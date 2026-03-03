@@ -1,6 +1,6 @@
 // ============================================================
 //  StockOS — Servidor API (Express + PostgreSQL)
-//  Ficheiro: api/server.js 
+//  Ficheiro: api/server.js
 // ============================================================
 require('dotenv').config();
 const express = require('express');

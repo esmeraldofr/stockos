@@ -15,303 +15,203 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 app.use(express.static('public'));
 
-// ── Helper ────────────────────────────────────────────────────
-const query = (text, params) => pool.query(text, params);
+function base64url(str) {
+  return Buffer.from(str).toString('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
+}
+function createToken(payload) {
+  const h = base64url(JSON.stringify({ alg:'HS256', typ:'JWT' }));
+  const b = base64url(JSON.stringify({ ...payload, exp: Math.floor(Date.now()/1000) + 8*3600 }));
+  const s = crypto.createHmac('sha256', JWT_SECRET).update(`${h}.${b}`).digest('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
+  return `${h}.${b}.${s}`;
+}
+function verifyToken(token) {
+  try {
+    const [h,b,s] = token.split('.');
+    const expected = crypto.createHmac('sha256', JWT_SECRET).update(`${h}.${b}`).digest('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
+    if (s !== expected) return null;
+    const payload = JSON.parse(Buffer.from(b, 'base64').toString());
+    if (payload.exp < Math.floor(Date.now()/1000)) return null;
+    return payload;
+  } catch { return null; }
+}
+function hashPassword(p) { return crypto.createHash('sha256').update(p + JWT_SECRET).digest('hex'); }
+function auth(req, res, next) {
+  const token = (req.headers.authorization || '').replace('Bearer ','');
+  const payload = verifyToken(token);
+  if (!payload) return res.status(401).json({ erro: 'Não autenticado' });
+  req.user = payload; next();
+}
+function requireRole(...roles) {
+  return (req, res, next) => { if (!roles.includes(req.user.role)) return res.status(403).json({ erro: 'Sem permissão' }); next(); };
+}
 
-// ============================================================
-//  ROTAS — AUTENTICAÇÃO (públicas)
-// ============================================================
-
-// POST /api/auth/login
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ erro: 'Email e password são obrigatórios' });
-
-    const result = await query(`SELECT * FROM utilizadores WHERE email = $1 AND ativo = true`, [email.toLowerCase().trim()]);
-    if (!result.rows.length) return res.status(401).json({ erro: 'Email ou password incorrectos' });
-
-    const user = result.rows[0];
-
-    // Verificar password (suporte a bcrypt do Supabase e hash simples)
-    const hashSimples = hashPassword(password);
-    let passwordValida = false;
-
-    if (user.senha_hash === hashSimples) {
-      passwordValida = true;
-    } else {
-      // Tentar comparação directa para passwords definidas manualmente
-      try {
-        const { execSync } = require('child_process');
-        // fallback: aceitar se o hash começa com $2 (bcrypt do seed SQL)
-        if (user.senha_hash.startsWith('$2')) {
-          // Para o primeiro login com bcrypt, forçar reset
-          passwordValida = false;
-        }
-      } catch {}
-    }
-
-    if (!passwordValida) return res.status(401).json({ erro: 'Email ou password incorrectos' });
-
-    const token = signJWT({ id: user.id, nome: user.nome, email: user.email, role: user.role });
-
-    // Actualizar último acesso
-    await query(`UPDATE utilizadores SET atualizado_em = NOW() WHERE id = $1`, [user.id]);
-
-    res.json({
-      token,
-      utilizador: { id: user.id, nome: user.nome, email: user.email, role: user.role }
-    });
-  } catch (err) {
-    res.status(500).json({ erro: err.message });
-  }
+    if (!email || !password) return res.status(400).json({ erro: 'Email e password obrigatórios' });
+    const r = await query('SELECT * FROM utilizadores WHERE email=$1 AND ativo=true', [email]);
+    if (!r.rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
+    const user = r.rows[0];
+    if (user.senha_hash !== hashPassword(password)) return res.status(401).json({ erro: 'Credenciais inválidas' });
+    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role });
+    res.json({ token, user: { id: user.id, email: user.email, nome: user.nome, role: user.role } });
+  } catch(e) { console.error(e); res.status(500).json({ erro: 'Erro interno' }); }
 });
 
-// POST /api/auth/setup — criar primeiro admin (só funciona se não houver utilizadores com hash simples)
 app.post('/api/auth/setup', async (req, res) => {
   try {
-    const { email, password, nome, codigo } = req.body;
-    if (codigo !== 'STOCKOS2025') return res.status(403).json({ erro: 'Código de activação inválido' });
-    const hash = hashPassword(password);
-    await query(`UPDATE utilizadores SET senha_hash = $1 WHERE email = $2`, [hash, email.toLowerCase().trim()]);
-    res.json({ mensagem: 'Password definida com sucesso. Pode fazer login.' });
-  } catch (err) {
-    res.status(500).json({ erro: err.message });
-  }
+    const { email, codigo, password } = req.body;
+    if (codigo !== 'STOCKOS2025') return res.status(400).json({ erro: 'Código inválido' });
+    if (!password || password.length < 6) return res.status(400).json({ erro: 'Password deve ter pelo menos 6 caracteres' });
+    const r = await query('SELECT * FROM utilizadores WHERE email=$1', [email]);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
+    await query('UPDATE utilizadores SET senha_hash=$1 WHERE email=$2', [hashPassword(password), email]);
+    res.json({ sucesso: true });
+  } catch(e) { res.status(500).json({ erro: 'Erro interno' }); }
 });
 
-// POST /api/auth/alterar-password
 app.post('/api/auth/alterar-password', auth, async (req, res) => {
   try {
-    const { password_atual, password_nova } = req.body;
-    const result = await query(`SELECT senha_hash FROM utilizadores WHERE id = $1`, [req.user.id]);
-    if (result.rows[0].senha_hash !== hashPassword(password_atual)) return res.status(400).json({ erro: 'Password actual incorrecta' });
-    await query(`UPDATE utilizadores SET senha_hash = $1 WHERE id = $2`, [hashPassword(password_nova), req.user.id]);
-    res.json({ mensagem: 'Password alterada com sucesso' });
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    const { passwordAtual, passwordNova } = req.body;
+    const r = await query('SELECT * FROM utilizadores WHERE id=$1', [req.user.id]);
+    if (r.rows[0].senha_hash !== hashPassword(passwordAtual)) return res.status(400).json({ erro: 'Password actual incorrecta' });
+    await query('UPDATE utilizadores SET senha_hash=$1 WHERE id=$2', [hashPassword(passwordNova), req.user.id]);
+    res.json({ sucesso: true });
+  } catch(e) { res.status(500).json({ erro: 'Erro interno' }); }
 });
 
-// GET /api/auth/me
 app.get('/api/auth/me', auth, async (req, res) => {
-  try {
-    const result = await query(`SELECT id, nome, email, role, criado_em FROM utilizadores WHERE id = $1`, [req.user.id]);
-    res.json(result.rows[0]);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+  const r = await query('SELECT id,email,nome,role FROM utilizadores WHERE id=$1', [req.user.id]);
+  res.json(r.rows[0]);
 });
 
-// ============================================================
-//  ROTAS — UTILIZADORES (admin only)
-// ============================================================
-app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const result = await query(`SELECT id, nome, email, role, ativo, criado_em, atualizado_em FROM utilizadores ORDER BY nome`);
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
-});
+app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
-app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { nome, email, password, role } = req.body;
-    if (!nome || !email || !password) return res.status(400).json({ erro: 'Nome, email e password são obrigatórios' });
-    const hash = hashPassword(password);
-    const result = await query(
-      `INSERT INTO utilizadores (nome, email, senha_hash, role) VALUES ($1,$2,$3,$4) RETURNING id, nome, email, role`,
-      [nome, email.toLowerCase().trim(), hash, role||'operador']
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    if (err.code === '23505') return res.status(400).json({ erro: 'Email já existe' });
-    res.status(500).json({ erro: err.message });
-  }
-});
-
-app.delete('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) => {
-  try {
-    if (req.params.id === req.user.id) return res.status(400).json({ erro: 'Não pode eliminar a sua própria conta' });
-    await query(`UPDATE utilizadores SET ativo = false WHERE id = $1`, [req.params.id]);
-    res.json({ mensagem: 'Utilizador desactivado' });
-  } catch (err) { res.status(500).json({ erro: err.message }); }
-});
-
-// ============================================================
-//  ROTAS — PRODUTOS (protegidas)
-// ============================================================
 app.get('/api/produtos', auth, async (req, res) => {
   try {
-    const { categoria, status, search } = req.query;
-    let sql = `SELECT * FROM v_produtos_stock WHERE 1=1`;
-    const params = [];
-    if (categoria) { params.push(categoria); sql += ` AND categoria = $${params.length}`; }
-    if (search)    { params.push(`%${search}%`); sql += ` AND (nome ILIKE $${params.length} OR sku ILIKE $${params.length})`; }
-    if (status === 'critico') sql += ` AND estado_stock IN ('Crítico','Esgotado')`;
-    if (status === 'baixo')   sql += ` AND estado_stock = 'Baixo'`;
-    if (status === 'ok')      sql += ` AND estado_stock = 'OK'`;
-    sql += ` ORDER BY nome`;
-    const result = await query(sql, params);
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    const r = await query('SELECT p.*, c.nome as categoria_nome, a.nome as armazem_nome FROM produtos p LEFT JOIN categorias c ON p.categoria_id=c.id LEFT JOIN armazens a ON p.armazem_id=a.id ORDER BY p.nome');
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
-
-app.get('/api/produtos/:id', auth, async (req, res) => {
+app.post('/api/produtos', auth, async (req, res) => {
   try {
-    const result = await query(`SELECT * FROM v_produtos_stock WHERE id = $1`, [req.params.id]);
-    if (!result.rows.length) return res.status(404).json({ erro: 'Produto não encontrado' });
-    res.json(result.rows[0]);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    const { nome, sku, categoria_id, armazem_id, quantidade, quantidade_minima, preco_custo, preco_venda, unidade } = req.body;
+    const r = await query('INSERT INTO produtos (nome,sku,categoria_id,armazem_id,quantidade,quantidade_minima,preco_custo,preco_venda,unidade) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
+      [nome, sku, categoria_id, armazem_id, quantidade||0, quantidade_minima||0, preco_custo, preco_venda, unidade||'un']);
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
-
-app.post('/api/produtos', auth, requireRole('admin','gestor'), async (req, res) => {
+app.put('/api/produtos/:id', auth, async (req, res) => {
   try {
-    const { nome, sku, categoria_id, unidade, preco_custo, preco_venda, stock_minimo, stock_atual, armazem_id, descricao } = req.body;
-    if (!nome || !sku) return res.status(400).json({ erro: 'Nome e SKU são obrigatórios' });
-    const result = await query(
-      `INSERT INTO produtos (nome, sku, categoria_id, unidade, preco_custo, preco_venda, stock_minimo, stock_atual, armazem_id, descricao) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [nome, sku, categoria_id, unidade||'un', preco_custo||0, preco_venda||0, stock_minimo||0, stock_atual||0, armazem_id, descricao]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    if (err.code === '23505') return res.status(400).json({ erro: 'SKU já existe' });
-    res.status(500).json({ erro: err.message });
-  }
-});
-
-app.put('/api/produtos/:id', auth, requireRole('admin','gestor'), async (req, res) => {
-  try {
-    const { nome, sku, categoria_id, unidade, preco_custo, preco_venda, stock_minimo, armazem_id, descricao } = req.body;
-    const result = await query(
-      `UPDATE produtos SET nome=$1,sku=$2,categoria_id=$3,unidade=$4,preco_custo=$5,preco_venda=$6,stock_minimo=$7,armazem_id=$8,descricao=$9,atualizado_em=NOW() WHERE id=$10 RETURNING *`,
-      [nome, sku, categoria_id, unidade, preco_custo, preco_venda, stock_minimo, armazem_id, descricao, req.params.id]
-    );
-    if (!result.rows.length) return res.status(404).json({ erro: 'Produto não encontrado' });
-    res.json(result.rows[0]);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
-});
-
-app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => {
-  try {
-    await query(`UPDATE produtos SET ativo=false WHERE id=$1`, [req.params.id]);
-    res.json({ mensagem: 'Produto desactivado' });
-  } catch (err) { res.status(500).json({ erro: err.message }); }
-});
-
-// ============================================================
-//  ROTAS — MOVIMENTAÇÕES (protegidas)
-// ============================================================
-app.get('/api/movimentacoes', auth, async (req, res) => {
-  try {
-    const { tipo } = req.query;
-    let sql = `SELECT m.*, p.nome AS produto_nome, p.sku, ao.nome AS origem_nome, ad.nome AS destino_nome, u.nome AS utilizador_nome FROM movimentacoes m JOIN produtos p ON p.id = m.produto_id LEFT JOIN armazens ao ON ao.id = m.armazem_origem LEFT JOIN armazens ad ON ad.id = m.armazem_destino LEFT JOIN utilizadores u ON u.id = m.utilizador_id WHERE 1=1`;
-    const params = [];
-    if (tipo) { params.push(tipo); sql += ` AND m.tipo = $${params.length}`; }
-    sql += ` ORDER BY m.criado_em DESC LIMIT 200`;
-    const result = await query(sql, params);
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    const { nome, sku, categoria_id, armazem_id, quantidade_minima, preco_custo, preco_venda, unidade } = req.body;
+    const r = await query('UPDATE produtos SET nome=$1,sku=$2,categoria_id=$3,armazem_id=$4,quantidade_minima=$5,preco_custo=$6,preco_venda=$7,unidade=$8 WHERE id=$9 RETURNING *',
+      [nome, sku, categoria_id, armazem_id, quantidade_minima, preco_custo, preco_venda, unidade, req.params.id]);
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => {
   try { await query('DELETE FROM produtos WHERE id=$1', [req.params.id]); res.json({ sucesso: true }); }
   catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.post('/api/movimentacoes', auth, async (req, res) => {
+app.get('/api/categorias', auth, async (req, res) => {
+  try { const r = await query('SELECT * FROM categorias ORDER BY nome'); res.json(r.rows); }
+  catch(e) { res.status(500).json({ erro: e.message }); }
+});
+app.post('/api/categorias', auth, async (req, res) => {
   try {
-    const { produto_id, tipo, quantidade, armazem_origem, armazem_destino, motivo, referencia } = req.body;
-    if (!produto_id || !tipo || !quantidade) return res.status(400).json({ erro: 'Campos obrigatórios em falta' });
-    const result = await query(
-      `INSERT INTO movimentacoes (produto_id, tipo, quantidade, armazem_origem, armazem_destino, motivo, referencia, utilizador_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [produto_id, tipo, quantidade, armazem_origem||null, armazem_destino||null, motivo, referencia||null, req.user.id]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    if (err.message.includes('Stock insuficiente')) return res.status(400).json({ erro: err.message });
-    res.status(500).json({ erro: err.message });
-  }
+    const r = await query('INSERT INTO categorias (nome,descricao) VALUES ($1,$2) RETURNING *', [req.body.nome, req.body.descricao]);
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// ============================================================
-//  ROTAS — VENDAS (protegidas)
-// ============================================================
+app.get('/api/armazens', auth, async (req, res) => {
+  try { const r = await query('SELECT * FROM armazens ORDER BY nome'); res.json(r.rows); }
+  catch(e) { res.status(500).json({ erro: e.message }); }
+});
+app.post('/api/armazens', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const r = await query('INSERT INTO armazens (nome,localizacao) VALUES ($1,$2) RETURNING *', [req.body.nome, req.body.localizacao]);
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/movimentos', auth, async (req, res) => {
+  try {
+    const r = await query('SELECT m.*, p.nome as produto_nome, p.sku, u.nome as utilizador_nome FROM movimentos m LEFT JOIN produtos p ON m.produto_id=p.id LEFT JOIN utilizadores u ON m.utilizador_id=u.id ORDER BY m.created_at DESC LIMIT 100');
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+app.post('/api/movimentos', auth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { produto_id, tipo, quantidade, motivo, referencia } = req.body;
+    const prod = await client.query('SELECT quantidade FROM produtos WHERE id=$1 FOR UPDATE', [produto_id]);
+    if (!prod.rows.length) throw new Error('Produto não encontrado');
+    const qtdAtual = prod.rows[0].quantidade;
+    const qtdNova  = tipo === 'entrada' ? qtdAtual + quantidade : qtdAtual - quantidade;
+    if (qtdNova < 0) throw new Error('Quantidade insuficiente em stock');
+    await client.query('UPDATE produtos SET quantidade=$1 WHERE id=$2', [qtdNova, produto_id]);
+    const r = await client.query('INSERT INTO movimentos (produto_id,tipo,quantidade,quantidade_anterior,quantidade_atual,motivo,referencia,utilizador_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
+      [produto_id, tipo, quantidade, qtdAtual, qtdNova, motivo, referencia, req.user.id]);
+    await client.query('COMMIT');
+    res.json(r.rows[0]);
+  } catch(e) { await client.query('ROLLBACK'); res.status(400).json({ erro: e.message }); }
+  finally { client.release(); }
+});
+
 app.get('/api/vendas', auth, async (req, res) => {
   try {
-    const { estado } = req.query;
-    let sql = `SELECT v.*, COALESCE(json_agg(json_build_object('id',vi.id,'produto_nome',vi.produto_nome,'quantidade',vi.quantidade,'preco_unitario',vi.preco_unitario,'total_linha',vi.total_linha)) FILTER (WHERE vi.id IS NOT NULL),'[]') AS itens FROM vendas v LEFT JOIN venda_itens vi ON vi.venda_id = v.id WHERE 1=1`;
-    const params = [];
-    if (estado) { params.push(estado); sql += ` AND v.estado = $${params.length}`; }
-    sql += ` GROUP BY v.id ORDER BY v.criado_em DESC`;
-    const result = await query(sql, params);
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    const r = await query("SELECT v.*, u.nome as utilizador_nome, json_agg(json_build_object('produto_nome',p.nome,'quantidade',iv.quantidade,'preco_unitario',iv.preco_unitario)) as itens FROM vendas v LEFT JOIN itens_venda iv ON v.id=iv.venda_id LEFT JOIN produtos p ON iv.produto_id=p.id LEFT JOIN utilizadores u ON v.utilizador_id=u.id GROUP BY v.id, u.nome ORDER BY v.created_at DESC LIMIT 50");
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
-
 app.post('/api/vendas', auth, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { cliente_id, cliente_nome, metodo_pagamento, desconto_pct, itens, notas } = req.body;
-    if (!itens || !itens.length) return res.status(400).json({ erro: 'A venda precisa de pelo menos 1 item' });
-    const subtotal = itens.reduce((s, i) => s + (i.quantidade * i.preco_unitario), 0);
-    const total    = subtotal * (1 - (desconto_pct || 0) / 100);
-    const venda = await client.query(
-      `INSERT INTO vendas (cliente_id, cliente_nome, metodo_pagamento, desconto_pct, subtotal, total, notas, utilizador_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [cliente_id||null, cliente_nome||'— Avulso —', metodo_pagamento||'dinheiro', desconto_pct||0, subtotal, total, notas||null, req.user.id]
-    );
-    const vendaId = venda.rows[0].id;
+    const { cliente, itens, desconto, notas } = req.body;
+    let total = 0;
     for (const item of itens) {
-      await client.query(`INSERT INTO venda_itens (venda_id, produto_id, produto_nome, produto_sku, quantidade, preco_unitario) VALUES ($1,$2,$3,$4,$5,$6)`, [vendaId, item.produto_id, item.produto_nome, item.produto_sku, item.quantidade, item.preco_unitario]);
-      await client.query(`INSERT INTO movimentacoes (produto_id, tipo, quantidade, motivo, referencia, utilizador_id) VALUES ($1,'saida',$2,$3,$4,$5)`, [item.produto_id, item.quantidade, `Venda ${vendaId}`, vendaId, req.user.id]);
+      const p = await client.query('SELECT quantidade,preco_venda FROM produtos WHERE id=$1 FOR UPDATE', [item.produto_id]);
+      if (p.rows[0].quantidade < item.quantidade) throw new Error('Stock insuficiente');
+      total += p.rows[0].preco_venda * item.quantidade;
+    }
+    total -= desconto || 0;
+    const venda = await client.query('INSERT INTO vendas (cliente,total,desconto,notas,utilizador_id) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+      [cliente, total, desconto||0, notas, req.user.id]);
+    for (const item of itens) {
+      const p = await client.query('SELECT preco_venda FROM produtos WHERE id=$1', [item.produto_id]);
+      await client.query('INSERT INTO itens_venda (venda_id,produto_id,quantidade,preco_unitario) VALUES ($1,$2,$3,$4)',
+        [venda.rows[0].id, item.produto_id, item.quantidade, p.rows[0].preco_venda]);
+      await client.query('UPDATE produtos SET quantidade=quantidade-$1 WHERE id=$2', [item.quantidade, item.produto_id]);
     }
     await client.query('COMMIT');
-    res.status(201).json(venda.rows[0]);
-  } catch (err) {
-    await client.query('ROLLBACK');
-    if (err.message.includes('Stock insuficiente')) return res.status(400).json({ erro: err.message });
-    res.status(500).json({ erro: err.message });
-  } finally { client.release(); }
-});
-
-app.patch('/api/vendas/:id/cancelar', auth, requireRole('admin','gestor'), async (req, res) => {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const venda = await client.query(`SELECT * FROM vendas WHERE id=$1`, [req.params.id]);
-    if (!venda.rows.length) return res.status(404).json({ erro: 'Venda não encontrada' });
-    if (venda.rows[0].estado === 'cancelada') return res.status(400).json({ erro: 'Venda já cancelada' });
-    await client.query(`UPDATE vendas SET estado='cancelada' WHERE id=$1`, [req.params.id]);
-    const itens = await client.query(`SELECT * FROM venda_itens WHERE venda_id=$1`, [req.params.id]);
-    for (const item of itens.rows) {
-      await client.query(`INSERT INTO movimentacoes (produto_id, tipo, quantidade, motivo, referencia, utilizador_id) VALUES ($1,'entrada',$2,$3,$4,$5)`, [item.produto_id, item.quantidade, `Cancelamento venda ${req.params.id}`, req.params.id, req.user.id]);
-    }
-    await client.query('COMMIT');
-    res.json({ mensagem: `Venda ${req.params.id} cancelada — stock reposto` });
-  } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ erro: err.message }); }
+    res.json(venda.rows[0]);
+  } catch(e) { await client.query('ROLLBACK'); res.status(400).json({ erro: e.message }); }
   finally { client.release(); }
 });
-
-// ============================================================
-//  ROTAS — CLIENTES, ARMAZÉNS, CATEGORIAS, ALERTAS, DASHBOARD
-// ============================================================
-app.get('/api/clientes', auth, async (req, res) => {
-  try { res.json((await query(`SELECT * FROM v_clientes_resumo ORDER BY nome`)).rows); }
-  catch (err) { res.status(500).json({ erro: err.message }); }
-});
-
-app.post('/api/clientes', auth, async (req, res) => {
+app.patch('/api/vendas/:id/cancelar', auth, requireRole('admin','gestor'), async (req, res) => {
   try {
-    const { nome, telefone, email, nif, endereco } = req.body;
-    if (!nome) return res.status(400).json({ erro: 'Nome é obrigatório' });
-    const result = await query(`INSERT INTO clientes (nome, telefone, email, nif, endereco) VALUES ($1,$2,$3,$4,$5) RETURNING *`, [nome, telefone, email, nif, endereco]);
-    res.status(201).json(result.rows[0]);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    const r = await query("UPDATE vendas SET estado='cancelado' WHERE id=$1 RETURNING *", [req.params.id]);
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.get('/api/armazens', auth, async (req, res) => {
+app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
+  try { const r = await query('SELECT id,email,nome,role,ativo FROM utilizadores ORDER BY nome'); res.json(r.rows); }
+  catch(e) { res.status(500).json({ erro: e.message }); }
+});
+app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
-    const result = await query(`SELECT a.*, COUNT(p.id) AS total_produtos, COALESCE(SUM(p.stock_atual),0) AS total_unidades FROM armazens a LEFT JOIN produtos p ON p.armazem_id = a.id AND p.ativo=true WHERE a.ativo=true GROUP BY a.id ORDER BY a.nome`);
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    const { email, nome, role } = req.body;
+    const r = await query('INSERT INTO utilizadores (email,nome,role,senha_hash) VALUES ($1,$2,$3,$4) RETURNING id,email,nome,role',
+      [email, nome, role, hashPassword('StockOS2025!')]);
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
-
-app.post('/api/armazens', auth, requireRole('admin'), async (req, res) => {
+app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) => {
   try {
     const { nome, role, ativo } = req.body;
     const r = await query('UPDATE utilizadores SET nome=$1,role=$2,ativo=$3 WHERE id=$4 RETURNING id,email,nome,role,ativo',
@@ -320,34 +220,19 @@ app.post('/api/armazens', auth, requireRole('admin'), async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.get('/api/categorias', auth, async (req, res) => {
-  try { res.json((await query(`SELECT * FROM categorias ORDER BY nome`)).rows); }
-  catch (err) { res.status(500).json({ erro: err.message }); }
-});
-
-app.get('/api/alertas', auth, async (req, res) => {
-  try { res.json((await query(`SELECT * FROM v_alertas_stock`)).rows); }
-  catch (err) { res.status(500).json({ erro: err.message }); }
-});
-
 app.get('/api/dashboard', auth, async (req, res) => {
   try {
-    const [produtos, stock, alertas, receita] = await Promise.all([
-      query(`SELECT COUNT(*) AS total FROM produtos WHERE ativo=true`),
-      query(`SELECT COALESCE(SUM(stock_atual),0) AS total FROM produtos WHERE ativo=true`),
-      query(`SELECT COUNT(*) AS total FROM v_alertas_stock`),
-      query(`SELECT COALESCE(SUM(total),0) AS total, COUNT(*) AS vendas FROM vendas WHERE estado='concluida' AND DATE_TRUNC('month', criado_em) = DATE_TRUNC('month', NOW())`)
+    const [p, sb, m, v] = await Promise.all([
+      query('SELECT COUNT(*) as total, SUM(quantidade*preco_custo) as valor_total FROM produtos'),
+      query('SELECT COUNT(*) as total FROM produtos WHERE quantidade<=quantidade_minima'),
+      query("SELECT COUNT(*) as total FROM movimentos WHERE created_at>NOW()-INTERVAL '30 days'"),
+      query("SELECT COUNT(*) as total, COALESCE(SUM(total),0) as valor FROM vendas WHERE created_at>NOW()-INTERVAL '30 days' AND estado!='cancelado'")
     ]);
-    res.json({ total_produtos: parseInt(produtos.rows[0].total), total_stock: parseInt(stock.rows[0].total), total_alertas: parseInt(alertas.rows[0].total), receita_mes: parseFloat(receita.rows[0].total), vendas_mes: parseInt(receita.rows[0].vendas) });
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    res.json({ produtos: parseInt(p.rows[0].total), valor_stock: parseFloat(p.rows[0].valor_total)||0,
+      stock_baixo: parseInt(sb.rows[0].total), movimentos_mes: parseInt(m.rows[0].total),
+      vendas_mes: parseInt(v.rows[0].total), valor_vendas_mes: parseFloat(v.rows[0].valor)||0 });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.get('/api/health', async (req, res) => {
-  try { await query('SELECT 1'); res.json({ status: 'ok', timestamp: new Date().toISOString(), versao: '2.1.0' }); }
-  catch (err) { res.status(500).json({ status: 'erro', detalhe: err.message }); }
-});
-
-app.get('*', (req, res) => { res.sendFile('index.html', { root: 'public' }); });
-
-app.listen(PORT, () => { console.log(`✅ StockOS API (com auth) na porta ${PORT}`); });
-
+app.listen(PORT, () => console.log(`StockOS API na porta ${PORT}`));
+module.exports = app;

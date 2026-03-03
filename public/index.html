@@ -209,6 +209,52 @@ textarea { resize:vertical; min-height:72px; }
 </head>
 <body>
 
+<!-- ═══ LOGIN ══════════════════════════════════════════════ -->
+<div id="login-screen" style="position:fixed;inset:0;background:var(--ink);display:flex;align-items:center;justify-content:center;z-index:1000;padding:24px">
+  <div style="background:var(--surface);border-radius:16px;box-shadow:0 8px 32px rgba(26,22,18,0.3);width:100%;max-width:400px;overflow:hidden">
+    <div style="background:var(--ink);padding:36px 40px 28px;text-align:center">
+      <div style="font-family:DM Serif Display,serif;font-size:36px;color:#fff;letter-spacing:-1px">StockOS</div>
+      <div style="font-family:DM Mono,monospace;font-size:10px;color:rgba(255,255,255,0.35);letter-spacing:2.5px;text-transform:uppercase;margin-top:6px">Sistema de Inventário · Luanda</div>
+    </div>
+    <div style="padding:36px 40px 40px">
+      <div style="font-family:DM Serif Display,serif;font-size:22px;color:var(--ink);margin-bottom:6px">Bem-vindo</div>
+      <div style="font-size:13px;color:var(--ink3);margin-bottom:24px">Introduza as suas credenciais</div>
+      <div id="login-error" style="display:none;background:var(--red-bg);border:1px solid rgba(192,57,43,0.2);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--red);margin-bottom:16px"></div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:16px">
+        <label style="font-family:DM Mono,monospace;font-size:10px;color:var(--ink3);letter-spacing:1px;text-transform:uppercase">Email</label>
+        <input type="email" id="login-email" placeholder="email@exemplo.com" autocomplete="email" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-family:Instrument Sans,sans-serif;font-size:14px;color:var(--ink);outline:none;width:100%">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:20px">
+        <label style="font-family:DM Mono,monospace;font-size:10px;color:var(--ink3);letter-spacing:1px;text-transform:uppercase">Password</label>
+        <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-family:Instrument Sans,sans-serif;font-size:14px;color:var(--ink);outline:none;width:100%" onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <button onclick="doLogin()" id="btn-login" style="width:100%;padding:13px;background:var(--ink);color:#fff;border:none;border-radius:8px;font-family:DM Serif Display,serif;font-size:16px;cursor:pointer;letter-spacing:-0.3px">Entrar →</button>
+      <div style="text-align:center;margin-top:16px;font-size:12px;color:var(--ink3)">Primeiro acesso? <a onclick="showSetup()" style="color:var(--blue);cursor:pointer">Definir password</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SETUP ═══════════════════════════════════════════════ -->
+<div id="setup-screen" style="display:none;position:fixed;inset:0;background:var(--ink);align-items:center;justify-content:center;z-index:1000;padding:24px">
+  <div style="background:var(--surface);border-radius:16px;box-shadow:0 8px 32px rgba(26,22,18,0.3);width:100%;max-width:400px;overflow:hidden">
+    <div style="background:var(--ink);padding:36px 40px 28px;text-align:center">
+      <div style="font-family:DM Serif Display,serif;font-size:36px;color:#fff">StockOS</div>
+      <div style="font-family:DM Mono,monospace;font-size:10px;color:rgba(255,255,255,0.35);letter-spacing:2.5px;text-transform:uppercase;margin-top:6px">Configuração inicial</div>
+    </div>
+    <div style="padding:36px 40px 40px">
+      <div style="font-family:DM Serif Display,serif;font-size:22px;color:var(--ink);margin-bottom:6px">Definir Password</div>
+      <div style="font-size:13px;color:var(--ink3);margin-bottom:24px">Use o código: <strong>STOCKOS2025</strong></div>
+      <div id="setup-error" style="display:none;background:var(--red-bg);border:1px solid rgba(192,57,43,0.2);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--red);margin-bottom:16px"></div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:12px"><label style="font-family:DM Mono,monospace;font-size:10px;color:var(--ink3);letter-spacing:1px;text-transform:uppercase">Email</label><input type="email" id="setup-email" placeholder="joao.silva@stockos.ao" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-size:14px;color:var(--ink);outline:none;width:100%"></div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:12px"><label style="font-family:DM Mono,monospace;font-size:10px;color:var(--ink3);letter-spacing:1px;text-transform:uppercase">Nova Password</label><input type="password" id="setup-password" placeholder="••••••••" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-size:14px;color:var(--ink);outline:none;width:100%"></div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:20px"><label style="font-family:DM Mono,monospace;font-size:10px;color:var(--ink3);letter-spacing:1px;text-transform:uppercase">Código de Activação</label><input type="text" id="setup-codigo" placeholder="STOCKOS2025" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-size:14px;color:var(--ink);outline:none;width:100%"></div>
+      <button onclick="doSetup()" style="width:100%;padding:13px;background:var(--ink);color:#fff;border:none;border-radius:8px;font-family:DM Serif Display,serif;font-size:16px;cursor:pointer">Activar Conta →</button>
+      <div style="text-align:center;margin-top:16px;font-size:12px;color:var(--ink3)"><a onclick="showLogin()" style="color:var(--blue);cursor:pointer">← Voltar ao login</a></div>
+    </div>
+  </div>
+</div>
+
+
 <!-- Loading -->
 <div class="loading-overlay" id="loading">
   <div class="spinner"></div>
@@ -238,6 +284,7 @@ textarea { resize:vertical; min-height:72px; }
       <div class="user-avatar">JS</div>
       <div><div class="user-name">João Silva</div><div class="user-role">Admin</div></div>
     </div>
+    <button onclick="doLogout()" style="background:none;border:none;color:rgba(255,255,255,0.3);cursor:pointer;font-size:16px;padding:4px;margin-left:auto;transition:color 0.15s" title="Sair" onmouseover="this.style.color='#c0392b'" onmouseout="this.style.color='rgba(255,255,255,0.3)'">⎋</button>
   </div>
 </nav>
 
@@ -427,12 +474,7 @@ textarea { resize:vertical; min-height:72px; }
 <div class="toast-container" id="toast-container"></div>
 
 <script>
-// ── CONFIG ───────────────────────────────────────────────────
-// Em produção, a API está no mesmo domínio (/api/...)
-// Em desenvolvimento local, aponta para localhost:3000
-const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? 'http://localhost:3000/api'
-  : '/api';
+// API configured in auth section above
 
 // ── HELPERS ──────────────────────────────────────────────────
 function fmtKz(v) { return Number(v).toLocaleString('pt-AO', {minimumFractionDigits:2,maximumFractionDigits:2}) + ' Kz'; }
@@ -442,17 +484,7 @@ function loading(show) {
   document.getElementById('loading').classList.toggle('show', show);
 }
 
-async function apiFetch(path, opts={}) {
-  const res = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ erro: res.statusText }));
-    throw new Error(err.erro || 'Erro desconhecido');
-  }
-  return res.json();
-}
+// apiFetch defined in auth section above
 
 function showToast(msg, type='success') {
   const c = document.getElementById('toast-container');

@@ -1,0 +1,48 @@
+name: Auto-merge Claude branches
+
+on:
+  push:
+    branches:
+      - 'claude/**'
+
+jobs:
+  auto-merge:
+    name: Merge to main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create PR and merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          echo "Branch: $BRANCH"
+
+          # Create PR if it doesn't exist
+          PR_URL=$(gh pr list --head "$BRANCH" --base main --json url --jq '.[0].url' 2>/dev/null)
+
+          if [ -z "$PR_URL" ]; then
+            PR_URL=$(gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore: merge $BRANCH into main" \
+              --body "Auto-merge triggered by push to \`$BRANCH\`.")
+            echo "PR created: $PR_URL"
+          else
+            echo "PR already exists: $PR_URL"
+          fi
+
+          # Merge the PR
+          gh pr merge "$BRANCH" \
+            --base main \
+            --merge \
+            --delete-branch=false \
+            --subject "chore: merge $BRANCH into main [auto]"

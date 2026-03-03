@@ -590,5 +590,64 @@ app.post('/api/deploy/update-file', async (req, res) => {
     else res.status(400).json({ erro: 'Erro ao actualizar', detail: result });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
+// ── AUTO-DEPLOY ───────────────────────────────────────────────
+const DEPLOY_SECRET = process.env.DEPLOY_SECRET || 'stockos-deploy-2025';
+
+app.post('/api/deploy/update-file', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const deployToken = authHeader.replace('Bearer ', '');
+    
+    // Aceita token de utilizador admin OU deploy secret
+    let autorizado = false;
+    if (deployToken === DEPLOY_SECRET) {
+      autorizado = true;
+    } else {
+      const payload = verifyToken(deployToken);
+      if (payload && payload.role === 'admin') autorizado = true;
+    }
+    if (!autorizado) return res.status(403).json({ erro: 'Não autorizado' });
+
+    const { file, content, message } = req.body;
+    const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+    const REPO = 'esmeraldofr/stockos';
+    if (!GITHUB_TOKEN) return res.status(500).json({ erro: 'GITHUB_TOKEN não configurado' });
+
+    const getRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${file}`, {
+      headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    const fileData = await getRes.json();
+    if (!fileData.sha) return res.status(400).json({ erro: 'Ficheiro não encontrado', detail: fileData });
+
+    const updateRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${file}`, {
+      method: 'PUT',
+      headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json' },
+      body: JSON.stringify({ message: message || 'Auto-update via StockOS', content: Buffer.from(content).toString('base64'), sha: fileData.sha })
+    });
+    const result = await updateRes.json();
+    if (result.commit) res.json({ sucesso: true, commit: result.commit.sha });
+    else res.status(400).json({ erro: 'Erro ao actualizar', detail: result });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/deploy/get-file', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const deployToken = authHeader.replace('Bearer ', '');
+    const payload = verifyToken(deployToken);
+    if (!payload || payload.role !== 'admin') return res.status(403).json({ erro: 'Não autorizado' });
+
+    const { file } = req.query;
+    const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+    const REPO = 'esmeraldofr/stockos';
+    const getRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${file}`, {
+      headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    const fileData = await getRes.json();
+    if (!fileData.content) return res.status(400).json({ erro: 'Ficheiro não encontrado' });
+    const content = Buffer.from(fileData.content, 'base64').toString('utf8');
+    res.json({ sucesso: true, content, sha: fileData.sha });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
 app.listen(PORT, () => console.log(`StockOS API na porta ${PORT}`));
 module.exports = app;

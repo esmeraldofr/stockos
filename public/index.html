@@ -1,6 +1,4 @@
-<!DOCTYPE html>
-<html lang="pt">
-<head>
+<html lang="pt"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>StockOS · Restaurante</title>
@@ -127,7 +125,7 @@ tr:hover td { background:#fafafa; }
 <body>
 
 <!-- LOGIN -->
-<div id="loginScreen">
+<div id="loginScreen" style="display: none;">
   <div class="login-logo">StockOS</div>
   <div class="login-sub">Restaurante · Luanda</div>
   <div class="login-box">
@@ -142,7 +140,7 @@ tr:hover td { background:#fafafa; }
 </div>
 
 <!-- SETUP -->
-<div id="setupScreen">
+<div id="setupScreen" style="display: none;">
   <div class="login-logo">StockOS</div>
   <div class="login-sub">Primeiro Acesso</div>
   <div class="login-box">
@@ -158,15 +156,15 @@ tr:hover td { background:#fafafa; }
 </div>
 
 <!-- APP -->
-<div id="app">
+<div id="app" style="display: block;">
   <div class="layout">
     <div class="sidebar">
       <div class="sidebar-logo"><h1>StockOS</h1><p>Restaurante</p></div>
       <div class="sidebar-user">
-        <div class="user-name" id="sidebarNome">–</div>
-        <div class="user-role" id="sidebarRole">–</div>
+        <div class="user-name" id="sidebarNome">Admin Sistema</div>
+        <div class="user-role" id="sidebarRole">Administrador</div>
       </div>
-      <div id="turnoBadge" class="turno-badge fechado">⚫ Sem turno activo</div>
+      <div id="turnoBadge" class="turno-badge aberto">🌅 Turno manha activo</div>
       <nav class="sidebar-nav">
         <div class="nav-section">Operação</div>
         <div class="nav-item active" onclick="navTo('dashboard',this)"><span class="icon">📊</span> Dashboard</div>
@@ -192,19 +190,19 @@ tr:hover td { background:#fafafa; }
 
       <!-- DASHBOARD -->
       <div id="page-dashboard" class="page active">
-        <div class="page-header"><h2>Dashboard</h2><span id="dataHoje" style="color:#888;font-size:0.9rem;"></span></div>
-        <div id="turnoAlerta" style="margin-bottom:20px;display:none;"></div>
+        <div class="page-header"><h2>Dashboard</h2><span id="dataHoje" style="color:#888;font-size:0.9rem;">terça-feira, 3 de março</span></div>
+        <div id="turnoAlerta" style="margin-bottom: 20px; display: block;"><div class="alert alert-warning">⚠️ Nenhum turno activo! Vá a <a href="#" onclick="navTo('turnos',null)">Turnos</a> para abrir.</div></div>
         <div class="cards">
-          <div class="card"><div class="card-label">Produtos</div><div class="card-value" id="d-produtos">–</div></div>
-          <div class="card"><div class="card-label">Valor Stock</div><div class="card-value" id="d-valor">–</div></div>
-          <div class="card"><div class="card-label">Stock Baixo</div><div class="card-value danger" id="d-baixo">–</div></div>
-          <div class="card"><div class="card-label">Vendas Hoje</div><div class="card-value success" id="d-vendas">–</div></div>
-          <div class="card"><div class="card-label">Receita Hoje</div><div class="card-value success" id="d-receita">–</div></div>
-          <div class="card"><div class="card-label">Desperdício</div><div class="card-value warning" id="d-desp">–</div></div>
+          <div class="card"><div class="card-label">Produtos</div><div class="card-value" id="d-produtos"></div></div>
+          <div class="card"><div class="card-label">Valor Stock</div><div class="card-value" id="d-valor">0&nbsp;Kz</div></div>
+          <div class="card"><div class="card-label">Stock Baixo</div><div class="card-value danger" id="d-baixo"></div></div>
+          <div class="card"><div class="card-label">Vendas Hoje</div><div class="card-value success" id="d-vendas"></div></div>
+          <div class="card"><div class="card-label">Receita Hoje</div><div class="card-value success" id="d-receita">0&nbsp;Kz</div></div>
+          <div class="card"><div class="card-label">Desperdício</div><div class="card-value warning" id="d-desp">0&nbsp;Kz</div></div>
         </div>
         <div class="table-wrap">
           <div class="table-toolbar"><strong>Turno Activo</strong></div>
-          <div id="turnoActivoInfo" style="padding:20px;color:#888;">A verificar...</div>
+          <div id="turnoActivoInfo" style="padding:20px;color:#888;"><div style="padding:20px;color:#888;">Nenhum turno activo. Abra um turno em <strong>Turnos</strong>.</div></div>
         </div>
       </div>
 
@@ -999,8 +997,8 @@ document.querySelectorAll('.modal-overlay').forEach(o=>o.addEventListener('click
 
 if(token&&currentUser) enterApp();
 </script>
-</body>
-</html>.sidebar-user { padding:16px 20px; border-bottom:1px solid #222; }
+
+.sidebar-user { padding:16px 20px; border-bottom:1px solid #222; }
 .sidebar-user .user-name { font-size:0.9rem; font-weight:600; }
 .sidebar-user .user-role { font-size:0.75rem; color:#888; margin-top:2px; }
 .sidebar-nav { flex:1; padding:12px 0; overflow-y:auto; }
@@ -1074,9 +1072,9 @@ tr:hover td { background:#fafafa; }
 .alert { padding:12px 16px; border-radius:8px; margin-bottom:16px; font-size:0.9rem; }
 .alert-error { background:#fce8e8; color:#c53030; }
 .alert-success { background:#e6f7ef; color:#276749; }
-</style>
-</head>
-<body>
+
+
+
 
 <!-- LOGIN -->
 <div id="loginScreen">
@@ -1726,5 +1724,6 @@ document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('cli
 // Auto-login se token existir
 if (token && currentUser) enterApp();
 </script>
-</body>
-</html>
+
+
+</body></html>

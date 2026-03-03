@@ -1,31 +1,19 @@
-// ============================================================
-//  StockOS — Servidor API (Express + PostgreSQL)
-//  Ficheiro: api/server.js
-// ============================================================
 require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
+const crypto  = require('crypto');
 const { Pool } = require('pg');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'stockos-secret-2025';
 
-// ── Base de dados ────────────────────────────────────────────
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }  // necessário para Supabase
-});
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+const query = (text, params) => pool.query(text, params);
 
-// ── Middleware ────────────────────────────────────────────────
-app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || '*',
-    'http://localhost:5500',
-    'http://127.0.0.1:5500'
-  ]
-}));
+app.use(cors({ origin: '*' }));
 app.use(express.json());
-app.use(express.static('public'));  // servir o frontend
+app.use(express.static('public'));
 
 // ── Helper ────────────────────────────────────────────────────
 const query = (text, params) => pool.query(text, params);
@@ -220,6 +208,10 @@ app.get('/api/movimentacoes', auth, async (req, res) => {
     res.json(result.rows);
   } catch (err) { res.status(500).json({ erro: err.message }); }
 });
+app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => {
+  try { await query('DELETE FROM produtos WHERE id=$1', [req.params.id]); res.json({ sucesso: true }); }
+  catch(e) { res.status(500).json({ erro: e.message }); }
+});
 
 app.post('/api/movimentacoes', auth, async (req, res) => {
   try {
@@ -321,11 +313,11 @@ app.get('/api/armazens', auth, async (req, res) => {
 
 app.post('/api/armazens', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { nome, endereco, responsavel } = req.body;
-    if (!nome) return res.status(400).json({ erro: 'Nome é obrigatório' });
-    const result = await query(`INSERT INTO armazens (nome, endereco, responsavel) VALUES ($1,$2,$3) RETURNING *`, [nome, endereco, responsavel]);
-    res.status(201).json(result.rows[0]);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    const { nome, role, ativo } = req.body;
+    const r = await query('UPDATE utilizadores SET nome=$1,role=$2,ativo=$3 WHERE id=$4 RETURNING id,email,nome,role,ativo',
+      [nome, role, ativo, req.params.id]);
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 app.get('/api/categorias', auth, async (req, res) => {
@@ -358,3 +350,4 @@ app.get('/api/health', async (req, res) => {
 app.get('*', (req, res) => { res.sendFile('index.html', { root: 'public' }); });
 
 app.listen(PORT, () => { console.log(`✅ StockOS API (com auth) na porta ${PORT}`); });
+

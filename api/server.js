@@ -564,6 +564,31 @@ app.get('/api/dashboard', auth, async (req, res) => {
       vendas_mes: parseInt(v.rows[0].total), valor_vendas_mes: parseFloat(v.rows[0].valor)||0 });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
+// ── AUTO-DEPLOY via GitHub API ────────────────────────────────
+app.post('/api/deploy/update-file', async (req, res) => {
+  try {
+    const { file, content, message } = req.body;
+    const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+    const REPO = 'esmeraldofr/stockos';
+    if (!GITHUB_TOKEN) return res.status(500).json({ erro: 'GITHUB_TOKEN não configurado' });
 
+    // Obter SHA actual do ficheiro
+    const getRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${file}`, {
+      headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    const fileData = await getRes.json();
+    if (!fileData.sha) return res.status(400).json({ erro: 'Ficheiro não encontrado', detail: fileData });
+
+    // Actualizar ficheiro
+    const updateRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${file}`, {
+      method: 'PUT',
+      headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json' },
+      body: JSON.stringify({ message: message || 'Auto-update via StockOS', content: Buffer.from(content).toString('base64'), sha: fileData.sha })
+    });
+    const result = await updateRes.json();
+    if (result.commit) res.json({ sucesso: true, commit: result.commit.sha });
+    else res.status(400).json({ erro: 'Erro ao actualizar', detail: result });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
 app.listen(PORT, () => console.log(`StockOS API na porta ${PORT}`));
 module.exports = app;

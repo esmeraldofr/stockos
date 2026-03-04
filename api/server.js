@@ -93,7 +93,7 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
     const { nome, fundo_inicial, notas } = req.body;
     const aberto = await query("SELECT id FROM turnos WHERE estado='aberto' AND nome=$1 AND data=CURRENT_DATE", [nome]);
     if (aberto.rows.length) return res.status(400).json({ erro: `Turno ${nome} já está aberto hoje` });
-    const r = await query('INSERT INTO turnos (nome, data, utilizador_id, fundo_inicial, notas) VALUES ($1, CURRENT_DATE, $2, $3, $4) RETURNING *',
+    const r = await query("INSERT INTO turnos (nome, data, utilizador_id, estado, fundo_inicial, notas) VALUES ($1, CURRENT_DATE, $2, 'aberto', $3, $4) RETURNING *",
       [nome, req.user.id, fundo_inicial||0, notas||'']);
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -183,14 +183,15 @@ app.post('/api/comandas/:id/fechar', auth, async (req, res) => {
     if (!comanda.rows.length) throw new Error('Comanda não encontrada');
     const c = comanda.rows[0];
     const itens = await client.query("SELECT ci.*, p.nome FROM comanda_itens ci LEFT JOIN produtos p ON ci.produto_id=p.id WHERE ci.comanda_id=$1 AND ci.estado!='cancelado'", [req.params.id]);
-    let total = 0;
+    let subtotal = 0;
     for (const item of itens.rows) {
-      total += parseFloat(item.subtotal);
+      subtotal += parseFloat(item.subtotal);
       await client.query('UPDATE produtos SET stock_atual = stock_atual - $1 WHERE id=$2', [item.quantidade, item.produto_id]);
     }
-    total = total - (desconto||0);
-    const venda = await client.query('INSERT INTO vendas (cliente_nome, utilizador_id, metodo_pagamento, total, subtotal, desconto_pct, turno_id, mesa_id, comanda_id, estado) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,\'concluido\') RETURNING *',
-      ['Mesa ' + (c.mesa_id||''), req.user.id, metodo_pagamento||'dinheiro', total, total, desconto||0, turno_id||c.turno_id, c.mesa_id, c.id]);
+    const desconto_pct = desconto || 0;
+    const total = subtotal * (1 - desconto_pct / 100);
+    const venda = await client.query("INSERT INTO vendas (cliente_nome, utilizador_id, metodo_pagamento, total, subtotal, desconto_pct, turno_id, mesa_id, comanda_id, estado) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'concluida') RETURNING *",
+      ['Mesa ' + (c.mesa_id||''), req.user.id, metodo_pagamento||'dinheiro', total, subtotal, desconto_pct, turno_id||c.turno_id, c.mesa_id, c.id]);
     await client.query('UPDATE comandas SET estado=$1, fechada_em=NOW(), total=$2 WHERE id=$3', ['fechada', total, req.params.id]);
     await client.query('UPDATE mesas SET estado=$1 WHERE id=$2', ['livre', c.mesa_id]);
     await client.query('COMMIT');

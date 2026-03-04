@@ -15,7 +15,14 @@ DROP TABLE IF EXISTS auditoria_alteracoes CASCADE;
 DROP TABLE IF EXISTS auditoria_log CASCADE;
 DROP TABLE IF EXISTS venda_itens CASCADE;
 DROP TABLE IF EXISTS vendas CASCADE;
+DROP TABLE IF EXISTS comanda_itens CASCADE;
+DROP TABLE IF EXISTS comandas CASCADE;
+DROP TABLE IF EXISTS fechos_caixa CASCADE;
+DROP TABLE IF EXISTS desperdicios CASCADE;
+DROP TABLE IF EXISTS escalas CASCADE;
 DROP TABLE IF EXISTS movimentacoes CASCADE;
+DROP TABLE IF EXISTS mesas CASCADE;
+DROP TABLE IF EXISTS turnos CASCADE;
 DROP TABLE IF EXISTS produtos CASCADE;
 DROP TABLE IF EXISTS clientes CASCADE;
 DROP TABLE IF EXISTS armazens CASCADE;
@@ -83,6 +90,56 @@ CREATE TABLE categorias (
 COMMENT ON TABLE categorias IS 'Categorias de produtos';
 
 -- ============================================================
+--  TABELA: turnos
+-- ============================================================
+CREATE TABLE turnos (
+    id                  SERIAL          PRIMARY KEY,
+    nome                VARCHAR(20)     NOT NULL CHECK (nome IN ('manha','tarde','noite')),
+    data                DATE            NOT NULL DEFAULT CURRENT_DATE,
+    utilizador_id       UUID            REFERENCES utilizadores(id) ON DELETE SET NULL,
+    estado              VARCHAR(10)     NOT NULL DEFAULT 'aberto' CHECK (estado IN ('aberto','fechado')),
+    fundo_inicial       NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    total_vendas        NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    total_dinheiro      NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    total_transferencia NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    total_cartao        NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    total_desperdicio   NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    notas               TEXT            NOT NULL DEFAULT '',
+    aberto_em           TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    fechado_em          TIMESTAMPTZ,
+    UNIQUE (nome, data)
+);
+
+COMMENT ON TABLE turnos IS 'Turnos de trabalho (manhã, tarde, noite)';
+
+-- ============================================================
+--  TABELA: mesas
+-- ============================================================
+CREATE TABLE mesas (
+    id          SERIAL          PRIMARY KEY,
+    numero      INTEGER         NOT NULL UNIQUE,
+    capacidade  INTEGER         NOT NULL DEFAULT 4,
+    estado      VARCHAR(20)     NOT NULL DEFAULT 'livre' CHECK (estado IN ('livre','ocupada','reservada')),
+    criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE mesas IS 'Mesas do restaurante/estabelecimento';
+
+-- ============================================================
+--  TABELA: escalas
+-- ============================================================
+CREATE TABLE escalas (
+    id              SERIAL      PRIMARY KEY,
+    utilizador_id   UUID        NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+    data            DATE        NOT NULL,
+    turno           VARCHAR(20) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+    criado_em       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (utilizador_id, data, turno)
+);
+
+COMMENT ON TABLE escalas IS 'Escalas de trabalho dos utilizadores';
+
+-- ============================================================
 --  TABELA: clientes
 -- ============================================================
 CREATE TABLE clientes (
@@ -141,6 +198,7 @@ CREATE TABLE movimentacoes (
     armazem_destino UUID                REFERENCES armazens(id) ON DELETE SET NULL,
     motivo          TEXT,
     referencia      VARCHAR(100),       -- ex: "VND-0001", "PO-0045"
+    turno_id        INTEGER             REFERENCES turnos(id) ON DELETE SET NULL,
     utilizador_id   UUID                REFERENCES utilizadores(id) ON DELETE SET NULL,
     criado_em       TIMESTAMPTZ         NOT NULL DEFAULT NOW()
 );
@@ -165,6 +223,9 @@ CREATE TABLE vendas (
     subtotal        NUMERIC(15,2)       NOT NULL DEFAULT 0,
     total           NUMERIC(15,2)       NOT NULL DEFAULT 0,
     estado          estado_venda        NOT NULL DEFAULT 'concluida',
+    turno_id        INTEGER             REFERENCES turnos(id) ON DELETE SET NULL,
+    mesa_id         INTEGER             REFERENCES mesas(id) ON DELETE SET NULL,
+    comanda_id      INTEGER,
     notas           TEXT,
     criado_em       TIMESTAMPTZ         NOT NULL DEFAULT NOW(),
     atualizado_em   TIMESTAMPTZ         NOT NULL DEFAULT NOW()
@@ -194,6 +255,76 @@ COMMENT ON TABLE venda_itens IS 'Linhas/itens de cada venda';
 
 CREATE INDEX idx_vitens_venda   ON venda_itens(venda_id);
 CREATE INDEX idx_vitens_produto ON venda_itens(produto_id);
+
+-- ============================================================
+--  TABELA: comandas
+-- ============================================================
+CREATE TABLE comandas (
+    id              SERIAL          PRIMARY KEY,
+    mesa_id         INTEGER         REFERENCES mesas(id) ON DELETE SET NULL,
+    turno_id        INTEGER         REFERENCES turnos(id) ON DELETE SET NULL,
+    utilizador_id   UUID            REFERENCES utilizadores(id) ON DELETE SET NULL,
+    num_pessoas     INTEGER         NOT NULL DEFAULT 1,
+    estado          VARCHAR(10)     NOT NULL DEFAULT 'aberta' CHECK (estado IN ('aberta','fechada','cancelada')),
+    total           NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    notas           TEXT            NOT NULL DEFAULT '',
+    aberta_em       TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    fechada_em      TIMESTAMPTZ
+);
+
+COMMENT ON TABLE comandas IS 'Comandas abertas nas mesas';
+
+-- ============================================================
+--  TABELA: comanda_itens
+-- ============================================================
+CREATE TABLE comanda_itens (
+    id              SERIAL          PRIMARY KEY,
+    comanda_id      INTEGER         NOT NULL REFERENCES comandas(id) ON DELETE CASCADE,
+    produto_id      UUID            REFERENCES produtos(id) ON DELETE SET NULL,
+    quantidade      INTEGER         NOT NULL CHECK (quantidade > 0),
+    preco_unitario  NUMERIC(15,2)   NOT NULL,
+    subtotal        NUMERIC(15,2)   NOT NULL,
+    estado          VARCHAR(10)     NOT NULL DEFAULT 'ativo' CHECK (estado IN ('ativo','cancelado')),
+    notas           TEXT            NOT NULL DEFAULT ''
+);
+
+COMMENT ON TABLE comanda_itens IS 'Itens de cada comanda';
+
+-- ============================================================
+--  TABELA: desperdicios
+-- ============================================================
+CREATE TABLE desperdicios (
+    id              SERIAL          PRIMARY KEY,
+    turno_id        INTEGER         REFERENCES turnos(id) ON DELETE SET NULL,
+    produto_id      UUID            REFERENCES produtos(id) ON DELETE SET NULL,
+    quantidade      INTEGER         NOT NULL CHECK (quantidade > 0),
+    motivo          TEXT,
+    utilizador_id   UUID            REFERENCES utilizadores(id) ON DELETE SET NULL,
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE desperdicios IS 'Registo de desperdícios por turno';
+
+-- ============================================================
+--  TABELA: fechos_caixa
+-- ============================================================
+CREATE TABLE fechos_caixa (
+    id                  SERIAL          PRIMARY KEY,
+    turno_id            INTEGER         NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
+    utilizador_id       UUID            REFERENCES utilizadores(id) ON DELETE SET NULL,
+    total_vendas        NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    total_dinheiro      NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    total_transferencia NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    total_cartao        NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    dinheiro_contado    NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    diferenca           NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    num_vendas          INTEGER         NOT NULL DEFAULT 0,
+    total_desperdicio   NUMERIC(15,2)   NOT NULL DEFAULT 0,
+    notas               TEXT            NOT NULL DEFAULT '',
+    criado_em           TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE fechos_caixa IS 'Fecho de caixa no fim de cada turno';
 
 -- ============================================================
 --  TABELA: auditoria_log

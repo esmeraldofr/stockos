@@ -41,8 +41,6 @@ jobs:
           fi
 
           # Merge the PR
-          gh pr merge "$BRANCH" \
-            --base main \
+          gh pr merge "$PR_URL" \
             --merge \
-            --delete-branch=false \
-            --subject "chore: merge $BRANCH into main [auto]"
+            --delete-branch=false

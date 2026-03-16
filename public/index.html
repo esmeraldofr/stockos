@@ -1,1003 +1,949 @@
-<html lang="pt"><head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>StockOS · Restaurante</title>
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<title>StockOS</title>
 <style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { font-family: 'Segoe UI', sans-serif; background:#0f0f0f; color:#1a1a1a; }
-#loginScreen { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; background:#0f0f0f; }
-.login-logo { color:#fff; font-size:2.5rem; font-weight:700; letter-spacing:-1px; margin-bottom:4px; }
-.login-sub { color:#666; font-size:0.75rem; letter-spacing:4px; text-transform:uppercase; margin-bottom:40px; }
-.login-box { background:#fff; padding:40px; border-radius:16px; width:100%; max-width:400px; }
-.login-box h2 { font-size:1.5rem; margin-bottom:6px; }
-.login-box p { color:#666; font-size:0.9rem; margin-bottom:28px; }
-.field { margin-bottom:16px; }
-.field label { display:block; font-size:0.75rem; font-weight:600; letter-spacing:1px; text-transform:uppercase; margin-bottom:6px; color:#444; }
-.field input, .field select, .field textarea { width:100%; padding:12px 16px; border:1.5px solid #e5e5e5; border-radius:8px; font-size:0.95rem; background:#fffff0; outline:none; transition:border 0.2s; font-family:inherit; }
-.field input:focus, .field select:focus { border-color:#1a1a1a; }
-.btn-login { width:100%; padding:14px; background:#1a1a1a; color:#fff; border:none; border-radius:8px; font-size:1rem; font-weight:600; cursor:pointer; margin-top:8px; }
-.btn-login:hover { background:#333; }
-.login-link { text-align:center; margin-top:16px; font-size:0.85rem; color:#666; }
-.login-link a { color:#1a6ef5; text-decoration:none; font-weight:600; }
-#loginError { color:#e53e3e; font-size:0.85rem; margin-top:8px; display:none; text-align:center; }
-#setupScreen { display:none; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; background:#0f0f0f; }
-#app { display:none; min-height:100vh; background:#f5f5f5; }
-.layout { display:flex; min-height:100vh; }
-.sidebar { width:240px; background:#0f0f0f; color:#fff; display:flex; flex-direction:column; position:fixed; top:0; left:0; height:100vh; z-index:100; overflow-y:auto; }
-.sidebar-logo { padding:24px 20px 16px; border-bottom:1px solid #222; }
-.sidebar-logo h1 { font-size:1.4rem; font-weight:700; letter-spacing:-0.5px; }
-.sidebar-logo p { font-size:0.65rem; color:#666; letter-spacing:3px; text-transform:uppercase; margin-top:2px; }
-.sidebar-user { padding:16px 20px; border-bottom:1px solid #222; }
-.sidebar-user .user-name { font-size:0.9rem; font-weight:600; }
-.sidebar-user .user-role { font-size:0.75rem; color:#888; margin-top:2px; }
-.turno-badge { margin:12px 20px; padding:8px 12px; border-radius:8px; font-size:0.8rem; }
-.turno-badge.aberto { background:#1a3a2a; color:#4ade80; }
-.turno-badge.fechado { background:#2a1a1a; color:#f87171; }
-.sidebar-nav { flex:1; padding:12px 0; }
-.nav-section { padding:8px 20px 4px; font-size:0.65rem; color:#555; text-transform:uppercase; letter-spacing:2px; }
-.nav-item { display:flex; align-items:center; gap:10px; padding:10px 20px; color:#aaa; font-size:0.88rem; cursor:pointer; transition:all 0.15s; border-left:3px solid transparent; }
-.nav-item:hover { background:#1a1a1a; color:#fff; }
-.nav-item.active { background:#1a1a1a; color:#fff; border-left-color:#fff; }
-.nav-item .icon { font-size:1.1rem; width:20px; text-align:center; }
-.sidebar-footer { padding:16px 20px; border-top:1px solid #222; }
-.btn-logout { width:100%; padding:10px; background:transparent; color:#888; border:1px solid #333; border-radius:8px; font-size:0.85rem; cursor:pointer; }
-.btn-logout:hover { background:#1a1a1a; color:#fff; }
-.main { margin-left:240px; flex:1; padding:32px; }
-.page { display:none; }
-.page.active { display:block; }
-.page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:28px; flex-wrap:wrap; gap:12px; }
-.page-header h2 { font-size:1.5rem; font-weight:700; }
-.cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:16px; margin-bottom:28px; }
-.card { background:#fff; border-radius:12px; padding:20px; border:1px solid #e5e5e5; }
-.card-label { font-size:0.75rem; color:#888; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
-.card-value { font-size:1.6rem; font-weight:700; }
-.card-value.danger { color:#e53e3e; }
-.card-value.success { color:#38a169; }
-.card-value.warning { color:#d69e2e; }
-.table-wrap { background:#fff; border-radius:12px; border:1px solid #e5e5e5; overflow:hidden; margin-bottom:20px; }
-.table-toolbar { padding:16px 20px; border-bottom:1px solid #f0f0f0; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-.search-input { flex:1; min-width:200px; padding:8px 14px; border:1.5px solid #e5e5e5; border-radius:8px; font-size:0.9rem; outline:none; }
-.search-input:focus { border-color:#1a1a1a; }
-table { width:100%; border-collapse:collapse; }
-th { padding:12px 16px; text-align:left; font-size:0.75rem; color:#888; text-transform:uppercase; letter-spacing:1px; border-bottom:1px solid #f0f0f0; background:#fafafa; }
-td { padding:12px 16px; font-size:0.88rem; border-bottom:1px solid #f7f7f7; }
-tr:last-child td { border-bottom:none; }
-tr:hover td { background:#fafafa; }
-.badge { display:inline-block; padding:3px 10px; border-radius:99px; font-size:0.75rem; font-weight:600; }
-.badge-green { background:#e6f7ef; color:#276749; }
-.badge-red { background:#fce8e8; color:#c53030; }
-.badge-yellow { background:#fef9e7; color:#b7791f; }
-.badge-blue { background:#ebf4ff; color:#2b6cb0; }
-.badge-gray { background:#f0f0f0; color:#666; }
-.badge-purple { background:#f3e8ff; color:#6b21a8; }
-.btn { padding:8px 16px; border-radius:8px; font-size:0.88rem; font-weight:600; cursor:pointer; border:none; transition:all 0.15s; }
-.btn-primary { background:#1a1a1a; color:#fff; }
-.btn-primary:hover { background:#333; }
-.btn-secondary { background:#f0f0f0; color:#333; }
-.btn-secondary:hover { background:#e0e0e0; }
-.btn-danger { background:#fce8e8; color:#c53030; }
-.btn-danger:hover { background:#f8d7d7; }
-.btn-success { background:#e6f7ef; color:#276749; }
-.btn-success:hover { background:#d4eddf; }
-.btn-warning { background:#fef9e7; color:#b7791f; }
-.btn-sm { padding:5px 10px; font-size:0.8rem; }
-.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; display:none; align-items:center; justify-content:center; padding:20px; }
-.modal-overlay.open { display:flex; }
-.modal { background:#fff; border-radius:16px; padding:32px; width:100%; max-width:500px; max-height:90vh; overflow-y:auto; }
-.modal h3 { font-size:1.2rem; margin-bottom:20px; }
-.modal-actions { display:flex; gap:12px; justify-content:flex-end; margin-top:24px; }
-.form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-.alert { padding:12px 16px; border-radius:8px; margin-bottom:16px; font-size:0.9rem; }
-.alert-error { background:#fce8e8; color:#c53030; }
-.alert-success { background:#e6f7ef; color:#276749; }
-.alert-warning { background:#fef9e7; color:#b7791f; }
-.empty { text-align:center; padding:48px; color:#aaa; }
-.empty-icon { font-size:2.5rem; margin-bottom:12px; }
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+input,select,button,textarea{font-family:inherit}
 
-/* MESAS GRID */
-.mesas-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px,1fr)); gap:16px; }
-.mesa-card { background:#fff; border-radius:12px; padding:20px; border:2px solid #e5e5e5; cursor:pointer; text-align:center; transition:all 0.2s; }
-.mesa-card:hover { transform:translateY(-2px); box-shadow:0 4px 12px rgba(0,0,0,0.1); }
-.mesa-card.livre { border-color:#e5e5e5; }
-.mesa-card.ocupada { border-color:#f87171; background:#fff5f5; }
-.mesa-card.reservada { border-color:#fbbf24; background:#fffbeb; }
-.mesa-numero { font-size:2rem; font-weight:700; margin-bottom:4px; }
-.mesa-info { font-size:0.8rem; color:#888; }
-.mesa-total { font-size:0.9rem; font-weight:600; color:#276749; margin-top:4px; }
+/* Layout */
+#app{display:flex;flex-direction:column;min-height:100vh}
+#content{flex:1;padding:16px;padding-bottom:80px;max-width:900px;margin:0 auto;width:100%}
+#navbar{position:fixed;bottom:0;left:0;right:0;background:#1e293b;border-top:1px solid #334155;display:flex;z-index:100}
+.nav-btn{flex:1;padding:12px 4px;background:none;border:none;color:#94a3b8;cursor:pointer;font-size:11px;display:flex;flex-direction:column;align-items:center;gap:3px;transition:.2s}
+.nav-btn.active{color:#3b82f6}
+.nav-btn svg{width:22px;height:22px}
 
-/* TURNO SELECTOR */
-.turno-selector { display:flex; gap:12px; margin-bottom:24px; }
-.turno-btn { flex:1; padding:16px; border-radius:12px; border:2px solid #e5e5e5; background:#fff; cursor:pointer; text-align:center; transition:all 0.2s; }
-.turno-btn:hover { border-color:#1a1a1a; }
-.turno-btn.selected { border-color:#1a1a1a; background:#1a1a1a; color:#fff; }
-.turno-btn .turno-icon { font-size:1.8rem; margin-bottom:4px; }
-.turno-btn .turno-nome { font-size:0.9rem; font-weight:600; }
-.turno-btn .turno-hora { font-size:0.75rem; color:#888; }
-.turno-btn.selected .turno-hora { color:#aaa; }
+/* Header */
+#header{background:#1e293b;border-bottom:1px solid #334155;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
+#header h1{font-size:18px;font-weight:700;color:#f1f5f9}
+.header-sub{font-size:12px;color:#64748b}
 
-/* COMANDA */
-.comanda-card { background:#fff; border-radius:12px; padding:20px; border:1px solid #e5e5e5; margin-bottom:12px; }
-.comanda-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
-.comanda-itens { border-top:1px solid #f0f0f0; padding-top:12px; }
-.comanda-item { display:flex; justify-content:space-between; align-items:center; padding:6px 0; font-size:0.88rem; }
+/* Cards */
+.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:16px;margin-bottom:12px}
+.card-title{font-size:13px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px}
+
+/* Botões */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 18px;border-radius:8px;border:none;cursor:pointer;font-size:14px;font-weight:600;transition:.2s}
+.btn:disabled{opacity:.5;cursor:default}
+.btn-primary{background:#3b82f6;color:#fff}
+.btn-primary:hover:not(:disabled){background:#2563eb}
+.btn-success{background:#22c55e;color:#fff}
+.btn-success:hover:not(:disabled){background:#16a34a}
+.btn-danger{background:#ef4444;color:#fff}
+.btn-danger:hover:not(:disabled){background:#dc2626}
+.btn-ghost{background:#334155;color:#e2e8f0}
+.btn-ghost:hover:not(:disabled){background:#475569}
+.btn-sm{padding:6px 12px;font-size:12px}
+.btn-full{width:100%}
+
+/* Inputs */
+.field{margin-bottom:14px}
+.field label{display:block;font-size:13px;color:#94a3b8;margin-bottom:5px}
+.field input,.field select{width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 12px;color:#f1f5f9;font-size:14px}
+.field input:focus,.field select:focus{outline:none;border-color:#3b82f6}
+
+/* Badges */
+.badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600}
+.badge-green{background:#14532d;color:#4ade80}
+.badge-red{background:#450a0a;color:#f87171}
+.badge-amber{background:#451a03;color:#fb923c}
+.badge-blue{background:#172554;color:#60a5fa}
+.badge-grey{background:#1e293b;color:#64748b}
+
+/* Turno cards */
+.turno-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px}
+@media(max-width:500px){.turno-cards{grid-template-columns:1fr}}
+.turno-card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px;cursor:pointer;transition:.2s}
+.turno-card:hover{border-color:#3b82f6;background:#172554}
+.turno-card.aberto{border-color:#22c55e}
+.turno-card.fechado{border-color:#475569;opacity:.8}
+.turno-card-nome{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8;margin-bottom:6px}
+.turno-card-status{margin-bottom:8px}
+.turno-card-value{font-size:20px;font-weight:700;color:#f1f5f9}
+.turno-card-label{font-size:11px;color:#64748b}
+.turno-card-abrir{margin-top:10px}
+
+/* Tabela de stock */
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:580px}
+th{background:#0f172a;color:#64748b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;text-align:left;position:sticky;top:0}
+td{padding:6px 10px;border-bottom:1px solid #1e293b}
+tr:hover td{background:#1e293b}
+.td-name{font-weight:500;white-space:nowrap}
+.td-cat{font-size:10px;color:#64748b}
+.td-input{width:70px}
+.td-input input{width:65px;background:#0f172a;border:1px solid #334155;border-radius:6px;padding:5px 6px;color:#f1f5f9;font-size:13px;text-align:right}
+.td-input input:focus{outline:none;border-color:#3b82f6}
+.td-calc{color:#94a3b8;text-align:right;font-variant-numeric:tabular-nums}
+.td-valor{color:#4ade80;text-align:right;font-weight:600}
+.comp-igual{color:#4ade80;font-size:12px}
+.comp-falta{color:#f87171;font-size:12px}
+.comp-sobra{color:#fb923c;font-size:12px}
+.comp-null{color:#334155;font-size:12px}
+.section-header{background:#0f172a;color:#3b82f6;font-size:11px;font-weight:700;text-transform:uppercase;padding:6px 10px;letter-spacing:.5px}
+
+/* Caixa grid */
+.caixa-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+@media(max-width:400px){.caixa-grid{grid-template-columns:1fr}}
+.caixa-item label{display:block;font-size:12px;color:#64748b;margin-bottom:4px}
+.caixa-item input{width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:9px 12px;color:#f1f5f9;font-size:16px;text-align:right}
+.caixa-item input:focus{outline:none;border-color:#3b82f6}
+.caixa-total{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid #334155}
+.caixa-total-label{font-size:13px;color:#94a3b8}
+.caixa-total-value{font-size:18px;font-weight:700;color:#4ade80}
+
+/* Dashboard totals */
+.total-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:400px){.total-grid{grid-template-columns:1fr}}
+.total-item{background:#0f172a;border-radius:8px;padding:12px}
+.total-item-label{font-size:11px;color:#64748b;margin-bottom:4px}
+.total-item-value{font-size:20px;font-weight:700;color:#f1f5f9}
+
+/* Date nav */
+.date-nav{display:flex;align-items:center;gap:10px;background:#1e293b;border:1px solid #334155;border-radius:10px;padding:8px 12px;margin-bottom:16px}
+.date-nav button{background:none;border:none;color:#94a3b8;cursor:pointer;padding:2px 6px;font-size:18px;border-radius:4px}
+.date-nav button:hover{background:#334155;color:#f1f5f9}
+.date-nav span{flex:1;text-align:center;font-weight:600;font-size:15px}
+
+/* Login */
+#login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px}
+.login-box{background:#1e293b;border:1px solid #334155;border-radius:16px;padding:32px;width:100%;max-width:380px}
+.login-logo{font-size:28px;font-weight:800;color:#3b82f6;margin-bottom:4px}
+.login-sub{color:#64748b;font-size:14px;margin-bottom:28px}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;display:flex;align-items:flex-end;justify-content:center}
+.modal{background:#1e293b;border-radius:16px 16px 0 0;width:100%;max-width:600px;max-height:90vh;overflow-y:auto;padding:20px}
+.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.modal-title{font-size:16px;font-weight:700}
+.modal-close{background:none;border:none;color:#64748b;cursor:pointer;font-size:22px;line-height:1}
+
+/* Setup */
+.setup-banner{background:#172554;border:1px solid #1d4ed8;border-radius:10px;padding:14px;margin-bottom:16px;font-size:13px;color:#93c5fd}
+
+/* Produto list */
+.produto-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #334155}
+.produto-row:last-child{border-bottom:none}
+.produto-info{flex:1}
+.produto-nome{font-size:14px;font-weight:500}
+.produto-meta{font-size:12px;color:#64748b}
+.produto-actions{display:flex;gap:6px}
+
+/* Alert */
+.alert{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:12px}
+.alert-error{background:#450a0a;color:#fca5a5;border:1px solid #7f1d1d}
+.alert-success{background:#14532d;color:#86efac;border:1px solid #166534}
+
+/* Utils */
+.text-center{text-align:center}
+.text-right{text-align:right}
+.mt-8{margin-top:8px}
+.mt-12{margin-top:12px}
+.mt-16{margin-top:16px}
+.flex{display:flex}
+.gap-8{gap:8px}
+.items-center{align-items:center}
+.justify-between{justify-content:space-between}
+.hidden{display:none}
+.spinner{display:inline-block;width:18px;height:18px;border:2px solid #334155;border-top-color:#3b82f6;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
-
-<!-- LOGIN -->
-<div id="loginScreen" style="display: flex;">
-  <div class="login-logo">StockOS</div>
-  <div class="login-sub">Restaurante · Luanda</div>
-  <div class="login-box">
-    <h2>Bem-vindo</h2>
-    <p>Introduza as suas credenciais</p>
-    <div class="field"><label>Email</label><input type="email" id="loginEmail" placeholder="email@restaurante.ao"></div>
-    <div class="field"><label>Password</label><input type="password" id="loginPassword" onkeydown="if(event.key==='Enter') doLogin()"></div>
-    <div id="loginError"></div>
-    <button class="btn-login" onclick="doLogin()">Entrar →</button>
-    <div class="login-link">Primeiro acesso? <a href="#" onclick="showSetup()">Definir password</a></div>
-  </div>
-</div>
-
-<!-- SETUP -->
-<div id="setupScreen" style="display: none;">
-  <div class="login-logo">StockOS</div>
-  <div class="login-sub">Primeiro Acesso</div>
-  <div class="login-box">
-    <h2>Definir Password</h2>
-    <p>Use o código de activação fornecido</p>
-    <div class="field"><label>Email</label><input type="email" id="setupEmail"></div>
-    <div class="field"><label>Código</label><input type="text" id="setupCodigo" placeholder="STOCKOS2025"></div>
-    <div class="field"><label>Nova Password</label><input type="password" id="setupPassword"></div>
-    <div id="setupMsg"></div>
-    <button class="btn-login" onclick="doSetup()">Definir →</button>
-    <div class="login-link"><a href="#" onclick="showLogin()">← Voltar</a></div>
-  </div>
-</div>
-
-<!-- APP -->
-<div id="app" style="display: none;">
-  <div class="layout">
-    <div class="sidebar">
-      <div class="sidebar-logo"><h1>StockOS</h1><p>Restaurante</p></div>
-      <div class="sidebar-user">
-        <div class="user-name" id="sidebarNome">Admin Sistema</div>
-        <div class="user-role" id="sidebarRole">Administrador</div>
-      </div>
-      <div id="turnoBadge" class="turno-badge aberto">🌅 Turno manha activo</div>
-      <nav class="sidebar-nav">
-        <div class="nav-section">Operação</div>
-        <div class="nav-item active" onclick="navTo('dashboard',this)"><span class="icon">📊</span> Dashboard</div>
-        <div class="nav-item" onclick="navTo('turnos',this)"><span class="icon">🔄</span> Turnos</div>
-        <div class="nav-item" onclick="navTo('mesas',this)"><span class="icon">🪑</span> Mesas</div>
-        <div class="nav-item" onclick="navTo('comandas',this)"><span class="icon">📋</span> Comandas</div>
-        <div class="nav-section">Stock</div>
-        <div class="nav-item" onclick="navTo('produtos',this)"><span class="icon">📦</span> Produtos</div>
-        <div class="nav-item" onclick="navTo('movimentos',this)"><span class="icon">↕️</span> Movimentos</div>
-        <div class="nav-item" onclick="navTo('desperdicios',this)"><span class="icon">🗑️</span> Desperdício</div>
-        <div class="nav-section">Gestão</div>
-        <div class="nav-item" onclick="navTo('vendas',this)"><span class="icon">🛒</span> Vendas</div>
-        <div class="nav-item" onclick="navTo('escalas',this)"><span class="icon">📅</span> Escalas</div>
-        <div class="nav-item" onclick="navTo('categorias',this)"><span class="icon">🏷️</span> Categorias</div>
-        <div class="nav-item admin-only" onclick="navTo('utilizadores',this)"><span class="icon">👥</span> Utilizadores</div>
-      </nav>
-      <div class="sidebar-footer">
-        <button class="btn-logout" onclick="doLogout()">Terminar Sessão</button>
-      </div>
-    </div>
-
-    <div class="main">
-
-      <!-- DASHBOARD -->
-      <div id="page-dashboard" class="page active">
-        <div class="page-header"><h2>Dashboard</h2><span id="dataHoje" style="color:#888;font-size:0.9rem;">terça-feira, 3 de março</span></div>
-        <div id="turnoAlerta" style="margin-bottom: 20px; display: block;"><div class="alert alert-warning">⚠️ Nenhum turno activo! Vá a <a href="#" onclick="navTo('turnos',null)">Turnos</a> para abrir.</div></div>
-        <div class="cards">
-          <div class="card"><div class="card-label">Produtos</div><div class="card-value" id="d-produtos"></div></div>
-          <div class="card"><div class="card-label">Valor Stock</div><div class="card-value" id="d-valor">0&nbsp;Kz</div></div>
-          <div class="card"><div class="card-label">Stock Baixo</div><div class="card-value danger" id="d-baixo"></div></div>
-          <div class="card"><div class="card-label">Vendas Hoje</div><div class="card-value success" id="d-vendas"></div></div>
-          <div class="card"><div class="card-label">Receita Hoje</div><div class="card-value success" id="d-receita">0&nbsp;Kz</div></div>
-          <div class="card"><div class="card-label">Desperdício</div><div class="card-value warning" id="d-desp">0&nbsp;Kz</div></div>
-        </div>
-        <div class="table-wrap">
-          <div class="table-toolbar"><strong>Turno Activo</strong></div>
-          <div id="turnoActivoInfo" style="padding:20px;color:#888;"><div style="padding:20px;color:#888;">Nenhum turno activo. Abra um turno em <strong>Turnos</strong>.</div></div>
-        </div>
-      </div>
-
-      <!-- TURNOS -->
-      <div id="page-turnos" class="page">
-        <div class="page-header"><h2>Gestão de Turnos</h2></div>
-        <div class="turno-selector">
-          <div class="turno-btn" id="tbManha" onclick="selectTurno('manha')">
-            <div class="turno-icon">🌅</div><div class="turno-nome">Manhã</div><div class="turno-hora">06:00 – 14:00</div>
-          </div>
-          <div class="turno-btn" id="tbTarde" onclick="selectTurno('tarde')">
-            <div class="turno-icon">☀️</div><div class="turno-nome">Tarde</div><div class="turno-hora">14:00 – 22:00</div>
-          </div>
-          <div class="turno-btn" id="tbNoite" onclick="selectTurno('noite')">
-            <div class="turno-icon">🌙</div><div class="turno-nome">Noite</div><div class="turno-hora">22:00 – 06:00</div>
-          </div>
-        </div>
-        <div style="display:flex;gap:12px;margin-bottom:24px;">
-          <button class="btn btn-success" onclick="abrirTurno()">▶ Abrir Turno</button>
-          <button class="btn btn-danger" onclick="openModal('modalFecharTurno')">⏹ Fechar Turno</button>
-        </div>
-        <div class="table-wrap">
-          <table><thead><tr><th>Data</th><th>Turno</th><th>Responsável</th><th>Estado</th><th>Vendas</th><th>Dinheiro</th><th>Desperdício</th><th></th></tr></thead>
-          <tbody id="tbTurnos"></tbody></table>
-        </div>
-      </div>
-
-      <!-- MESAS -->
-      <div id="page-mesas" class="page">
-        <div class="page-header"><h2>Mesas</h2><button class="btn btn-primary" onclick="openModal('modalNovaComanda')">+ Nova Comanda</button></div>
-        <div class="mesas-grid" id="mesasGrid"></div>
-      </div>
-
-      <!-- COMANDAS -->
-      <div id="page-comandas" class="page">
-        <div class="page-header"><h2>Comandas Abertas</h2></div>
-        <div id="comandasLista"></div>
-      </div>
-
-      <!-- PRODUTOS -->
-      <div id="page-produtos" class="page">
-        <div class="page-header"><h2>Produtos</h2><button class="btn btn-primary" onclick="openModal('modalProduto')">+ Novo Produto</button></div>
-        <div class="table-wrap">
-          <div class="table-toolbar"><input class="search-input" placeholder="Pesquisar..." oninput="filtrarProdutos(this.value)"></div>
-          <table><thead><tr><th>Nome</th><th>SKU</th><th>Categoria</th><th>Stock</th><th>Preço Venda</th><th>Estado</th><th></th></tr></thead>
-          <tbody id="tbProdutos"></tbody></table>
-        </div>
-      </div>
-
-      <!-- MOVIMENTOS -->
-      <div id="page-movimentos" class="page">
-        <div class="page-header"><h2>Movimentos de Stock</h2><button class="btn btn-primary" onclick="openModal('modalMovimento')">+ Registar</button></div>
-        <div class="table-wrap">
-          <table><thead><tr><th>Data</th><th>Produto</th><th>Tipo</th><th>Qtd</th><th>Motivo</th><th>Turno</th><th>Utilizador</th></tr></thead>
-          <tbody id="tbMovimentos"></tbody></table>
-        </div>
-      </div>
-
-      <!-- DESPERDÍCIO -->
-      <div id="page-desperdicios" class="page">
-        <div class="page-header"><h2>Registo de Desperdício</h2><button class="btn btn-primary" onclick="openModal('modalDesperdicio')">+ Registar</button></div>
-        <div class="table-wrap">
-          <table><thead><tr><th>Data</th><th>Produto</th><th>Quantidade</th><th>Motivo</th><th>Turno</th><th>Utilizador</th></tr></thead>
-          <tbody id="tbDesperdicios"></tbody></table>
-        </div>
-      </div>
-
-      <!-- VENDAS -->
-      <div id="page-vendas" class="page">
-        <div class="page-header"><h2>Histórico de Vendas</h2></div>
-        <div class="table-wrap">
-          <table><thead><tr><th>Data</th><th>Mesa</th><th>Total</th><th>Pagamento</th><th>Estado</th><th>Utilizador</th></tr></thead>
-          <tbody id="tbVendas"></tbody></table>
-        </div>
-      </div>
-
-      <!-- ESCALAS -->
-      <div id="page-escalas" class="page">
-        <div class="page-header"><h2>Escalas de Trabalho</h2><button class="btn btn-primary admin-only" onclick="openModal('modalEscala')">+ Adicionar</button></div>
-        <div class="table-wrap">
-          <table><thead><tr><th>Data</th><th>Turno</th><th>Colaborador</th><th></th></tr></thead>
-          <tbody id="tbEscalas"></tbody></table>
-        </div>
-      </div>
-
-      <!-- CATEGORIAS -->
-      <div id="page-categorias" class="page">
-        <div class="page-header"><h2>Categorias</h2><button class="btn btn-primary" onclick="openModal('modalCategoria')">+ Nova</button></div>
-        <div class="table-wrap">
-          <table><thead><tr><th>Nome</th><th>Descrição</th></tr></thead>
-          <tbody id="tbCategorias"></tbody></table>
-        </div>
-      </div>
-
-      <!-- UTILIZADORES -->
-      <div id="page-utilizadores" class="page admin-only">
-        <div class="page-header"><h2>Utilizadores</h2><button class="btn btn-primary" onclick="openModal('modalUtilizador')">+ Novo</button></div>
-        <div class="table-wrap">
-          <table><thead><tr><th>Nome</th><th>Email</th><th>Função</th><th>Estado</th></tr></thead>
-          <tbody id="tbUtilizadores"></tbody></table>
-        </div>
-      </div>
-
-    </div>
-  </div>
-</div>
-
-<!-- MODAIS -->
-<div id="modalFecharTurno" class="modal-overlay">
-  <div class="modal">
-    <h3>⏹ Fechar Turno</h3>
-    <div class="field"><label>Dinheiro Contado (Kz)</label><input type="number" id="ftDinheiro" value="0" min="0"></div>
-    <div class="field"><label>Notas</label><textarea id="ftNotas" rows="3" placeholder="Observações do turno..."></textarea></div>
-    <div id="ftMsg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('modalFecharTurno')">Cancelar</button>
-      <button class="btn btn-danger" onclick="fecharTurno()">Fechar Turno</button>
-    </div>
-  </div>
-</div>
-
-<div id="modalNovaComanda" class="modal-overlay">
-  <div class="modal">
-    <h3>📋 Nova Comanda</h3>
-    <div class="field"><label>Mesa</label><select id="ncMesa"></select></div>
-    <div class="field"><label>Nº de Pessoas</label><input type="number" id="ncPessoas" value="2" min="1"></div>
-    <div class="field"><label>Notas</label><input id="ncNotas" placeholder="Observações..."></div>
-    <div id="ncMsg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('modalNovaComanda')">Cancelar</button>
-      <button class="btn btn-primary" onclick="criarComanda()">Abrir Comanda</button>
-    </div>
-  </div>
-</div>
-
-<div id="modalAddItem" class="modal-overlay">
-  <div class="modal">
-    <h3>➕ Adicionar Item</h3>
-    <input type="hidden" id="aiComandaId">
-    <div class="field"><label>Produto</label><select id="aiProduto"></select></div>
-    <div class="field"><label>Quantidade</label><input type="number" id="aiQtd" value="1" min="1"></div>
-    <div class="field"><label>Notas</label><input id="aiNotas" placeholder="Ex: sem sal, bem passado..."></div>
-    <div id="aiMsg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('modalAddItem')">Cancelar</button>
-      <button class="btn btn-primary" onclick="addItemComanda()">Adicionar</button>
-    </div>
-  </div>
-</div>
-
-<div id="modalFecharComanda" class="modal-overlay">
-  <div class="modal">
-    <h3>💳 Fechar Comanda</h3>
-    <input type="hidden" id="fcComandaId">
-    <div id="fcResumo" style="background:#f9f9f9;border-radius:8px;padding:16px;margin-bottom:16px;"></div>
-    <div class="field"><label>Método de Pagamento</label>
-      <select id="fcMetodo">
-        <option value="dinheiro">💵 Dinheiro</option>
-        <option value="transferencia">📱 Transferência</option>
-        <option value="cartao">💳 Cartão</option>
-      </select>
-    </div>
-    <div class="field"><label>Desconto (Kz)</label><input type="number" id="fcDesconto" value="0" min="0"></div>
-    <div id="fcMsg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('modalFecharComanda')">Cancelar</button>
-      <button class="btn btn-success" onclick="fecharComanda()">✅ Fechar e Cobrar</button>
-    </div>
-  </div>
-</div>
-
-<div id="modalProduto" class="modal-overlay">
-  <div class="modal">
-    <h3 id="modalProdutoTitulo">Novo Produto</h3>
-    <input type="hidden" id="produtoId">
-    <div class="form-row">
-      <div class="field"><label>Nome</label><input id="produtoNome"></div>
-      <div class="field"><label>SKU</label><input id="produtoSku"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label>Categoria</label><select id="produtoCategoria"></select></div>
-      <div class="field"><label>Armazém</label><select id="produtoArmazem"></select></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label>Stock Actual</label><input type="number" id="produtoQtd" value="0"></div>
-      <div class="field"><label>Stock Mínimo</label><input type="number" id="produtoQtdMin" value="0"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label>Preço Custo (Kz)</label><input type="number" id="produtoCusto" value="0"></div>
-      <div class="field"><label>Preço Venda (Kz)</label><input type="number" id="produtoVenda" value="0"></div>
-    </div>
-    <div class="field"><label>Unidade</label>
-      <select id="produtoUnidade"><option>un</option><option>kg</option><option>lt</option><option>cx</option><option>dose</option><option>prato</option></select>
-    </div>
-    <div id="produtoMsg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('modalProduto')">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveProduto()">Guardar</button>
-    </div>
-  </div>
-</div>
-
-<div id="modalMovimento" class="modal-overlay">
-  <div class="modal">
-    <h3>Registar Movimento</h3>
-    <div class="field"><label>Produto</label><select id="movProduto"></select></div>
-    <div class="form-row">
-      <div class="field"><label>Tipo</label><select id="movTipo"><option value="entrada">Entrada</option><option value="saida">Saída</option></select></div>
-      <div class="field"><label>Quantidade</label><input type="number" id="movQtd" value="1" min="1"></div>
-    </div>
-    <div class="field"><label>Motivo</label><input id="movMotivo"></div>
-    <div id="movMsg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('modalMovimento')">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveMovimento()">Registar</button>
-    </div>
-  </div>
-</div>
-
-<div id="modalDesperdicio" class="modal-overlay">
-  <div class="modal">
-    <h3>🗑️ Registar Desperdício</h3>
-    <div class="field"><label>Produto</label><select id="despProduto"></select></div>
-    <div class="field"><label>Quantidade</label><input type="number" id="despQtd" value="1" min="1"></div>
-    <div class="field"><label>Motivo</label><input id="despMotivo" placeholder="Ex: prazo expirado, queda..."></div>
-    <div id="despMsg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('modalDesperdicio')">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveDesperdicio()">Registar</button>
-    </div>
-  </div>
-</div>
-
-<div id="modalEscala" class="modal-overlay">
-  <div class="modal">
-    <h3>📅 Adicionar à Escala</h3>
-    <div class="field"><label>Colaborador</label><select id="escUtilizador"></select></div>
-    <div class="field"><label>Data</label><input type="date" id="escData"></div>
-    <div class="field"><label>Turno</label>
-      <select id="escTurno"><option value="manha">🌅 Manhã</option><option value="tarde">☀️ Tarde</option><option value="noite">🌙 Noite</option></select>
-    </div>
-    <div id="escMsg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('modalEscala')">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveEscala()">Guardar</button>
-    </div>
-  </div>
-</div>
-
-<div id="modalCategoria" class="modal-overlay">
-  <div class="modal">
-    <h3>Nova Categoria</h3>
-    <div class="field"><label>Nome</label><input id="catNome"></div>
-    <div class="field"><label>Descrição</label><input id="catDesc"></div>
-    <div id="catMsg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('modalCategoria')">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveCategoria()">Guardar</button>
-    </div>
-  </div>
-</div>
-
-<div id="modalUtilizador" class="modal-overlay">
-  <div class="modal">
-    <h3>Novo Utilizador</h3>
-    <div class="field"><label>Nome</label><input id="utNome"></div>
-    <div class="field"><label>Email</label><input type="email" id="utEmail"></div>
-    <div class="field"><label>Função</label>
-      <select id="utRole"><option value="operador">Operador</option><option value="gestor">Gestor</option><option value="admin">Admin</option></select>
-    </div>
-    <div class="alert alert-success">Password inicial: <strong>StockOS2025!</strong></div>
-    <div id="utMsg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('modalUtilizador')">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveUtilizador()">Criar</button>
-    </div>
-  </div>
-</div>
+<div id="app"></div>
 
 <script>
-const API = '';
-let token = localStorage.getItem('stockos_token');
-let currentUser = (() => { try { return JSON.parse(localStorage.getItem('stockos_user') || 'null'); } catch { return null; } })();
-let produtosCache = [];
-let turnoAtivo = null;
-let turnoSelecionado = 'manha';
+// ── STATE ─────────────────────────────────────────────────────
+const S = {
+  token: localStorage.getItem('token') || null,
+  user: JSON.parse(localStorage.getItem('user') || 'null'),
+  page: 'dia',
+  date: new Date().toISOString().split('T')[0],
+  turnoId: null,
+  turnoData: null,
+  produtos: [],
+  utilizadores: []
+};
 
-async function apiFetch(path, opts={}) {
-  try {
-    const res = await fetch(API + path, { ...opts, headers: { 'Content-Type':'application/json', 'Authorization':`Bearer ${token}`, ...(opts.headers||{}) } });
-    if (res.status === 401) { doLogout(); return null; }
-    return await res.json();
-  } catch(e) { console.error('apiFetch error:', e); return null; }
+// ── API ───────────────────────────────────────────────────────
+const API = '/api';
+async function api(method, path, body) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${S.token}` }
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(API + path, opts);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.erro || 'Erro');
+  return data;
 }
 
-function showLogin() { document.getElementById('loginScreen').style.display='flex'; document.getElementById('setupScreen').style.display='none'; }
-function showSetup() { document.getElementById('loginScreen').style.display='none'; document.getElementById('setupScreen').style.display='flex'; }
+// ── HELPERS ───────────────────────────────────────────────────
+function fmt(v) {
+  const n = parseFloat(v) || 0;
+  return n.toLocaleString('pt-AO') + ' Kz';
+}
+function fmtNum(v) {
+  const n = parseFloat(v) || 0;
+  return n % 1 === 0 ? n.toString() : n.toFixed(2);
+}
+function turnoLabel(nome) {
+  return { manha: '🌅 Manhã', tarde: '🌤 Tarde', noite: '🌙 Noite' }[nome] || nome;
+}
+function dateLabel(d) {
+  const [y,m,dd] = d.split('-');
+  const today = new Date().toISOString().split('T')[0];
+  if (d === today) return 'Hoje';
+  const yest = new Date(); yest.setDate(yest.getDate()-1);
+  if (d === yest.toISOString().split('T')[0]) return 'Ontem';
+  return `${dd}/${m}/${y}`;
+}
+function addDays(d, n) {
+  const dt = new Date(d + 'T12:00:00Z');
+  dt.setDate(dt.getDate() + n);
+  return dt.toISOString().split('T')[0];
+}
+function render(html) { document.getElementById('app').innerHTML = html; }
+function show(id, html) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
+function val(id) { return document.getElementById(id)?.value || ''; }
+function err(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-error">${msg}</div>`; }
+function suc(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-success">${msg}</div>`; }
+
+// ── ROUTER ────────────────────────────────────────────────────
+function navigate(page, params) {
+  S.page = page;
+  if (params) Object.assign(S, params);
+  draw();
+}
+
+function draw() {
+  if (!S.token) { drawLogin(); return; }
+  switch (S.page) {
+    case 'dia':      drawDia(); break;
+    case 'turno':    drawTurno(); break;
+    case 'historico':drawHistorico(); break;
+    case 'produtos': drawProdutos(); break;
+    case 'admin':    drawAdmin(); break;
+    default:         drawDia();
+  }
+}
+
+// ── LOGIN ─────────────────────────────────────────────────────
+function drawLogin() {
+  render(`
+    <div id="login-screen">
+      <div class="login-box">
+        <div class="login-logo">StockOS</div>
+        <div class="login-sub">Sistema de gestão de turnos</div>
+        <div id="login-msg"></div>
+        <div class="field">
+          <label>Email</label>
+          <input id="l-email" type="email" placeholder="admin@stockos.ao" autocomplete="email"/>
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input id="l-pass" type="password" placeholder="••••••" autocomplete="current-password"/>
+        </div>
+        <button class="btn btn-primary btn-full" onclick="doLogin()">Entrar</button>
+        <div style="margin-top:20px;border-top:1px solid #334155;padding-top:16px">
+          <div style="font-size:12px;color:#64748b;margin-bottom:12px">Primeira vez? Configura a password:</div>
+          <button class="btn btn-ghost btn-sm btn-full" onclick="showSetup()">Configurar conta</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('l-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+}
 
 async function doLogin() {
-  const email = document.getElementById('loginEmail').value.trim();
-  const password = document.getElementById('loginPassword').value;
-  const errEl = document.getElementById('loginError');
-  errEl.style.display='none';
-  if (!email||!password) { errEl.textContent='Preencha email e password'; errEl.style.display='block'; return; }
+  const email = val('l-email'), password = val('l-pass');
   try {
-    const res = await fetch('/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email,password}) });
-    const data = await res.json();
-    if (!res.ok) { errEl.textContent=data.erro||'Erro ao autenticar'; errEl.style.display='block'; return; }
-    token=data.token; currentUser=data.user;
-    localStorage.setItem('stockos_token',token);
-    localStorage.setItem('stockos_user',JSON.stringify(currentUser));
-    enterApp();
-  } catch(e) { errEl.textContent='Erro de ligação'; errEl.style.display='block'; }
+    const data = await api('POST', '/auth/login', { email, password });
+    S.token = data.token; S.user = data.user;
+    localStorage.setItem('token', S.token);
+    localStorage.setItem('user', JSON.stringify(S.user));
+    navigate('dia');
+  } catch(e) { err('login-msg', e.message); }
+}
+
+function showSetup() {
+  document.getElementById('login-screen').innerHTML = `
+    <div class="login-box">
+      <div class="login-logo">StockOS</div>
+      <div class="login-sub">Configurar conta</div>
+      <div class="setup-banner">Usa o código <strong>STOCKOS2025</strong> para configurar a tua password.</div>
+      <div id="setup-msg"></div>
+      <div class="field"><label>Email</label><input id="s-email" type="email" placeholder="admin@stockos.ao"/></div>
+      <div class="field"><label>Código</label><input id="s-code" type="text" placeholder="STOCKOS2025"/></div>
+      <div class="field"><label>Nova Password</label><input id="s-pass" type="password" placeholder="Mínimo 6 caracteres"/></div>
+      <button class="btn btn-success btn-full" onclick="doSetup()">Guardar Password</button>
+      <button class="btn btn-ghost btn-full mt-8" onclick="drawLogin()">Voltar</button>
+    </div>
+  `;
 }
 
 async function doSetup() {
-  const res = await fetch('/api/auth/setup', { method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ email:document.getElementById('setupEmail').value, codigo:document.getElementById('setupCodigo').value, password:document.getElementById('setupPassword').value }) });
-  const data = await res.json();
-  const msgEl = document.getElementById('setupMsg');
-  if (!res.ok) { msgEl.innerHTML=`<div class="alert alert-error">${data.erro}</div>`; return; }
-  msgEl.innerHTML='<div class="alert alert-success">Password definida! Faça login.</div>';
-  setTimeout(showLogin,1500);
+  try {
+    await api('POST', '/auth/setup', { email: val('s-email'), codigo: val('s-code'), password: val('s-pass') });
+    suc('setup-msg', 'Password configurada! Já podes fazer login.');
+    setTimeout(drawLogin, 1500);
+  } catch(e) { err('setup-msg', e.message); }
 }
 
 function doLogout() {
-  token=null; currentUser=null;
-  localStorage.removeItem('stockos_token'); localStorage.removeItem('stockos_user');
-  document.getElementById('app').style.display='none';
-  document.getElementById('loginScreen').style.display='flex';
-  document.getElementById('loginPassword').value='';
+  S.token = null; S.user = null;
+  localStorage.removeItem('token'); localStorage.removeItem('user');
+  drawLogin();
 }
 
-function enterApp() {
-  document.getElementById('loginScreen').style.display='none';
-  document.getElementById('setupScreen').style.display='none';
-  document.getElementById('app').style.display='block';
-  document.getElementById('sidebarNome').textContent = currentUser.nome||currentUser.email;
-  document.getElementById('sidebarRole').textContent = {admin:'Administrador',gestor:'Gestor',operador:'Operador'}[currentUser.role]||currentUser.role;
-  document.getElementById('dataHoje').textContent = new Date().toLocaleDateString('pt-PT',{weekday:'long',day:'numeric',month:'long'});
-  if (currentUser.role!=='admin') document.querySelectorAll('.admin-only').forEach(el=>el.style.display='none');
-  navTo('dashboard', document.querySelector('.nav-item'));
+// ── NAV ───────────────────────────────────────────────────────
+function navBar() {
+  const isAdmin = S.user?.role === 'admin';
+  return `
+    <div id="navbar">
+      <button class="nav-btn ${S.page==='dia'?'active':''}" onclick="navigate('dia')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        Dia
+      </button>
+      <button class="nav-btn ${S.page==='historico'?'active':''}" onclick="navigate('historico')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Histórico
+      </button>
+      <button class="nav-btn ${S.page==='produtos'?'active':''}" onclick="navigate('produtos')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+        Produtos
+      </button>
+      ${isAdmin ? `
+      <button class="nav-btn ${S.page==='admin'?'active':''}" onclick="navigate('admin')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+        Admin
+      </button>` : ''}
+      <button class="nav-btn" onclick="doLogout()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        Sair
+      </button>
+    </div>
+  `;
 }
 
-function navTo(page, el) {
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-  document.getElementById('page-'+page).classList.add('active');
-  if(el) el.classList.add('active');
-  loadPage(page);
+// ── PÁGINA DIA ────────────────────────────────────────────────
+async function drawDia() {
+  render(`
+    <div id="header">
+      <div>
+        <div id="header-h1" style="font-size:18px;font-weight:700;color:#f1f5f9">StockOS</div>
+        <div class="header-sub">${S.user?.nome}</div>
+      </div>
+    </div>
+    <div id="content">
+      <div class="date-nav">
+        <button onclick="changeDate(-1)">‹</button>
+        <span id="date-label">${dateLabel(S.date)}</span>
+        <button onclick="changeDate(1)">›</button>
+      </div>
+      <div id="dia-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadDia();
 }
 
-function loadPage(p) {
-  const map = { dashboard:loadDashboard, turnos:loadTurnos, mesas:loadMesas, comandas:loadComandas,
-    produtos:loadProdutos, movimentos:loadMovimentos, desperdicios:loadDesperdicios,
-    vendas:loadVendas, escalas:loadEscalas, categorias:loadCategorias, utilizadores:loadUtilizadores };
-  if(map[p]) map[p]();
+function changeDate(n) {
+  S.date = addDays(S.date, n);
+  document.getElementById('date-label').textContent = dateLabel(S.date);
+  loadDia();
 }
 
-// ── TURNO ─────────────────────────────────────────────────────
-function selectTurno(t) {
-  turnoSelecionado = t;
-  ['manha','tarde','noite'].forEach(x => document.getElementById('tb'+x.charAt(0).toUpperCase()+x.slice(1))?.classList.remove('selected'));
-  document.getElementById('tb'+t.charAt(0).toUpperCase()+t.slice(1))?.classList.add('selected');
-}
+async function loadDia() {
+  try {
+    const [turnos, dash] = await Promise.all([
+      api('GET', `/dia?data=${S.date}`),
+      api('GET', `/dashboard?data=${S.date}`)
+    ]);
 
-async function loadTurnoAtivo() {
-  turnoAtivo = await apiFetch('/api/turnos/ativo');
-  const badge = document.getElementById('turnoBadge');
-  if (turnoAtivo) {
-    const icons = {manha:'🌅',tarde:'☀️',noite:'🌙'};
-    badge.className='turno-badge aberto';
-    badge.textContent = `${icons[turnoAtivo.nome]||'●'} Turno ${turnoAtivo.nome} activo`;
-  } else {
-    badge.className='turno-badge fechado';
-    badge.textContent='⚫ Sem turno activo';
-  }
-}
+    const turnoMap = {};
+    turnos.forEach(t => { turnoMap[t.nome] = t; });
 
-async function abrirTurno() {
-  if (!turnoSelecionado) { alert('Seleccione um turno'); return; }
-  const fundo = prompt('Fundo inicial de caixa (Kz)?', '0');
-  if (fundo === null) return;
-  const r = await apiFetch('/api/turnos/abrir', { method:'POST', body:JSON.stringify({ nome:turnoSelecionado, fundo_inicial:parseFloat(fundo)||0 }) });
-  if (r && r.id) { await loadTurnoAtivo(); loadTurnos(); alert(`Turno ${turnoSelecionado} aberto com sucesso!`); }
-  else alert(r?.erro||'Erro ao abrir turno');
-}
+    const cards = ['manha','tarde','noite'].map(nome => {
+      const t = turnoMap[nome];
+      if (!t) {
+        return `
+          <div class="turno-card" onclick="abrirTurno('${nome}')">
+            <div class="turno-card-nome">${turnoLabel(nome)}</div>
+            <div class="badge badge-grey" style="margin-bottom:8px">Não iniciado</div>
+            <div class="turno-card-abrir">
+              <button class="btn btn-primary btn-sm btn-full">Abrir Turno</button>
+            </div>
+          </div>`;
+      }
+      const totalVendas = t.total_vendas || 0;
+      const totalCaixa  = t.caixa?.total_final || 0;
+      const cls = t.estado === 'aberto' ? 'aberto' : 'fechado';
+      const badge = t.estado === 'aberto'
+        ? '<span class="badge badge-green">Aberto</span>'
+        : '<span class="badge badge-grey">Fechado</span>';
+      return `
+        <div class="turno-card ${cls}" onclick="navigate('turno',{turnoId:${t.id}})">
+          <div class="turno-card-nome">${turnoLabel(nome)}</div>
+          <div class="turno-card-status">${badge}</div>
+          <div class="turno-card-value">${fmt(totalCaixa)}</div>
+          <div class="turno-card-label">Total Caixa</div>
+          <div style="font-size:12px;color:#64748b;margin-top:4px">Vendas: ${fmt(totalVendas)}</div>
+        </div>`;
+    }).join('');
 
-async function fecharTurno() {
-  if (!turnoAtivo) { alert('Não há turno activo'); closeModal('modalFecharTurno'); return; }
-  const dinheiro = document.getElementById('ftDinheiro').value;
-  const notas = document.getElementById('ftNotas').value;
-  const r = await apiFetch(`/api/turnos/${turnoAtivo.id}/fechar`, { method:'POST', body:JSON.stringify({ dinheiro_contado:parseFloat(dinheiro)||0, notas }) });
-  if (r && r.id) {
-    closeModal('modalFecharTurno');
-    turnoAtivo = null;
-    await loadTurnoAtivo();
-    loadTurnos();
-    alert('Turno fechado! Relatório gerado.');
-  } else document.getElementById('ftMsg').innerHTML=`<div class="alert alert-error">${r?.erro||'Erro'}</div>`;
-}
-
-async function loadTurnos() {
-  await loadTurnoAtivo();
-  const data = await apiFetch('/api/turnos');
-  if(!data) return;
-  const tb = document.getElementById('tbTurnos');
-  if(!data.length) { tb.innerHTML='<tr><td colspan="8"><div class="empty"><div class="empty-icon">🔄</div>Sem turnos registados</div></td></tr>'; return; }
-  const icons = {manha:'🌅',tarde:'☀️',noite:'🌙'};
-  tb.innerHTML = data.map(t=>`<tr>
-    <td>${fmtDate(t.data||t.created_at)}</td>
-    <td>${icons[t.nome]||''} <strong>${t.nome}</strong></td>
-    <td>${esc(t.utilizador_nome||'–')}</td>
-    <td>${t.estado==='aberto'?'<span class="badge badge-green">Aberto</span>':'<span class="badge badge-gray">Fechado</span>'}</td>
-    <td>${fmt(t.total_vendas||0)}</td>
-    <td>${fmt(t.total_dinheiro||0)}</td>
-    <td>${fmt(t.total_desperdicio||0)}</td>
-    <td><button class="btn btn-secondary btn-sm" onclick="verRelatorio(${t.id})">Relatório</button></td>
-  </tr>`).join('');
-  selectTurno(turnoSelecionado||'manha');
-}
-
-async function verRelatorio(id) {
-  const r = await apiFetch(`/api/turnos/${id}/relatorio`);
-  if(!r||!r.turno) return;
-  const t = r.turno; const v = r.vendas;
-  alert(`📊 RELATÓRIO DO TURNO\n\nTurno: ${t.nome} — ${fmtDate(t.data||t.created_at)}\nResponsável: ${t.utilizador_nome||'–'}\n\n💰 VENDAS\nTotal: ${fmt(v.total)}\nNº vendas: ${v.num}\nDinheiro: ${fmt(v.dinheiro)}\nTransferência: ${fmt(v.transferencia)}\nCartão: ${fmt(v.cartao)}\n\n🗑️ Desperdício: ${r.desperdicios.length} registos`);
-}
-
-// ── MESAS ─────────────────────────────────────────────────────
-async function loadMesas() {
-  const data = await apiFetch('/api/mesas');
-  if(!data) return;
-  const grid = document.getElementById('mesasGrid');
-  grid.innerHTML = data.map(m=>`
-    <div class="mesa-card ${m.estado}" onclick="clickMesa(${m.id}, '${m.estado}', ${m.comanda_id||'null'})">
-      <div class="mesa-numero">Mesa ${m.numero}</div>
-      <div class="mesa-info">${m.capacidade} lugares</div>
-      <div class="mesa-info">${m.estado==='ocupada'?`👥 ${m.num_pessoas||'?'} pessoas`:`<span class="badge ${m.estado==='livre'?'badge-green':'badge-yellow'}">${m.estado}</span>`}</div>
-      ${m.estado==='ocupada'?`<div class="mesa-total">Comanda #${m.comanda_id||'?'}</div>`:''}
-    </div>`).join('');
-}
-
-async function clickMesa(id, estado, comandaId) {
-  if (estado==='livre') {
-    document.getElementById('ncMesa').value = id;
-    openModal('modalNovaComanda');
-    const mesas = await apiFetch('/api/mesas');
-    document.getElementById('ncMesa').innerHTML = (mesas||[]).filter(m=>m.estado==='livre').map(m=>`<option value="${m.id}" ${m.id===id?'selected':''}>Mesa ${m.numero} (${m.capacidade} lugares)</option>`).join('');
-  } else if (estado==='ocupada' && comandaId) {
-    navTo('comandas', null);
-  }
-}
-
-// ── COMANDAS ──────────────────────────────────────────────────
-async function loadComandas() {
-  const data = await apiFetch('/api/comandas');
-  if(!data) return;
-  const lista = document.getElementById('comandasLista');
-  if(!data.length) { lista.innerHTML='<div class="empty"><div class="empty-icon">📋</div>Sem comandas abertas</div>'; return; }
-  lista.innerHTML = data.map(c=>`
-    <div class="comanda-card">
-      <div class="comanda-header">
-        <div>
-          <strong>Mesa ${c.mesa_numero||'?'}</strong> — ${c.num_pessoas} pessoa(s)
-          <span class="badge badge-yellow" style="margin-left:8px;">Aberta ${fmtHora(c.aberta_em)}</span>
-        </div>
-        <div style="display:flex;gap:8px;">
-          <button class="btn btn-secondary btn-sm" onclick="openAddItem(${c.id})">+ Item</button>
-          <button class="btn btn-success btn-sm" onclick="openFecharComanda(${c.id}, ${c.total||0})">💳 Cobrar</button>
+    const c = dash.caixa;
+    show('dia-content', `
+      <div class="turno-cards">${cards}</div>
+      <div class="card">
+        <div class="card-title">Resumo do dia</div>
+        <div class="total-grid">
+          <div class="total-item">
+            <div class="total-item-label">Total Vendas</div>
+            <div class="total-item-value" style="color:#4ade80">${fmt(dash.total_vendas)}</div>
+          </div>
+          <div class="total-item">
+            <div class="total-item-label">Total Caixa</div>
+            <div class="total-item-value" style="color:#4ade80">${fmt(c?.total_final||0)}</div>
+          </div>
+          <div class="total-item">
+            <div class="total-item-label">TPA</div>
+            <div class="total-item-value" style="font-size:16px">${fmt(c?.tpa||0)}</div>
+          </div>
+          <div class="total-item">
+            <div class="total-item-label">Dinheiro</div>
+            <div class="total-item-value" style="font-size:16px">${fmt(c?.dinheiro||0)}</div>
+          </div>
+          <div class="total-item">
+            <div class="total-item-label">Transferência</div>
+            <div class="total-item-value" style="font-size:16px">${fmt(c?.transferencia||0)}</div>
+          </div>
+          <div class="total-item">
+            <div class="total-item-label">Saída</div>
+            <div class="total-item-value" style="font-size:16px;color:#f87171">${fmt(c?.saida||0)}</div>
+          </div>
         </div>
       </div>
-      <div class="comanda-itens">
-        ${c.itens && c.itens.length ? c.itens.map(i=>`
-          <div class="comanda-item">
-            <span>${i.quantidade}× ${esc(i.produto_nome||'?')} ${i.notas?`<small style="color:#888">(${esc(i.notas)})</small>`:''}</span>
-            <span style="display:flex;align-items:center;gap:8px;">
-              ${fmt(i.subtotal)}
-              <button class="btn btn-danger btn-sm" onclick="removeItemComanda(${c.id},${i.id})">×</button>
-            </span>
-          </div>`).join('') : '<div style="color:#aaa;font-size:0.85rem;">Sem itens</div>'}
-        <div style="border-top:1px solid #f0f0f0;padding-top:8px;margin-top:8px;display:flex;justify-content:space-between;">
-          <strong>Total</strong><strong>${fmt(c.total||0)}</strong>
+    `);
+  } catch(e) {
+    show('dia-content', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+async function abrirTurno(nome) {
+  try {
+    await api('POST', '/turnos/abrir', { data: S.date, nome });
+    await loadDia();
+  } catch(e) { alert(e.message); }
+}
+
+// ── PÁGINA TURNO ──────────────────────────────────────────────
+async function drawTurno() {
+  render(`
+    <div id="header">
+      <div>
+        <button class="btn btn-ghost btn-sm" onclick="navigate('dia')" style="margin-bottom:4px">‹ Voltar</button>
+        <div id="turno-title" style="font-size:16px;font-weight:700;color:#f1f5f9">Turno</div>
+      </div>
+      <div id="turno-header-actions"></div>
+    </div>
+    <div id="content">
+      <div id="turno-msg"></div>
+      <div id="turno-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadTurno();
+}
+
+// Stock buffer for edits
+let stockBuf = {};
+let caixaBuf = {};
+
+async function loadTurno() {
+  try {
+    const turnos = await api('GET', `/dia?data=${S.date}`);
+    const turno = turnos.find(t => t.id === S.turnoId);
+    if (!turno) { show('turno-content','<div class="alert alert-error">Turno não encontrado</div>'); return; }
+
+    S.turnoData = turno;
+    stockBuf = {};
+    turno.stock.forEach(s => {
+      stockBuf[s.produto_id] = {
+        encontrado: parseFloat(s.encontrado)||0,
+        entrada: parseFloat(s.entrada)||0,
+        deixado: parseFloat(s.deixado)||0
+      };
+    });
+    caixaBuf = {
+      tpa: parseFloat(turno.caixa?.tpa)||0,
+      transferencia: parseFloat(turno.caixa?.transferencia)||0,
+      dinheiro: parseFloat(turno.caixa?.dinheiro)||0,
+      saida: parseFloat(turno.caixa?.saida)||0
+    };
+
+    document.getElementById('turno-title').textContent =
+      `${turnoLabel(turno.nome)} — ${dateLabel(S.date)}`;
+
+    const isAberto = turno.estado === 'aberto';
+    const canEdit  = isAberto;
+
+    show('turno-header-actions', isAberto
+      ? `<button class="btn btn-danger btn-sm" onclick="fecharTurno(${turno.id})">Fechar</button>`
+      : '<span class="badge badge-grey">Fechado</span>'
+    );
+
+    // Separar comida e bebida
+    const comida  = turno.stock.filter(s => s.categoria === 'comida');
+    const bebida  = turno.stock.filter(s => s.categoria === 'bebida');
+    const outro   = turno.stock.filter(s => s.categoria !== 'comida' && s.categoria !== 'bebida');
+
+    function stockRows(items) {
+      return items.map(s => {
+        const pid = s.produto_id;
+        const vend = Math.max(0, (stockBuf[pid]?.encontrado||0) + (stockBuf[pid]?.entrada||0) - (stockBuf[pid]?.deixado||0));
+        const val  = vend * parseFloat(s.preco);
+        let compHtml = '<span class="comp-null">—</span>';
+        if (s.comparacao === 'igual') compHtml = '<span class="comp-igual">✓</span>';
+        else if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
+        else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
+
+        const inputAttr = canEdit ? '' : 'disabled';
+        return `
+          <tr>
+            <td class="td-name">${s.produto_nome}</td>
+            <td class="td-input"><input type="number" min="0" step="0.5" value="${fmtNum(s.encontrado)}"
+              onchange="updateStock(${pid},'encontrado',this.value)" ${inputAttr}/></td>
+            <td class="td-input"><input type="number" min="0" step="0.5" value="${fmtNum(s.entrada)}"
+              onchange="updateStock(${pid},'entrada',this.value)" ${inputAttr}/></td>
+            <td class="td-input"><input type="number" min="0" step="0.5" value="${fmtNum(s.deixado)}"
+              onchange="updateStock(${pid},'deixado',this.value)" ${inputAttr}/></td>
+            <td class="td-calc" id="vend-${pid}">${fmtNum(vend)}</td>
+            <td class="td-valor" id="val-${pid}">${s.preco > 0 ? fmt(val) : '—'}</td>
+            <td id="comp-${pid}">${compHtml}</td>
+          </tr>`;
+      }).join('');
+    }
+
+    function tableFor(items, label) {
+      if (!items.length) return '';
+      return `
+        <tr><td colspan="7" class="section-header">${label}</td></tr>
+        ${stockRows(items)}`;
+    }
+
+    const caixa = turno.caixa || {};
+    const tg = parseFloat(caixa.tpa||0) + parseFloat(caixa.transferencia||0) + parseFloat(caixa.dinheiro||0);
+    const tf = tg - parseFloat(caixa.saida||0);
+
+    show('turno-content', `
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Produto</th>
+                <th>Enc.</th>
+                <th>Ent.</th>
+                <th>Dei.</th>
+                <th>Vend.</th>
+                <th>Valor</th>
+                <th>Comp.</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tableFor(comida,'🍔 Comida')}
+              ${tableFor(bebida,'🥤 Bebidas')}
+              ${tableFor(outro,'📦 Outros')}
+            </tbody>
+          </table>
         </div>
       </div>
-    </div>`).join('');
-}
 
-async function criarComanda() {
-  if (!turnoAtivo) { document.getElementById('ncMsg').innerHTML='<div class="alert alert-warning">Abra um turno primeiro!</div>'; return; }
-  const r = await apiFetch('/api/comandas', { method:'POST', body:JSON.stringify({
-    mesa_id: parseInt(document.getElementById('ncMesa').value),
-    turno_id: turnoAtivo.id,
-    num_pessoas: parseInt(document.getElementById('ncPessoas').value)||1,
-    notas: document.getElementById('ncNotas').value
-  })});
-  if(r&&r.id) { closeModal('modalNovaComanda'); loadMesas(); loadComandas(); }
-  else document.getElementById('ncMsg').innerHTML=`<div class="alert alert-error">${r?.erro||'Erro'}</div>`;
-}
+      ${canEdit ? `<button class="btn btn-primary btn-full mt-12" onclick="guardarStock(${turno.id})">💾 Guardar Stock</button>` : ''}
 
-async function openAddItem(comandaId) {
-  document.getElementById('aiComandaId').value = comandaId;
-  document.getElementById('aiMsg').innerHTML='';
-  const prods = await apiFetch('/api/produtos');
-  document.getElementById('aiProduto').innerHTML = (prods||[]).map(p=>`<option value="${p.id}">${esc(p.nome)} — ${fmt(p.preco_venda)}</option>`).join('');
-  openModal('modalAddItem');
-}
-
-async function addItemComanda() {
-  const id = document.getElementById('aiComandaId').value;
-  const r = await apiFetch(`/api/comandas/${id}/itens`, { method:'POST', body:JSON.stringify({
-    produto_id: document.getElementById('aiProduto').value,
-    quantidade: parseInt(document.getElementById('aiQtd').value)||1,
-    notas: document.getElementById('aiNotas').value
-  })});
-  if(r&&r.id) { closeModal('modalAddItem'); loadComandas(); }
-  else document.getElementById('aiMsg').innerHTML=`<div class="alert alert-error">${r?.erro||'Erro'}</div>`;
-}
-
-function openFecharComanda(id, total) {
-  document.getElementById('fcComandaId').value = id;
-  document.getElementById('fcResumo').innerHTML=`<strong>Total a cobrar: ${fmt(total)}</strong>`;
-  document.getElementById('fcMsg').innerHTML='';
-  openModal('modalFecharComanda');
-}
-
-async function fecharComanda() {
-  const id = document.getElementById('fcComandaId').value;
-  const r = await apiFetch(`/api/comandas/${id}/fechar`, { method:'POST', body:JSON.stringify({
-    metodo_pagamento: document.getElementById('fcMetodo').value,
-    desconto: parseFloat(document.getElementById('fcDesconto').value)||0,
-    turno_id: turnoAtivo?.id
-  })});
-  if(r&&r.id) { closeModal('modalFecharComanda'); loadMesas(); loadComandas(); }
-  else document.getElementById('fcMsg').innerHTML=`<div class="alert alert-error">${r?.erro||'Erro'}</div>`;
-}
-
-async function removeItemComanda(comandaId, itemId) {
-  if(!confirm('Remover este item?')) return;
-  await apiFetch(`/api/comandas/${comandaId}/itens/${itemId}`, { method:'DELETE' });
-  loadComandas();
-}
-
-// ── DASHBOARD ─────────────────────────────────────────────────
-async function loadDashboard() {
-  await loadTurnoAtivo();
-  const d = await apiFetch('/api/dashboard');
-  if(!d) return;
-  document.getElementById('d-produtos').textContent = d.produtos;
-  document.getElementById('d-valor').textContent    = fmt(d.valor_stock);
-  document.getElementById('d-baixo').textContent    = d.stock_baixo;
-  document.getElementById('d-vendas').textContent   = d.vendas_hoje;
-  document.getElementById('d-receita').textContent  = fmt(d.valor_vendas_hoje);
-  document.getElementById('d-desp').textContent     = fmt(d.desperdicio_hoje);
-  const info = document.getElementById('turnoActivoInfo');
-  const alerta = document.getElementById('turnoAlerta');
-  if(d.turno_ativo) {
-    const icons = {manha:'🌅',tarde:'☀️',noite:'🌙'};
-    info.innerHTML=`<div style="padding:16px;display:flex;gap:24px;align-items:center;">
-      <div style="font-size:2rem;">${icons[d.turno_ativo.nome]||'●'}</div>
-      <div><strong style="font-size:1.1rem;">Turno ${d.turno_ativo.nome} em curso</strong><br>
-      <span style="color:#888;font-size:0.85rem;">Aberto às ${fmtHora(d.turno_ativo.aberto_em)}</span></div>
-    </div>`;
-    alerta.style.display='none';
-  } else {
-    info.innerHTML='<div style="padding:20px;color:#888;">Nenhum turno activo. Abra um turno em <strong>Turnos</strong>.</div>';
-    alerta.innerHTML='<div class="alert alert-warning">⚠️ Nenhum turno activo! Vá a <a href="#" onclick="navTo(\'turnos\',null)">Turnos</a> para abrir.</div>';
-    alerta.style.display='block';
+      <div class="card mt-16">
+        <div class="card-title">💰 Caixa</div>
+        <div class="caixa-grid">
+          <div class="caixa-item">
+            <label>TPA / Máquina</label>
+            <input type="number" min="0" id="c-tpa" value="${caixa.tpa||0}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+          </div>
+          <div class="caixa-item">
+            <label>Transferência</label>
+            <input type="number" min="0" id="c-transf" value="${caixa.transferencia||0}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+          </div>
+          <div class="caixa-item">
+            <label>Dinheiro</label>
+            <input type="number" min="0" id="c-din" value="${caixa.dinheiro||0}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+          </div>
+          <div class="caixa-item">
+            <label>Saída</label>
+            <input type="number" min="0" id="c-saida" value="${caixa.saida||0}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+          </div>
+        </div>
+        <div class="caixa-total">
+          <span class="caixa-total-label">Total Gerado</span>
+          <span class="caixa-total-value" id="c-total-gerado">${fmt(tg)}</span>
+        </div>
+        <div class="caixa-total">
+          <span class="caixa-total-label">Total Final</span>
+          <span class="caixa-total-value" id="c-total-final">${fmt(tf)}</span>
+        </div>
+        ${canEdit ? `<button class="btn btn-success btn-full mt-12" onclick="guardarCaixa(${turno.id})">💾 Guardar Caixa</button>` : ''}
+      </div>
+    `);
+  } catch(e) {
+    show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
   }
+}
+
+function updateStock(pid, field, value) {
+  if (!stockBuf[pid]) stockBuf[pid] = { encontrado:0, entrada:0, deixado:0 };
+  stockBuf[pid][field] = parseFloat(value) || 0;
+  const { encontrado:enc, entrada:ent, deixado:dei } = stockBuf[pid];
+  const vend = Math.max(0, enc + ent - dei);
+  const prod = S.turnoData?.stock?.find(s => s.produto_id === pid);
+  const preco = parseFloat(prod?.preco) || 0;
+  const val = vend * preco;
+  const ve = document.getElementById(`vend-${pid}`);
+  const va = document.getElementById(`val-${pid}`);
+  if (ve) ve.textContent = fmtNum(vend);
+  if (va) va.textContent = preco > 0 ? fmt(val) : '—';
+}
+
+async function guardarStock(turnoId) {
+  try {
+    show('turno-msg','');
+    const proms = Object.entries(stockBuf).map(([pid, v]) =>
+      api('PUT', `/turnos/${turnoId}/stock`, {
+        produto_id: parseInt(pid),
+        encontrado: v.encontrado,
+        entrada: v.entrada,
+        deixado: v.deixado
+      })
+    );
+    await Promise.all(proms);
+    suc('turno-msg', 'Stock guardado com sucesso!');
+    setTimeout(() => show('turno-msg',''), 3000);
+  } catch(e) { err('turno-msg', e.message); }
+}
+
+function calcCaixa() {
+  const tpa   = parseFloat(document.getElementById('c-tpa')?.value)||0;
+  const transf= parseFloat(document.getElementById('c-transf')?.value)||0;
+  const din   = parseFloat(document.getElementById('c-din')?.value)||0;
+  const saida = parseFloat(document.getElementById('c-saida')?.value)||0;
+  const tg = tpa + transf + din;
+  const tf = tg - saida;
+  const elTG = document.getElementById('c-total-gerado');
+  const elTF = document.getElementById('c-total-final');
+  if (elTG) elTG.textContent = fmt(tg);
+  if (elTF) elTF.textContent = fmt(tf);
+}
+
+async function guardarCaixa(turnoId) {
+  try {
+    show('turno-msg','');
+    await api('PUT', `/turnos/${turnoId}/caixa`, {
+      tpa:          parseFloat(document.getElementById('c-tpa')?.value)||0,
+      transferencia:parseFloat(document.getElementById('c-transf')?.value)||0,
+      dinheiro:     parseFloat(document.getElementById('c-din')?.value)||0,
+      saida:        parseFloat(document.getElementById('c-saida')?.value)||0
+    });
+    suc('turno-msg', 'Caixa guardada com sucesso!');
+    setTimeout(() => show('turno-msg',''), 3000);
+  } catch(e) { err('turno-msg', e.message); }
+}
+
+async function fecharTurno(id) {
+  if (!confirm('Fechar este turno? Não poderá ser editado depois.')) return;
+  try {
+    // Guardar stock e caixa primeiro
+    await guardarStock(id);
+    await guardarCaixa(id);
+    await api('POST', `/turnos/${id}/fechar`);
+    await loadTurno();
+  } catch(e) { err('turno-msg', e.message); }
+}
+
+// ── HISTÓRICO ─────────────────────────────────────────────────
+async function drawHistorico() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Histórico</div></div>
+    </div>
+    <div id="content">
+      <div class="card">
+        <div class="card-title">Período</div>
+        <div style="display:flex;gap:10px;align-items:flex-end">
+          <div class="field" style="flex:1;margin:0"><label>De</label><input type="date" id="h-inicio"/></div>
+          <div class="field" style="flex:1;margin:0"><label>Até</label><input type="date" id="h-fim"/></div>
+          <button class="btn btn-primary" onclick="loadHistorico()">Ver</button>
+        </div>
+      </div>
+      <div id="hist-content"></div>
+    </div>
+    ${navBar()}
+  `);
+  // Defaults: último mês
+  const hoje = new Date().toISOString().split('T')[0];
+  const mes  = addDays(hoje, -30);
+  document.getElementById('h-inicio').value = mes;
+  document.getElementById('h-fim').value = hoje;
+  await loadHistorico();
+}
+
+async function loadHistorico() {
+  const ini = val('h-inicio'), fim = val('h-fim');
+  show('hist-content','<div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div>');
+  try {
+    const rows = await api('GET', `/historico?inicio=${ini}&fim=${fim}`);
+    if (!rows.length) { show('hist-content','<div class="alert alert-error">Sem dados neste período</div>'); return; }
+
+    let totalGeral = 0;
+    const rowsHtml = rows.map(r => {
+      totalGeral += parseFloat(r.total_final)||0;
+      return `
+        <div class="card" style="cursor:pointer" onclick="S.date='${r.data}';navigate('dia')">
+          <div class="flex justify-between items-center">
+            <div>
+              <div style="font-weight:600">${dateLabel(r.data)}</div>
+              <div style="font-size:12px;color:#64748b">${r.data} · ${r.num_turnos} turno(s)</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:18px;font-weight:700;color:#4ade80">${fmt(r.total_final)}</div>
+              <div style="font-size:11px;color:#64748b">TPA: ${fmt(r.tpa)} · Din: ${fmt(r.dinheiro)}</div>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+
+    show('hist-content', `
+      <div class="card" style="margin-bottom:16px">
+        <div class="text-center">
+          <div style="font-size:12px;color:#64748b;margin-bottom:4px">Total do período</div>
+          <div style="font-size:28px;font-weight:700;color:#4ade80">${fmt(totalGeral)}</div>
+        </div>
+      </div>
+      ${rowsHtml}
+    `);
+  } catch(e) { show('hist-content',`<div class="alert alert-error">${e.message}</div>`); }
 }
 
 // ── PRODUTOS ──────────────────────────────────────────────────
+async function drawProdutos() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Produtos</div></div>
+      <button class="btn btn-primary btn-sm" onclick="showProdutoForm()">+ Novo</button>
+    </div>
+    <div id="content">
+      <div id="prod-msg"></div>
+      <div id="prod-form"></div>
+      <div id="prod-list"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadProdutos();
+}
+
 async function loadProdutos() {
-  const data = await apiFetch('/api/produtos');
-  if(!data) return;
-  produtosCache = data;
-  renderProdutos(data);
-}
-function renderProdutos(data) {
-  const tb = document.getElementById('tbProdutos');
-  if(!data.length) { tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="empty-icon">📦</div>Sem produtos</div></td></tr>'; return; }
-  tb.innerHTML = data.map(p=>`<tr>
-    <td><strong>${esc(p.nome)}</strong></td>
-    <td><span class="badge badge-gray">${esc(p.sku||'–')}</span></td>
-    <td>${esc(p.categoria_nome||'–')}</td>
-    <td><strong>${p.stock_atual}</strong> ${esc(p.unidade||'un')}</td>
-    <td>${fmt(p.preco_venda)}</td>
-    <td>${p.stock_atual<=p.stock_minimo?'<span class="badge badge-red">Stock Baixo</span>':'<span class="badge badge-green">OK</span>'}</td>
-    <td style="display:flex;gap:6px;">
-      <button class="btn btn-secondary btn-sm" onclick="editProduto('${p.id}')">Editar</button>
-      ${currentUser.role==='admin'?`<button class="btn btn-danger btn-sm" onclick="deleteProduto('${p.id}')">Apagar</button>`:''}
-    </td>
-  </tr>`).join('');
-}
-function filtrarProdutos(q) { renderProdutos(produtosCache.filter(p=>p.nome.toLowerCase().includes(q.toLowerCase())||(p.sku||'').toLowerCase().includes(q.toLowerCase()))); }
+  try {
+    const isAdmin = ['admin','gestor'].includes(S.user?.role);
+    S.produtos = await api('GET', '/produtos' + (isAdmin ? '?todos=1' : ''));
+    const comida = S.produtos.filter(p => p.categoria==='comida');
+    const bebida = S.produtos.filter(p => p.categoria==='bebida');
+    const outro  = S.produtos.filter(p => p.categoria!=='comida'&&p.categoria!=='bebida');
 
-async function openModal(id) {
-  if(id==='modalProduto') {
-    document.getElementById('modalProdutoTitulo').textContent='Novo Produto';
-    document.getElementById('produtoId').value='';
-    ['produtoNome','produtoSku'].forEach(i=>document.getElementById(i).value='');
-    ['produtoQtd','produtoQtdMin','produtoCusto','produtoVenda'].forEach(i=>document.getElementById(i).value='0');
-    document.getElementById('produtoMsg').innerHTML='';
-    const [cats,arms] = await Promise.all([apiFetch('/api/categorias'), apiFetch('/api/armazens')]);
-    document.getElementById('produtoCategoria').innerHTML=(cats||[]).map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join('');
-    document.getElementById('produtoArmazem').innerHTML=(arms||[]).map(a=>`<option value="${a.id}">${esc(a.nome)}</option>`).join('');
-  }
-  if(id==='modalMovimento') {
-    document.getElementById('movMsg').innerHTML='';
-    const prods = await apiFetch('/api/produtos');
-    document.getElementById('movProduto').innerHTML=(prods||[]).map(p=>`<option value="${p.id}">${esc(p.nome)} (${p.stock_atual})</option>`).join('');
-  }
-  if(id==='modalDesperdicio') {
-    document.getElementById('despMsg').innerHTML='';
-    const prods = await apiFetch('/api/produtos');
-    document.getElementById('despProduto').innerHTML=(prods||[]).map(p=>`<option value="${p.id}">${esc(p.nome)} (${p.stock_atual})</option>`).join('');
-  }
-  if(id==='modalNovaComanda') {
-    document.getElementById('ncMsg').innerHTML='';
-    const mesas = await apiFetch('/api/mesas');
-    document.getElementById('ncMesa').innerHTML=(mesas||[]).filter(m=>m.estado==='livre').map(m=>`<option value="${m.id}">Mesa ${m.numero} (${m.capacidade} lugares)</option>`).join('');
-  }
-  if(id==='modalEscala') {
-    document.getElementById('escMsg').innerHTML='';
-    document.getElementById('escData').value=new Date().toISOString().split('T')[0];
-    const utils = await apiFetch('/api/utilizadores');
-    document.getElementById('escUtilizador').innerHTML=(utils||[]).map(u=>`<option value="${u.id}">${esc(u.nome)}</option>`).join('');
-  }
-  document.getElementById(id).classList.add('open');
-}
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+    function prodList(items, label) {
+      if (!items.length) return '';
+      return `
+        <div class="card">
+          <div class="card-title">${label}</div>
+          ${items.map(p => `
+            <div class="produto-row">
+              <div class="produto-info">
+                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}</div>
+                <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · #${p.ordem}</div>
+              </div>
+              ${isAdmin ? `
+              <div class="produto-actions">
+                <button class="btn btn-ghost btn-sm" onclick='showProdutoForm(${JSON.stringify(p)})'>Editar</button>
+              </div>` : ''}
+            </div>`).join('')}
+        </div>`;
+    }
 
-async function saveProduto() {
-  const id = document.getElementById('produtoId').value;
-  const body = { nome:document.getElementById('produtoNome').value, sku:document.getElementById('produtoSku').value,
-    categoria_id:document.getElementById('produtoCategoria').value, armazem_id:document.getElementById('produtoArmazem').value,
-    stock_atual:parseFloat(document.getElementById('produtoQtd').value)||0, stock_minimo:parseFloat(document.getElementById('produtoQtdMin').value)||0,
-    preco_custo:parseFloat(document.getElementById('produtoCusto').value)||0, preco_venda:parseFloat(document.getElementById('produtoVenda').value)||0,
-    unidade:document.getElementById('produtoUnidade').value };
-  const r = await apiFetch(id?`/api/produtos/${id}`:'/api/produtos', { method:id?'PUT':'POST', body:JSON.stringify(body) });
-  if(r&&(r.id||r.nome)) { closeModal('modalProduto'); loadProdutos(); }
-  else document.getElementById('produtoMsg').innerHTML=`<div class="alert alert-error">${r?.erro||'Erro'}</div>`;
-}
-async function editProduto(id) {
-  const p = produtosCache.find(x=>x.id===id); if(!p) return;
-  const [cats,arms] = await Promise.all([apiFetch('/api/categorias'), apiFetch('/api/armazens')]);
-  document.getElementById('produtoCategoria').innerHTML=(cats||[]).map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join('');
-  document.getElementById('produtoArmazem').innerHTML=(arms||[]).map(a=>`<option value="${a.id}">${esc(a.nome)}</option>`).join('');
-  document.getElementById('modalProdutoTitulo').textContent='Editar Produto';
-  document.getElementById('produtoId').value=p.id;
-  document.getElementById('produtoNome').value=p.nome;
-  document.getElementById('produtoSku').value=p.sku||'';
-  document.getElementById('produtoQtd').value=p.stock_atual;
-  document.getElementById('produtoQtdMin').value=p.stock_minimo;
-  document.getElementById('produtoCusto').value=p.preco_custo;
-  document.getElementById('produtoVenda').value=p.preco_venda;
-  document.getElementById('produtoUnidade').value=p.unidade||'un';
-  document.getElementById('produtoCategoria').value=p.categoria_id||'';
-  document.getElementById('produtoArmazem').value=p.armazem_id||'';
-  document.getElementById('produtoMsg').innerHTML='';
-  document.getElementById('modalProduto').classList.add('open');
-}
-async function deleteProduto(id) {
-  if(!confirm('Apagar produto?')) return;
-  await apiFetch(`/api/produtos/${id}`, { method:'DELETE' });
-  loadProdutos();
+    show('prod-list',
+      prodList(comida,'🍔 Comida') +
+      prodList(bebida,'🥤 Bebidas') +
+      prodList(outro,'📦 Outros')
+    );
+  } catch(e) { show('prod-list',`<div class="alert alert-error">${e.message}</div>`); }
 }
 
-async function loadMovimentos() {
-  const data = await apiFetch('/api/movimentos'); if(!data) return;
-  const tb = document.getElementById('tbMovimentos');
-  if(!data.length) { tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="empty-icon">↕️</div>Sem movimentos</div></td></tr>'; return; }
-  tb.innerHTML = data.map(m=>`<tr>
-    <td>${fmtDate(m.criado_em)}</td>
-    <td><strong>${esc(m.produto_nome||'–')}</strong></td>
-    <td>${m.tipo==='entrada'?'<span class="badge badge-green">Entrada</span>':'<span class="badge badge-red">Saída</span>'}</td>
-    <td><strong>${m.quantidade}</strong></td>
-    <td>${esc(m.motivo||'–')}</td>
-    <td>${m.turno_id?`<span class="badge badge-blue">#${m.turno_id}</span>`:'–'}</td>
-    <td>${esc(m.utilizador_nome||'–')}</td>
-  </tr>`).join('');
-}
-async function saveMovimento() {
-  const r = await apiFetch('/api/movimentos', { method:'POST', body:JSON.stringify({
-    produto_id:document.getElementById('movProduto').value,
-    tipo:document.getElementById('movTipo').value,
-    quantidade:parseFloat(document.getElementById('movQtd').value)||1,
-    motivo:document.getElementById('movMotivo').value,
-    turno_id: turnoAtivo?.id
-  })});
-  if(r&&r.id) { closeModal('modalMovimento'); loadMovimentos(); }
-  else document.getElementById('movMsg').innerHTML=`<div class="alert alert-error">${r?.erro||'Erro'}</div>`;
-}
-
-async function loadDesperdicios() {
-  const data = await apiFetch('/api/desperdicios'); if(!data) return;
-  const tb = document.getElementById('tbDesperdicios');
-  if(!data.length) { tb.innerHTML='<tr><td colspan="6"><div class="empty"><div class="empty-icon">🗑️</div>Sem registos</div></td></tr>'; return; }
-  tb.innerHTML = data.map(d=>`<tr>
-    <td>${fmtDate(d.created_at)}</td>
-    <td><strong>${esc(d.produto_nome||'–')}</strong></td>
-    <td>${d.quantidade}</td>
-    <td>${esc(d.motivo||'–')}</td>
-    <td>${d.turno_id?`<span class="badge badge-blue">#${d.turno_id}</span>`:'–'}</td>
-    <td>${esc(d.utilizador_nome||'–')}</td>
-  </tr>`).join('');
-}
-async function saveDesperdicio() {
-  if(!turnoAtivo) { document.getElementById('despMsg').innerHTML='<div class="alert alert-warning">Abra um turno primeiro!</div>'; return; }
-  const r = await apiFetch('/api/desperdicios', { method:'POST', body:JSON.stringify({
-    turno_id:turnoAtivo.id,
-    produto_id:document.getElementById('despProduto').value,
-    quantidade:parseInt(document.getElementById('despQtd').value)||1,
-    motivo:document.getElementById('despMotivo').value
-  })});
-  if(r&&r.id) { closeModal('modalDesperdicio'); loadDesperdicios(); }
-  else document.getElementById('despMsg').innerHTML=`<div class="alert alert-error">${r?.erro||'Erro'}</div>`;
+function showProdutoForm(p) {
+  const isEdit = !!p;
+  show('prod-form', `
+    <div class="card">
+      <div class="card-title">${isEdit?'Editar':'Novo'} Produto</div>
+      <div id="prod-form-msg"></div>
+      <div class="field"><label>Nome</label><input id="p-nome" value="${p?.nome||''}"/></div>
+      <div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="${p?.preco||0}"/></div>
+      <div class="field"><label>Categoria</label>
+        <select id="p-cat">
+          <option value="comida" ${p?.categoria==='comida'?'selected':''}>Comida</option>
+          <option value="bebida" ${p?.categoria==='bebida'?'selected':''}>Bebida</option>
+          <option value="outro"  ${p?.categoria==='outro'?'selected':''}>Outro</option>
+        </select>
+      </div>
+      <div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="${p?.ordem||0}"/></div>
+      ${isEdit ? `
+      <div class="field"><label>Activo</label>
+        <select id="p-ativo"><option value="true" ${p?.ativo?'selected':''}>Sim</option><option value="false" ${!p?.ativo?'selected':''}>Não</option></select>
+      </div>` : ''}
+      <div class="flex gap-8 mt-8">
+        <button class="btn btn-success" onclick="${isEdit?`saveProduto(${p.id})`:'createProduto()'}">Guardar</button>
+        <button class="btn btn-ghost" onclick="show('prod-form','')">Cancelar</button>
+      </div>
+    </div>
+  `);
 }
 
-async function loadVendas() {
-  const data = await apiFetch('/api/vendas'); if(!data) return;
-  const tb = document.getElementById('tbVendas');
-  if(!data.length) { tb.innerHTML='<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>Sem vendas</div></td></tr>'; return; }
-  tb.innerHTML = data.map(v=>`<tr>
-    <td>${fmtDate(v.criado_em)}</td>
-    <td>${v.mesa_id?`Mesa ${v.mesa_id}`:(esc(v.cliente_nome||'–'))}</td>
-    <td><strong>${fmt(v.total)}</strong></td>
-    <td><span class="badge badge-blue">${v.metodo_pagamento||'–'}</span></td>
-    <td>${v.estado==='cancelada'?'<span class="badge badge-red">Cancelado</span>':'<span class="badge badge-green">Concluído</span>'}</td>
-    <td>${esc(v.utilizador_nome||'–')}</td>
-  </tr>`).join('');
+async function createProduto() {
+  try {
+    await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,categoria:val('p-cat')});
+    show('prod-form','');
+    suc('prod-msg','Produto criado!');
+    setTimeout(()=>show('prod-msg',''),2000);
+    await loadProdutos();
+  } catch(e) { err('prod-form-msg',e.message); }
 }
 
-async function loadEscalas() {
-  const data = await apiFetch('/api/escalas'); if(!data) return;
-  const tb = document.getElementById('tbEscalas');
-  if(!data.length) { tb.innerHTML='<tr><td colspan="4"><div class="empty"><div class="empty-icon">📅</div>Sem escalas</div></td></tr>'; return; }
-  const icons = {manha:'🌅',tarde:'☀️',noite:'🌙'};
-  tb.innerHTML = data.map(e=>`<tr>
-    <td>${fmtDate(e.data)}</td>
-    <td>${icons[e.turno]||''} <strong>${e.turno}</strong></td>
-    <td>${esc(e.utilizador_nome||'–')}</td>
-    <td>${currentUser.role!=='operador'?`<button class="btn btn-danger btn-sm" onclick="deleteEscala(${e.id})">Remover</button>`:''}</td>
-  </tr>`).join('');
-}
-async function saveEscala() {
-  const r = await apiFetch('/api/escalas', { method:'POST', body:JSON.stringify({
-    utilizador_id:document.getElementById('escUtilizador').value,
-    data:document.getElementById('escData').value,
-    turno:document.getElementById('escTurno').value
-  })});
-  if(r) { closeModal('modalEscala'); loadEscalas(); }
-  else document.getElementById('escMsg').innerHTML='<div class="alert alert-error">Erro</div>';
-}
-async function deleteEscala(id) {
-  if(!confirm('Remover da escala?')) return;
-  await apiFetch(`/api/escalas/${id}`, { method:'DELETE' });
-  loadEscalas();
+async function saveProduto(id) {
+  try {
+    const p = S.produtos.find(x=>x.id===id);
+    await api('PUT',`/produtos/${id}`,{
+      nome: val('p-nome'), preco: parseFloat(val('p-preco'))||0,
+      categoria: val('p-cat'), ordem: parseInt(val('p-ordem'))||0,
+      ativo: val('p-ativo')==='true'
+    });
+    show('prod-form','');
+    suc('prod-msg','Produto actualizado!');
+    setTimeout(()=>show('prod-msg',''),2000);
+    await loadProdutos();
+  } catch(e) { err('prod-form-msg',e.message); }
 }
 
-async function loadCategorias() {
-  const data = await apiFetch('/api/categorias'); if(!data) return;
-  const tb = document.getElementById('tbCategorias');
-  if(!data.length) { tb.innerHTML='<tr><td colspan="2"><div class="empty">Sem categorias</div></td></tr>'; return; }
-  tb.innerHTML = data.map(c=>`<tr><td><strong>${esc(c.nome)}</strong></td><td>${esc(c.descricao||'–')}</td></tr>`).join('');
-}
-async function saveCategoria() {
-  const r = await apiFetch('/api/categorias', { method:'POST', body:JSON.stringify({nome:document.getElementById('catNome').value, descricao:document.getElementById('catDesc').value}) });
-  if(r&&r.id) { closeModal('modalCategoria'); loadCategorias(); }
-  else document.getElementById('catMsg').innerHTML=`<div class="alert alert-error">${r?.erro||'Erro'}</div>`;
+// ── ADMIN ─────────────────────────────────────────────────────
+async function drawAdmin() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Administração</div></div>
+      <button class="btn btn-primary btn-sm" onclick="showUserForm()">+ Utilizador</button>
+    </div>
+    <div id="content">
+      <div id="admin-msg"></div>
+      <div id="admin-form"></div>
+      <div id="admin-users"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+      <div class="card mt-16">
+        <div class="card-title">Alterar Password</div>
+        <div id="pass-msg"></div>
+        <div class="field"><label>Password Actual</label><input type="password" id="pass-atual"/></div>
+        <div class="field"><label>Nova Password</label><input type="password" id="pass-nova"/></div>
+        <button class="btn btn-primary" onclick="alterarPassword()">Alterar</button>
+      </div>
+    </div>
+    ${navBar()}
+  `);
+  await loadUtilizadores();
 }
 
 async function loadUtilizadores() {
-  const data = await apiFetch('/api/utilizadores'); if(!data) return;
-  const tb = document.getElementById('tbUtilizadores');
-  tb.innerHTML = data.map(u=>`<tr>
-    <td><strong>${esc(u.nome)}</strong></td><td>${esc(u.email)}</td>
-    <td><span class="badge ${u.role==='admin'?'badge-blue':u.role==='gestor'?'badge-yellow':'badge-gray'}">${u.role}</span></td>
-    <td>${u.ativo?'<span class="badge badge-green">Activo</span>':'<span class="badge badge-red">Inactivo</span>'}</td>
-  </tr>`).join('');
+  try {
+    S.utilizadores = await api('GET','/utilizadores');
+    show('admin-users', `
+      <div class="card">
+        <div class="card-title">Utilizadores</div>
+        ${S.utilizadores.map(u => `
+          <div class="produto-row">
+            <div class="produto-info">
+              <div class="produto-nome">${u.nome}</div>
+              <div class="produto-meta">${u.email} · ${u.role} ${!u.ativo?'· Inactivo':''}</div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick='showUserForm(${JSON.stringify(u)})'>Editar</button>
+          </div>`).join('')}
+      </div>`);
+  } catch(e) { show('admin-users',`<div class="alert alert-error">${e.message}</div>`); }
 }
-async function saveUtilizador() {
-  const r = await apiFetch('/api/utilizadores', { method:'POST', body:JSON.stringify({nome:document.getElementById('utNome').value, email:document.getElementById('utEmail').value, role:document.getElementById('utRole').value}) });
-  if(r&&r.id) { closeModal('modalUtilizador'); loadUtilizadores(); }
-  else document.getElementById('utMsg').innerHTML=`<div class="alert alert-error">${r?.erro||'Erro'}</div>`;
+
+function showUserForm(u) {
+  const isEdit = !!u;
+  show('admin-form', `
+    <div class="card">
+      <div class="card-title">${isEdit?'Editar':'Novo'} Utilizador</div>
+      <div id="user-form-msg"></div>
+      <div class="field"><label>Nome</label><input id="u-nome" value="${u?.nome||''}"/></div>
+      ${!isEdit?`<div class="field"><label>Email</label><input id="u-email" type="email" value=""/></div>`:''}
+      <div class="field"><label>Role</label>
+        <select id="u-role">
+          <option value="operador" ${u?.role==='operador'?'selected':''}>Operador</option>
+          <option value="gestor"   ${u?.role==='gestor'?'selected':''}>Gestor</option>
+          <option value="admin"    ${u?.role==='admin'?'selected':''}>Admin</option>
+        </select>
+      </div>
+      ${isEdit?`
+      <div class="field"><label>Activo</label>
+        <select id="u-ativo"><option value="true" ${u?.ativo?'selected':''}>Sim</option><option value="false" ${!u?.ativo?'selected':''}>Não</option></select>
+      </div>
+      <div class="field"><label>Nova Password (opcional)</label><input type="password" id="u-pass"/></div>`:''}
+      <div class="flex gap-8 mt-8">
+        <button class="btn btn-success" onclick="${isEdit?`saveUser(${u.id})`:'createUser()'}">Guardar</button>
+        <button class="btn btn-ghost" onclick="show('admin-form','')">Cancelar</button>
+      </div>
+    </div>
+  `);
 }
 
-function fmt(v) { return new Intl.NumberFormat('pt-AO',{style:'currency',currency:'AOA',minimumFractionDigits:0}).format(v||0); }
-function fmtDate(d) { return d?new Date(d).toLocaleDateString('pt-PT',{day:'2-digit',month:'2-digit',year:'numeric'}):'–'; }
-function fmtHora(d) { return d?new Date(d).toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'}):'–'; }
-function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+async function createUser() {
+  try {
+    await api('POST','/utilizadores',{nome:val('u-nome'),email:val('u-email'),role:val('u-role')});
+    show('admin-form','');
+    suc('admin-msg','Utilizador criado! Password padrão: StockOS2025!');
+    await loadUtilizadores();
+  } catch(e) { err('user-form-msg',e.message); }
+}
 
-document.querySelectorAll('.modal-overlay').forEach(o=>o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('open')}));
+async function saveUser(id) {
+  try {
+    const body = {nome:val('u-nome'),role:val('u-role'),ativo:val('u-ativo')==='true'};
+    const p = val('u-pass');
+    if (p) body.password = p;
+    await api('PUT',`/utilizadores/${id}`,body);
+    show('admin-form','');
+    suc('admin-msg','Utilizador actualizado!');
+    setTimeout(()=>show('admin-msg',''),2000);
+    await loadUtilizadores();
+  } catch(e) { err('user-form-msg',e.message); }
+}
 
-if(token&&currentUser) enterApp();
+async function alterarPassword() {
+  try {
+    await api('POST','/auth/alterar-password',{passwordAtual:val('pass-atual'),passwordNova:val('pass-nova')});
+    suc('pass-msg','Password alterada com sucesso!');
+    document.getElementById('pass-atual').value='';
+    document.getElementById('pass-nova').value='';
+  } catch(e) { err('pass-msg',e.message); }
+}
+
+// ── START ─────────────────────────────────────────────────────
+draw();
 </script>
-
-</body></html>
+</body>
+</html>

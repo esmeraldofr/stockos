@@ -112,6 +112,14 @@ function prevTurno(nome, data) {
 // ── AUTH ──────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok', v: 3 }));
 
+app.get('/api/debug', async (req, res) => {
+  try {
+    const tables = await query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name`);
+    const users = await query(`SELECT id, email, role, ativo, length(senha_hash) as hash_len FROM utilizadores`);
+    res.json({ tables: tables.rows.map(r => r.table_name), users: users.rows });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -122,7 +130,7 @@ app.post('/api/auth/login', async (req, res) => {
     if (user.senha_hash !== hashPassword(password)) return res.status(401).json({ erro: 'Credenciais inválidas' });
     const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role });
     res.json({ token, user: { id: user.id, email: user.email, nome: user.nome, role: user.role } });
-  } catch(e) { res.status(500).json({ erro: 'Erro interno' }); }
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 app.post('/api/auth/setup', async (req, res) => {

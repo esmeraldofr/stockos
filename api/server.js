@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'stockos-secret-2025';
 
 const _dbUrl = process.env.DATABASE_URL || '';
-const _poolerUrl = 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-0-eu-west-1.pooler.supabase.com:6543/postgres';
+const _poolerUrl = 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:6543/postgres';
 const pool  = new Pool({ connectionString: (_dbUrl && _dbUrl.includes('pooler.supabase.com')) ? _dbUrl : _poolerUrl, ssl: { rejectUnauthorized: false } });
 const query = (text, params) => pool.query(text, params);
 

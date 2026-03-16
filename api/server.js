@@ -8,7 +8,7 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'stockos-secret-2025';
 
-const pool  = new Pool({ connectionString: process.env.DATABASE_URL || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres', ssl: { rejectUnauthorized: false } });
+const pool  = new Pool({ connectionString: process.env.DATABASE_URL || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-0-eu-west-1.pooler.supabase.com:6543/postgres', ssl: { rejectUnauthorized: false } });
 const query = (text, params) => pool.query(text, params);
 
 async function initDB() {

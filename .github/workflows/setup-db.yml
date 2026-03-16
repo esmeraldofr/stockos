@@ -1,0 +1,52 @@
+name: Setup Database
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  setup:
+    name: Initialize Supabase Database
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
+      PGSSLMODE: require
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install psql
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Check if database already setup
+        id: check
+        run: |
+          COUNT=$(psql "$DATABASE_URL" -t -c \
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='utilizadores';" \
+            2>/dev/null | tr -d ' \n' || echo "0")
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Tables found: $COUNT"
+
+      - name: Run SQL setup
+        if: steps.check.outputs.count == '0'
+        run: |
+          echo "Database not setup. Running SQL..."
+          psql "$DATABASE_URL" -f supabase/stockos_database.sql
+          echo "Database setup complete!"
+
+      - name: Already setup
+        if: steps.check.outputs.count != '0'
+        run: echo "Database already setup. Skipping."
+
+      - name: Set admin password
+        if: steps.check.outputs.count == '0'
+        run: |
+          psql "$DATABASE_URL" -c "
+            UPDATE utilizadores SET senha_hash = encode(
+              digest('admin123' || 'stockos-secret-2025', 'sha256'), 'hex'
+            ) WHERE email = 'admin@stockos.ao';
+          "
+          echo "Admin password set to: admin123"

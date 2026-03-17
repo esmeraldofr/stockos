@@ -56,11 +56,11 @@ async function initDB() {
   // Garantir constraint única no nome
   await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='produtos_nome_key') THEN ALTER TABLE produtos ADD CONSTRAINT produtos_nome_key UNIQUE (nome); END IF; END $$`, [], 'produtos-unique');
   await qry(`INSERT INTO produtos (nome,preco,categoria,ordem) VALUES
-    ('Carne',0,'comida',1),('Ovo',0,'comida',2),('Enchido',0,'comida',3),('Pão 12',0,'comida',4),
-    ('Pão 6',0,'comida',5),('Batata Palha',0,'comida',6),('Malonese',0,'comida',7),('Mostarda',0,'comida',8),
-    ('Ketchup',0,'comida',9),('Milho',0,'comida',10),('Óleo',0,'comida',11),('Molho Inglês',0,'comida',12),
-    ('Nata',0,'comida',13),('Papel Alumínio',0,'comida',14),('Saco',0,'comida',15),('Palito',0,'comida',16),
-    ('Guardanapos',0,'comida',17),('Batata Pré-frita',0,'comida',18),
+    ('Carne',0,'ingredientes',1),('Ovo',0,'ingredientes',2),('Enchido',0,'ingredientes',3),('Pão 12',0,'ingredientes',4),
+    ('Pão 6',0,'ingredientes',5),('Batata Palha',0,'ingredientes',6),('Malonese',0,'ingredientes',7),('Mostarda',0,'ingredientes',8),
+    ('Ketchup',0,'ingredientes',9),('Milho',0,'ingredientes',10),('Óleo',0,'ingredientes',11),('Molho Inglês',0,'ingredientes',12),
+    ('Nata',0,'ingredientes',13),('Papel Alumínio',0,'ingredientes',14),('Saco',0,'ingredientes',15),('Palito',0,'ingredientes',16),
+    ('Guardanapos',0,'ingredientes',17),('Batata Pré-frita',0,'ingredientes',18),
     ('Água Pequena',200,'bebida',19),('Smirnoff',1000,'bebida',20),('Gin Gordons Lata',1000,'bebida',21),
     ('Coca Cola Lata',700,'bebida',22),('Speed Lata',1000,'bebida',23),('Blue Laranja Lata',700,'bebida',24),
     ('Sprite Lata',700,'bebida',25),('Blue Limão Lata',700,'bebida',26),('Eka',700,'bebida',27),
@@ -158,11 +158,11 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   await run(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, 'produtos-dedup');
   await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='produtos_nome_key') THEN ALTER TABLE produtos ADD CONSTRAINT produtos_nome_key UNIQUE (nome); END IF; END $$`, 'produtos-unique');
   await run(`INSERT INTO produtos (nome,preco,categoria,ordem) VALUES
-    ('Carne',0,'comida',1),('Ovo',0,'comida',2),('Enchido',0,'comida',3),('Pão 12',0,'comida',4),
-    ('Pão 6',0,'comida',5),('Batata Palha',0,'comida',6),('Malonese',0,'comida',7),('Mostarda',0,'comida',8),
-    ('Ketchup',0,'comida',9),('Milho',0,'comida',10),('Óleo',0,'comida',11),('Molho Inglês',0,'comida',12),
-    ('Nata',0,'comida',13),('Papel Alumínio',0,'comida',14),('Saco',0,'comida',15),('Palito',0,'comida',16),
-    ('Guardanapos',0,'comida',17),('Batata Pré-frita',0,'comida',18),
+    ('Carne',0,'ingredientes',1),('Ovo',0,'ingredientes',2),('Enchido',0,'ingredientes',3),('Pão 12',0,'ingredientes',4),
+    ('Pão 6',0,'ingredientes',5),('Batata Palha',0,'ingredientes',6),('Malonese',0,'ingredientes',7),('Mostarda',0,'ingredientes',8),
+    ('Ketchup',0,'ingredientes',9),('Milho',0,'ingredientes',10),('Óleo',0,'ingredientes',11),('Molho Inglês',0,'ingredientes',12),
+    ('Nata',0,'ingredientes',13),('Papel Alumínio',0,'ingredientes',14),('Saco',0,'ingredientes',15),('Palito',0,'ingredientes',16),
+    ('Guardanapos',0,'ingredientes',17),('Batata Pré-frita',0,'ingredientes',18),
     ('Água Pequena',200,'bebida',19),('Smirnoff',1000,'bebida',20),('Gin Gordons Lata',1000,'bebida',21),
     ('Coca Cola Lata',700,'bebida',22),('Speed Lata',1000,'bebida',23),('Blue Laranja Lata',700,'bebida',24),
     ('Sprite Lata',700,'bebida',25),('Blue Limão Lata',700,'bebida',26),('Eka',700,'bebida',27),
@@ -181,11 +181,11 @@ app.post('/api/reseed-produtos', auth, requireRole('admin'), async (req, res) =>
     await query(`DELETE FROM turno_stock`);
     await query(`DELETE FROM produtos`);
     await query(`INSERT INTO produtos (nome,preco,categoria,ordem) VALUES
-      ('Carne',0,'comida',1),('Ovo',0,'comida',2),('Enchido',0,'comida',3),('Pão 12',0,'comida',4),
-      ('Pão 6',0,'comida',5),('Batata Palha',0,'comida',6),('Malonese',0,'comida',7),('Mostarda',0,'comida',8),
-      ('Ketchup',0,'comida',9),('Milho',0,'comida',10),('Óleo',0,'comida',11),('Molho Inglês',0,'comida',12),
-      ('Nata',0,'comida',13),('Papel Alumínio',0,'comida',14),('Saco',0,'comida',15),('Palito',0,'comida',16),
-      ('Guardanapos',0,'comida',17),('Batata Pré-frita',0,'comida',18),
+      ('Carne',0,'ingredientes',1),('Ovo',0,'ingredientes',2),('Enchido',0,'ingredientes',3),('Pão 12',0,'ingredientes',4),
+      ('Pão 6',0,'ingredientes',5),('Batata Palha',0,'ingredientes',6),('Malonese',0,'ingredientes',7),('Mostarda',0,'ingredientes',8),
+      ('Ketchup',0,'ingredientes',9),('Milho',0,'ingredientes',10),('Óleo',0,'ingredientes',11),('Molho Inglês',0,'ingredientes',12),
+      ('Nata',0,'ingredientes',13),('Papel Alumínio',0,'ingredientes',14),('Saco',0,'ingredientes',15),('Palito',0,'ingredientes',16),
+      ('Guardanapos',0,'ingredientes',17),('Batata Pré-frita',0,'ingredientes',18),
       ('Água Pequena',200,'bebida',19),('Smirnoff',1000,'bebida',20),('Gin Gordons Lata',1000,'bebida',21),
       ('Coca Cola Lata',700,'bebida',22),('Speed Lata',1000,'bebida',23),('Blue Laranja Lata',700,'bebida',24),
       ('Sprite Lata',700,'bebida',25),('Blue Limão Lata',700,'bebida',26),('Eka',700,'bebida',27),

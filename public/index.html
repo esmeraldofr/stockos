@@ -694,6 +694,7 @@ async function guardarStock(turnoId) {
   } catch(e) { err('turno-msg', e.message); }
 }
 
+let autoSaveCaixaTimer = null;
 function calcCaixa() {
   const tpa   = parseFloat(document.getElementById('c-tpa')?.value)||0;
   const transf= parseFloat(document.getElementById('c-transf')?.value)||0;
@@ -705,6 +706,13 @@ function calcCaixa() {
   const elTF = document.getElementById('c-total-final');
   if (elTG) elTG.textContent = fmt(tg);
   if (elTF) elTF.textContent = fmt(tf);
+  // Auto-save
+  const turnoId = S.turnoData?.id;
+  if (!turnoId) return;
+  const el = document.getElementById('turno-msg');
+  if (el) { el.className='alert'; el.textContent='A guardar...'; el.style.opacity='.5'; }
+  clearTimeout(autoSaveCaixaTimer);
+  autoSaveCaixaTimer = setTimeout(() => guardarCaixa(turnoId), 2000);
 }
 
 async function guardarCaixa(turnoId) {
@@ -716,8 +724,8 @@ async function guardarCaixa(turnoId) {
       dinheiro:     parseFloat(document.getElementById('c-din')?.value)||0,
       saida:        parseFloat(document.getElementById('c-saida')?.value)||0
     });
-    suc('turno-msg', 'Caixa guardada com sucesso!');
-    setTimeout(() => show('turno-msg',''), 3000);
+    suc('turno-msg', '✓ Guardado');
+    setTimeout(() => show('turno-msg',''), 2000);
   } catch(e) { err('turno-msg', e.message); }
 }
 

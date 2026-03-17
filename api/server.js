@@ -17,7 +17,8 @@ async function initDB() {
   try {
     const r = await query(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='utilizadores'`);
     if (r.rows[0].count !== '0') {
-      await query(`UPDATE utilizadores SET senha_hash=$1 WHERE email='admin@stockos.ao' AND (senha_hash='' OR senha_hash IS NULL)`, [hashPassword('admin123')]);
+      const expected = hashPassword('admin123');
+      await query(`UPDATE utilizadores SET senha_hash=$1 WHERE email='admin@stockos.ao' AND senha_hash!=$1`, [expected]);
       return;
     }
     await query(`

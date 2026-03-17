@@ -7,6 +7,7 @@ const { Pool } = require('pg');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'stockos-secret-2025';
+const PWD_SALT   = 'stockos-pwd-salt-2025';
 
 const _dbUrl = process.env.DATABASE_URL || '';
 const _poolerUrl = 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:6543/postgres';
@@ -18,7 +19,7 @@ async function initDB() {
     const r = await query(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='utilizadores'`);
     if (r.rows[0].count !== '0') {
       const expected = hashPassword('admin123');
-      await query(`UPDATE utilizadores SET senha_hash=$1 WHERE email='admin@stockos.ao' AND senha_hash!=$1`, [expected]);
+      await query(`UPDATE utilizadores SET senha_hash=$1 WHERE email='admin@stockos.ao'`, [expected]);
       return;
     }
     await query(`
@@ -92,7 +93,7 @@ function verifyToken(token) {
     return payload;
   } catch { return null; }
 }
-function hashPassword(p) { return crypto.createHash('sha256').update(p + JWT_SECRET).digest('hex'); }
+function hashPassword(p) { return crypto.createHash('sha256').update(p + PWD_SALT).digest('hex'); }
 function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ','');
   const payload = verifyToken(token);

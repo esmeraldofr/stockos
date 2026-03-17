@@ -893,44 +893,44 @@ function closeProdutoModal() {
 }
 
 function showProdutoForm(id) {
-  const p = (id !== undefined) ? S.produtos.find(x => x.id === id) : null;
+  const p = (id != null) ? S.produtos.find(x => x.id == id) : null;
   const isEdit = !!p;
   closeProdutoModal();
+
+  const ativoHtml = isEdit
+    ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>'
+    : '';
+  const guardarFn = isEdit ? 'saveProduto(' + p.id + ')' : 'createProduto()';
+
   const div = document.createElement('div');
   div.id = 'produto-modal';
   div.className = 'modal-overlay';
-  div.innerHTML = `
-    <div class="modal">
-      <div class="modal-header">
-        <div class="modal-title">${isEdit ? 'Editar' : 'Novo'} Produto</div>
-        <button class="modal-close" onclick="closeProdutoModal()">×</button>
-      </div>
-      <div id="prod-form-msg"></div>
-      <div class="field"><label>Nome</label><input id="p-nome" value=""/></div>
-      <div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="${p?.preco||0}"/></div>
-      <div class="field"><label>Categoria</label>
-        <select id="p-cat">
-          <option value="comida" ${p?.categoria==='comida'?'selected':''}>Comida</option>
-          <option value="bebida" ${p?.categoria==='bebida'?'selected':''}>Bebida</option>
-          <option value="outro"  ${p?.categoria==='outro'?'selected':''}>Outro</option>
-        </select>
-      </div>
-      <div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="${p?.ordem||0}"/></div>
-      ${isEdit ? `
-      <div class="field"><label>Activo</label>
-        <select id="p-ativo">
-          <option value="true" ${p?.ativo ? 'selected' : ''}>Sim</option>
-          <option value="false" ${!p?.ativo ? 'selected' : ''}>Não</option>
-        </select>
-      </div>` : ''}
-      <div class="flex gap-8 mt-8">
-        <button class="btn btn-success" onclick="${isEdit ? `saveProduto(${p.id})` : 'createProduto()'}">Guardar</button>
-        <button class="btn btn-ghost" onclick="closeProdutoModal()">Cancelar</button>
-      </div>
-    </div>
-  `;
+  div.innerHTML =
+    '<div class="modal">' +
+      '<div class="modal-header">' +
+        '<div class="modal-title">' + (isEdit ? 'Editar' : 'Novo') + ' Produto</div>' +
+        '<button class="modal-close" onclick="closeProdutoModal()">×</button>' +
+      '</div>' +
+      '<div id="prod-form-msg"></div>' +
+      '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
+      '<div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
+      '<div class="field"><label>Categoria</label><select id="p-cat"><option value="comida">Comida</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
+      '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
+      ativoHtml +
+      '<div class="flex gap-8 mt-8">' +
+        '<button class="btn btn-success" onclick="' + guardarFn + '">Guardar</button>' +
+        '<button class="btn btn-ghost" onclick="closeProdutoModal()">Cancelar</button>' +
+      '</div>' +
+    '</div>';
+
   document.getElementById('app').appendChild(div);
-  if (p) document.getElementById('p-nome').value = p.nome;
+
+  document.getElementById('p-nome').value = p ? (p.nome || '') : '';
+  document.getElementById('p-preco').value = p ? (p.preco || 0) : 0;
+  document.getElementById('p-cat').value = p ? (p.categoria || 'outro') : 'outro';
+  document.getElementById('p-ordem').value = p ? (p.ordem || 0) : 0;
+  if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
+
   document.getElementById('p-nome').focus();
 }
 

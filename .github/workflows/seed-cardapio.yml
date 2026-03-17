@@ -54,4 +54,4 @@ jobs:
               'Composto Frango Pequeno','Composto Frango Grande'
             );
           "
-          echo "Produtos inseridos e categoria actualizada."
+          echo "Produtos inseridos e categoria actualizada. [run-2]"

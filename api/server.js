@@ -51,6 +51,10 @@ async function initDB() {
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`, [], 'alter-fechado');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
+  // Remover duplicados de produtos (manter o de menor id por nome)
+  await qry(`DELETE FROM produtos WHERE id NOT IN (SELECT MIN(id) FROM produtos GROUP BY nome)`, [], 'produtos-dedup');
+  // Garantir constraint única no nome
+  await qry(`ALTER TABLE produtos ADD CONSTRAINT IF NOT EXISTS produtos_nome_key UNIQUE (nome)`, [], 'produtos-unique');
   await qry(`INSERT INTO produtos (nome,preco,categoria,ordem) VALUES
     ('Carne',0,'comida',1),('Ovo',0,'comida',2),('Enchido',0,'comida',3),('Pão 12',0,'comida',4),
     ('Pão 6',0,'comida',5),('Batata Palha',0,'comida',6),('Malonese',0,'comida',7),('Mostarda',0,'comida',8),
@@ -63,7 +67,7 @@ async function initDB() {
     ('Booster',700,'bebida',28),('Booster Morango',700,'bebida',29),('Booster Manga',700,'bebida',30),
     ('Compal Lata',700,'bebida',31),('Sumol Ananas',700,'bebida',32),('Sumol Laranja',700,'bebida',33),
     ('Sumol Manga',700,'bebida',34),('Cuca Lata',700,'bebida',35),('Nocal Lata',700,'bebida',36),('Dopel',700,'bebida',37)
-    ON CONFLICT DO NOTHING`, [], 'produtos-seed');
+    ON CONFLICT (nome) DO NOTHING`, [], 'produtos-seed');
   console.log('DB ready');
 }
 const dbReady = initDB();
@@ -151,6 +155,8 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
     tpa NUMERIC(15,2) NOT NULL DEFAULT 0, transferencia NUMERIC(15,2) NOT NULL DEFAULT 0,
     dinheiro NUMERIC(15,2) NOT NULL DEFAULT 0, saida NUMERIC(15,2) NOT NULL DEFAULT 0)`, 'turno_caixa');
+  await run(`DELETE FROM produtos WHERE id NOT IN (SELECT MIN(id) FROM produtos GROUP BY nome)`, 'produtos-dedup');
+  await run(`ALTER TABLE produtos ADD CONSTRAINT IF NOT EXISTS produtos_nome_key UNIQUE (nome)`, 'produtos-unique');
   await run(`INSERT INTO produtos (nome,preco,categoria,ordem) VALUES
     ('Carne',0,'comida',1),('Ovo',0,'comida',2),('Enchido',0,'comida',3),('Pão 12',0,'comida',4),
     ('Pão 6',0,'comida',5),('Batata Palha',0,'comida',6),('Malonese',0,'comida',7),('Mostarda',0,'comida',8),
@@ -163,7 +169,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     ('Booster',700,'bebida',28),('Booster Morango',700,'bebida',29),('Booster Manga',700,'bebida',30),
     ('Compal Lata',700,'bebida',31),('Sumol Ananas',700,'bebida',32),('Sumol Laranja',700,'bebida',33),
     ('Sumol Manga',700,'bebida',34),('Cuca Lata',700,'bebida',35),('Nocal Lata',700,'bebida',36),('Dopel',700,'bebida',37)
-    ON CONFLICT DO NOTHING`, 'produtos-seed');
+    ON CONFLICT (nome) DO NOTHING`, 'produtos-seed');
   res.json({ results });
 });
 

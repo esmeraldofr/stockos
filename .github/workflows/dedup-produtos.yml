@@ -1,0 +1,26 @@
+name: Dedup Produtos
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dedup:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:6543/postgres' }}
+      PGSSLMODE: require
+    steps:
+      - name: Install psql
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Dedup produtos
+        run: |
+          psql "$DATABASE_URL" -c "
+            DELETE FROM turno_stock WHERE produto_id IN (
+              SELECT id FROM produtos WHERE id NOT IN (SELECT MIN(id) FROM produtos GROUP BY nome)
+            );
+            DELETE FROM produtos WHERE id NOT IN (SELECT MIN(id) FROM produtos GROUP BY nome);
+            ALTER TABLE produtos ADD CONSTRAINT IF NOT EXISTS produtos_nome_key UNIQUE (nome);
+            SELECT COUNT(*) AS total_produtos FROM produtos;
+          "
+          echo "Dedup concluído."

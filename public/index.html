@@ -873,7 +873,7 @@ async function loadProdutos() {
               </div>
               ${isAdmin ? `
               <div class="produto-actions">
-                <button class="btn btn-ghost btn-sm" onclick="showProdutoForm(${p.id})">Editar</button>
+                <button class="btn btn-ghost btn-sm" data-edit-id="${p.id}">Editar</button>
               </div>` : ''}
             </div>`).join('')}
         </div>`;
@@ -884,6 +884,10 @@ async function loadProdutos() {
       prodList(bebida,'🥤 Bebidas') +
       prodList(outro,'📦 Outros')
     );
+    document.getElementById('prod-list').addEventListener('click', function(e) {
+      const btn = e.target.closest('[data-edit-id]');
+      if (btn) showProdutoForm(btn.getAttribute('data-edit-id'));
+    });
   } catch(e) { show('prod-list',`<div class="alert alert-error">${e.message}</div>`); }
 }
 

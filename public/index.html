@@ -459,15 +459,15 @@ async function abrirTurno(nome) {
 async function drawTurno() {
   render(`
     <div id="header">
-      <div>
-        <button class="btn btn-ghost btn-sm" onclick="navigate('dia')" style="margin-bottom:4px">‹ Voltar</button>
-        <div id="turno-title" style="font-size:16px;font-weight:700;color:#f1f5f9">Turno</div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <button class="btn btn-ghost btn-sm" onclick="navigate('dia')" style="align-self:flex-start">‹ Voltar</button>
+        <div style="display:flex;align-items:center;gap:6px">
+          <button class="btn btn-ghost btn-sm" id="btn-prev-turno" onclick="navTurno(-1)" style="padding:2px 8px;font-size:18px;line-height:1">‹</button>
+          <div id="turno-title" style="font-size:15px;font-weight:700;color:#f1f5f9;white-space:nowrap">Turno</div>
+          <button class="btn btn-ghost btn-sm" id="btn-next-turno" onclick="navTurno(1)" style="padding:2px 8px;font-size:18px;line-height:1">›</button>
+        </div>
       </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <button class="btn btn-ghost btn-sm" id="btn-prev-turno" onclick="navTurno(-1)">‹</button>
-        <button class="btn btn-ghost btn-sm" id="btn-next-turno" onclick="navTurno(1)">›</button>
-        <div id="turno-header-actions"></div>
-      </div>
+      <div id="turno-header-actions"></div>
     </div>
     <div id="content">
       <div id="turno-msg"></div>
@@ -483,19 +483,31 @@ let stockBuf = {};
 let caixaBuf = {};
 
 const TURNO_ORDER = ['manha','tarde','noite'];
-function navTurno(dir) {
-  const turnos = TURNO_ORDER;
-  const idx = turnos.indexOf(S.turnoData?.nome);
-  const next = idx + dir;
-  if (next < 0 || next >= turnos.length) return;
-  const nextNome = turnos[next];
-  // Encontrar o id do turno destino a partir dos dados já carregados
-  api('GET', `/dia?data=${S.date}`).then(all => {
-    const t = all.find(x => x.nome === nextNome);
-    if (!t) return;
-    S.turnoId = t.id;
-    loadTurno();
-  });
+async function navTurno(dir) {
+  const idx = TURNO_ORDER.indexOf(S.turnoData?.nome);
+  let nextIdx = idx + dir;
+  let nextDate = S.date;
+
+  if (nextIdx < 0) {
+    // vai ao dia anterior
+    const d = new Date(S.date + 'T12:00:00');
+    d.setDate(d.getDate() - 1);
+    nextDate = d.toISOString().split('T')[0];
+    nextIdx = TURNO_ORDER.length - 1;
+  } else if (nextIdx >= TURNO_ORDER.length) {
+    // vai ao próximo dia
+    const d = new Date(S.date + 'T12:00:00');
+    d.setDate(d.getDate() + 1);
+    nextDate = d.toISOString().split('T')[0];
+    nextIdx = 0;
+  }
+
+  const all = await api('GET', `/dia?data=${nextDate}`);
+  const t = all.find(x => x.nome === TURNO_ORDER[nextIdx]);
+  if (!t) return;
+  S.date = nextDate;
+  S.turnoId = t.id;
+  loadTurno();
 }
 
 async function loadTurno() {
@@ -522,11 +534,6 @@ async function loadTurno() {
 
     document.getElementById('turno-title').textContent =
       `${turnoLabel(turno.nome)} — ${dateLabel(S.date)}`;
-    const idx = TURNO_ORDER.indexOf(turno.nome);
-    const btnP = document.getElementById('btn-prev-turno');
-    const btnN = document.getElementById('btn-next-turno');
-    if (btnP) btnP.disabled = idx <= 0;
-    if (btnN) btnN.disabled = idx >= TURNO_ORDER.length - 1;
 
     const isAberto = turno.estado === 'aberto';
     const canEdit  = isAberto;

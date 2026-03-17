@@ -69,6 +69,23 @@ CREATE TABLE IF NOT EXISTS turno_caixa (
 );
 
 -- ============================================================
+--  MIGRATIONS — add missing columns to existing tables
+-- ============================================================
+ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'operador';
+ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS senha_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categoria VARCHAR(20) NOT NULL DEFAULT 'outro';
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT '';
+ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ;
+ALTER TABLE turnos ADD COLUMN IF NOT EXISTS estado VARCHAR(10) NOT NULL DEFAULT 'aberto';
+ALTER TABLE turnos ADD COLUMN IF NOT EXISTS utilizador_id INTEGER;
+
+-- ============================================================
 --  DADOS INICIAIS — UTILIZADORES
 --  Password: usar /api/auth/setup com código STOCKOS2025
 -- ============================================================

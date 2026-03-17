@@ -13,14 +13,16 @@ jobs:
       - name: Install psql
         run: sudo apt-get install -y postgresql-client
 
-      - name: Apagar turno_stock duplicados
-        run: psql "$DATABASE_URL" -c "DELETE FROM turno_stock WHERE produto_id IN (SELECT id FROM produtos WHERE id NOT IN (SELECT MIN(id) FROM produtos GROUP BY nome));"
+      - name: Apagar turno_stock dos duplicados
+        run: |
+          psql "$DATABASE_URL" -c "DELETE FROM turno_stock WHERE produto_id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1);"
 
       - name: Apagar produtos duplicados
-        run: psql "$DATABASE_URL" -c "DELETE FROM produtos WHERE id NOT IN (SELECT MIN(id) FROM produtos GROUP BY nome);"
+        run: |
+          psql "$DATABASE_URL" -c "DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1);"
 
       - name: Adicionar constraint única
-        run: psql "$DATABASE_URL" -c "CREATE UNIQUE INDEX IF NOT EXISTS produtos_nome_key ON produtos(nome);"
+        run: psql "$DATABASE_URL" -c "CREATE UNIQUE INDEX IF NOT EXISTS produtos_nome_idx ON produtos(nome);"
 
       - name: Verificar total
         run: psql "$DATABASE_URL" -c "SELECT COUNT(*) AS total_produtos FROM produtos;"

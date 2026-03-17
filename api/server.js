@@ -119,13 +119,6 @@ function prevTurno(nome, data) {
 // ── AUTH ──────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok', v: 3 }));
 
-app.get('/api/debug', async (req, res) => {
-  try {
-    const tables = await query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name`);
-    const users = await query(`SELECT id, email, role, ativo, left(senha_hash,8) as hash_preview, length(senha_hash) as hash_len FROM utilizadores`);
-    res.json({ tables: tables.rows.map(r => r.table_name), users: users.rows, expected_hash_preview: hashPassword('admin123').substring(0,8) });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
-});
 
 app.post('/api/auth/login', async (req, res) => {
   try {

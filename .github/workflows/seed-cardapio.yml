@@ -32,8 +32,14 @@ jobs:
               ('Paito Alto Grande',  5000, 'comida', 6, true),
               ('Calulu Pequeno', 3500, 'comida',  7, true),
               ('Calulu Grande',  5000, 'comida',  8, true),
-              ('Composto Pequeno', 3500, 'comida', 9, true),
-              ('Composto Grande',  5000, 'comida', 10, true)
+              ('Composto Bife Pequeno',          3500, 'comida',  9, true),
+              ('Composto Bife Grande',           5000, 'comida', 10, true),
+              ('Composto Febra Pequeno',         3500, 'comida', 11, true),
+              ('Composto Febra Grande',          5000, 'comida', 12, true),
+              ('Composto Peito de Frango Pequeno', 3500, 'comida', 13, true),
+              ('Composto Peito de Frango Grande',  5000, 'comida', 14, true),
+              ('Composto Frango Pequeno',        3500, 'comida', 15, true),
+              ('Composto Frango Grande',         5000, 'comida', 16, true)
             ON CONFLICT DO NOTHING;
           "
           echo "Produtos inseridos com sucesso."

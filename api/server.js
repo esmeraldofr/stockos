@@ -120,6 +120,13 @@ function prevTurno(nome, data) {
 app.get('/api/health', (req, res) => res.json({ status: 'ok', v: 3 }));
 
 
+app.get('/api/status', async (req, res) => {
+  try {
+    const r = await query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name`);
+    res.json({ tables: r.rows.map(x => x.table_name) });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;

@@ -50,6 +50,20 @@ async function initDB() {
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`, [], 'alter-fechado');
+  await qry(`CREATE TABLE IF NOT EXISTS receitas (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    componente_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    quantidade NUMERIC(10,3) NOT NULL DEFAULT 1,
+    UNIQUE(produto_id, componente_id)
+  )`, [], 'receitas');
+  await qry(`CREATE TABLE IF NOT EXISTS turno_vendas (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    quantidade NUMERIC(10,3) NOT NULL DEFAULT 0,
+    UNIQUE(turno_id, produto_id)
+  )`, [], 'turno_vendas');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
@@ -507,6 +521,101 @@ app.get('/api/historico', auth, async (req, res) => {
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── RECEITAS ──────────────────────────────────────────────────
+app.get('/api/receitas/:produto_id', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT r.*, p.nome as componente_nome, p.categoria
+       FROM receitas r JOIN produtos p ON r.componente_id=p.id
+       WHERE r.produto_id=$1 ORDER BY p.categoria, p.nome`,
+      [req.params.produto_id]
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/receitas', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    const { produto_id, componente_id, quantidade } = req.body;
+    const r = await query(
+      `INSERT INTO receitas (produto_id,componente_id,quantidade) VALUES ($1,$2,$3)
+       ON CONFLICT (produto_id,componente_id) DO UPDATE SET quantidade=$3 RETURNING *`,
+      [produto_id, componente_id, quantidade||1]
+    );
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/receitas/:id', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    const r = await query('UPDATE receitas SET quantidade=$1 WHERE id=$2 RETURNING *', [req.body.quantidade, req.params.id]);
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/receitas/:id', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    await query('DELETE FROM receitas WHERE id=$1', [req.params.id]);
+    res.json({ sucesso: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── VENDAS DE MENU ─────────────────────────────────────────────
+app.get('/api/turnos/:id/vendas', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT tv.*, p.nome as produto_nome, p.preco
+       FROM turno_vendas tv JOIN produtos p ON tv.produto_id=p.id
+       WHERE tv.turno_id=$1 ORDER BY p.nome`,
+      [req.params.id]
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const turnoId = req.params.id;
+    const { produto_id, quantidade } = req.body;
+
+    const old = await client.query(
+      'SELECT quantidade FROM turno_vendas WHERE turno_id=$1 AND produto_id=$2',
+      [turnoId, produto_id]
+    );
+    const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
+    const delta = parseFloat(quantidade) - oldQty;
+
+    await client.query(
+      `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
+       ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
+      [turnoId, produto_id, quantidade]
+    );
+
+    if (delta !== 0) {
+      const receita = await client.query(
+        'SELECT componente_id, quantidade FROM receitas WHERE produto_id=$1',
+        [produto_id]
+      );
+      for (const comp of receita.rows) {
+        const deducao = delta * parseFloat(comp.quantidade);
+        await client.query(
+          `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
+           WHERE turno_id=$2 AND produto_id=$3`,
+          [deducao, turnoId, comp.componente_id]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ sucesso: true });
+  } catch(e) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ erro: e.message });
+  } finally { client.release(); }
 });
 
 // ── UTILIZADORES ──────────────────────────────────────────────

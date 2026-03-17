@@ -901,11 +901,6 @@ function showProdutoForm(id) {
   const isEdit = !!p;
   closeProdutoModal();
 
-  const ativoHtml = isEdit
-    ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>'
-    : '';
-  const guardarFn = isEdit ? 'saveProduto(' + p.id + ')' : 'createProduto()';
-
   const div = document.createElement('div');
   div.id = 'produto-modal';
   div.className = 'modal-overlay';
@@ -913,17 +908,17 @@ function showProdutoForm(id) {
     '<div class="modal">' +
       '<div class="modal-header">' +
         '<div class="modal-title">' + (isEdit ? 'Editar' : 'Novo') + ' Produto</div>' +
-        '<button class="modal-close" onclick="closeProdutoModal()">×</button>' +
+        '<button id="btn-modal-close" class="modal-close">×</button>' +
       '</div>' +
       '<div id="prod-form-msg"></div>' +
       '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
       '<div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="comida">Comida</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
-      ativoHtml +
+      (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +
-        '<button class="btn btn-success" onclick="' + guardarFn + '">Guardar</button>' +
-        '<button class="btn btn-ghost" onclick="closeProdutoModal()">Cancelar</button>' +
+        '<button id="btn-modal-guardar" class="btn btn-success">Guardar</button>' +
+        '<button id="btn-modal-cancelar" class="btn btn-ghost">Cancelar</button>' +
       '</div>' +
     '</div>';
 
@@ -934,6 +929,12 @@ function showProdutoForm(id) {
   document.getElementById('p-cat').value = p ? (p.categoria || 'outro') : 'outro';
   document.getElementById('p-ordem').value = p ? (p.ordem || 0) : 0;
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
+
+  document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
+  document.getElementById('btn-modal-cancelar').addEventListener('click', closeProdutoModal);
+  document.getElementById('btn-modal-guardar').addEventListener('click', function() {
+    if (isEdit) saveProduto(p.id); else createProduto();
+  });
 
   document.getElementById('p-nome').focus();
 }

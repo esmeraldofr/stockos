@@ -142,3 +142,25 @@ INSERT INTO produtos (nome, preco, categoria, ordem) VALUES
   ('Nocal Lata',        700,  'bebida', 36),
   ('Dopel',             700,  'bebida', 37)
   ON CONFLICT DO NOTHING;
+
+-- ============================================================
+--  RECEITAS (composição de produtos de menu)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS receitas (
+  id            SERIAL          PRIMARY KEY,
+  produto_id    INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  componente_id INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  quantidade    NUMERIC(10,3)   NOT NULL DEFAULT 1,
+  UNIQUE(produto_id, componente_id)
+);
+
+-- ============================================================
+--  TURNO_VENDAS (vendas de menu por turno)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS turno_vendas (
+  id          SERIAL          PRIMARY KEY,
+  turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+  produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
+  UNIQUE(turno_id, produto_id)
+);

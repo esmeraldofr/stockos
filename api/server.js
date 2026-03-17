@@ -169,6 +169,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
 
 app.post('/api/reseed-produtos', auth, requireRole('admin'), async (req, res) => {
   try {
+    await query(`ALTER TABLE produtos DROP CONSTRAINT IF EXISTS produtos_sku_key`);
     await query(`DELETE FROM comanda_itens`);
     await query(`DELETE FROM movimentacoes`);
     await query(`DELETE FROM turno_stock`);

@@ -66,11 +66,12 @@ async function initDB() {
     console.log('DB ready');
   } catch(e) { console.error('DB init error:', e.message); }
 }
-initDB();
+const dbReady = initDB();
 
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 app.use(express.static('public'));
+app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { res.status(500).json({ erro: 'DB não disponível' }); } });
 
 // ── HELPERS AUTH ──────────────────────────────────────────────
 function base64url(str) {

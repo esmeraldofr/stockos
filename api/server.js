@@ -330,7 +330,8 @@ app.get('/api/dia', auth, async (req, res) => {
           else if (diff < 0) comparacao = `falta ${Math.abs(diff)}`;
           else comparacao = `sobra ${diff}`;
         }
-        return { ...s, vendido: vend, valor: val, comparacao };
+        const prevDeixado = prevMap[s.produto_id] !== undefined ? prevMap[s.produto_id] : null;
+        return { ...s, vendido: vend, valor: val, comparacao, prev_deixado: prevDeixado };
       });
 
       const c = caixa.rows[0] || { tpa:0, transferencia:0, dinheiro:0, saida:0 };

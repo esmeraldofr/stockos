@@ -527,6 +527,7 @@ async function loadTurno() {
         return `
           <tr>
             <td class="td-name">${s.produto_nome}${s.preco > 0 ? `<span style="color:#64748b;font-size:11px;margin-left:6px">${fmt(s.preco)}</span>` : ''}</td>
+            <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.encontrado)}"
               onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
@@ -546,7 +547,7 @@ async function loadTurno() {
     function tableFor(items, label) {
       if (!items.length) return '';
       return `
-        <tr><td colspan="7" class="section-header">${label}</td></tr>
+        <tr><td colspan="8" class="section-header">${label}</td></tr>
         ${stockRows(items)}`;
     }
 
@@ -561,6 +562,7 @@ async function loadTurno() {
             <thead>
               <tr>
                 <th>Produto</th>
+                <th style="text-align:right">T. Anterior</th>
                 <th>Comparação</th>
                 <th style="text-align:right">Encontrado</th>
                 <th style="text-align:right">Entrada</th>
@@ -574,7 +576,7 @@ async function loadTurno() {
               ${tableFor(bebida,'🥤 Bebidas')}
               ${tableFor(outro,'📦 Outros')}
               <tr id="stock-total-row" style="font-weight:700;border-top:2px solid #334155;background:#1e293b">
-                <td colspan="5" style="padding:8px 10px;color:#94a3b8">Total</td>
+                <td colspan="6" style="padding:8px 10px;color:#94a3b8">Total</td>
                 <td class="td-calc" id="total-vend">—</td>
                 <td class="td-valor" id="total-val">—</td>
               </tr>

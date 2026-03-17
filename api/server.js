@@ -169,6 +169,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
 
 app.post('/api/reseed-produtos', auth, requireRole('admin'), async (req, res) => {
   try {
+    await query(`DELETE FROM comanda_itens`);
     await query(`DELETE FROM movimentacoes`);
     await query(`DELETE FROM turno_stock`);
     await query(`DELETE FROM produtos`);

@@ -190,7 +190,7 @@ function fmt(v) {
 }
 function fmtNum(v) {
   const n = parseFloat(v) || 0;
-  return n % 1 === 0 ? n.toString() : n.toFixed(2);
+  return n.toLocaleString('pt-AO', { maximumFractionDigits: 2 });
 }
 function turnoLabel(nome) {
   return { manha: '🌅 Manhã', tarde: '🌤 Tarde', noite: '🌙 Noite' }[nome] || nome;

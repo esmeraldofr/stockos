@@ -80,7 +80,7 @@ CREATE TABLE turno_caixa (
 --  Password: usar /api/auth/setup com código STOCKOS2025
 -- ============================================================
 INSERT INTO utilizadores (nome, email, senha_hash, role) VALUES
-  ('Admin', 'admin@stockos.ao', '', 'admin');
+  ('Admin', 'admin@stockos.ao', '0fa525288b3f7d18b1e016179c657b3e43e6bff4e7d7e2b736212703da770cff', 'admin');
 
 -- ============================================================
 --  DADOS INICIAIS — PRODUTOS (COMIDA)

@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS produtos (
   id        SERIAL        PRIMARY KEY,
   nome      VARCHAR(200)  NOT NULL,
   preco     NUMERIC(15,2) NOT NULL DEFAULT 0,
-  categoria VARCHAR(20)   NOT NULL DEFAULT 'outro', -- comida, bebida, outro
+  categoria VARCHAR(20)   NOT NULL DEFAULT 'outro', -- ingredientes, bebida, outro
   ordem     INTEGER       NOT NULL DEFAULT 0,
   ativo     BOOLEAN       NOT NULL DEFAULT TRUE
 );
@@ -95,27 +95,27 @@ INSERT INTO utilizadores (nome, email, senha_hash, role) VALUES
   ON CONFLICT (email) DO NOTHING;
 
 -- ============================================================
---  DADOS INICIAIS — PRODUTOS (COMIDA)
+--  DADOS INICIAIS — PRODUTOS (INGREDIENTES)
 -- ============================================================
 INSERT INTO produtos (nome, preco, categoria, ordem) VALUES
-  ('Carne',           0, 'comida',  1),
-  ('Ovo',             0, 'comida',  2),
-  ('Enchido',         0, 'comida',  3),
-  ('Pão 12',          0, 'comida',  4),
-  ('Pão 6',           0, 'comida',  5),
-  ('Batata Palha',    0, 'comida',  6),
-  ('Malonese',        0, 'comida',  7),
-  ('Mostarda',        0, 'comida',  8),
-  ('Ketchup',         0, 'comida',  9),
-  ('Milho',           0, 'comida', 10),
-  ('Óleo',            0, 'comida', 11),
-  ('Molho Inglês',    0, 'comida', 12),
-  ('Nata',            0, 'comida', 13),
-  ('Papel Alumínio',  0, 'comida', 14),
-  ('Saco',            0, 'comida', 15),
-  ('Palito',          0, 'comida', 16),
-  ('Guardanapos',     0, 'comida', 17),
-  ('Batata Pré-frita',0, 'comida', 18)
+  ('Carne',           0, 'ingredientes',  1),
+  ('Ovo',             0, 'ingredientes',  2),
+  ('Enchido',         0, 'ingredientes',  3),
+  ('Pão 12',          0, 'ingredientes',  4),
+  ('Pão 6',           0, 'ingredientes',  5),
+  ('Batata Palha',    0, 'ingredientes',  6),
+  ('Malonese',        0, 'ingredientes',  7),
+  ('Mostarda',        0, 'ingredientes',  8),
+  ('Ketchup',         0, 'ingredientes',  9),
+  ('Milho',           0, 'ingredientes', 10),
+  ('Óleo',            0, 'ingredientes', 11),
+  ('Molho Inglês',    0, 'ingredientes', 12),
+  ('Nata',            0, 'ingredientes', 13),
+  ('Papel Alumínio',  0, 'ingredientes', 14),
+  ('Saco',            0, 'ingredientes', 15),
+  ('Palito',          0, 'ingredientes', 16),
+  ('Guardanapos',     0, 'ingredientes', 17),
+  ('Batata Pré-frita',0, 'ingredientes', 18)
   ON CONFLICT DO NOTHING;
 
 -- ============================================================

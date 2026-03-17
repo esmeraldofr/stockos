@@ -20,7 +20,7 @@ jobs:
       - name: Install psql
         run: sudo apt-get install -y postgresql-client
 
-      - name: Inserir produtos do cardápio
+      - name: Inserir produtos do cardápio (trigger)
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
             INSERT INTO produtos (nome, preco, categoria, ordem, ativo) VALUES

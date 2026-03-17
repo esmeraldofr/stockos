@@ -54,7 +54,7 @@ async function initDB() {
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id NOT IN (SELECT MIN(id) FROM produtos GROUP BY nome)`, [], 'produtos-dedup');
   // Garantir constraint única no nome
-  await qry(`ALTER TABLE produtos ADD CONSTRAINT IF NOT EXISTS produtos_nome_key UNIQUE (nome)`, [], 'produtos-unique');
+  await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='produtos_nome_key') THEN ALTER TABLE produtos ADD CONSTRAINT produtos_nome_key UNIQUE (nome); END IF; END $$`, [], 'produtos-unique');
   await qry(`INSERT INTO produtos (nome,preco,categoria,ordem) VALUES
     ('Carne',0,'comida',1),('Ovo',0,'comida',2),('Enchido',0,'comida',3),('Pão 12',0,'comida',4),
     ('Pão 6',0,'comida',5),('Batata Palha',0,'comida',6),('Malonese',0,'comida',7),('Mostarda',0,'comida',8),
@@ -156,7 +156,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     tpa NUMERIC(15,2) NOT NULL DEFAULT 0, transferencia NUMERIC(15,2) NOT NULL DEFAULT 0,
     dinheiro NUMERIC(15,2) NOT NULL DEFAULT 0, saida NUMERIC(15,2) NOT NULL DEFAULT 0)`, 'turno_caixa');
   await run(`DELETE FROM produtos WHERE id NOT IN (SELECT MIN(id) FROM produtos GROUP BY nome)`, 'produtos-dedup');
-  await run(`ALTER TABLE produtos ADD CONSTRAINT IF NOT EXISTS produtos_nome_key UNIQUE (nome)`, 'produtos-unique');
+  await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='produtos_nome_key') THEN ALTER TABLE produtos ADD CONSTRAINT produtos_nome_key UNIQUE (nome); END IF; END $$`, 'produtos-unique');
   await run(`INSERT INTO produtos (nome,preco,categoria,ordem) VALUES
     ('Carne',0,'comida',1),('Ovo',0,'comida',2),('Enchido',0,'comida',3),('Pão 12',0,'comida',4),
     ('Pão 6',0,'comida',5),('Batata Palha',0,'comida',6),('Malonese',0,'comida',7),('Mostarda',0,'comida',8),

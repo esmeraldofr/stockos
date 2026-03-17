@@ -16,7 +16,10 @@ const query = (text, params) => pool.query(text, params);
 async function initDB() {
   try {
     const r = await query(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='utilizadores'`);
-    if (r.rows[0].count !== '0') return;
+    if (r.rows[0].count !== '0') {
+      await query(`UPDATE utilizadores SET senha_hash=$1 WHERE email='admin@stockos.ao' AND senha_hash=''`, [hashPassword('admin123')]);
+      return;
+    }
     await query(`
       CREATE TABLE IF NOT EXISTS utilizadores (
         id SERIAL PRIMARY KEY, nome VARCHAR(150) NOT NULL, email VARCHAR(200) NOT NULL UNIQUE,
@@ -45,7 +48,7 @@ async function initDB() {
         dinheiro NUMERIC(15,2) NOT NULL DEFAULT 0, saida NUMERIC(15,2) NOT NULL DEFAULT 0
       );
     `);
-    await query(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT DO NOTHING`, [hashPassword('admin123')]);
+    await query(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1 WHERE utilizadores.senha_hash=''`, [hashPassword('admin123')]);
     await query(`INSERT INTO produtos (nome,preco,categoria,ordem) VALUES
       ('Carne',0,'comida',1),('Ovo',0,'comida',2),('Enchido',0,'comida',3),('Pão 12',0,'comida',4),
       ('Pão 6',0,'comida',5),('Batata Palha',0,'comida',6),('Malonese',0,'comida',7),('Mostarda',0,'comida',8),

@@ -654,6 +654,11 @@ async function loadTurno() {
         </div>
         ${canEdit ? `<button class="btn btn-success btn-full mt-12" onclick="guardarCaixa(${turno.id})">💾 Guardar Caixa</button>` : ''}
       </div>
+
+      <div class="card mt-16" id="vendas-menu-card">
+        <div class="card-title">🍽️ Vendas de Menu</div>
+        <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
+      </div>
     `);
   // Inicializar total após render
   let initTotalVend = 0, initTotalVal = 0;
@@ -668,8 +673,58 @@ async function loadTurno() {
   if (tv) tv.textContent = fmtNum(initTotalVend);
   if (tva) tva.textContent = fmt(initTotalVal);
 
+    loadVendasMenu(turno.id, canEdit);
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+let vendasBuf = {};
+
+async function loadVendasMenu(turnoId, canEdit) {
+  try {
+    const [prods, vendas] = await Promise.all([
+      api('GET', '/produtos?todos=0'),
+      api('GET', `/turnos/${turnoId}/vendas`)
+    ]);
+    const menuProds = prods.filter(p => p.categoria === 'menu');
+    vendasBuf = {};
+    vendas.forEach(v => { vendasBuf[v.produto_id] = parseFloat(v.quantidade); });
+
+    if (!menuProds.length) {
+      show('vendas-menu-list', '<span style="color:#64748b">Nenhum produto de menu configurado. Adicione produtos com categoria "Menu".</span>');
+      return;
+    }
+
+    const rows = menuProds.map(p => {
+      const qty = vendasBuf[p.id] || 0;
+      return `<div class="produto-row" style="align-items:center">
+        <div class="produto-info"><div class="produto-nome">${p.nome}</div>
+          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda(${turnoId},${p.id},-1)">−</button>` : ''}
+          <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${qty}</span>
+          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda(${turnoId},${p.id},+1)">+</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+    show('vendas-menu-list', rows);
+  } catch(e) {
+    show('vendas-menu-list', `<span style="color:#ef4444">${e.message}</span>`);
+  }
+}
+
+async function deltaVenda(turnoId, prodId, delta) {
+  vendasBuf[prodId] = Math.max(0, (vendasBuf[prodId] || 0) + delta);
+  const el = document.getElementById(`venda-qty-${prodId}`);
+  if (el) el.textContent = vendasBuf[prodId];
+  try {
+    await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: vendasBuf[prodId] });
+    // Recarregar turno para reflectir stock deduzido
+    await renderTurno();
+  } catch(e) {
+    alert('Erro ao registar venda: ' + e.message);
   }
 }
 
@@ -924,6 +979,7 @@ function showProdutoForm(id) {
         '<button id="btn-modal-guardar" class="btn btn-success">Guardar</button>' +
         '<button id="btn-modal-cancelar" class="btn btn-ghost">Cancelar</button>' +
       '</div>' +
+      (isEdit ? '<div id="receita-section" style="display:none;margin-top:16px;border-top:1px solid #334155;padding-top:12px"><div class="card-title">🧾 Receita</div><div id="receita-list"></div><div style="display:flex;gap-6px;margin-top:8px"><select id="r-comp" style="flex:1"></select><input id="r-qty" type="number" min="0.001" step="0.001" value="1" style="width:70px"/><button class="btn btn-primary btn-sm" onclick="addReceita(' + p.id + ')">+</button></div><div id="receita-msg" style="margin-top:4px"></div></div>' : '') +
     '</div>';
 
   document.getElementById('app').appendChild(div);
@@ -933,6 +989,21 @@ function showProdutoForm(id) {
   document.getElementById('p-cat').value = p ? (p.categoria || 'outro') : 'outro';
   document.getElementById('p-ordem').value = p ? (p.ordem || 0) : 0;
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
+
+  function toggleReceita() {
+    const sec = document.getElementById('receita-section');
+    if (!sec) return;
+    if (document.getElementById('p-cat').value === 'menu') {
+      sec.style.display = '';
+      loadReceita(p.id);
+    } else {
+      sec.style.display = 'none';
+    }
+  }
+  if (isEdit) {
+    document.getElementById('p-cat').addEventListener('change', toggleReceita);
+    toggleReceita();
+  }
 
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
   document.getElementById('btn-modal-cancelar').addEventListener('click', closeProdutoModal);
@@ -965,6 +1036,62 @@ async function saveProduto(id) {
     setTimeout(()=>show('prod-msg',''),2000);
     await loadProdutos();
   } catch(e) { err('prod-form-msg',e.message); }
+}
+
+async function loadReceita(produtoId) {
+  try {
+    const [receita, todos] = await Promise.all([
+      api('GET', `/receitas/${produtoId}`),
+      api('GET', '/produtos?todos=0')
+    ]);
+    const outros = todos.filter(p => p.id !== produtoId);
+    // Preencher select de componentes
+    const sel = document.getElementById('r-comp');
+    if (sel) {
+      sel.innerHTML = outros.map(p =>
+        `<option value="${p.id}">${p.nome} (${p.categoria})</option>`
+      ).join('');
+    }
+    // Listar componentes actuais
+    const listEl = document.getElementById('receita-list');
+    if (!listEl) return;
+    if (!receita.length) {
+      listEl.innerHTML = '<span style="color:#64748b;font-size:13px">Sem componentes. Adicione abaixo.</span>';
+      return;
+    }
+    listEl.innerHTML = receita.map(r =>
+      `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #1e293b">
+        <span style="font-size:13px">${r.componente_nome}</span>
+        <span style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:13px;color:#94a3b8">×${fmtNum(r.quantidade)}</span>
+          <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="deleteReceita(${r.id},${produtoId})">✕</button>
+        </span>
+      </div>`
+    ).join('');
+  } catch(e) {
+    const el = document.getElementById('receita-msg');
+    if (el) el.innerHTML = `<span style="color:#ef4444">${e.message}</span>`;
+  }
+}
+
+async function addReceita(produtoId) {
+  const compId = document.getElementById('r-comp')?.value;
+  const qty = parseFloat(document.getElementById('r-qty')?.value) || 1;
+  if (!compId) return;
+  try {
+    await api('POST', '/receitas', { produto_id: produtoId, componente_id: compId, quantidade: qty });
+    await loadReceita(produtoId);
+  } catch(e) {
+    const el = document.getElementById('receita-msg');
+    if (el) el.innerHTML = `<span style="color:#ef4444">${e.message}</span>`;
+  }
+}
+
+async function deleteReceita(receitaId, produtoId) {
+  try {
+    await api('DELETE', `/receitas/${receitaId}`);
+    await loadReceita(produtoId);
+  } catch(e) { alert(e.message); }
 }
 
 // ── ADMIN ─────────────────────────────────────────────────────

@@ -21,25 +21,11 @@ jobs:
       - name: Install psql
         run: sudo apt-get install -y postgresql-client
 
-      - name: Check if all tables exist
-        id: check
-        run: |
-          COUNT=$(psql "$DATABASE_URL" -t -c \
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('utilizadores','produtos','turnos','turno_stock','turno_caixa');" \
-            2>/dev/null | tr -d ' \n' || echo "0")
-          echo "count=$COUNT" >> $GITHUB_OUTPUT
-          echo "Tables found: $COUNT"
-
       - name: Run SQL setup
-        if: steps.check.outputs.count != '5'
         run: |
-          echo "Missing tables (found ${{ steps.check.outputs.count }}/5). Running SQL..."
-          psql "$DATABASE_URL" -f supabase/stockos_database.sql
-          echo "Database setup complete!"
-
-      - name: Already setup
-        if: steps.check.outputs.count == '5'
-        run: echo "All 5 tables exist. Skipping."
+          echo "Running SQL (idempotent)..."
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/stockos_database.sql
+          echo "Done."
 
       - name: Set admin password
         run: |

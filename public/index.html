@@ -463,7 +463,11 @@ async function drawTurno() {
         <button class="btn btn-ghost btn-sm" onclick="navigate('dia')" style="margin-bottom:4px">‹ Voltar</button>
         <div id="turno-title" style="font-size:16px;font-weight:700;color:#f1f5f9">Turno</div>
       </div>
-      <div id="turno-header-actions"></div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn btn-ghost btn-sm" id="btn-prev-turno" onclick="navTurno(-1)">‹</button>
+        <button class="btn btn-ghost btn-sm" id="btn-next-turno" onclick="navTurno(1)">›</button>
+        <div id="turno-header-actions"></div>
+      </div>
     </div>
     <div id="content">
       <div id="turno-msg"></div>
@@ -477,6 +481,22 @@ async function drawTurno() {
 // Stock buffer for edits
 let stockBuf = {};
 let caixaBuf = {};
+
+const TURNO_ORDER = ['manha','tarde','noite'];
+function navTurno(dir) {
+  const turnos = TURNO_ORDER;
+  const idx = turnos.indexOf(S.turnoData?.nome);
+  const next = idx + dir;
+  if (next < 0 || next >= turnos.length) return;
+  const nextNome = turnos[next];
+  // Encontrar o id do turno destino a partir dos dados já carregados
+  api('GET', `/dia?data=${S.date}`).then(all => {
+    const t = all.find(x => x.nome === nextNome);
+    if (!t) return;
+    S.turnoId = t.id;
+    loadTurno();
+  });
+}
 
 async function loadTurno() {
   try {
@@ -502,6 +522,11 @@ async function loadTurno() {
 
     document.getElementById('turno-title').textContent =
       `${turnoLabel(turno.nome)} — ${dateLabel(S.date)}`;
+    const idx = TURNO_ORDER.indexOf(turno.nome);
+    const btnP = document.getElementById('btn-prev-turno');
+    const btnN = document.getElementById('btn-next-turno');
+    if (btnP) btnP.disabled = idx <= 0;
+    if (btnN) btnN.disabled = idx >= TURNO_ORDER.length - 1;
 
     const isAberto = turno.estado === 'aberto';
     const canEdit  = isAberto;

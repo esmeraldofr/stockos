@@ -663,6 +663,18 @@ function updateStock(pid, field, value) {
   const tva = document.getElementById('total-val');
   if (tv) tv.textContent = fmtNum(totalVend);
   if (tva) tva.textContent = fmt(totalVal);
+  // Auto-save
+  autoSaveSchedule();
+}
+
+let autoSaveTimer = null;
+function autoSaveSchedule() {
+  const turnoId = S.turnoData?.id;
+  if (!turnoId) return;
+  const el = document.getElementById('turno-msg');
+  if (el) { el.className='alert'; el.textContent='A guardar...'; el.style.opacity='.5'; }
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(() => guardarStock(turnoId), 2000);
 }
 
 async function guardarStock(turnoId) {
@@ -677,8 +689,8 @@ async function guardarStock(turnoId) {
       })
     );
     await Promise.all(proms);
-    suc('turno-msg', 'Stock guardado com sucesso!');
-    setTimeout(() => show('turno-msg',''), 3000);
+    suc('turno-msg', '✓ Guardado');
+    setTimeout(() => show('turno-msg',''), 2000);
   } catch(e) { err('turno-msg', e.message); }
 }
 

@@ -346,8 +346,10 @@ async function drawDia() {
     <div id="content">
       <div class="date-nav">
         <button onclick="changeDate(-1)">‹</button>
-        <span id="date-label" onclick="openDatePicker()" style="cursor:pointer;text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
-        <input type="date" id="date-picker" value="${S.date}" style="position:fixed;opacity:0;pointer-events:none;width:0;height:0" onchange="pickDate(this.value)">
+        <span style="position:relative;cursor:pointer">
+          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
+          <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
+        </span>
         <button onclick="changeDate(1)">›</button>
       </div>
       <div id="dia-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
@@ -363,12 +365,6 @@ function changeDate(n) {
   const dp = document.getElementById('date-picker');
   if (dp) dp.value = S.date;
   loadDia();
-}
-function openDatePicker() {
-  const dp = document.getElementById('date-picker');
-  if (!dp) return;
-  if (dp.showPicker) dp.showPicker();
-  else dp.click();
 }
 function pickDate(val) {
   if (!val) return;

@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:6543/postgres' }}
       PGSSLMODE: require
 
     steps:

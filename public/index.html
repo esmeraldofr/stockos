@@ -527,6 +527,7 @@ async function loadTurno() {
         return `
           <tr>
             <td class="td-name">${s.produto_nome}${s.preco > 0 ? `<span style="color:#64748b;font-size:11px;margin-left:6px">${fmt(s.preco)}</span>` : ''}</td>
+            <td id="comp-${pid}">${compHtml}</td>
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.encontrado)}"
               onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
               oninput="updateStock('${pid}','encontrado',this.value)" ${inputAttr}/></td>
@@ -538,7 +539,6 @@ async function loadTurno() {
               oninput="updateStock('${pid}','deixado',this.value)" ${inputAttr}/></td>
             <td class="td-calc" id="vend-${pid}">${fmtNum(vend)}</td>
             <td class="td-valor" id="val-${pid}">${s.preco > 0 ? fmt(val) : '—'}</td>
-            <td id="comp-${pid}">${compHtml}</td>
           </tr>`;
       }).join('');
     }
@@ -561,12 +561,12 @@ async function loadTurno() {
             <thead>
               <tr>
                 <th>Produto</th>
+                <th>Comparação</th>
                 <th style="text-align:right">Encontrado</th>
                 <th style="text-align:right">Entrada</th>
                 <th style="text-align:right">Deixado</th>
                 <th style="text-align:right">Vendido</th>
                 <th style="text-align:right">Valor</th>
-                <th>Comparação</th>
               </tr>
             </thead>
             <tbody>
@@ -574,10 +574,9 @@ async function loadTurno() {
               ${tableFor(bebida,'🥤 Bebidas')}
               ${tableFor(outro,'📦 Outros')}
               <tr id="stock-total-row" style="font-weight:700;border-top:2px solid #334155;background:#1e293b">
-                <td colspan="4" style="padding:8px 10px;color:#94a3b8">Total</td>
+                <td colspan="5" style="padding:8px 10px;color:#94a3b8">Total</td>
                 <td class="td-calc" id="total-vend">—</td>
                 <td class="td-valor" id="total-val">—</td>
-                <td></td>
               </tr>
             </tbody>
           </table>

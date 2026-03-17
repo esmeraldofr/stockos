@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS turnos (
 CREATE TABLE IF NOT EXISTS turno_stock (
   id          SERIAL          PRIMARY KEY,
   turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-  produto_id  UUID            NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
   encontrado  NUMERIC(10,3)   NOT NULL DEFAULT 0,
   entrada     NUMERIC(10,3)   NOT NULL DEFAULT 0,
   deixado     NUMERIC(10,3)   NOT NULL DEFAULT 0,

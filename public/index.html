@@ -518,11 +518,11 @@ async function loadTurno() {
           <tr>
             <td class="td-name">${s.produto_nome}</td>
             <td class="td-input"><input type="number" min="0" step="0.5" value="${fmtNum(s.encontrado)}"
-              oninput="updateStock(${pid},'encontrado',this.value)" ${inputAttr}/></td>
+              oninput="updateStock('${pid}','encontrado',this.value)" ${inputAttr}/></td>
             <td class="td-input"><input type="number" min="0" step="0.5" value="${fmtNum(s.entrada)}"
-              oninput="updateStock(${pid},'entrada',this.value)" ${inputAttr}/></td>
+              oninput="updateStock('${pid}','entrada',this.value)" ${inputAttr}/></td>
             <td class="td-input"><input type="number" min="0" step="0.5" value="${fmtNum(s.deixado)}"
-              oninput="updateStock(${pid},'deixado',this.value)" ${inputAttr}/></td>
+              oninput="updateStock('${pid}','deixado',this.value)" ${inputAttr}/></td>
             <td class="td-calc" id="vend-${pid}">${fmtNum(vend)}</td>
             <td class="td-valor" id="val-${pid}">${s.preco > 0 ? fmt(val) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
@@ -653,7 +653,7 @@ async function guardarStock(turnoId) {
     show('turno-msg','');
     const proms = Object.entries(stockBuf).map(([pid, v]) =>
       api('PUT', `/turnos/${turnoId}/stock`, {
-        produto_id: parseInt(pid),
+        produto_id: pid,
         encontrado: v.encontrado,
         entrada: v.entrada,
         deixado: v.deixado

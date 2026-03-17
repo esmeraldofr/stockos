@@ -518,11 +518,11 @@ async function loadTurno() {
           <tr>
             <td class="td-name">${s.produto_nome}</td>
             <td class="td-input"><input type="number" min="0" step="0.5" value="${fmtNum(s.encontrado)}"
-              onchange="updateStock(${pid},'encontrado',this.value)" ${inputAttr}/></td>
+              oninput="updateStock(${pid},'encontrado',this.value)" ${inputAttr}/></td>
             <td class="td-input"><input type="number" min="0" step="0.5" value="${fmtNum(s.entrada)}"
-              onchange="updateStock(${pid},'entrada',this.value)" ${inputAttr}/></td>
+              oninput="updateStock(${pid},'entrada',this.value)" ${inputAttr}/></td>
             <td class="td-input"><input type="number" min="0" step="0.5" value="${fmtNum(s.deixado)}"
-              onchange="updateStock(${pid},'deixado',this.value)" ${inputAttr}/></td>
+              oninput="updateStock(${pid},'deixado',this.value)" ${inputAttr}/></td>
             <td class="td-calc" id="vend-${pid}">${fmtNum(vend)}</td>
             <td class="td-valor" id="val-${pid}">${s.preco > 0 ? fmt(val) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
@@ -560,6 +560,12 @@ async function loadTurno() {
               ${tableFor(comida,'🍔 Comida')}
               ${tableFor(bebida,'🥤 Bebidas')}
               ${tableFor(outro,'📦 Outros')}
+              <tr id="stock-total-row" style="font-weight:700;border-top:2px solid #334155;background:#1e293b">
+                <td colspan="4" style="padding:8px 10px;color:#94a3b8">Total</td>
+                <td class="td-calc" id="total-vend">—</td>
+                <td class="td-valor" id="total-val">—</td>
+                <td></td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -598,6 +604,19 @@ async function loadTurno() {
         ${canEdit ? `<button class="btn btn-success btn-full mt-12" onclick="guardarCaixa(${turno.id})">💾 Guardar Caixa</button>` : ''}
       </div>
     `);
+  // Inicializar total após render
+  let initTotalVend = 0, initTotalVal = 0;
+  turno.stock.forEach(s => {
+    const b = stockBuf[s.produto_id] || { encontrado:0, entrada:0, deixado:0 };
+    const v = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    initTotalVend += v;
+    initTotalVal += v * (parseFloat(s.preco) || 0);
+  });
+  const tv = document.getElementById('total-vend');
+  const tva = document.getElementById('total-val');
+  if (tv) tv.textContent = fmtNum(initTotalVend);
+  if (tva) tva.textContent = fmt(initTotalVal);
+
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -615,6 +634,18 @@ function updateStock(pid, field, value) {
   const va = document.getElementById(`val-${pid}`);
   if (ve) ve.textContent = fmtNum(vend);
   if (va) va.textContent = preco > 0 ? fmt(val) : '—';
+  // Recalcular total
+  let totalVend = 0, totalVal = 0;
+  (S.turnoData?.stock || []).forEach(s => {
+    const b = stockBuf[s.produto_id] || { encontrado:0, entrada:0, deixado:0 };
+    const v = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    totalVend += v;
+    totalVal += v * (parseFloat(s.preco) || 0);
+  });
+  const tv = document.getElementById('total-vend');
+  const tva = document.getElementById('total-val');
+  if (tv) tv.textContent = fmtNum(totalVend);
+  if (tva) tva.textContent = fmt(totalVal);
 }
 
 async function guardarStock(turnoId) {

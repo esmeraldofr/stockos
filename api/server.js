@@ -17,7 +17,7 @@ async function initDB() {
   try {
     const r = await query(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='utilizadores'`);
     if (r.rows[0].count !== '0') {
-      await query(`UPDATE utilizadores SET senha_hash=$1 WHERE email='admin@stockos.ao' AND senha_hash=''`, [hashPassword('admin123')]);
+      await query(`UPDATE utilizadores SET senha_hash=$1 WHERE email='admin@stockos.ao' AND (senha_hash='' OR senha_hash IS NULL)`, [hashPassword('admin123')]);
       return;
     }
     await query(`
@@ -120,8 +120,8 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', v: 3 }));
 app.get('/api/debug', async (req, res) => {
   try {
     const tables = await query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name`);
-    const users = await query(`SELECT id, email, role, ativo, length(senha_hash) as hash_len FROM utilizadores`);
-    res.json({ tables: tables.rows.map(r => r.table_name), users: users.rows });
+    const users = await query(`SELECT id, email, role, ativo, left(senha_hash,8) as hash_preview, length(senha_hash) as hash_len FROM utilizadores`);
+    res.json({ tables: tables.rows.map(r => r.table_name), users: users.rows, expected_hash_preview: hashPassword('admin123').substring(0,8) });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

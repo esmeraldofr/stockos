@@ -71,9 +71,12 @@ input,select,button,textarea{font-family:inherit}
 .table-wrap{overflow-x:auto;overflow-y:auto;max-height:calc(100vh - 180px);-webkit-overflow-scrolling:touch}
 table{width:100%;border-collapse:collapse;font-size:13px;min-width:580px}
 th{background:#0f172a;color:#64748b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;text-align:left;position:sticky;top:0}
+th:first-child{left:0;z-index:2}
 td{padding:6px 10px;border-bottom:1px solid #1e293b}
 tr:hover td{background:#1e293b}
-.td-name{font-weight:500;white-space:nowrap}
+.td-name{font-weight:500;white-space:nowrap;position:sticky;left:0;background:#0f172a;z-index:1}
+tr:hover .td-name{background:#1e293b}
+.section-header{position:sticky;left:0}
 .td-cat{font-size:10px;color:#64748b}
 .td-input{width:90px;text-align:right}
 .td-input input{width:65px;background:#0f172a;border:1px solid #334155;border-radius:6px;padding:5px 6px;color:#f1f5f9;font-size:13px;text-align:right}

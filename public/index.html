@@ -200,10 +200,6 @@ function turnoLabel(nome) {
 }
 function dateLabel(d) {
   const [y,m,dd] = d.split('-');
-  const today = new Date().toISOString().split('T')[0];
-  if (d === today) return 'Hoje';
-  const yest = new Date(); yest.setDate(yest.getDate()-1);
-  if (d === yest.toISOString().split('T')[0]) return 'Ontem';
   return `${dd}/${m}/${y}`;
 }
 function addDays(d, n) {

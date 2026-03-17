@@ -874,7 +874,7 @@ async function loadProdutos() {
               </div>
               ${isAdmin ? `
               <div class="produto-actions">
-                <button class="btn btn-ghost btn-sm" onclick='showProdutoForm(${JSON.stringify(p)})'>Editar</button>
+                <button class="btn btn-ghost btn-sm" onclick="showProdutoForm(${p.id})">Editar</button>
               </div>` : ''}
             </div>`).join('')}
         </div>`;
@@ -888,13 +888,14 @@ async function loadProdutos() {
   } catch(e) { show('prod-list',`<div class="alert alert-error">${e.message}</div>`); }
 }
 
-function showProdutoForm(p) {
+function showProdutoForm(id) {
+  const p = (id !== undefined) ? S.produtos.find(x => x.id === id) : null;
   const isEdit = !!p;
   show('prod-form', `
     <div class="card">
       <div class="card-title">${isEdit?'Editar':'Novo'} Produto</div>
       <div id="prod-form-msg"></div>
-      <div class="field"><label>Nome</label><input id="p-nome" value="${p?.nome||''}"/></div>
+      <div class="field"><label>Nome</label><input id="p-nome" value=""/></div>
       <div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="${p?.preco||0}"/></div>
       <div class="field"><label>Categoria</label>
         <select id="p-cat">
@@ -914,6 +915,8 @@ function showProdutoForm(p) {
       </div>
     </div>
   `);
+  if (p) document.getElementById('p-nome').value = p.nome;
+  document.getElementById('prod-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function createProduto() {
@@ -928,7 +931,6 @@ async function createProduto() {
 
 async function saveProduto(id) {
   try {
-    const p = S.produtos.find(x=>x.id===id);
     await api('PUT',`/produtos/${id}`,{
       nome: val('p-nome'), preco: parseFloat(val('p-preco'))||0,
       categoria: val('p-cat'), ordem: parseInt(val('p-ordem'))||0,

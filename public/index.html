@@ -845,7 +845,6 @@ async function drawProdutos() {
     </div>
     <div id="content">
       <div id="prod-msg"></div>
-      <div id="prod-form"></div>
       <div id="prod-list"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
     </div>
     ${navBar()}
@@ -888,12 +887,24 @@ async function loadProdutos() {
   } catch(e) { show('prod-list',`<div class="alert alert-error">${e.message}</div>`); }
 }
 
+function closeProdutoModal() {
+  const m = document.getElementById('produto-modal');
+  if (m) m.remove();
+}
+
 function showProdutoForm(id) {
   const p = (id !== undefined) ? S.produtos.find(x => x.id === id) : null;
   const isEdit = !!p;
-  show('prod-form', `
-    <div class="card">
-      <div class="card-title">${isEdit?'Editar':'Novo'} Produto</div>
+  closeProdutoModal();
+  const div = document.createElement('div');
+  div.id = 'produto-modal';
+  div.className = 'modal-overlay';
+  div.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">${isEdit ? 'Editar' : 'Novo'} Produto</div>
+        <button class="modal-close" onclick="closeProdutoModal()">×</button>
+      </div>
       <div id="prod-form-msg"></div>
       <div class="field"><label>Nome</label><input id="p-nome" value=""/></div>
       <div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="${p?.preco||0}"/></div>
@@ -907,22 +918,26 @@ function showProdutoForm(id) {
       <div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="${p?.ordem||0}"/></div>
       ${isEdit ? `
       <div class="field"><label>Activo</label>
-        <select id="p-ativo"><option value="true" ${p?.ativo?'selected':''}>Sim</option><option value="false" ${!p?.ativo?'selected':''}>Não</option></select>
+        <select id="p-ativo">
+          <option value="true" ${p?.ativo ? 'selected' : ''}>Sim</option>
+          <option value="false" ${!p?.ativo ? 'selected' : ''}>Não</option>
+        </select>
       </div>` : ''}
       <div class="flex gap-8 mt-8">
-        <button class="btn btn-success" onclick="${isEdit?`saveProduto(${p.id})`:'createProduto()'}">Guardar</button>
-        <button class="btn btn-ghost" onclick="show('prod-form','')">Cancelar</button>
+        <button class="btn btn-success" onclick="${isEdit ? `saveProduto(${p.id})` : 'createProduto()'}">Guardar</button>
+        <button class="btn btn-ghost" onclick="closeProdutoModal()">Cancelar</button>
       </div>
     </div>
-  `);
+  `;
+  document.getElementById('app').appendChild(div);
   if (p) document.getElementById('p-nome').value = p.nome;
-  document.getElementById('prod-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  document.getElementById('p-nome').focus();
 }
 
 async function createProduto() {
   try {
     await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,categoria:val('p-cat')});
-    show('prod-form','');
+    closeProdutoModal();
     suc('prod-msg','Produto criado!');
     setTimeout(()=>show('prod-msg',''),2000);
     await loadProdutos();
@@ -936,7 +951,7 @@ async function saveProduto(id) {
       categoria: val('p-cat'), ordem: parseInt(val('p-ordem'))||0,
       ativo: val('p-ativo')==='true'
     });
-    show('prod-form','');
+    closeProdutoModal();
     suc('prod-msg','Produto actualizado!');
     setTimeout(()=>show('prod-msg',''),2000);
     await loadProdutos();

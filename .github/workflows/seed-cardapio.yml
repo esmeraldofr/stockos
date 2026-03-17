@@ -1,0 +1,39 @@
+name: Seed Cardápio
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/seed-cardapio.yml'
+    branches: [main]
+
+jobs:
+  seed:
+    name: Inserir produtos do cardápio
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:6543/postgres' }}
+      PGSSLMODE: require
+
+    steps:
+      - name: Install psql
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Inserir produtos do cardápio
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+            INSERT INTO produtos (nome, preco, categoria, ordem, ativo) VALUES
+              ('Hambúrguer',      2500, 'comida',  1, true),
+              ('Combo',          4000, 'comida',  2, true),
+              ('Mufete Pequeno', 3500, 'comida',  3, true),
+              ('Mufete Grande',  5000, 'comida',  4, true),
+              ('Paito Alto Pequeno', 3500, 'comida', 5, true),
+              ('Paito Alto Grande',  5000, 'comida', 6, true),
+              ('Calulu Pequeno', 3500, 'comida',  7, true),
+              ('Calulu Grande',  5000, 'comida',  8, true),
+              ('Composto Pequeno', 3500, 'comida', 9, true),
+              ('Composto Grande',  5000, 'comida', 10, true)
+            ON CONFLICT DO NOTHING;
+          "
+          echo "Produtos inseridos com sucesso."

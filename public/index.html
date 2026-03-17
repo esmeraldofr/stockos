@@ -544,9 +544,10 @@ async function loadTurno() {
     );
 
     // Separar comida e bebida
+    const menu    = turno.stock.filter(s => s.categoria === 'menu');
     const comida  = turno.stock.filter(s => s.categoria === 'comida');
     const bebida  = turno.stock.filter(s => s.categoria === 'bebida');
-    const outro   = turno.stock.filter(s => s.categoria !== 'comida' && s.categoria !== 'bebida');
+    const outro   = turno.stock.filter(s => !['menu','comida','bebida'].includes(s.categoria));
 
     function stockRows(items) {
       return items.map(s => {
@@ -607,6 +608,7 @@ async function loadTurno() {
               </tr>
             </thead>
             <tbody>
+              ${tableFor(menu,'🍽️ Menu')}
               ${tableFor(comida,'🍔 Comida')}
               ${tableFor(bebida,'🥤 Bebidas')}
               ${tableFor(outro,'📦 Outros')}
@@ -856,9 +858,10 @@ async function loadProdutos() {
   try {
     const isAdmin = ['admin','gestor'].includes(S.user?.role);
     S.produtos = await api('GET', '/produtos' + (isAdmin ? '?todos=1' : ''));
+    const menu   = S.produtos.filter(p => p.categoria==='menu');
     const comida = S.produtos.filter(p => p.categoria==='comida');
     const bebida = S.produtos.filter(p => p.categoria==='bebida');
-    const outro  = S.produtos.filter(p => p.categoria!=='comida'&&p.categoria!=='bebida');
+    const outro  = S.produtos.filter(p => !['menu','comida','bebida'].includes(p.categoria));
 
     function prodList(items, label) {
       if (!items.length) return '';
@@ -880,6 +883,7 @@ async function loadProdutos() {
     }
 
     show('prod-list',
+      prodList(menu,'🍽️ Menu') +
       prodList(comida,'🍔 Comida') +
       prodList(bebida,'🥤 Bebidas') +
       prodList(outro,'📦 Outros')
@@ -913,7 +917,7 @@ function showProdutoForm(id) {
       '<div id="prod-form-msg"></div>' +
       '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
       '<div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
-      '<div class="field"><label>Categoria</label><select id="p-cat"><option value="comida">Comida</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
+      '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="comida">Comida</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
       (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +

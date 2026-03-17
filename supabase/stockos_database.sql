@@ -3,17 +3,10 @@
 --  Sistema baseado em turnos (Manhã / Tarde / Noite)
 -- ============================================================
 
--- Limpeza
-DROP TABLE IF EXISTS turno_caixa CASCADE;
-DROP TABLE IF EXISTS turno_stock CASCADE;
-DROP TABLE IF EXISTS turnos CASCADE;
-DROP TABLE IF EXISTS produtos CASCADE;
-DROP TABLE IF EXISTS utilizadores CASCADE;
-
 -- ============================================================
 --  UTILIZADORES
 -- ============================================================
-CREATE TABLE utilizadores (
+CREATE TABLE IF NOT EXISTS utilizadores (
   id          SERIAL        PRIMARY KEY,
   nome        VARCHAR(150)  NOT NULL,
   email       VARCHAR(200)  NOT NULL UNIQUE,
@@ -26,7 +19,7 @@ CREATE TABLE utilizadores (
 -- ============================================================
 --  PRODUTOS
 -- ============================================================
-CREATE TABLE produtos (
+CREATE TABLE IF NOT EXISTS produtos (
   id        SERIAL        PRIMARY KEY,
   nome      VARCHAR(200)  NOT NULL,
   preco     NUMERIC(15,2) NOT NULL DEFAULT 0,
@@ -38,7 +31,7 @@ CREATE TABLE produtos (
 -- ============================================================
 --  TURNOS (um por turno por dia)
 -- ============================================================
-CREATE TABLE turnos (
+CREATE TABLE IF NOT EXISTS turnos (
   id             SERIAL      PRIMARY KEY,
   data           DATE        NOT NULL DEFAULT CURRENT_DATE,
   nome           VARCHAR(10) NOT NULL CHECK (nome IN ('manha','tarde','noite')),
@@ -53,7 +46,7 @@ CREATE TABLE turnos (
 -- ============================================================
 --  TURNO_STOCK (stock por produto por turno)
 -- ============================================================
-CREATE TABLE turno_stock (
+CREATE TABLE IF NOT EXISTS turno_stock (
   id          SERIAL          PRIMARY KEY,
   turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
   produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
@@ -66,7 +59,7 @@ CREATE TABLE turno_stock (
 -- ============================================================
 --  TURNO_CAIXA (caixa por turno)
 -- ============================================================
-CREATE TABLE turno_caixa (
+CREATE TABLE IF NOT EXISTS turno_caixa (
   id            SERIAL          PRIMARY KEY,
   turno_id      INTEGER         NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
   tpa           NUMERIC(15,2)   NOT NULL DEFAULT 0,
@@ -80,7 +73,8 @@ CREATE TABLE turno_caixa (
 --  Password: usar /api/auth/setup com código STOCKOS2025
 -- ============================================================
 INSERT INTO utilizadores (nome, email, senha_hash, role) VALUES
-  ('Admin', 'admin@stockos.ao', '0fa525288b3f7d18b1e016179c657b3e43e6bff4e7d7e2b736212703da770cff', 'admin');
+  ('Admin', 'admin@stockos.ao', '', 'admin')
+  ON CONFLICT (email) DO NOTHING;
 
 -- ============================================================
 --  DADOS INICIAIS — PRODUTOS (COMIDA)
@@ -103,7 +97,8 @@ INSERT INTO produtos (nome, preco, categoria, ordem) VALUES
   ('Saco',            0, 'comida', 15),
   ('Palito',          0, 'comida', 16),
   ('Guardanapos',     0, 'comida', 17),
-  ('Batata Pré-frita',0, 'comida', 18);
+  ('Batata Pré-frita',0, 'comida', 18)
+  ON CONFLICT DO NOTHING;
 
 -- ============================================================
 --  DADOS INICIAIS — PRODUTOS (BEBIDAS)
@@ -127,4 +122,5 @@ INSERT INTO produtos (nome, preco, categoria, ordem) VALUES
   ('Sumol Manga',       700,  'bebida', 34),
   ('Cuca Lata',         700,  'bebida', 35),
   ('Nocal Lata',        700,  'bebida', 36),
-  ('Dopel',             700,  'bebida', 37);
+  ('Dopel',             700,  'bebida', 37)
+  ON CONFLICT DO NOTHING;

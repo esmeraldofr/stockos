@@ -20,11 +20,22 @@ async function initDB() {
     if (r.rows[0].count !== '0') {
       const expected = hashPassword('admin123');
       await query(`UPDATE utilizadores SET senha_hash=$1 WHERE email='admin@stockos.ao'`, [expected]);
-      // migrations: add missing columns if they don't exist
+      // migrations: add missing columns and tables if they don't exist
       await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
       await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`);
       await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`);
       await query(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+      await query(`CREATE TABLE IF NOT EXISTS turno_stock (
+        id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+        produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+        encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0,
+        deixado NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id)
+      )`);
+      await query(`CREATE TABLE IF NOT EXISTS turno_caixa (
+        id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
+        tpa NUMERIC(15,2) NOT NULL DEFAULT 0, transferencia NUMERIC(15,2) NOT NULL DEFAULT 0,
+        dinheiro NUMERIC(15,2) NOT NULL DEFAULT 0, saida NUMERIC(15,2) NOT NULL DEFAULT 0
+      )`);
       await query(`INSERT INTO produtos (nome,preco,categoria,ordem) VALUES
         ('Carne',0,'comida',1),('Ovo',0,'comida',2),('Enchido',0,'comida',3),('Pão 12',0,'comida',4),
         ('Pão 6',0,'comida',5),('Batata Palha',0,'comida',6),('Malonese',0,'comida',7),('Mostarda',0,'comida',8),

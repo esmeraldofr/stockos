@@ -37,6 +37,7 @@ jobs:
           git merge --no-ff "origin/$BRANCH" -m "chore: merge $BRANCH into main"
           if git push origin main; then
             echo "Direct git push succeeded."
+            gh workflow run deploy.yml --ref main || true
             exit 0
           fi
 
@@ -72,3 +73,4 @@ jobs:
             --merge \
             --admin \
             --delete-branch=false
+          gh workflow run deploy.yml --ref main || true

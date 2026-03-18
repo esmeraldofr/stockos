@@ -46,6 +46,7 @@ async function initDB() {
     tpa NUMERIC(15,2) NOT NULL DEFAULT 0, transferencia NUMERIC(15,2) NOT NULL DEFAULT 0,
     dinheiro NUMERIC(15,2) NOT NULL DEFAULT 0, saida NUMERIC(15,2) NOT NULL DEFAULT 0
   )`, [], 'turno_caixa');
+  await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_avulso BOOLEAN NOT NULL DEFAULT FALSE`, [], 'alter-venda-avulso');
   await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-util');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
@@ -293,11 +294,11 @@ app.get('/api/produtos', auth, async (req, res) => {
 
 app.post('/api/produtos', auth, requireRole('admin','gestor'), async (req, res) => {
   try {
-    const { nome, preco, categoria } = req.body;
+    const { nome, preco, categoria, venda_avulso } = req.body;
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
     const r = await query(
-      'INSERT INTO produtos (nome,preco,categoria,ordem) VALUES ($1,$2,$3,$4) RETURNING *',
-      [nome, preco||0, categoria||'outro', maxOrdem.rows[0].n]
+      'INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+      [nome, preco||0, categoria||'outro', maxOrdem.rows[0].n, !!venda_avulso]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -305,10 +306,10 @@ app.post('/api/produtos', auth, requireRole('admin','gestor'), async (req, res) 
 
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor'), async (req, res) => {
   try {
-    const { nome, preco, categoria, ordem, ativo } = req.body;
+    const { nome, preco, categoria, ordem, ativo, venda_avulso } = req.body;
     const r = await query(
-      'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5 WHERE id=$6 RETURNING *',
-      [nome, preco, categoria, ordem, ativo, req.params.id]
+      'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6 WHERE id=$7 RETURNING *',
+      [nome, preco, categoria, ordem, ativo, !!venda_avulso, req.params.id]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }

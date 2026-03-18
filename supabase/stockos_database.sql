@@ -76,6 +76,11 @@ ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'operador';
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS senha_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'produtos_nome_key') THEN
+    ALTER TABLE produtos ADD CONSTRAINT produtos_nome_key UNIQUE (nome);
+  END IF;
+END $$;
 ALTER TABLE produtos ALTER COLUMN sku SET DEFAULT '';
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categoria VARCHAR(20) NOT NULL DEFAULT 'outro';
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0;
@@ -116,7 +121,7 @@ INSERT INTO produtos (nome, preco, categoria, ordem) VALUES
   ('Palito',          0, 'ingredientes', 16),
   ('Guardanapos',     0, 'ingredientes', 17),
   ('Batata Pré-frita',0, 'ingredientes', 18)
-  ON CONFLICT DO NOTHING;
+  ON CONFLICT (nome) DO NOTHING;
 
 -- ============================================================
 --  DADOS INICIAIS — PRODUTOS (BEBIDAS)
@@ -141,7 +146,7 @@ INSERT INTO produtos (nome, preco, categoria, ordem) VALUES
   ('Cuca Lata',         700,  'bebida', 35),
   ('Nocal Lata',        700,  'bebida', 36),
   ('Dopel',             700,  'bebida', 37)
-  ON CONFLICT DO NOTHING;
+  ON CONFLICT (nome) DO NOTHING;
 
 -- ============================================================
 --  RECEITAS (composição de produtos de menu)

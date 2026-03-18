@@ -483,6 +483,7 @@ let stockBuf = {};
 let caixaBuf = {};
 let receitasBuf = {}; // { produto_id: [{componente_id, quantidade}] }
 let bebidaProdIds = []; // ids das bebidas registadas em Vendas
+let avulsoProdIds = []; // ids dos ingredientes com venda_avulso=true
 
 function calcMenuQty(prodId) {
   const recipe = receitasBuf[prodId] || [];
@@ -494,6 +495,17 @@ function calcMenuQty(prodId) {
     min = Math.min(min, vendido / parseFloat(comp.quantidade));
   }
   return min === Infinity ? 0 : Math.floor(min);
+}
+
+function calcStandaloneQty(prodId) {
+  const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
+  const total = Math.max(0, b.encontrado + b.entrada - b.deixado);
+  let comboUsage = 0;
+  for (const [menuProdId, recipe] of Object.entries(receitasBuf)) {
+    const comp = recipe.find(r => r.componente_id === prodId);
+    if (comp) comboUsage += (calcMenuQty(menuProdId) || 0) * comp.quantidade;
+  }
+  return Math.max(0, total - comboUsage);
 }
 
 function refreshMenuQtys() {
@@ -510,6 +522,10 @@ function refreshMenuQtys() {
       const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
       el.textContent = fmtNum(Math.max(0, b.encontrado + b.entrada - b.deixado));
     }
+  }
+  for (const prodId of avulsoProdIds) {
+    const el = document.getElementById(`venda-qty-${prodId}`);
+    if (el) el.textContent = fmtNum(calcStandaloneQty(prodId));
   }
 }
 
@@ -718,6 +734,7 @@ async function loadVendasMenu(turnoId, canEdit) {
     ]);
     const menuProds   = prods.filter(p => p.categoria === 'menu');
     const bebidaProds = prods.filter(p => p.categoria === 'bebida');
+    const avulsoProds = prods.filter(p => p.venda_avulso && p.categoria !== 'menu' && p.categoria !== 'bebida');
     vendasBuf = {};
     vendas.forEach(v => { vendasBuf[v.produto_id] = parseFloat(v.quantidade); });
 
@@ -727,7 +744,9 @@ async function loadVendasMenu(turnoId, canEdit) {
       receitasBuf[r.produto_id].push({ componente_id: r.componente_id, quantidade: parseFloat(r.quantidade) });
     });
 
-    if (!menuProds.length && !bebidaProds.length) {
+    avulsoProdIds = avulsoProds.map(p => p.id);
+
+    if (!menuProds.length && !bebidaProds.length && !avulsoProds.length) {
       show('vendas-menu-list', '<span style="color:#64748b">Nenhum produto de menu configurado. Adicione produtos com categoria "Menu".</span>');
       return;
     }
@@ -762,7 +781,18 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     }).join('');
 
+    const avulsoRows = avulsoProds.map(p => {
+      const qty = calcStandaloneQty(p.id);
+      return `<div class="produto-row" style="align-items:center">
+        <div class="produto-info"><div class="produto-nome">${p.nome}</div>
+          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
+        </div>
+        <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${fmtNum(qty)}</span>
+      </div>`;
+    }).join('');
+
     const html = (menuProds.length ? groupHeader('🍽️ Menu') + menuRows : '')
+               + (avulsoProds.length ? groupHeader('🛒 Avulso') + avulsoRows : '')
                + (bebidaProds.length ? groupHeader('🥤 Bebidas') + bebidaRows : '');
     show('vendas-menu-list', html);
   } catch(e) {
@@ -983,7 +1013,7 @@ async function loadProdutos() {
           ${items.map(p => `
             <div class="produto-row">
               <div class="produto-info">
-                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}</div>
+                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}</div>
                 <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · #${p.ordem}</div>
               </div>
               ${isAdmin ? `
@@ -1030,6 +1060,7 @@ function showProdutoForm(id) {
       '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
       '<div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
+      '<div class="field" id="field-avulso" style="display:none"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso (aparece em Vendas separado dos combos)</label></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
       (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +
@@ -1046,7 +1077,13 @@ function showProdutoForm(id) {
   document.getElementById('p-cat').value = p ? (p.categoria || 'outro') : 'outro';
   document.getElementById('p-ordem').value = p ? (p.ordem || 0) : 0;
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
+  if (p) document.getElementById('p-avulso').checked = !!p.venda_avulso;
 
+  function toggleAvulso() {
+    const cat = document.getElementById('p-cat').value;
+    const fa = document.getElementById('field-avulso');
+    if (fa) fa.style.display = (cat === 'ingredientes' || cat === 'outro') ? '' : 'none';
+  }
   function toggleReceita() {
     const sec = document.getElementById('receita-section');
     if (!sec) return;
@@ -1057,10 +1094,9 @@ function showProdutoForm(id) {
       sec.style.display = 'none';
     }
   }
-  if (isEdit) {
-    document.getElementById('p-cat').addEventListener('change', toggleReceita);
-    toggleReceita();
-  }
+  document.getElementById('p-cat').addEventListener('change', () => { toggleAvulso(); if (isEdit) toggleReceita(); });
+  toggleAvulso();
+  if (isEdit) toggleReceita();
 
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
   document.getElementById('btn-modal-cancelar').addEventListener('click', closeProdutoModal);
@@ -1073,7 +1109,7 @@ function showProdutoForm(id) {
 
 async function createProduto() {
   try {
-    await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,categoria:val('p-cat')});
+    await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,categoria:val('p-cat'),venda_avulso:document.getElementById('p-avulso')?.checked||false});
     closeProdutoModal();
     suc('prod-msg','Produto criado!');
     setTimeout(()=>show('prod-msg',''),2000);
@@ -1086,7 +1122,8 @@ async function saveProduto(id) {
     await api('PUT',`/produtos/${id}`,{
       nome: val('p-nome'), preco: parseFloat(val('p-preco'))||0,
       categoria: val('p-cat'), ordem: parseInt(val('p-ordem'))||0,
-      ativo: val('p-ativo')==='true'
+      ativo: val('p-ativo')==='true',
+      venda_avulso: document.getElementById('p-avulso')?.checked||false
     });
     closeProdutoModal();
     suc('prod-msg','Produto actualizado!');

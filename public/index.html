@@ -622,7 +622,6 @@ async function loadTurno() {
         </div>
       </div>
 
-      ${canEdit ? `<button class="btn btn-primary btn-full mt-12" onclick="guardarStock('${turno.id}')">💾 Guardar Stock</button>` : ''}
 
       <div class="card mt-16">
         <div class="card-title">💰 Caixa</div>
@@ -652,7 +651,6 @@ async function loadTurno() {
           <span class="caixa-total-label">Total Final</span>
           <span class="caixa-total-value" id="c-total-final">${fmt(tf)}</span>
         </div>
-        ${canEdit ? `<button class="btn btn-success btn-full mt-12" onclick="guardarCaixa('${turno.id}')">💾 Guardar Caixa</button>` : ''}
       </div>
 
       <div class="card mt-16" id="vendas-menu-card">

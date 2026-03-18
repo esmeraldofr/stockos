@@ -979,7 +979,7 @@ function showProdutoForm(id) {
         '<button id="btn-modal-guardar" class="btn btn-success">Guardar</button>' +
         '<button id="btn-modal-cancelar" class="btn btn-ghost">Cancelar</button>' +
       '</div>' +
-      (isEdit ? '<div id="receita-section" style="display:none;margin-top:16px;border-top:1px solid #334155;padding-top:12px"><div class="card-title">🧾 Receita</div><div id="receita-list"></div><div style="display:flex;gap-6px;margin-top:8px"><select id="r-comp" style="flex:1"></select><input id="r-qty" type="number" min="0.001" step="0.001" value="1" style="width:70px"/><button class="btn btn-primary btn-sm" onclick="addReceita(' + p.id + ')">+</button></div><div id="receita-msg" style="margin-top:4px"></div></div>' : '') +
+      (isEdit ? '<div id="receita-section" style="display:none;margin-top:16px;border-top:1px solid #334155;padding-top:12px"><div class="card-title">🧾 Receita</div><div id="receita-list"></div><div style="display:flex;gap-6px;margin-top:8px"><select id="r-comp" style="flex:1"></select><input id="r-qty" type="number" min="0.001" step="0.001" value="1" style="width:70px"/><button class="btn btn-primary btn-sm" onclick="addReceita(\'' + p.id + '\')">+</button></div><div id="receita-msg" style="margin-top:4px"></div></div>' : '') +
     '</div>';
 
   document.getElementById('app').appendChild(div);
@@ -1064,7 +1064,7 @@ async function loadReceita(produtoId) {
         <span style="font-size:13px">${r.componente_nome}</span>
         <span style="display:flex;align-items:center;gap:6px">
           <span style="font-size:13px;color:#94a3b8">×${fmtNum(r.quantidade)}</span>
-          <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="deleteReceita(${r.id},${produtoId})">✕</button>
+          <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="deleteReceita(${r.id},'${produtoId}')">✕</button>
         </span>
       </div>`
     ).join('');
@@ -1079,7 +1079,7 @@ async function addReceita(produtoId) {
   const qty = parseFloat(document.getElementById('r-qty')?.value) || 1;
   if (!compId) { alert('Seleccione um componente primeiro.'); return; }
   try {
-    await api('POST', '/receitas', { produto_id: produtoId, componente_id: parseInt(compId), quantidade: qty });
+    await api('POST', '/receitas', { produto_id: produtoId, componente_id: compId, quantidade: qty });
     await loadReceita(produtoId);
   } catch(e) {
     alert('Erro ao adicionar: ' + e.message);

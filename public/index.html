@@ -1060,7 +1060,7 @@ function showProdutoForm(id) {
       '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
       '<div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
-      '<div class="field" id="field-avulso" style="display:none"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso (aparece em Vendas separado dos combos)</label></div>' +
+      '<div class="field" id="field-avulso" style="' + ((p && (p.categoria==='ingredientes'||p.categoria==='outro')) || (!p) ? '' : 'display:none') + '"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso (aparece em Vendas separado dos combos)</label></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
       (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +

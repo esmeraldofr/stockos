@@ -178,29 +178,34 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
     tpa NUMERIC(15,2) NOT NULL DEFAULT 0, transferencia NUMERIC(15,2) NOT NULL DEFAULT 0,
     dinheiro NUMERIC(15,2) NOT NULL DEFAULT 0, saida NUMERIC(15,2) NOT NULL DEFAULT 0)`, 'turno_caixa');
-  // Fix receitas: drop if UUID columns, recreate with INTEGER
-  const _rcCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='receitas' AND column_name='produto_id'`).catch(e=>({rows:[],err:e.message}));
+  // Detect produtos.id type to align all FK columns
+  const _pidCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`).catch(e=>({rows:[]}));
+  const _pidType = _pidCheck.rows.length > 0 ? _pidCheck.rows[0].data_type : 'integer';
+  results.push({ label: 'produtos-id-type', ok: true, type: _pidType });
+  const pidCol = _pidType === 'uuid' ? 'UUID' : 'INTEGER';
+  // Fix receitas
+  const _rcCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='receitas' AND column_name='produto_id'`).catch(e=>({rows:[]}));
   const _rcType = _rcCheck.rows.length > 0 ? _rcCheck.rows[0].data_type : 'not_found';
   results.push({ label: 'receitas-type-check', ok: true, type: _rcType });
-  if (_rcType !== 'integer') {
+  if (_rcType !== _pidType) {
     await run(`DROP TABLE IF EXISTS receitas CASCADE`, 'receitas-drop');
-    await run(`CREATE TABLE receitas (id SERIAL PRIMARY KEY, produto_id INTEGER NOT NULL, componente_id INTEGER NOT NULL, quantidade NUMERIC(10,3) NOT NULL DEFAULT 1, UNIQUE(produto_id,componente_id))`, 'receitas-create');
+    await run(`CREATE TABLE receitas (id SERIAL PRIMARY KEY, produto_id ${pidCol} NOT NULL, componente_id ${pidCol} NOT NULL, quantidade NUMERIC(10,3) NOT NULL DEFAULT 1, UNIQUE(produto_id,componente_id))`, 'receitas-create');
   }
-  // Fix turno_vendas: drop if UUID columns, recreate with INTEGER
+  // Fix turno_vendas
   const _tvCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='turno_vendas' AND column_name='produto_id'`).catch(e=>({rows:[]}));
   const _tvType = _tvCheck.rows.length > 0 ? _tvCheck.rows[0].data_type : 'not_found';
   results.push({ label: 'turno_vendas-type-check', ok: true, type: _tvType });
-  if (_tvType !== 'integer') {
+  if (_tvType !== _pidType) {
     await run(`DROP TABLE IF EXISTS turno_vendas CASCADE`, 'turno_vendas-drop');
-    await run(`CREATE TABLE turno_vendas (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, quantidade NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_vendas-create');
+    await run(`CREATE TABLE turno_vendas (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, quantidade NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_vendas-create');
   }
-  // Fix turno_stock: drop if UUID columns, recreate with INTEGER
+  // Fix turno_stock
   const _tsCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='turno_stock' AND column_name='produto_id'`).catch(e=>({rows:[]}));
   const _tsType = _tsCheck.rows.length > 0 ? _tsCheck.rows[0].data_type : 'not_found';
   results.push({ label: 'turno_stock-type-check', ok: true, type: _tsType });
-  if (_tsType !== 'integer') {
+  if (_tsType !== _pidType) {
     await run(`DROP TABLE IF EXISTS turno_stock CASCADE`, 'turno_stock-drop');
-    await run(`CREATE TABLE turno_stock (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0, deixado NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_stock-create');
+    await run(`CREATE TABLE turno_stock (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0, deixado NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_stock-create');
   }
   await run(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, 'produtos-dedup');
   await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='produtos_nome_key') THEN ALTER TABLE produtos ADD CONSTRAINT produtos_nome_key UNIQUE (nome); END IF; END $$`, 'produtos-unique');

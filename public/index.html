@@ -513,7 +513,7 @@ async function navTurno(dir) {
 async function loadTurno() {
   try {
     const turnos = await api('GET', `/dia?data=${S.date}`);
-    const turno = turnos.find(t => t.id === S.turnoId);
+    const turno = turnos.find(t => String(t.id) === String(S.turnoId));
     if (!turno) { show('turno-content','<div class="alert alert-error">Turno não encontrado</div>'); return; }
 
     S.turnoData = turno;

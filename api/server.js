@@ -51,10 +51,12 @@ async function initDB() {
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`, [], 'alter-fechado');
   try {
-    const _rc = await query(`SELECT data_type FROM information_schema.columns WHERE table_name='receitas' AND column_name='produto_id'`);
-    if (_rc.rows.length > 0 && _rc.rows[0].data_type === 'uuid') {
-      await query(`DROP TABLE receitas`);
-      console.log('[migrate] receitas dropped (UUID→INTEGER)');
+    const _rc = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='receitas' AND column_name='produto_id'`);
+    const _dt = _rc.rows.length > 0 ? _rc.rows[0].data_type : null;
+    console.log('[migrate-receitas] produto_id type:', _dt);
+    if (_dt && _dt !== 'integer') {
+      await query(`DROP TABLE IF EXISTS receitas CASCADE`);
+      console.log('[migrate] receitas dropped, was:', _dt);
     }
   } catch(e) { console.error('[migrate-receitas]', e.message); }
   await qry(`CREATE TABLE IF NOT EXISTS receitas (
@@ -176,6 +178,14 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
     tpa NUMERIC(15,2) NOT NULL DEFAULT 0, transferencia NUMERIC(15,2) NOT NULL DEFAULT 0,
     dinheiro NUMERIC(15,2) NOT NULL DEFAULT 0, saida NUMERIC(15,2) NOT NULL DEFAULT 0)`, 'turno_caixa');
+  // Fix receitas: drop if UUID columns, recreate with INTEGER
+  const _rcCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='receitas' AND column_name='produto_id'`).catch(e=>({rows:[],err:e.message}));
+  const _rcType = _rcCheck.rows.length > 0 ? _rcCheck.rows[0].data_type : 'not_found';
+  results.push({ label: 'receitas-type-check', ok: true, type: _rcType });
+  if (_rcType !== 'integer') {
+    await run(`DROP TABLE IF EXISTS receitas CASCADE`, 'receitas-drop');
+    await run(`CREATE TABLE receitas (id SERIAL PRIMARY KEY, produto_id INTEGER NOT NULL, componente_id INTEGER NOT NULL, quantidade NUMERIC(10,3) NOT NULL DEFAULT 1, UNIQUE(produto_id,componente_id))`, 'receitas-create');
+  }
   await run(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, 'produtos-dedup');
   await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='produtos_nome_key') THEN ALTER TABLE produtos ADD CONSTRAINT produtos_nome_key UNIQUE (nome); END IF; END $$`, 'produtos-unique');
   await run(`INSERT INTO produtos (nome,preco,categoria,ordem) VALUES

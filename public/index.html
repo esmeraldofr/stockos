@@ -1077,13 +1077,12 @@ async function loadReceita(produtoId) {
 async function addReceita(produtoId) {
   const compId = document.getElementById('r-comp')?.value;
   const qty = parseFloat(document.getElementById('r-qty')?.value) || 1;
-  if (!compId) return;
+  if (!compId) { alert('Seleccione um componente primeiro.'); return; }
   try {
-    await api('POST', '/receitas', { produto_id: produtoId, componente_id: compId, quantidade: qty });
+    await api('POST', '/receitas', { produto_id: produtoId, componente_id: parseInt(compId), quantidade: qty });
     await loadReceita(produtoId);
   } catch(e) {
-    const el = document.getElementById('receita-msg');
-    if (el) el.innerHTML = `<span style="color:#ef4444">${e.message}</span>`;
+    alert('Erro ao adicionar: ' + e.message);
   }
 }
 

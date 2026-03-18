@@ -722,7 +722,7 @@ async function deltaVenda(turnoId, prodId, delta) {
   try {
     await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: vendasBuf[prodId] });
     // Recarregar turno para reflectir stock deduzido
-    await renderTurno();
+    await loadTurno();
   } catch(e) {
     alert('Erro ao registar venda: ' + e.message);
   }

@@ -401,7 +401,7 @@ async function loadDia() {
         ? '<span class="badge badge-green">Aberto</span>'
         : '<span class="badge badge-grey">Fechado</span>';
       return `
-        <div class="turno-card ${cls}" onclick="navigate('turno',{turnoId:${t.id}})">
+        <div class="turno-card ${cls}" onclick="navigate('turno',{turnoId:'${t.id}'})">
           <div class="turno-card-nome">${turnoLabel(nome)}</div>
           <div class="turno-card-status">${badge}</div>
           <div class="turno-card-value">${fmt(totalCaixa)}</div>
@@ -539,7 +539,7 @@ async function loadTurno() {
     const canEdit  = isAberto;
 
     show('turno-header-actions', isAberto
-      ? `<button class="btn btn-danger btn-sm" onclick="fecharTurno(${turno.id})">Fechar</button>`
+      ? `<button class="btn btn-danger btn-sm" onclick="fecharTurno('${turno.id}')">Fechar</button>`
       : '<span class="badge badge-grey">Fechado</span>'
     );
 
@@ -622,7 +622,7 @@ async function loadTurno() {
         </div>
       </div>
 
-      ${canEdit ? `<button class="btn btn-primary btn-full mt-12" onclick="guardarStock(${turno.id})">💾 Guardar Stock</button>` : ''}
+      ${canEdit ? `<button class="btn btn-primary btn-full mt-12" onclick="guardarStock('${turno.id}')">💾 Guardar Stock</button>` : ''}
 
       <div class="card mt-16">
         <div class="card-title">💰 Caixa</div>
@@ -652,7 +652,7 @@ async function loadTurno() {
           <span class="caixa-total-label">Total Final</span>
           <span class="caixa-total-value" id="c-total-final">${fmt(tf)}</span>
         </div>
-        ${canEdit ? `<button class="btn btn-success btn-full mt-12" onclick="guardarCaixa(${turno.id})">💾 Guardar Caixa</button>` : ''}
+        ${canEdit ? `<button class="btn btn-success btn-full mt-12" onclick="guardarCaixa('${turno.id}')">💾 Guardar Caixa</button>` : ''}
       </div>
 
       <div class="card mt-16" id="vendas-menu-card">
@@ -703,9 +703,9 @@ async function loadVendasMenu(turnoId, canEdit) {
           ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px">
-          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda(${turnoId},${p.id},-1)">−</button>` : ''}
+          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',-1)">−</button>` : ''}
           <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${qty}</span>
-          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda(${turnoId},${p.id},+1)">+</button>` : ''}
+          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',+1)">+</button>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -1064,7 +1064,7 @@ async function loadReceita(produtoId) {
         <span style="font-size:13px">${r.componente_nome}</span>
         <span style="display:flex;align-items:center;gap:6px">
           <span style="font-size:13px;color:#94a3b8">×${fmtNum(r.quantidade)}</span>
-          <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="deleteReceita(${r.id},'${produtoId}')">✕</button>
+          <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="deleteReceita('${r.id}','${produtoId}')">✕</button>
         </span>
       </div>`
     ).join('');
@@ -1156,7 +1156,7 @@ function showUserForm(u) {
       </div>
       <div class="field"><label>Nova Password (opcional)</label><input type="password" id="u-pass"/></div>`:''}
       <div class="flex gap-8 mt-8">
-        <button class="btn btn-success" onclick="${isEdit?`saveUser(${u.id})`:'createUser()'}">Guardar</button>
+        <button class="btn btn-success" onclick="${isEdit?`saveUser('${u.id}')`:'createUser()'}">Guardar</button>
         <button class="btn btn-ghost" onclick="show('admin-form','')">Cancelar</button>
       </div>
     </div>

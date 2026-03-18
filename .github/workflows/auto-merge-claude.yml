@@ -20,6 +20,34 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Query DB and save result
+        run: |
+          npm install pg
+          node -e "
+          const { Pool } = require('pg');
+          const fs = require('fs');
+          const pool = new Pool({
+            connectionString: 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres',
+            ssl: { rejectUnauthorized: false }
+          });
+          const sql = fs.existsSync('data/query.sql')
+            ? fs.readFileSync('data/query.sql', 'utf8')
+            : 'SELECT p.nome AS produto, c.nome AS componente, r.quantidade FROM receitas r JOIN produtos p ON p.id = r.produto_id JOIN produtos c ON c.id = r.componente_id ORDER BY p.nome, r.quantidade DESC';
+          pool.query(sql).then(r => {
+            fs.mkdirSync('data', { recursive: true });
+            fs.writeFileSync('data/db-result.json', JSON.stringify(r.rows, null, 2));
+            console.log('DB query OK, rows:', r.rows.length);
+            pool.end();
+          }).catch(e => { console.error('DB query failed:', e.message); pool.end(); });
+          "
+          git add data/db-result.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: db snapshot [skip ci]"
+
       - name: Merge branch into main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

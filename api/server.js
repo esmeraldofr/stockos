@@ -50,7 +50,13 @@ async function initDB() {
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`, [], 'alter-fechado');
-  await qry(`DO $$ DECLARE t text; BEGIN SELECT data_type INTO t FROM information_schema.columns WHERE table_name='receitas' AND column_name='produto_id'; IF t='uuid' THEN DROP TABLE receitas; END IF; END $$`, [], 'receitas-migrate');
+  try {
+    const _rc = await query(`SELECT data_type FROM information_schema.columns WHERE table_name='receitas' AND column_name='produto_id'`);
+    if (_rc.rows.length > 0 && _rc.rows[0].data_type === 'uuid') {
+      await query(`DROP TABLE receitas`);
+      console.log('[migrate] receitas dropped (UUID→INTEGER)');
+    }
+  } catch(e) { console.error('[migrate-receitas]', e.message); }
   await qry(`CREATE TABLE IF NOT EXISTS receitas (
     id SERIAL PRIMARY KEY,
     produto_id INTEGER NOT NULL,

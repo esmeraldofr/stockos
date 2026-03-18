@@ -1,0 +1,49 @@
+name: DB Query
+on:
+  push:
+    branches: [main]
+    paths: ['data/query.sql']
+  workflow_dispatch:
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pg
+        run: npm install pg
+
+      - name: Run query
+        run: |
+          node -e "
+          const { Pool } = require('pg');
+          const pool = new Pool({
+            connectionString: 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres',
+            ssl: { rejectUnauthorized: false }
+          });
+          const fs = require('fs');
+          const sql = fs.existsSync('data/query.sql') ? fs.readFileSync('data/query.sql','utf8') : \`
+            SELECT p.nome AS produto, c.nome AS componente, r.quantidade
+            FROM receitas r
+            JOIN produtos p ON p.id = r.produto_id
+            JOIN produtos c ON c.id = r.componente_id
+            ORDER BY p.nome, r.quantidade DESC
+          \`;
+          pool.query(sql).then(r => {
+            fs.mkdirSync('data', { recursive: true });
+            fs.writeFileSync('data/db-result.json', JSON.stringify(r.rows, null, 2));
+            console.log(JSON.stringify(r.rows, null, 2));
+            pool.end();
+          }).catch(e => { console.error(e.message); pool.end(); process.exit(1); });
+          "
+
+      - name: Commit result
+        run: |
+          git config user.email "claude@stockos"
+          git config user.name "Claude"
+          git add data/db-result.json
+          git diff --staged --quiet || git commit -m "chore: db query result [skip ci]"
+          git push origin HEAD

@@ -685,29 +685,36 @@ async function loadVendasMenu(turnoId, canEdit) {
       api('GET', '/produtos?todos=0'),
       api('GET', `/turnos/${turnoId}/vendas`)
     ]);
-    const menuProds = prods.filter(p => p.categoria === 'menu');
+    const menuProds   = prods.filter(p => p.categoria === 'menu');
+    const bebidaProds = prods.filter(p => p.categoria === 'bebida');
     vendasBuf = {};
     vendas.forEach(v => { vendasBuf[v.produto_id] = parseFloat(v.quantidade); });
 
-    if (!menuProds.length) {
+    if (!menuProds.length && !bebidaProds.length) {
       show('vendas-menu-list', '<span style="color:#64748b">Nenhum produto de menu configurado. Adicione produtos com categoria "Menu".</span>');
       return;
     }
 
-    const rows = menuProds.map(p => {
-      const qty = vendasBuf[p.id] || 0;
-      return `<div class="produto-row" style="align-items:center">
-        <div class="produto-info"><div class="produto-nome">${p.nome}</div>
-          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
-        </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',-1)">−</button>` : ''}
-          <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${qty}</span>
-          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',+1)">+</button>` : ''}
-        </div>
-      </div>`;
-    }).join('');
-    show('vendas-menu-list', rows);
+    const renderGroup = (label, list) => {
+      if (!list.length) return '';
+      const header = `<div style="font-weight:600;color:#64748b;font-size:0.8rem;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px">${label}</div>`;
+      const rows = list.map(p => {
+        const qty = vendasBuf[p.id] || 0;
+        return `<div class="produto-row" style="align-items:center">
+          <div class="produto-info"><div class="produto-nome">${p.nome}</div>
+            ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',-1)">−</button>` : ''}
+            <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${qty}</span>
+            ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',+1)">+</button>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+      return header + rows;
+    };
+
+    show('vendas-menu-list', renderGroup('🍽️ Menu', menuProds) + renderGroup('🥤 Bebidas', bebidaProds));
   } catch(e) {
     show('vendas-menu-list', `<span style="color:#ef4444">${e.message}</span>`);
   }

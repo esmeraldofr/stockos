@@ -553,6 +553,17 @@ app.get('/api/historico', auth, async (req, res) => {
 });
 
 // ── RECEITAS ──────────────────────────────────────────────────
+app.get('/api/receitas', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT r.*, p.nome as componente_nome, p.categoria
+       FROM receitas r JOIN produtos p ON r.componente_id=p.id
+       ORDER BY r.produto_id, p.categoria, p.nome`
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 app.get('/api/receitas/:produto_id', auth, async (req, res) => {
   try {
     const r = await query(

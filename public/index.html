@@ -482,6 +482,7 @@ async function drawTurno() {
 let stockBuf = {};
 let caixaBuf = {};
 let receitasBuf = {}; // { produto_id: [{componente_id, quantidade}] }
+let bebidaProdIds = []; // ids das bebidas registadas em Vendas
 
 function calcMenuQty(prodId) {
   const recipe = receitasBuf[prodId] || [];
@@ -501,6 +502,13 @@ function refreshMenuQtys() {
     if (el) {
       const qty = calcMenuQty(prodId);
       el.textContent = qty === null ? '—' : qty;
+    }
+  }
+  for (const prodId of bebidaProdIds) {
+    const el = document.getElementById(`venda-qty-${prodId}`);
+    if (el) {
+      const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
+      el.textContent = fmtNum(Math.max(0, b.encontrado + b.entrada - b.deixado));
     }
   }
 }
@@ -740,16 +748,16 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     }).join('');
 
+    bebidaProdIds = bebidaProds.map(p => p.id);
     const bebidaRows = bebidaProds.map(p => {
-      const qty = vendasBuf[p.id] || 0;
+      const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
+      const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
       return `<div class="produto-row" style="align-items:center">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
           ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px">
-          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',-1)">−</button>` : ''}
-          <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${qty}</span>
-          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',+1)">+</button>` : ''}
+          <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${fmtNum(qty)}</span>
         </div>
       </div>`;
     }).join('');

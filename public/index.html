@@ -721,9 +721,10 @@ async function deltaVenda(turnoId, prodId, delta) {
   if (el) el.textContent = vendasBuf[prodId];
   try {
     await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: vendasBuf[prodId] });
-    // Recarregar turno para reflectir stock deduzido
-    await loadTurno();
   } catch(e) {
+    // reverter no erro
+    vendasBuf[prodId] = Math.max(0, vendasBuf[prodId] - delta);
+    if (el) el.textContent = vendasBuf[prodId];
     alert('Erro ao registar venda: ' + e.message);
   }
 }

@@ -481,6 +481,29 @@ async function drawTurno() {
 // Stock buffer for edits
 let stockBuf = {};
 let caixaBuf = {};
+let receitasBuf = {}; // { produto_id: [{componente_id, quantidade}] }
+
+function calcMenuQty(prodId) {
+  const recipe = receitasBuf[prodId] || [];
+  if (!recipe.length) return null;
+  let min = Infinity;
+  for (const comp of recipe) {
+    const b = stockBuf[comp.componente_id] || { encontrado:0, entrada:0, deixado:0 };
+    const vendido = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    min = Math.min(min, vendido / parseFloat(comp.quantidade));
+  }
+  return min === Infinity ? 0 : Math.floor(min);
+}
+
+function refreshMenuQtys() {
+  for (const prodId of Object.keys(receitasBuf)) {
+    const el = document.getElementById(`venda-qty-${prodId}`);
+    if (el) {
+      const qty = calcMenuQty(prodId);
+      el.textContent = qty === null ? '—' : qty;
+    }
+  }
+}
 
 const TURNO_ORDER = ['manha','tarde','noite'];
 async function navTurno(dir) {
@@ -680,40 +703,60 @@ let vendasBuf = {};
 
 async function loadVendasMenu(turnoId, canEdit) {
   try {
-    const [prods, vendas] = await Promise.all([
+    const [prods, vendas, todasReceitas] = await Promise.all([
       api('GET', '/produtos?todos=0'),
-      api('GET', `/turnos/${turnoId}/vendas`)
+      api('GET', `/turnos/${turnoId}/vendas`),
+      api('GET', '/receitas')
     ]);
     const menuProds   = prods.filter(p => p.categoria === 'menu');
     const bebidaProds = prods.filter(p => p.categoria === 'bebida');
     vendasBuf = {};
     vendas.forEach(v => { vendasBuf[v.produto_id] = parseFloat(v.quantidade); });
 
+    receitasBuf = {};
+    todasReceitas.forEach(r => {
+      if (!receitasBuf[r.produto_id]) receitasBuf[r.produto_id] = [];
+      receitasBuf[r.produto_id].push({ componente_id: r.componente_id, quantidade: parseFloat(r.quantidade) });
+    });
+
     if (!menuProds.length && !bebidaProds.length) {
       show('vendas-menu-list', '<span style="color:#64748b">Nenhum produto de menu configurado. Adicione produtos com categoria "Menu".</span>');
       return;
     }
 
-    const renderGroup = (label, list) => {
-      if (!list.length) return '';
-      const header = `<div style="font-weight:600;color:#64748b;font-size:0.8rem;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px">${label}</div>`;
-      const rows = list.map(p => {
-        const qty = vendasBuf[p.id] || 0;
-        return `<div class="produto-row" style="align-items:center">
-          <div class="produto-info"><div class="produto-nome">${p.nome}</div>
-            ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
-          </div>
-          <div style="display:flex;align-items:center;gap:8px">
-            ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',-1)">−</button>` : ''}
-            <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${qty}</span>
-            ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',+1)">+</button>` : ''}
-          </div>
-        </div>`;
-      }).join('');
-      return header + rows;
-    };
+    const groupHeader = label => `<div style="font-weight:600;color:#64748b;font-size:0.8rem;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px">${label}</div>`;
 
-    show('vendas-menu-list', renderGroup('🍽️ Menu', menuProds) + renderGroup('🥤 Bebidas', bebidaProds));
+    const menuRows = menuProds.map(p => {
+      const qty = calcMenuQty(p.id);
+      const semReceita = !(receitasBuf[p.id] || []).length;
+      return `<div class="produto-row" style="align-items:center">
+        <div class="produto-info"><div class="produto-nome">${p.nome}</div>
+          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${qty === null ? '—' : qty}</span>
+          ${semReceita ? '<span style="color:#f59e0b;font-size:11px">sem receita</span>' : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    const bebidaRows = bebidaProds.map(p => {
+      const qty = vendasBuf[p.id] || 0;
+      return `<div class="produto-row" style="align-items:center">
+        <div class="produto-info"><div class="produto-nome">${p.nome}</div>
+          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',-1)">−</button>` : ''}
+          <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${qty}</span>
+          ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="deltaVenda('${turnoId}','${p.id}',+1)">+</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    const html = (menuProds.length ? groupHeader('🍽️ Menu') + menuRows : '')
+               + (bebidaProds.length ? groupHeader('🥤 Bebidas') + bebidaRows : '');
+    show('vendas-menu-list', html);
   } catch(e) {
     show('vendas-menu-list', `<span style="color:#ef4444">${e.message}</span>`);
   }
@@ -757,6 +800,7 @@ function updateStock(pid, field, value) {
   const tva = document.getElementById('total-val');
   if (tv) tv.textContent = fmtNum(totalVend);
   if (tva) tva.textContent = fmt(totalVal);
+  refreshMenuQtys();
   // Auto-save
   autoSaveSchedule();
 }

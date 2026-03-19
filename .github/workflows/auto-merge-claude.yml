@@ -21,16 +21,6 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Limpar turnos de teste
-        run: |
-          SUPABASE_URL="https://dakleqewbwbryuchlrzm.supabase.co"
-          SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRha2xlcWV3Yndicnl1Y2hscnptIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjQ4MzgxNywiZXhwIjoyMDg4MDU5ODE3fQ.83h_4hueK3-znXpjy35TZJWJntcyI2X-hopw0QHQSts"
-          echo "A apagar turnos..."
-          curl -s -X DELETE "$SUPABASE_URL/rest/v1/turnos?id=gt.0" \
-            -H "apikey: $SUPABASE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_KEY" \
-            -H "Prefer: return=representation"
-          echo "Feito."
 
       - name: Query DB via REST API and save result
         run: |

@@ -14,18 +14,6 @@ const _poolerUrl = 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@
 const pool  = new Pool({ connectionString: (_dbUrl && _dbUrl.includes('pooler.supabase.com')) ? _dbUrl : _poolerUrl, ssl: { rejectUnauthorized: false } });
 const query = (text, params) => pool.query(text, params);
 
-// ── MIGRATIONS ─────────────────────────────────────────────────
-async function runMigrations() {
-  await query(`CREATE TABLE IF NOT EXISTS turno_entradas (
-    id          SERIAL          PRIMARY KEY,
-    turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-    produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
-    quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
-    notas       TEXT            NOT NULL DEFAULT '',
-    criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
-  )`);
-}
-runMigrations().catch(e => console.error('Migration error:', e.message));
 
 async function qry(sql, params, label) {
   try { await query(sql, params); }
@@ -78,6 +66,14 @@ async function initDB() {
     quantidade NUMERIC(10,3) NOT NULL DEFAULT 0,
     UNIQUE(turno_id, produto_id)
   )`, [], 'turno_vendas');
+  await qry(`CREATE TABLE IF NOT EXISTS turno_entradas (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    quantidade NUMERIC(10,3) NOT NULL DEFAULT 0,
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'turno_entradas');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');

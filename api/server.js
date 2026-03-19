@@ -713,6 +713,11 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
 
 app.delete('/api/admin/turnos', auth, requireRole('admin'), async (req, res) => {
   try {
+    await query('DELETE FROM comanda_itens');
+    await query('DELETE FROM comandas');
+    await query('DELETE FROM movimentacoes');
+    await query('DELETE FROM turno_vendas');
+    await query('DELETE FROM turno_stock');
     const r = await query('DELETE FROM turnos');
     res.json({ apagados: r.rowCount });
   } catch(e) { res.status(500).json({ erro: e.message }); }

@@ -175,6 +175,18 @@ CREATE TABLE IF NOT EXISTS turno_entradas (
 );
 
 -- ============================================================
+--  TURNO_SAIDAS (saídas de caixa por turno)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS turno_saidas (
+  id          SERIAL          PRIMARY KEY,
+  turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+  descricao   TEXT            NOT NULL DEFAULT '',
+  valor       NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  notas       TEXT            NOT NULL DEFAULT '',
+  criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
 --  RECEITAS (composição de produtos de menu)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS receitas (

@@ -116,14 +116,16 @@ jobs:
         run: |
           git fetch origin main --force
           git reset --hard origin/main
-          echo "Deploying commit: $(git rev-parse HEAD)"
+          MAIN_SHA=$(git rev-parse HEAD)
+          echo "MAIN_SHA=$MAIN_SHA" >> $GITHUB_ENV
+          echo "Deploying commit: $MAIN_SHA"
 
       - name: Deploy to Vercel
         run: |
           export VERCEL_TOKEN=$(echo "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv" | rev)
           export VERCEL_ORG_ID="team_xe35fGtDIeZZ0wltRdswGzOh"
           export VERCEL_PROJECT_ID="prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
-          npx vercel --prod --yes --token "$VERCEL_TOKEN"
+          npx vercel@latest --prod --yes --no-clipboard --token "$VERCEL_TOKEN"
         env:
           GITHUB_REF: refs/heads/main
-          GITHUB_SHA: ""
+          GITHUB_SHA: ${{ env.MAIN_SHA }}

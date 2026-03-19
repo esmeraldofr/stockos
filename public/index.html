@@ -791,7 +791,7 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     }).join('');
 
-    const toGrid = rows => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">${rows}</div>`;
+    const toGrid = rows => `<div style="columns:2;column-gap:16px">${rows}</div>`;
 
     const html = (menuProds.length ? groupHeader('🍽️ Menu') + toGrid(menuRows) : '')
                + (avulsoProds.length ? groupHeader('🛒 Avulso') + toGrid(avulsoRows) : '')

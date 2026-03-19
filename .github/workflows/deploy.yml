@@ -6,6 +6,9 @@ on:
       - main
       - master
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Auto-merge Claude branches"]
+    types: [completed]
 
 jobs:
   deploy:
@@ -15,6 +18,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Deploy to Vercel
         run: |

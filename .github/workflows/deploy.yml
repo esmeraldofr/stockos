@@ -1,15 +1,11 @@
 name: Deploy to Vercel
 
 on:
-  push:
-    branches:
-      - main
-      - master
   workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy
+    name: Deploy (manual only)
     runs-on: ubuntu-latest
 
     steps:
@@ -18,12 +14,6 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-
-      - name: Get main SHA
-        run: |
-          git fetch origin main --force
-          git reset --hard origin/main
-          echo "MAIN_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
       - name: Deploy to Vercel
         run: |
@@ -36,4 +26,3 @@ jobs:
           _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
           _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
           GITHUB_REF: refs/heads/main
-          GITHUB_SHA: ${{ env.MAIN_SHA }}

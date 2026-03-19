@@ -655,10 +655,8 @@ async function loadTurno() {
     show('turno-content', `
       <div class="turno-tabs">
         <button class="turno-tab active" onclick="switchTurnoTab('stock',this)">📊 Stock</button>
-        <button class="turno-tab" onclick="switchTurnoTab('entradas',this)">📦 Entradas</button>
-        <button class="turno-tab" onclick="switchTurnoTab('caixa',this)">💰 Caixa</button>
+        <button class="turno-tab" onclick="switchTurnoTab('registos',this)">📦 Registos</button>
         <button class="turno-tab" onclick="switchTurnoTab('vendas',this)">🍽️ Vendas</button>
-        <button class="turno-tab" onclick="switchTurnoTab('notas',this)">📝 Notas</button>
       </div>
 
       <div id="tab-stock" class="turno-tab-panel active">
@@ -692,15 +690,12 @@ async function loadTurno() {
         </div>
       </div>
 
-      <div id="tab-entradas" class="turno-tab-panel">
+      <div id="tab-registos" class="turno-tab-panel">
         <div class="card" id="entradas-card">
           <div class="card-title">📦 Entradas de Stock</div>
           <div id="entradas-section"><span style="color:#64748b">A carregar...</span></div>
         </div>
-      </div>
-
-      <div id="tab-caixa" class="turno-tab-panel">
-        <div class="card" id="saidas-card">
+        <div class="card mt-16" id="saidas-card">
           <div class="card-title">💸 Saídas de Caixa</div>
           <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
         </div>
@@ -733,22 +728,19 @@ async function loadTurno() {
             <span class="caixa-total-value" id="c-total-final">${fmt(tf)}</span>
           </div>
         </div>
+        <div class="card mt-16">
+          <div class="card-title">📝 Observações</div>
+          <textarea id="turno-notas" rows="4" placeholder="Escreve aqui as observações do turno..."
+            style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
+            ${canEdit ? '' : 'disabled'}
+            onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
+        </div>
       </div>
 
       <div id="tab-vendas" class="turno-tab-panel">
         <div class="card" id="vendas-menu-card">
           <div class="card-title">🍽️ Vendas de Menu</div>
           <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
-        </div>
-      </div>
-
-      <div id="tab-notas" class="turno-tab-panel">
-        <div class="card">
-          <div class="card-title">📝 Observações</div>
-          <textarea id="turno-notas" rows="6" placeholder="Escreve aqui as observações do turno..."
-            style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
-            ${canEdit ? '' : 'disabled'}
-            onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
         </div>
       </div>
     `);

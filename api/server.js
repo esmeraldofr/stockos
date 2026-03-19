@@ -481,6 +481,23 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
 });
 
 // ── ENTRADAS DE STOCK ──────────────────────────────────────────
+async function ensureTurnoEntradas() {
+  await query(`CREATE TABLE IF NOT EXISTS turno_entradas (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    produto_id UUID NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    tipo VARCHAR(10) NOT NULL DEFAULT 'entrada',
+    origem VARCHAR(10) NOT NULL DEFAULT 'armazem',
+    preco NUMERIC(15,2) NOT NULL DEFAULT 0,
+    quantidade NUMERIC(10,3) NOT NULL DEFAULT 0,
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS tipo VARCHAR(10) NOT NULL DEFAULT 'entrada'`).catch(()=>{});
+  await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS origem VARCHAR(10) NOT NULL DEFAULT 'armazem'`).catch(()=>{});
+  await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(()=>{});
+}
+
 app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
   try {
     const r = await query(
@@ -490,7 +507,11 @@ app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
       [req.params.id]
     );
     res.json(r.rows);
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch(e) {
+    if (e.message.includes('does not exist')) {
+      try { await ensureTurnoEntradas(); res.json([]); } catch(e2) { res.status(500).json({ erro: e2.message }); }
+    } else { res.status(500).json({ erro: e.message }); }
+  }
 });
 
 app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
@@ -524,7 +545,10 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
     await client.query('COMMIT');
     res.json(registo.rows[0]);
   } catch(e) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(()=>{});
+    if (e.message.includes('does not exist')) {
+      try { await ensureTurnoEntradas(); } catch(_) {}
+    }
     res.status(400).json({ erro: e.message });
   } finally { client.release(); }
 });

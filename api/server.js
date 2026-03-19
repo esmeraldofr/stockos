@@ -70,10 +70,12 @@ async function initDB() {
     id SERIAL PRIMARY KEY,
     turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
     produto_id UUID NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    tipo VARCHAR(10) NOT NULL DEFAULT 'entrada' CHECK (tipo IN ('entrada','tirar')),
     quantidade NUMERIC(10,3) NOT NULL DEFAULT 0,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, [], 'turno_entradas');
+  await qry(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS tipo VARCHAR(10) NOT NULL DEFAULT 'entrada'`, [], 'turno_entradas-tipo');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
@@ -492,55 +494,29 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
   try {
     await client.query('BEGIN');
     const turnoId = req.params.id;
-    const { produto_id, quantidade, notas } = req.body;
+    const { produto_id, tipo, quantidade, notas } = req.body;
     if (!produto_id || !quantidade || parseFloat(quantidade) <= 0)
       throw new Error('produto_id e quantidade (> 0) são obrigatórios');
+    if (!notas || !notas.trim())
+      throw new Error('Notas são obrigatórias');
+    const tipoVal = tipo === 'tirar' ? 'tirar' : 'entrada';
 
-    const entrada = await client.query(
-      'INSERT INTO turno_entradas (turno_id, produto_id, quantidade, notas) VALUES ($1,$2,$3,$4) RETURNING *',
-      [turnoId, produto_id, quantidade, notas||'']
+    const registo = await client.query(
+      'INSERT INTO turno_entradas (turno_id, produto_id, tipo, quantidade, notas) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+      [turnoId, produto_id, tipoVal, quantidade, notas.trim()]
     );
 
-    // Recalcular turno_stock.entrada como soma de todas as entradas deste produto
+    // entrada = soma das entradas - soma das saídas
     await client.query(
       `UPDATE turno_stock SET entrada=(
-         SELECT COALESCE(SUM(quantidade),0) FROM turno_entradas
-         WHERE turno_id=$1 AND produto_id=$2
+         SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE -quantidade END),0)
+         FROM turno_entradas WHERE turno_id=$1 AND produto_id=$2
        ) WHERE turno_id=$1 AND produto_id=$2`,
       [turnoId, produto_id]
     );
 
     await client.query('COMMIT');
-    res.json(entrada.rows[0]);
-  } catch(e) {
-    await client.query('ROLLBACK');
-    res.status(400).json({ erro: e.message });
-  } finally { client.release(); }
-});
-
-app.delete('/api/turnos/:id/entradas/:eid', auth, async (req, res) => {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const { id: turnoId, eid } = req.params;
-
-    const del = await client.query(
-      'DELETE FROM turno_entradas WHERE id=$1 AND turno_id=$2 RETURNING produto_id',
-      [eid, turnoId]
-    );
-    if (!del.rows.length) throw new Error('Entrada não encontrada');
-    const produto_id = del.rows[0].produto_id;
-
-    await client.query(
-      `UPDATE turno_stock SET entrada=(
-         SELECT COALESCE(SUM(quantidade),0) FROM turno_entradas
-         WHERE turno_id=$1 AND produto_id=$2
-       ) WHERE turno_id=$1 AND produto_id=$2`,
-      [turnoId, produto_id]
-    );
-
-    await client.query('COMMIT');
-    res.json({ sucesso: true });
+    res.json(registo.rows[0]);
   } catch(e) {
     await client.query('ROLLBACK');
     res.status(400).json({ erro: e.message });

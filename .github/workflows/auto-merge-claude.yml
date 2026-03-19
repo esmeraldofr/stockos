@@ -21,6 +21,21 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Limpar turnos de teste
+        run: |
+          npm install pg --silent
+          node -e "
+          const { Pool } = require('pg');
+          const pool = new Pool({
+            connectionString: 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres',
+            ssl: { rejectUnauthorized: false }
+          });
+          pool.query('DELETE FROM turnos').then(r => {
+            console.log('Turnos apagados:', r.rowCount);
+            pool.end();
+          }).catch(e => { console.error(e.message); pool.end(); });
+          "
+
       - name: Query DB via REST API and save result
         run: |
           BRANCH="${GITHUB_REF#refs/heads/}"

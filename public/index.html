@@ -82,6 +82,9 @@ tr:hover .td-name{background:#1e293b}
 .td-input input{width:65px;background:#0f172a;border:1px solid #334155;border-radius:6px;padding:5px 6px;color:#f1f5f9;font-size:13px;text-align:right}
 .td-input input:focus{outline:none;border-color:#3b82f6}
 .td-calc{color:#94a3b8;text-align:right;font-variant-numeric:tabular-nums}
+.btn-entrada-add{background:#0f172a;border:1px solid #334155;color:#38bdf8;border-radius:6px;font-size:14px;font-weight:700;line-height:1;padding:1px 7px;margin-left:6px;cursor:pointer}
+.btn-entrada-add:hover{background:#1e293b;border-color:#38bdf8}
+.form-input{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 12px;color:#f1f5f9;font-size:14px;box-sizing:border-box}
 .td-valor{color:#4ade80;text-align:right;font-weight:600}
 .comp-igual{color:#4ade80;font-size:12px}
 .comp-falta{color:#f87171;font-size:12px}
@@ -615,9 +618,9 @@ async function loadTurno() {
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.encontrado)}"
               onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
               oninput="updateStock('${pid}','encontrado',this.value)" ${inputAttr}/></td>
-            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.entrada)}"
-              onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
-              oninput="updateStock('${pid}','entrada',this.value)" ${inputAttr}/></td>
+            <td class="td-calc" id="entrada-${pid}" style="white-space:nowrap">
+              <span>${fmtNum(s.entrada)}</span>${canEdit ? `<button class="btn-entrada-add" onclick="openEntradaModal('${pid}','${s.produto_nome.replace(/'/g,"\\'")}')">+</button>` : ''}
+            </td>
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.deixado)}"
               onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
               oninput="updateStock('${pid}','deixado',this.value)" ${inputAttr}/></td>
@@ -862,7 +865,6 @@ async function guardarStock(turnoId) {
       api('PUT', `/turnos/${turnoId}/stock`, {
         produto_id: pid,
         encontrado: v.encontrado,
-        entrada: v.entrada,
         deixado: v.deixado
       })
     );
@@ -916,6 +918,102 @@ async function fecharTurno(id) {
     await api('POST', `/turnos/${id}/fechar`);
     await loadTurno();
   } catch(e) { err('turno-msg', e.message); }
+}
+
+// ── ENTRADAS DE STOCK ─────────────────────────────────────────
+async function openEntradaModal(pid, prodNome) {
+  const turnoId = S.turnoData?.id;
+  if (!turnoId) return;
+
+  // Remove modal anterior se existir
+  const old = document.getElementById('entrada-modal');
+  if (old) old.remove();
+
+  const div = document.createElement('div');
+  div.id = 'entrada-modal';
+  div.className = 'modal-overlay';
+  div.innerHTML =
+    '<div class="modal">' +
+      '<div class="modal-header">' +
+        '<div class="modal-title">Registar Entrada — ' + prodNome + '</div>' +
+        '<button class="modal-close" id="btn-entrada-close">×</button>' +
+      '</div>' +
+      '<div style="margin-bottom:16px">' +
+        '<label style="display:block;margin-bottom:6px;color:#94a3b8;font-size:13px">Quantidade</label>' +
+        '<input id="entrada-qty" type="number" min="0.001" step="any" placeholder="0" class="form-input" style="width:100%"/>' +
+      '</div>' +
+      '<div style="margin-bottom:20px">' +
+        '<label style="display:block;margin-bottom:6px;color:#94a3b8;font-size:13px">Notas (opcional)</label>' +
+        '<input id="entrada-notas" type="text" placeholder="ex: reposição de fornecedor" class="form-input" style="width:100%"/>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;margin-bottom:20px">' +
+        '<button id="btn-entrada-guardar" class="btn btn-success">Guardar</button>' +
+        '<button id="btn-entrada-cancelar" class="btn btn-ghost">Cancelar</button>' +
+      '</div>' +
+      '<div id="entradas-lista-titulo" style="font-size:13px;font-weight:600;color:#64748b;margin-bottom:8px">Entradas registadas</div>' +
+      '<div id="entradas-lista"><span style="color:#64748b;font-size:13px">A carregar...</span></div>' +
+    '</div>';
+  document.body.appendChild(div);
+
+  const closeModal = () => div.remove();
+  document.getElementById('btn-entrada-close').addEventListener('click', closeModal);
+  document.getElementById('btn-entrada-cancelar').addEventListener('click', closeModal);
+  div.addEventListener('click', e => { if (e.target === div) closeModal(); });
+
+  document.getElementById('btn-entrada-guardar').addEventListener('click', async () => {
+    const qty = parseFloat(document.getElementById('entrada-qty').value);
+    const notas = document.getElementById('entrada-notas').value.trim();
+    if (!qty || qty <= 0) { alert('Quantidade inválida'); return; }
+    try {
+      await api('POST', `/turnos/${turnoId}/entradas`, { produto_id: pid, quantidade: qty, notas });
+      closeModal();
+      await loadTurno();
+    } catch(e) { alert('Erro: ' + e.message); }
+  });
+
+  // Carregar entradas existentes
+  await renderEntradasLista(turnoId, pid);
+}
+
+async function renderEntradasLista(turnoId, pid) {
+  const el = document.getElementById('entradas-lista');
+  if (!el) return;
+  try {
+    const entradas = await api('GET', `/turnos/${turnoId}/entradas`);
+    const doProd = entradas.filter(e => String(e.produto_id) === String(pid));
+    if (!doProd.length) {
+      el.innerHTML = '<span style="color:#64748b;font-size:13px">Nenhuma entrada registada.</span>';
+      return;
+    }
+    el.innerHTML = doProd.map(e => {
+      const dt = new Date(e.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b">` +
+        `<div><span style="font-weight:600;color:#e2e8f0">${fmtNum(e.quantidade)}</span>` +
+        (e.notas ? `<span style="color:#64748b;font-size:12px;margin-left:8px">${e.notas}</span>` : '') +
+        `<span style="color:#475569;font-size:11px;margin-left:8px">${dt}</span></div>` +
+        `<button onclick="deleteEntrada(${turnoId},'${pid}',${e.id},'')" style="background:none;border:none;color:#f87171;cursor:pointer;font-size:16px;padding:2px 6px">×</button>` +
+      `</div>`;
+    }).join('');
+  } catch(e) { el.innerHTML = '<span style="color:#f87171;font-size:13px">' + e.message + '</span>'; }
+}
+
+async function deleteEntrada(turnoId, pid, eid, prodNome) {
+  if (!confirm('Remover esta entrada?')) return;
+  try {
+    await api('DELETE', `/turnos/${turnoId}/entradas/${eid}`);
+    // Actualizar total na célula sem fechar modal
+    const novaEntrada = await api('GET', `/turnos/${turnoId}/entradas`);
+    const soma = novaEntrada.filter(e => String(e.produto_id) === String(pid))
+                            .reduce((s, e) => s + parseFloat(e.quantidade), 0);
+    const cell = document.getElementById(`entrada-${pid}`);
+    if (cell) cell.querySelector('span').textContent = fmtNum(soma);
+    // Actualizar stockBuf
+    if (!stockBuf[pid]) stockBuf[pid] = { encontrado:0, entrada:0, deixado:0 };
+    stockBuf[pid].entrada = soma;
+    updateStock(pid, 'entrada', soma);
+    // Refrescar lista no modal
+    await renderEntradasLista(turnoId, pid);
+  } catch(e) { alert('Erro: ' + e.message); }
 }
 
 // ── HISTÓRICO ─────────────────────────────────────────────────

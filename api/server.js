@@ -452,17 +452,90 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
 
 app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   try {
-    const { produto_id, encontrado, entrada, deixado } = req.body;
+    const { produto_id, encontrado, deixado } = req.body;
     const r = await query(
-      `INSERT INTO turno_stock (turno_id, produto_id, encontrado, entrada, deixado)
-       VALUES ($1,$2,$3,$4,$5)
+      `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado)
+       VALUES ($1,$2,$3,$4)
        ON CONFLICT (turno_id, produto_id)
-       DO UPDATE SET encontrado=$3, entrada=$4, deixado=$5
+       DO UPDATE SET encontrado=$3, deixado=$4
        RETURNING *`,
-      [req.params.id, produto_id, encontrado||0, entrada||0, deixado||0]
+      [req.params.id, produto_id, encontrado||0, deixado||0]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── ENTRADAS DE STOCK ──────────────────────────────────────────
+app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT te.*, p.nome as produto_nome
+       FROM turno_entradas te JOIN produtos p ON te.produto_id=p.id
+       WHERE te.turno_id=$1 ORDER BY te.criado_em DESC`,
+      [req.params.id]
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const turnoId = req.params.id;
+    const { produto_id, quantidade, notas } = req.body;
+    if (!produto_id || !quantidade || parseFloat(quantidade) <= 0)
+      throw new Error('produto_id e quantidade (> 0) são obrigatórios');
+
+    const entrada = await client.query(
+      'INSERT INTO turno_entradas (turno_id, produto_id, quantidade, notas) VALUES ($1,$2,$3,$4) RETURNING *',
+      [turnoId, produto_id, quantidade, notas||'']
+    );
+
+    // Recalcular turno_stock.entrada como soma de todas as entradas deste produto
+    await client.query(
+      `UPDATE turno_stock SET entrada=(
+         SELECT COALESCE(SUM(quantidade),0) FROM turno_entradas
+         WHERE turno_id=$1 AND produto_id=$2
+       ) WHERE turno_id=$1 AND produto_id=$2`,
+      [turnoId, produto_id]
+    );
+
+    await client.query('COMMIT');
+    res.json(entrada.rows[0]);
+  } catch(e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ erro: e.message });
+  } finally { client.release(); }
+});
+
+app.delete('/api/turnos/:id/entradas/:eid', auth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { id: turnoId, eid } = req.params;
+
+    const del = await client.query(
+      'DELETE FROM turno_entradas WHERE id=$1 AND turno_id=$2 RETURNING produto_id',
+      [eid, turnoId]
+    );
+    if (!del.rows.length) throw new Error('Entrada não encontrada');
+    const produto_id = del.rows[0].produto_id;
+
+    await client.query(
+      `UPDATE turno_stock SET entrada=(
+         SELECT COALESCE(SUM(quantidade),0) FROM turno_entradas
+         WHERE turno_id=$1 AND produto_id=$2
+       ) WHERE turno_id=$1 AND produto_id=$2`,
+      [turnoId, produto_id]
+    );
+
+    await client.query('COMMIT');
+    res.json({ sucesso: true });
+  } catch(e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ erro: e.message });
+  } finally { client.release(); }
 });
 
 app.put('/api/turnos/:id/caixa', auth, async (req, res) => {

@@ -1067,7 +1067,7 @@ async function submitEntrada(turnoId) {
     updateStock(pid, 'entrada', soma);
     const stocks = S.turnoData?.stock || [];
     await loadEntradasSection(turnoId, stocks, true);
-    if (origem === 'compra') await loadSaidasSection(turnoId, true);
+    await loadSaidasSection(turnoId, true);
   } catch(e) {
     if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
   }

@@ -71,11 +71,15 @@ async function initDB() {
     turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
     produto_id UUID NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
     tipo VARCHAR(10) NOT NULL DEFAULT 'entrada' CHECK (tipo IN ('entrada','tirar')),
+    origem VARCHAR(10) NOT NULL DEFAULT 'armazem' CHECK (origem IN ('armazem','compra')),
+    preco NUMERIC(15,2) NOT NULL DEFAULT 0,
     quantidade NUMERIC(10,3) NOT NULL DEFAULT 0,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, [], 'turno_entradas');
   await qry(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS tipo VARCHAR(10) NOT NULL DEFAULT 'entrada'`, [], 'turno_entradas-tipo');
+  await qry(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS origem VARCHAR(10) NOT NULL DEFAULT 'armazem'`, [], 'turno_entradas-origem');
+  await qry(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0`, [], 'turno_entradas-preco');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
@@ -494,16 +498,18 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
   try {
     await client.query('BEGIN');
     const turnoId = req.params.id;
-    const { produto_id, tipo, quantidade, notas } = req.body;
+    const { produto_id, tipo, origem, preco, quantidade, notas } = req.body;
     if (!produto_id || !quantidade || parseFloat(quantidade) <= 0)
       throw new Error('produto_id e quantidade (> 0) são obrigatórios');
     if (!notas || !notas.trim())
-      throw new Error('Notas são obrigatórias');
-    const tipoVal = tipo === 'tirar' ? 'tirar' : 'entrada';
+      throw new Error('A nota é obrigatória');
+    const tipoVal   = tipo   === 'tirar'  ? 'tirar'  : 'entrada';
+    const origemVal = origem === 'compra' ? 'compra' : 'armazem';
+    const precoVal  = origemVal === 'compra' ? (parseFloat(preco) || 0) : 0;
 
     const registo = await client.query(
-      'INSERT INTO turno_entradas (turno_id, produto_id, tipo, quantidade, notas) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-      [turnoId, produto_id, tipoVal, quantidade, notas.trim()]
+      'INSERT INTO turno_entradas (turno_id, produto_id, tipo, origem, preco, quantidade, notas) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+      [turnoId, produto_id, tipoVal, origemVal, precoVal, quantidade, notas.trim()]
     );
 
     // entrada = soma das entradas - soma das saídas

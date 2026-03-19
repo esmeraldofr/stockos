@@ -87,6 +87,7 @@ tr:hover .td-name{background:#1e293b}
 .tipo-btn{background:#0f172a;border:none;color:#94a3b8;padding:7px 14px;font-size:13px;cursor:pointer;font-weight:600}
 .tipo-btn-active,.tipo-btn-active-green{background:#14532d;color:#4ade80}
 .tipo-btn-active-red{background:#450a0a;color:#f87171}
+.tipo-btn-active-orange{background:#431407;color:#fb923c}
 .entradas-select{flex:1.5;min-width:140px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:13px}
 .entradas-qty{width:80px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:13px;text-align:right}
 .entradas-notas{flex:2;min-width:120px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:13px}
@@ -951,11 +952,16 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
     const formHtml = canEdit ? `
       <div class="entradas-form">
         <div class="entradas-tipo-toggle">
-          <button id="e-tipo-entrada" class="tipo-btn tipo-btn-active" onclick="setTipo('entrada')">+ Entrada</button>
+          <button id="e-tipo-entrada" class="tipo-btn tipo-btn-active-green" onclick="setTipo('entrada')">+ Entrada</button>
           <button id="e-tipo-tirar" class="tipo-btn" onclick="setTipo('tirar')">− Tirar</button>
+        </div>
+        <div class="entradas-tipo-toggle" id="e-origem-wrap">
+          <button id="e-orig-armazem" class="tipo-btn tipo-btn-active" onclick="setOrigem('armazem')">Armazém</button>
+          <button id="e-orig-compra" class="tipo-btn" onclick="setOrigem('compra')">Compra</button>
         </div>
         <select id="e-produto" class="entradas-select">${opts}</select>
         <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd" class="entradas-qty"/>
+        <input id="e-preco" type="number" min="0" step="any" placeholder="Preço" class="entradas-qty" style="display:none"/>
         <input id="e-notas" type="text" placeholder="Nota obrigatória" class="entradas-notas"/>
         <button class="btn btn-success btn-sm" onclick="submitEntrada(${turnoId})">Registar</button>
       </div>
@@ -967,28 +973,38 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
           <thead><tr>
             <th style="text-align:left">Hora</th>
             <th style="text-align:left">Tipo</th>
+            <th style="text-align:left">Origem</th>
             <th style="text-align:left">Produto</th>
             <th style="text-align:right">Qtd</th>
+            <th style="text-align:right">Preço</th>
             <th style="text-align:left">Nota</th>
           </tr></thead>
           <tbody>${entradas.map(e => {
             const dt = new Date(e.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
-            const isEntrada = e.tipo !== 'tirar';
-            const tipoLabel = isEntrada
-              ? '<span style="color:#4ade80;font-weight:600">+ Entrada</span>'
-              : '<span style="color:#f87171;font-weight:600">− Tirar</span>';
+            const tipoLabel = e.tipo === 'tirar'
+              ? '<span style="color:#f87171;font-weight:600">− Tirar</span>'
+              : '<span style="color:#4ade80;font-weight:600">+ Entrada</span>';
+            const origemLabel = e.origem === 'compra'
+              ? '<span style="color:#fb923c">Compra</span>'
+              : '<span style="color:#94a3b8">Armazém</span>';
+            const precoLabel = e.origem === 'compra' && parseFloat(e.preco) > 0
+              ? `<span style="color:#fbbf24">${fmt(e.preco)}</span>`
+              : '—';
             return `<tr>
               <td style="color:#64748b;font-size:12px;white-space:nowrap">${dt}</td>
               <td style="font-size:12px">${tipoLabel}</td>
+              <td style="font-size:12px">${origemLabel}</td>
               <td style="font-size:13px">${e.produto_nome}</td>
               <td style="text-align:right;font-weight:600;color:#e2e8f0">${fmtNum(e.quantidade)}</td>
+              <td style="text-align:right;font-size:12px">${precoLabel}</td>
               <td style="color:#94a3b8;font-size:12px">${e.notas}</td>
             </tr>`;
           }).join('')}</tbody>
         </table></div>`;
 
     el.innerHTML = formHtml + listaHtml;
-    window._entradaTipo = 'entrada';
+    window._entradaTipo   = 'entrada';
+    window._entradaOrigem = 'armazem';
   } catch(e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }
@@ -998,31 +1014,44 @@ function setTipo(tipo) {
   window._entradaTipo = tipo;
   const btnE = document.getElementById('e-tipo-entrada');
   const btnT = document.getElementById('e-tipo-tirar');
-  if (!btnE || !btnT) return;
-  if (tipo === 'entrada') {
-    btnE.className = 'tipo-btn tipo-btn-active-green';
-    btnT.className = 'tipo-btn';
-  } else {
-    btnE.className = 'tipo-btn';
-    btnT.className = 'tipo-btn tipo-btn-active-red';
+  const origemWrap = document.getElementById('e-origem-wrap');
+  if (btnE) btnE.className = tipo === 'entrada' ? 'tipo-btn tipo-btn-active-green' : 'tipo-btn';
+  if (btnT) btnT.className = tipo === 'tirar'   ? 'tipo-btn tipo-btn-active-red'   : 'tipo-btn';
+  // Origem só faz sentido em entradas
+  if (origemWrap) origemWrap.style.display = tipo === 'tirar' ? 'none' : '';
+  if (tipo === 'tirar') {
+    const p = document.getElementById('e-preco');
+    if (p) p.style.display = 'none';
   }
 }
 
+function setOrigem(origem) {
+  window._entradaOrigem = origem;
+  const btnA = document.getElementById('e-orig-armazem');
+  const btnC = document.getElementById('e-orig-compra');
+  const precoEl = document.getElementById('e-preco');
+  if (btnA) btnA.className = origem === 'armazem' ? 'tipo-btn tipo-btn-active' : 'tipo-btn';
+  if (btnC) btnC.className = origem === 'compra'  ? 'tipo-btn tipo-btn-active-orange' : 'tipo-btn';
+  if (precoEl) precoEl.style.display = origem === 'compra' ? '' : 'none';
+}
+
 async function submitEntrada(turnoId) {
-  const pid   = document.getElementById('e-produto')?.value;
-  const qty   = parseFloat(document.getElementById('e-qty')?.value);
-  const notas = document.getElementById('e-notas')?.value.trim() || '';
-  const tipo  = window._entradaTipo || 'entrada';
-  const msg   = document.getElementById('entrada-form-msg');
+  const pid    = document.getElementById('e-produto')?.value;
+  const qty    = parseFloat(document.getElementById('e-qty')?.value);
+  const notas  = document.getElementById('e-notas')?.value.trim() || '';
+  const tipo   = window._entradaTipo   || 'entrada';
+  const origem = window._entradaOrigem || 'armazem';
+  const preco  = parseFloat(document.getElementById('e-preco')?.value) || 0;
+  const msg    = document.getElementById('entrada-form-msg');
   if (!pid)  { if (msg) { msg.className='alert alert-error'; msg.textContent='Selecciona um produto.'; } return; }
   if (!qty || qty <= 0) { if (msg) { msg.className='alert alert-error'; msg.textContent='Quantidade inválida.'; } return; }
   if (!notas) { if (msg) { msg.className='alert alert-error'; msg.textContent='A nota é obrigatória.'; } return; }
   try {
-    await api('POST', `/turnos/${turnoId}/entradas`, { produto_id: pid, tipo, quantidade: qty, notas });
+    await api('POST', `/turnos/${turnoId}/entradas`, { produto_id: pid, tipo, origem, preco, quantidade: qty, notas });
     document.getElementById('e-produto').value = '';
     document.getElementById('e-qty').value = '';
     document.getElementById('e-notas').value = '';
-    // Actualizar célula na tabela de stock
+    document.getElementById('e-preco').value = '';
     const novaEntrada = await api('GET', `/turnos/${turnoId}/entradas`);
     const soma = novaEntrada.filter(e => String(e.produto_id) === String(pid))
                             .reduce((s, e) => s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1), 0);

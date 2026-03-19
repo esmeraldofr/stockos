@@ -95,6 +95,8 @@ CREATE TABLE IF NOT EXISTS turno_entradas (
   turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
   produto_id  UUID            NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
   tipo        VARCHAR(10)     NOT NULL DEFAULT 'entrada' CHECK (tipo IN ('entrada','tirar')),
+  origem      VARCHAR(10)     NOT NULL DEFAULT 'armazem' CHECK (origem IN ('armazem','compra')),
+  preco       NUMERIC(15,2)   NOT NULL DEFAULT 0,
   quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
   notas       TEXT            NOT NULL DEFAULT '',
   criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
@@ -165,6 +167,8 @@ CREATE TABLE IF NOT EXISTS turno_entradas (
   turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
   produto_id  UUID            NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
   tipo        VARCHAR(10)     NOT NULL DEFAULT 'entrada' CHECK (tipo IN ('entrada','tirar')),
+  origem      VARCHAR(10)     NOT NULL DEFAULT 'armazem' CHECK (origem IN ('armazem','compra')),
+  preco       NUMERIC(15,2)   NOT NULL DEFAULT 0,
   quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
   notas       TEXT            NOT NULL DEFAULT '',
   criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()

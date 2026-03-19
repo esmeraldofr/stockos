@@ -637,16 +637,35 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
     );
 
     if (delta !== 0) {
-      const receita = await client.query(
-        'SELECT componente_id, quantidade FROM receitas WHERE produto_id=$1',
-        [produto_id]
-      );
-      for (const comp of receita.rows) {
-        const deducao = delta * parseFloat(comp.quantidade);
+      // Expand recipe recursively: if a component itself has a recipe, use its ingredients instead
+      async function expandIngredientes(prodId, fator) {
+        const r = await client.query(
+          'SELECT componente_id, quantidade FROM receitas WHERE produto_id=$1',
+          [prodId]
+        );
+        if (r.rows.length === 0) {
+          // Leaf ingredient — subtract from stock directly
+          return [{ componente_id: prodId, quantidade: fator }];
+        }
+        const ingredientes = [];
+        for (const comp of r.rows) {
+          const sub = await expandIngredientes(comp.componente_id, fator * parseFloat(comp.quantidade));
+          ingredientes.push(...sub);
+        }
+        return ingredientes;
+      }
+
+      const ingredientes = await expandIngredientes(produto_id, delta);
+      // Aggregate in case the same ingredient appears multiple times
+      const totais = {};
+      for (const ing of ingredientes) {
+        totais[ing.componente_id] = (totais[ing.componente_id] || 0) + ing.quantidade;
+      }
+      for (const [compId, qtd] of Object.entries(totais)) {
         await client.query(
           `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
            WHERE turno_id=$2 AND produto_id=$3`,
-          [deducao, turnoId, comp.componente_id]
+          [qtd, turnoId, compId]
         );
       }
     }

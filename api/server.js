@@ -80,6 +80,14 @@ async function initDB() {
   await qry(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS tipo VARCHAR(10) NOT NULL DEFAULT 'entrada'`, [], 'turno_entradas-tipo');
   await qry(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS origem VARCHAR(10) NOT NULL DEFAULT 'armazem'`, [], 'turno_entradas-origem');
   await qry(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0`, [], 'turno_entradas-preco');
+  await qry(`CREATE TABLE IF NOT EXISTS turno_saidas (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    descricao TEXT NOT NULL DEFAULT '',
+    valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'turno_saidas');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
@@ -555,20 +563,82 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
 
 app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
   try {
-    const { tpa, transferencia, dinheiro, saida } = req.body;
+    const { tpa, transferencia, dinheiro } = req.body;
+    // saida é calculada automaticamente pela soma de turno_saidas
+    const saidaRow = await query(
+      `SELECT COALESCE(SUM(valor),0) as total FROM turno_saidas WHERE turno_id=$1`,
+      [req.params.id]
+    ).catch(() => ({ rows: [{ total: 0 }] }));
+    const saida = parseFloat(saidaRow.rows[0].total) || 0;
     const r = await query(
       `INSERT INTO turno_caixa (turno_id, tpa, transferencia, dinheiro, saida)
        VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (turno_id)
        DO UPDATE SET tpa=$2, transferencia=$3, dinheiro=$4, saida=$5
        RETURNING *`,
-      [req.params.id, tpa||0, transferencia||0, dinheiro||0, saida||0]
+      [req.params.id, tpa||0, transferencia||0, dinheiro||0, saida]
     );
     const c = r.rows[0];
     c.total_gerado = parseFloat(c.tpa) + parseFloat(c.transferencia) + parseFloat(c.dinheiro);
     c.total_final  = c.total_gerado - parseFloat(c.saida);
     res.json(c);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── SAÍDAS DE CAIXA ────────────────────────────────────────────
+async function ensureTurnoSaidas() {
+  await query(`CREATE TABLE IF NOT EXISTS turno_saidas (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    descricao TEXT NOT NULL DEFAULT '',
+    valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+}
+
+app.get('/api/turnos/:id/saidas', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT * FROM turno_saidas WHERE turno_id=$1 ORDER BY criado_em DESC`,
+      [req.params.id]
+    );
+    res.json(r.rows);
+  } catch(e) {
+    if (e.message.includes('does not exist')) {
+      try { await ensureTurnoSaidas(); res.json([]); } catch(e2) { res.status(500).json({ erro: e2.message }); }
+    } else { res.status(500).json({ erro: e.message }); }
+  }
+});
+
+app.post('/api/turnos/:id/saidas', auth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const turnoId = req.params.id;
+    const { descricao, valor, notas } = req.body;
+    if (!descricao || !descricao.trim()) throw new Error('Descrição é obrigatória');
+    if (!valor || parseFloat(valor) <= 0) throw new Error('Valor deve ser maior que 0');
+    if (!notas || !notas.trim()) throw new Error('A nota é obrigatória');
+
+    const r = await client.query(
+      'INSERT INTO turno_saidas (turno_id, descricao, valor, notas) VALUES ($1,$2,$3,$4) RETURNING *',
+      [turnoId, descricao.trim(), valor, notas.trim()]
+    );
+    // Recalcular saida na caixa
+    await client.query(
+      `UPDATE turno_caixa SET saida=(
+         SELECT COALESCE(SUM(valor),0) FROM turno_saidas WHERE turno_id=$1
+       ) WHERE turno_id=$1`,
+      [turnoId]
+    );
+    await client.query('COMMIT');
+    res.json(r.rows[0]);
+  } catch(e) {
+    await client.query('ROLLBACK').catch(()=>{});
+    if (e.message.includes('does not exist')) { try { await ensureTurnoSaidas(); } catch(_) {} }
+    res.status(400).json({ erro: e.message });
+  } finally { client.release(); }
 });
 
 // ── DASHBOARD ─────────────────────────────────────────────────

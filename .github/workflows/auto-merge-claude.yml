@@ -20,34 +20,20 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Query DB and save result
+      - name: Query DB via REST API and save result
         run: |
           BRANCH="${GITHUB_REF#refs/heads/}"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          npm install pg
-          node -e "
-          const { Pool } = require('pg');
-          const fs = require('fs');
-          const pool = new Pool({
-            connectionString: 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres',
-            ssl: { rejectUnauthorized: false }
-          });
-          const sql = fs.existsSync('data/query.sql')
-            ? fs.readFileSync('data/query.sql', 'utf8')
-            : 'SELECT p.nome AS produto, c.nome AS componente, r.quantidade FROM receitas r JOIN produtos p ON p.id = r.produto_id JOIN produtos c ON c.id = r.componente_id ORDER BY p.nome, r.quantidade DESC';
-          pool.query(sql).then(r => {
-            fs.mkdirSync('data', { recursive: true });
-            fs.writeFileSync('data/db-result.json', JSON.stringify(r.rows, null, 2));
-            console.log('DB query OK, rows:', r.rows.length);
-            pool.end();
-          }).catch(e => { console.error('DB query failed:', e.message); pool.end(); });
-          "
+          SUPABASE_URL="https://dakleqewbwbryuchlrzm.supabase.co"
+          SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRha2xlcWV3Yndicnl1Y2hscnptIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjQ4MzgxNywiZXhwIjoyMDg4MDU5ODE3fQ.83h_4hueK3-znXpjy35TZJWJntcyI2X-hopw0QHQSts"
+          mkdir -p data
+          # Fetch receitas with produto and componente info via REST
+          curl -sf "$SUPABASE_URL/rest/v1/receitas?select=quantidade,produto:produto_id(nome),componente:componente_id(nome)&order=produto_id" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -o data/db-result.json && echo "REST API OK" || echo "REST query failed"
+          cat data/db-result.json | head -50
           git add data/db-result.json 2>/dev/null || true
           git diff --staged --quiet || (git commit -m "chore: db snapshot [skip ci]" && git push origin "$BRANCH")
 

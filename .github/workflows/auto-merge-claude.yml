@@ -22,11 +22,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
 
-      - name: Limpar turnos de teste
-        run: |
-          sudo apt-get install -y postgresql-client -q
-          DATABASE_URL="postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:6543/postgres"
-          PGSSLMODE=require psql "$DATABASE_URL" -c "DELETE FROM turnos;" -c "SELECT count(*) AS turnos_restantes FROM turnos;"
 
       - name: Query DB via REST API and save result
         run: |

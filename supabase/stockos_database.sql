@@ -90,6 +90,14 @@ ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAU
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ;
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS estado VARCHAR(10) NOT NULL DEFAULT 'aberto';
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS utilizador_id INTEGER;
+CREATE TABLE IF NOT EXISTS turno_entradas (
+  id          SERIAL          PRIMARY KEY,
+  turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+  produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
+  notas       TEXT            NOT NULL DEFAULT '',
+  criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
 
 -- ============================================================
 --  DADOS INICIAIS — UTILIZADORES
@@ -147,6 +155,18 @@ INSERT INTO produtos (nome, preco, categoria, ordem) VALUES
   ('Nocal Lata',        700,  'bebida', 36),
   ('Dopel',             700,  'bebida', 37)
   ON CONFLICT (nome) DO NOTHING;
+
+-- ============================================================
+--  TURNO_ENTRADAS (registos de entrada de stock por turno)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS turno_entradas (
+  id          SERIAL          PRIMARY KEY,
+  turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+  produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
+  notas       TEXT            NOT NULL DEFAULT '',
+  criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
 
 -- ============================================================
 --  RECEITAS (composição de produtos de menu)

@@ -28,13 +28,21 @@ jobs:
           SUPABASE_URL="https://dakleqewbwbryuchlrzm.supabase.co"
           SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRha2xlcWV3Yndicnl1Y2hscnptIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjQ4MzgxNywiZXhwIjoyMDg4MDU5ODE3fQ.83h_4hueK3-znXpjy35TZJWJntcyI2X-hopw0QHQSts"
           mkdir -p data
-          # Fetch receitas with produto and componente info via REST
-          curl -sf "$SUPABASE_URL/rest/v1/receitas?select=quantidade,produto:produto_id(nome),componente:componente_id(nome)&order=produto_id" \
+          echo "--- produtos ---"
+          curl -s "$SUPABASE_URL/rest/v1/produtos?select=id,nome,categoria&order=nome" \
             -H "apikey: $SUPABASE_KEY" \
             -H "Authorization: Bearer $SUPABASE_KEY" \
-            -o data/db-result.json && echo "REST API OK" || echo "REST query failed"
-          cat data/db-result.json | head -50
-          git add data/db-result.json 2>/dev/null || true
+            -o data/produtos.json
+          cat data/produtos.json | head -30
+          echo "--- receitas ---"
+          curl -s "$SUPABASE_URL/rest/v1/receitas?select=*&order=produto_id" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -o data/receitas.json
+          cat data/receitas.json | head -30
+          echo "--- snapshot ---"
+          echo "{\"produtos\": $(cat data/produtos.json), \"receitas\": $(cat data/receitas.json)}" > data/db-result.json
+          git add data/produtos.json data/receitas.json data/db-result.json
           git diff --staged --quiet || (git commit -m "chore: db snapshot [skip ci]" && git push origin "$BRANCH")
 
       - name: Merge branch into main

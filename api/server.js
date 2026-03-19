@@ -711,13 +711,5 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.delete('/api/admin/turnos', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const r = await query('SELECT count(*) FROM turnos');
-    await query('TRUNCATE turnos CASCADE');
-    res.json({ apagados: parseInt(r.rows[0].count) });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
-});
-
 app.listen(PORT, () => console.log(`StockOS v3 na porta ${PORT}`));
 module.exports = app;

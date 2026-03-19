@@ -169,6 +169,13 @@ tr:hover .td-name{background:#1e293b}
 .turno-tab:hover{color:#cbd5e1;background:#1e293b}
 .turno-tab.active{color:#f1f5f9;background:#1e293b;border-bottom:2px solid #3b82f6;margin-bottom:-2px}
 .turno-tab-panel{display:none}.turno-tab-panel.active{display:block}
+.turno-view-toggle{margin-left:auto;flex-shrink:0;padding:5px 10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;align-self:center;transition:color .15s,border-color .15s}
+.turno-view-toggle:hover{color:#f1f5f9;border-color:#64748b}
+.turno-tabs-wrap{display:flex;align-items:flex-end;border-bottom:2px solid #1e293b;margin-bottom:16px}
+.turno-tabs-wrap .turno-tabs{border-bottom:none;margin-bottom:0;flex:1}
+.scroll-mode .turno-tab-panel{display:block!important}
+.scroll-mode .turno-tabs .turno-tab{opacity:.5;pointer-events:none}
+.scroll-mode .turno-view-toggle{color:#3b82f6;border-color:#3b82f6}
 </style>
 </head>
 <body>
@@ -653,10 +660,13 @@ async function loadTurno() {
     const tf = tg - parseFloat(caixa.saida||0);
 
     show('turno-content', `
-      <div class="turno-tabs">
-        <button class="turno-tab active" onclick="switchTurnoTab('stock',this)">📊 Stock</button>
-        <button class="turno-tab" onclick="switchTurnoTab('registos',this)">📦 Registos</button>
-        <button class="turno-tab" onclick="switchTurnoTab('vendas',this)">🍽️ Vendas</button>
+      <div class="turno-tabs-wrap">
+        <div class="turno-tabs">
+          <button class="turno-tab active" onclick="switchTurnoTab('stock',this)">📊 Stock</button>
+          <button class="turno-tab" onclick="switchTurnoTab('registos',this)">📦 Registos</button>
+          <button class="turno-tab" onclick="switchTurnoTab('vendas',this)">🍽️ Vendas</button>
+        </div>
+        <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
       </div>
 
       <div id="tab-stock" class="turno-tab-panel active">
@@ -935,10 +945,19 @@ function calcCaixa() {
 }
 
 function switchTurnoTab(name, btn) {
+  const wrap = document.getElementById('turno-content');
+  if (wrap?.classList.contains('scroll-mode')) return;
   document.querySelectorAll('.turno-tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.turno-tab').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name)?.classList.add('active');
   btn.classList.add('active');
+}
+
+function toggleTurnoView() {
+  const wrap = document.getElementById('turno-content');
+  const btn  = document.getElementById('turno-view-btn');
+  const isScroll = wrap?.classList.toggle('scroll-mode');
+  if (btn) btn.textContent = isScroll ? '▣ Abas' : '☰ Tudo';
 }
 
 async function guardarCaixa(turnoId) {

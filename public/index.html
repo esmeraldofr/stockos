@@ -83,6 +83,10 @@ tr:hover .td-name{background:#1e293b}
 .td-input input:focus{outline:none;border-color:#3b82f6}
 .td-calc{color:#94a3b8;text-align:right;font-variant-numeric:tabular-nums}
 .entradas-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.entradas-tipo-toggle{display:flex;border-radius:8px;overflow:hidden;border:1px solid #334155}
+.tipo-btn{background:#0f172a;border:none;color:#94a3b8;padding:7px 14px;font-size:13px;cursor:pointer;font-weight:600}
+.tipo-btn-active,.tipo-btn-active-green{background:#14532d;color:#4ade80}
+.tipo-btn-active-red{background:#450a0a;color:#f87171}
 .entradas-select{flex:1.5;min-width:140px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:13px}
 .entradas-qty{width:80px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:13px;text-align:right}
 .entradas-notas{flex:2;min-width:120px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:13px}
@@ -946,38 +950,61 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
 
     const formHtml = canEdit ? `
       <div class="entradas-form">
+        <div class="entradas-tipo-toggle">
+          <button id="e-tipo-entrada" class="tipo-btn tipo-btn-active" onclick="setTipo('entrada')">+ Entrada</button>
+          <button id="e-tipo-tirar" class="tipo-btn" onclick="setTipo('tirar')">− Tirar</button>
+        </div>
         <select id="e-produto" class="entradas-select">${opts}</select>
         <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd" class="entradas-qty"/>
-        <input id="e-notas" type="text" placeholder="Notas (opcional)" class="entradas-notas"/>
+        <input id="e-notas" type="text" placeholder="Nota obrigatória" class="entradas-notas"/>
         <button class="btn btn-success btn-sm" onclick="submitEntrada(${turnoId})">Registar</button>
       </div>
       <div id="entrada-form-msg" style="margin-bottom:8px"></div>` : '';
 
     const listaHtml = entradas.length === 0
-      ? '<div style="color:#475569;font-size:13px;padding:8px 0">Nenhuma entrada registada neste turno.</div>'
+      ? '<div style="color:#475569;font-size:13px;padding:8px 0">Nenhum registo neste turno.</div>'
       : `<div class="table-wrap"><table>
           <thead><tr>
             <th style="text-align:left">Hora</th>
+            <th style="text-align:left">Tipo</th>
             <th style="text-align:left">Produto</th>
             <th style="text-align:right">Qtd</th>
-            <th style="text-align:left">Notas</th>
-            ${canEdit ? '<th></th>' : ''}
+            <th style="text-align:left">Nota</th>
           </tr></thead>
           <tbody>${entradas.map(e => {
             const dt = new Date(e.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
+            const isEntrada = e.tipo !== 'tirar';
+            const tipoLabel = isEntrada
+              ? '<span style="color:#4ade80;font-weight:600">+ Entrada</span>'
+              : '<span style="color:#f87171;font-weight:600">− Tirar</span>';
             return `<tr>
               <td style="color:#64748b;font-size:12px;white-space:nowrap">${dt}</td>
+              <td style="font-size:12px">${tipoLabel}</td>
               <td style="font-size:13px">${e.produto_nome}</td>
               <td style="text-align:right;font-weight:600;color:#e2e8f0">${fmtNum(e.quantidade)}</td>
-              <td style="color:#64748b;font-size:12px">${e.notas || '—'}</td>
-              ${canEdit ? `<td><button onclick="deleteEntrada(${turnoId},${e.produto_id},${e.id})" style="background:none;border:none;color:#f87171;cursor:pointer;font-size:16px;line-height:1;padding:0 4px">×</button></td>` : ''}
+              <td style="color:#94a3b8;font-size:12px">${e.notas}</td>
             </tr>`;
           }).join('')}</tbody>
         </table></div>`;
 
     el.innerHTML = formHtml + listaHtml;
+    window._entradaTipo = 'entrada';
   } catch(e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
+function setTipo(tipo) {
+  window._entradaTipo = tipo;
+  const btnE = document.getElementById('e-tipo-entrada');
+  const btnT = document.getElementById('e-tipo-tirar');
+  if (!btnE || !btnT) return;
+  if (tipo === 'entrada') {
+    btnE.className = 'tipo-btn tipo-btn-active-green';
+    btnT.className = 'tipo-btn';
+  } else {
+    btnE.className = 'tipo-btn';
+    btnT.className = 'tipo-btn tipo-btn-active-red';
   }
 }
 
@@ -985,47 +1012,30 @@ async function submitEntrada(turnoId) {
   const pid   = document.getElementById('e-produto')?.value;
   const qty   = parseFloat(document.getElementById('e-qty')?.value);
   const notas = document.getElementById('e-notas')?.value.trim() || '';
+  const tipo  = window._entradaTipo || 'entrada';
   const msg   = document.getElementById('entrada-form-msg');
-  if (!pid) { if (msg) { msg.className='alert alert-error'; msg.textContent='Selecciona um produto.'; } return; }
+  if (!pid)  { if (msg) { msg.className='alert alert-error'; msg.textContent='Selecciona um produto.'; } return; }
   if (!qty || qty <= 0) { if (msg) { msg.className='alert alert-error'; msg.textContent='Quantidade inválida.'; } return; }
+  if (!notas) { if (msg) { msg.className='alert alert-error'; msg.textContent='A nota é obrigatória.'; } return; }
   try {
-    await api('POST', `/turnos/${turnoId}/entradas`, { produto_id: pid, quantidade: qty, notas });
-    // Limpar form
+    await api('POST', `/turnos/${turnoId}/entradas`, { produto_id: pid, tipo, quantidade: qty, notas });
     document.getElementById('e-produto').value = '';
     document.getElementById('e-qty').value = '';
     document.getElementById('e-notas').value = '';
     // Actualizar célula na tabela de stock
     const novaEntrada = await api('GET', `/turnos/${turnoId}/entradas`);
     const soma = novaEntrada.filter(e => String(e.produto_id) === String(pid))
-                            .reduce((s, e) => s + parseFloat(e.quantidade), 0);
+                            .reduce((s, e) => s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1), 0);
     const cell = document.getElementById(`entrada-${pid}`);
     if (cell) cell.textContent = fmtNum(soma);
-    if (stockBuf[pid] === undefined) stockBuf[pid] = { encontrado:0, entrada:0, deixado:0 };
+    if (!stockBuf[pid]) stockBuf[pid] = { encontrado:0, entrada:0, deixado:0 };
     stockBuf[pid].entrada = soma;
     updateStock(pid, 'entrada', soma);
-    // Refrescar lista
     const stocks = S.turnoData?.stock || [];
     await loadEntradasSection(turnoId, stocks, true);
   } catch(e) {
     if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
   }
-}
-
-async function deleteEntrada(turnoId, pid, eid) {
-  if (!confirm('Remover esta entrada?')) return;
-  try {
-    await api('DELETE', `/turnos/${turnoId}/entradas/${eid}`);
-    const novaEntrada = await api('GET', `/turnos/${turnoId}/entradas`);
-    const soma = novaEntrada.filter(e => String(e.produto_id) === String(pid))
-                            .reduce((s, e) => s + parseFloat(e.quantidade), 0);
-    const cell = document.getElementById(`entrada-${pid}`);
-    if (cell) cell.textContent = fmtNum(soma);
-    if (stockBuf[pid] === undefined) stockBuf[pid] = { encontrado:0, entrada:0, deixado:0 };
-    stockBuf[pid].entrada = soma;
-    updateStock(pid, 'entrada', soma);
-    const stocks = S.turnoData?.stock || [];
-    await loadEntradasSection(turnoId, stocks, true);
-  } catch(e) { alert('Erro: ' + e.message); }
 }
 
 // ── HISTÓRICO ─────────────────────────────────────────────────

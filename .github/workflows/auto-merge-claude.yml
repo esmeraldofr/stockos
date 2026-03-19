@@ -110,6 +110,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
+
+      - name: Ensure latest main
+        run: |
+          git fetch origin main --force
+          git reset --hard origin/main
+          echo "Deploying commit: $(git rev-parse HEAD)"
 
       - name: Deploy to Vercel
         run: |
@@ -117,3 +124,6 @@ jobs:
           export VERCEL_ORG_ID="team_xe35fGtDIeZZ0wltRdswGzOh"
           export VERCEL_PROJECT_ID="prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
           npx vercel --prod --yes --token "$VERCEL_TOKEN"
+        env:
+          GITHUB_REF: refs/heads/main
+          GITHUB_SHA: ""

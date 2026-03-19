@@ -959,7 +959,7 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
       <div class="entradas-form">
         <div class="entradas-tipo-toggle">
           <button id="e-tipo-entrada" class="tipo-btn tipo-btn-active-green" onclick="setTipo('entrada')">+ Entrada</button>
-          <button id="e-tipo-tirar" class="tipo-btn" onclick="setTipo('tirar')">− Tirar</button>
+          <button id="e-tipo-tirar" class="tipo-btn" onclick="setTipo('tirar')">− Saída</button>
         </div>
         <div class="entradas-tipo-toggle" id="e-origem-wrap">
           <button id="e-orig-armazem" class="tipo-btn tipo-btn-active" onclick="setOrigem('armazem')">Armazém</button>
@@ -988,7 +988,7 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
           <tbody>${entradas.map(e => {
             const dt = new Date(e.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
             const tipoLabel = e.tipo === 'tirar'
-              ? '<span style="color:#f87171;font-weight:600">− Tirar</span>'
+              ? '<span style="color:#f87171;font-weight:600">− Saída</span>'
               : '<span style="color:#4ade80;font-weight:600">+ Entrada</span>';
             const origemLabel = e.origem === 'compra'
               ? '<span style="color:#fb923c">Compra</span>'

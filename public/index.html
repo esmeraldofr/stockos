@@ -1077,8 +1077,14 @@ async function loadSaidasSection(turnoId, canEdit) {
   const el = document.getElementById('saidas-section');
   if (!el) return;
   try {
-    const saidas = await api('GET', `/turnos/${turnoId}/saidas`);
-    const total  = saidas.reduce((s, r) => s + parseFloat(r.valor), 0);
+    const [saidas, entradas] = await Promise.all([
+      api('GET', `/turnos/${turnoId}/saidas`),
+      api('GET', `/turnos/${turnoId}/entradas`)
+    ]);
+    const totalDespesas = saidas.reduce((s, r) => s + parseFloat(r.valor), 0);
+    const totalCompras  = entradas.filter(e => e.origem === 'compra' && e.tipo === 'entrada')
+                                  .reduce((s, e) => s + parseFloat(e.preco), 0);
+    const total = totalDespesas + totalCompras;
 
     const formHtml = canEdit ? `
       <div class="entradas-form">
@@ -1089,7 +1095,29 @@ async function loadSaidasSection(turnoId, canEdit) {
       </div>
       <div id="saida-form-msg" style="margin-bottom:8px"></div>` : '';
 
-    const listaHtml = saidas.length === 0
+    const comprasRows = entradas.filter(e => e.origem === 'compra' && e.tipo === 'entrada').map(e => {
+      const dt = new Date(e.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
+      return `<tr>
+        <td style="color:#64748b;font-size:12px;white-space:nowrap">${dt}</td>
+        <td style="font-size:13px">${e.produto_nome} <span style="color:#fb923c;font-size:11px">(compra)</span></td>
+        <td style="text-align:right;font-weight:600;color:#f87171">${fmt(e.preco)}</td>
+        <td style="color:#94a3b8;font-size:12px">${e.notas}</td>
+      </tr>`;
+    });
+
+    const despesasRows = saidas.map(s => {
+      const dt = new Date(s.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
+      return `<tr>
+        <td style="color:#64748b;font-size:12px;white-space:nowrap">${dt}</td>
+        <td style="font-size:13px">${s.descricao}</td>
+        <td style="text-align:right;font-weight:600;color:#f87171">${fmt(s.valor)}</td>
+        <td style="color:#94a3b8;font-size:12px">${s.notas}</td>
+      </tr>`;
+    });
+
+    const todasLinhas = [...comprasRows, ...despesasRows];
+
+    const listaHtml = todasLinhas.length === 0
       ? '<div style="color:#475569;font-size:13px;padding:8px 0">Nenhuma saída registada neste turno.</div>'
       : `<div class="table-wrap"><table>
           <thead><tr>
@@ -1099,15 +1127,7 @@ async function loadSaidasSection(turnoId, canEdit) {
             <th style="text-align:left">Nota</th>
           </tr></thead>
           <tbody>
-            ${saidas.map(s => {
-              const dt = new Date(s.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
-              return `<tr>
-                <td style="color:#64748b;font-size:12px;white-space:nowrap">${dt}</td>
-                <td style="font-size:13px">${s.descricao}</td>
-                <td style="text-align:right;font-weight:600;color:#f87171">${fmt(s.valor)}</td>
-                <td style="color:#94a3b8;font-size:12px">${s.notas}</td>
-              </tr>`;
-            }).join('')}
+            ${todasLinhas.join('')}
             <tr style="font-weight:700;border-top:2px solid #334155">
               <td colspan="2" style="color:#94a3b8;font-size:12px;padding:6px 10px">Total saídas</td>
               <td style="text-align:right;color:#f87171">${fmt(total)}</td>

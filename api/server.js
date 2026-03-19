@@ -550,6 +550,12 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
       [turnoId, produto_id]
     );
 
+    // Se for compra, recalcular saida da caixa
+    if (origemVal === 'compra') {
+      const novasSaida = await calcSaidaTotal(turnoId, client);
+      await client.query(`UPDATE turno_caixa SET saida=$1 WHERE turno_id=$2`, [novasSaida, turnoId]).catch(()=>{});
+    }
+
     await client.query('COMMIT');
     res.json(registo.rows[0]);
   } catch(e) {
@@ -561,15 +567,18 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
   } finally { client.release(); }
 });
 
+// saida = despesas directas + compras de stock
+async function calcSaidaTotal(turnoId, client) {
+  const q = client ? (s, p) => client.query(s, p) : query;
+  const despesas = await q(`SELECT COALESCE(SUM(valor),0) as t FROM turno_saidas WHERE turno_id=$1`, [turnoId]).catch(() => ({ rows: [{ t: 0 }] }));
+  const compras  = await q(`SELECT COALESCE(SUM(preco),0) as t FROM turno_entradas WHERE turno_id=$1 AND origem='compra' AND tipo='entrada'`, [turnoId]).catch(() => ({ rows: [{ t: 0 }] }));
+  return parseFloat(despesas.rows[0].t) + parseFloat(compras.rows[0].t);
+}
+
 app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
   try {
     const { tpa, transferencia, dinheiro } = req.body;
-    // saida é calculada automaticamente pela soma de turno_saidas
-    const saidaRow = await query(
-      `SELECT COALESCE(SUM(valor),0) as total FROM turno_saidas WHERE turno_id=$1`,
-      [req.params.id]
-    ).catch(() => ({ rows: [{ total: 0 }] }));
-    const saida = parseFloat(saidaRow.rows[0].total) || 0;
+    const saida = await calcSaidaTotal(req.params.id, null);
     const r = await query(
       `INSERT INTO turno_caixa (turno_id, tpa, transferencia, dinheiro, saida)
        VALUES ($1,$2,$3,$4,$5)
@@ -625,13 +634,9 @@ app.post('/api/turnos/:id/saidas', auth, async (req, res) => {
       'INSERT INTO turno_saidas (turno_id, descricao, valor, notas) VALUES ($1,$2,$3,$4) RETURNING *',
       [turnoId, descricao.trim(), valor, notas.trim()]
     );
-    // Recalcular saida na caixa
-    await client.query(
-      `UPDATE turno_caixa SET saida=(
-         SELECT COALESCE(SUM(valor),0) FROM turno_saidas WHERE turno_id=$1
-       ) WHERE turno_id=$1`,
-      [turnoId]
-    );
+    // Recalcular saida na caixa (despesas + compras)
+    const novasSaida = await calcSaidaTotal(turnoId, client);
+    await client.query(`UPDATE turno_caixa SET saida=$1 WHERE turno_id=$2`, [novasSaida, turnoId]);
     await client.query('COMMIT');
     res.json(r.rows[0]);
   } catch(e) {

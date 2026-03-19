@@ -518,7 +518,10 @@ function refreshMenuQtys() {
   }
   for (const prodId of bebidaProdIds) {
     const el = document.getElementById(`venda-qty-${prodId}`);
-    if (el) el.textContent = fmtNum(vendasBuf[prodId] || 0);
+    if (el) {
+      const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
+      el.textContent = fmtNum(Math.max(0, b.encontrado + b.entrada - b.deixado));
+    }
   }
   for (const prodId of avulsoProdIds) {
     const el = document.getElementById(`venda-qty-${prodId}`);
@@ -766,7 +769,8 @@ async function loadVendasMenu(turnoId, canEdit) {
 
     bebidaProdIds = bebidaProds.map(p => p.id);
     const bebidaRows = bebidaProds.map(p => {
-      const qty = vendasBuf[p.id] || 0;
+      const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
+      const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
       return `<div class="produto-row" style="align-items:center">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
           ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}

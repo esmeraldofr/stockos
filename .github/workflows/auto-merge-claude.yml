@@ -22,18 +22,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
 
-      - name: Limpar turnos de teste
-        run: |
-          sudo apt-get install -y postgresql-client -q
-          DATABASE_URL="postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:6543/postgres"
-          PGSSLMODE=require psql "$DATABASE_URL" -c "DELETE FROM turnos;"
-          RESULT=$(PGSSLMODE=require psql "$DATABASE_URL" -t -c "SELECT count(*) FROM turnos;")
-          echo "turnos_restantes: $RESULT" | tee data/turnos-cleanup.txt
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          BRANCH="${GITHUB_REF#refs/heads/}"
-          git add data/turnos-cleanup.txt
-          git diff --staged --quiet || (git commit -m "chore: resultado limpeza turnos [skip ci]" && git push origin "$BRANCH")
 
       - name: Query DB via REST API and save result
         run: |

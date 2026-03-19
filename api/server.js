@@ -14,6 +14,19 @@ const _poolerUrl = 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@
 const pool  = new Pool({ connectionString: (_dbUrl && _dbUrl.includes('pooler.supabase.com')) ? _dbUrl : _poolerUrl, ssl: { rejectUnauthorized: false } });
 const query = (text, params) => pool.query(text, params);
 
+// ── MIGRATIONS ─────────────────────────────────────────────────
+async function runMigrations() {
+  await query(`CREATE TABLE IF NOT EXISTS turno_entradas (
+    id          SERIAL          PRIMARY KEY,
+    turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
+    notas       TEXT            NOT NULL DEFAULT '',
+    criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+  )`);
+}
+runMigrations().catch(e => console.error('Migration error:', e.message));
+
 async function qry(sql, params, label) {
   try { await query(sql, params); }
   catch(e) { console.error(`[initDB:${label}]`, e.message); }

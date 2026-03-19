@@ -721,6 +721,14 @@ async function loadTurno() {
         <div class="card-title">🍽️ Vendas de Menu</div>
         <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
       </div>
+
+      <div class="card mt-16">
+        <div class="card-title">📝 Observações</div>
+        <textarea id="turno-notas" rows="4" placeholder="Escreve aqui as observações do turno..."
+          style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
+          ${canEdit ? '' : 'disabled'}
+          onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
+      </div>
     `);
   // Inicializar total após render
   let initTotalVend = 0, initTotalVal = 0;
@@ -921,6 +929,14 @@ async function guardarCaixa(turnoId) {
       dinheiro:     parseFloat(document.getElementById('c-din')?.value)||0
     });
     suc('turno-msg', '✓ Guardado');
+    setTimeout(() => show('turno-msg',''), 2000);
+  } catch(e) { err('turno-msg', e.message); }
+}
+
+async function saveTurnoNotas(turnoId, notas) {
+  try {
+    await api('PUT', `/turnos/${turnoId}/notas`, { notas });
+    suc('turno-msg', '✓ Observações guardadas');
     setTimeout(() => show('turno-msg',''), 2000);
   } catch(e) { err('turno-msg', e.message); }
 }

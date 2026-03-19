@@ -575,6 +575,18 @@ async function calcSaidaTotal(turnoId, client) {
   return parseFloat(despesas.rows[0].t) + parseFloat(compras.rows[0].t);
 }
 
+app.put('/api/turnos/:id/notas', auth, async (req, res) => {
+  try {
+    const { notas } = req.body;
+    const r = await query(
+      'UPDATE turnos SET notas=$1 WHERE id=$2 RETURNING notas',
+      [notas || '', req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
   try {
     const { tpa, transferencia, dinheiro } = req.body;

@@ -704,6 +704,13 @@ async function loadTurno() {
         <div class="card" id="entradas-card">
           <div class="card-title">📦 Entradas de Stock</div>
           <div id="entradas-section"><span style="color:#64748b">A carregar...</span></div>
+          <div style="margin-top:14px">
+            <div class="card-title" style="margin-bottom:6px">📝 Observações</div>
+            <textarea id="turno-notas" rows="3" placeholder="Escreve aqui as observações do turno..."
+              style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
+              ${canEdit ? '' : 'disabled'}
+              onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
+          </div>
         </div>
         <div class="card mt-16" id="saidas-card">
           <div class="card-title">💸 Saídas de Caixa</div>
@@ -736,13 +743,6 @@ async function loadTurno() {
           <div class="caixa-total">
             <span class="caixa-total-label">Total Final</span>
             <span class="caixa-total-value" id="c-total-final">${fmt(tf)}</span>
-          </div>
-          <div style="margin-top:14px">
-            <div class="card-title" style="margin-bottom:6px">📝 Observações</div>
-            <textarea id="turno-notas" rows="3" placeholder="Escreve aqui as observações do turno..."
-              style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
-              ${canEdit ? '' : 'disabled'}
-              onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
           </div>
         </div>
       </div>

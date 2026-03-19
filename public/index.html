@@ -791,9 +791,11 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     }).join('');
 
-    const html = (menuProds.length ? groupHeader('🍽️ Menu') + menuRows : '')
-               + (avulsoProds.length ? groupHeader('🛒 Avulso') + avulsoRows : '')
-               + (bebidaProds.length ? groupHeader('🥤 Bebidas') + bebidaRows : '');
+    const toGrid = rows => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">${rows}</div>`;
+
+    const html = (menuProds.length ? groupHeader('🍽️ Menu') + toGrid(menuRows) : '')
+               + (avulsoProds.length ? groupHeader('🛒 Avulso') + toGrid(avulsoRows) : '')
+               + (bebidaProds.length ? groupHeader('🥤 Bebidas') + toGrid(bebidaRows) : '');
     show('vendas-menu-list', html);
   } catch(e) {
     show('vendas-menu-list', `<span style="color:#ef4444">${e.message}</span>`);

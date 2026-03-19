@@ -23,18 +23,14 @@ jobs:
 
       - name: Limpar turnos de teste
         run: |
-          npm install pg --silent
-          node -e "
-          const { Pool } = require('pg');
-          const pool = new Pool({
-            connectionString: 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres',
-            ssl: { rejectUnauthorized: false }
-          });
-          pool.query('DELETE FROM turnos').then(r => {
-            console.log('Turnos apagados:', r.rowCount);
-            pool.end();
-          }).catch(e => { console.error(e.message); pool.end(); });
-          "
+          SUPABASE_URL="https://dakleqewbwbryuchlrzm.supabase.co"
+          SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRha2xlcWV3Yndicnl1Y2hscnptIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjQ4MzgxNywiZXhwIjoyMDg4MDU5ODE3fQ.83h_4hueK3-znXpjy35TZJWJntcyI2X-hopw0QHQSts"
+          echo "A apagar turnos..."
+          curl -s -X DELETE "$SUPABASE_URL/rest/v1/turnos?id=gt.0" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Prefer: return=representation"
+          echo "Feito."
 
       - name: Query DB via REST API and save result
         run: |

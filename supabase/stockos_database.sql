@@ -93,7 +93,7 @@ ALTER TABLE turnos ADD COLUMN IF NOT EXISTS utilizador_id INTEGER;
 CREATE TABLE IF NOT EXISTS turno_entradas (
   id          SERIAL          PRIMARY KEY,
   turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-  produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  produto_id  UUID            NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
   quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
   notas       TEXT            NOT NULL DEFAULT '',
   criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
@@ -162,7 +162,7 @@ INSERT INTO produtos (nome, preco, categoria, ordem) VALUES
 CREATE TABLE IF NOT EXISTS turno_entradas (
   id          SERIAL          PRIMARY KEY,
   turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-  produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  produto_id  UUID            NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
   quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
   notas       TEXT            NOT NULL DEFAULT '',
   criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()

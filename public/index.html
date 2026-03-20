@@ -1348,14 +1348,6 @@ async function loadResumoTab(turnoId) {
       irr.push({ level:'warn', msg:`Compras de stock registadas (${fmt(totalCompras)}) mas caixa com valor zero` });
     }
 
-    // 7. Discrepância entre valor de stock e caixa (> 20% e > 500)
-    if (totalValStock > 100 && totalGerado > 100) {
-      const diff = Math.abs(totalValStock - totalGerado);
-      const pct  = diff / Math.max(totalValStock, totalGerado) * 100;
-      if (diff > 500 && pct > 20) {
-        irr.push({ level:'warn', msg:`Discrepância entre valor de stock vendido (${fmt(totalValStock)}) e receita de caixa (${fmt(totalGerado)}) — diferença de ${fmt(diff)} (${pct.toFixed(0)}%)` });
-      }
-    }
 
     // — Helpers de render —
     const icon  = { error:'🔴', warn:'🟡', info:'🔵' };

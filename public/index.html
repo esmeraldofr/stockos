@@ -684,7 +684,6 @@ async function loadTurno() {
         <div class="turno-tabs">
           <button class="turno-tab active" onclick="switchTurnoTab('stock',this)">📊 Stock</button>
           <button class="turno-tab" onclick="switchTurnoTab('registos',this)">📦 Registos</button>
-          <button class="turno-tab" onclick="switchTurnoTab('caixa',this)">💰 Caixa</button>
           <button class="turno-tab" onclick="switchTurnoTab('vendas',this)">🍽️ Vendas</button>
         </div>
         <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
@@ -730,10 +729,7 @@ async function loadTurno() {
           <div class="card-title">💸 Saídas de Caixa</div>
           <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
         </div>
-      </div>
-
-      <div id="tab-caixa" class="turno-tab-panel">
-        <div class="card">
+        <div class="card mt-16">
           <div class="card-title">💰 Caixa</div>
           <div class="caixa-grid">
             <div class="caixa-item">

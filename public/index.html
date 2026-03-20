@@ -1348,6 +1348,12 @@ async function loadResumoTab(turnoId) {
       irr.push({ level:'warn', msg:`Compras de stock registadas (${fmt(totalCompras)}) mas caixa com valor zero` });
     }
 
+    // 7. Possível desconto aplicado: vendas de menu > caixa recebida
+    if (totalVendasVal > 0 && totalGerado > 0 && totalVendasVal > totalGerado) {
+      const desconto = totalVendasVal - totalGerado;
+      const pct = desconto / totalVendasVal * 100;
+      irr.push({ level:'warn', msg:`Possível desconto aplicado: vendas registadas (${fmt(totalVendasVal)}) superiores à caixa recebida (${fmt(totalGerado)}) — desconto de ${fmt(desconto)} (${pct.toFixed(1)}%)` });
+    }
 
     // — Helpers de render —
     const icon  = { error:'🔴', warn:'🟡', info:'🔵' };

@@ -685,6 +685,7 @@ async function loadTurno() {
           <button class="turno-tab active" onclick="switchTurnoTab('stock',this)">📊 Stock</button>
           <button class="turno-tab" onclick="switchTurnoTab('registos',this)">📦 Registos</button>
           <button class="turno-tab" onclick="switchTurnoTab('vendas',this)">🍽️ Vendas</button>
+          <button class="turno-tab" onclick="switchTurnoTab('resumo',this)">📋 Resumo</button>
         </div>
         <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
       </div>
@@ -773,6 +774,10 @@ async function loadTurno() {
           <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
         </div>
       </div>
+
+      <div id="tab-resumo" class="turno-tab-panel">
+        <div style="color:#64748b;text-align:center;padding:32px"><div class="spinner"></div></div>
+      </div>
     `);
   // Inicializar total após render
   let initTotalVend = 0, initTotalVal = 0;
@@ -790,6 +795,7 @@ async function loadTurno() {
     loadEntradasSection(turno.id, turno.stock, canEdit);
     loadSaidasSection(turno.id, canEdit);
     loadVendasMenu(turno.id, canEdit);
+    loadResumoTab(turno.id);
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -988,6 +994,10 @@ function switchTurnoTab(name, btn) {
   document.querySelectorAll('.turno-tab').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name)?.classList.add('active');
   btn.classList.add('active');
+  if (name === 'resumo') {
+    const tid = S.turnoData?.id;
+    if (tid) loadResumoTab(tid);
+  }
 }
 
 function toggleTurnoView() {
@@ -1245,6 +1255,177 @@ async function loadSaidasSection(turnoId, canEdit) {
       elTG.textContent = fmt(tg);
       elTF.textContent = fmt(tg - total);
     }
+  } catch(e) {
+    el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
+// ── RESUMO DO TURNO ───────────────────────────────────────────
+async function loadResumoTab(turnoId) {
+  const el = document.getElementById('tab-resumo');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#64748b;text-align:center;padding:32px"><div class="spinner"></div></div>';
+  try {
+    const [entradas, saidas] = await Promise.all([
+      api('GET', `/turnos/${turnoId}/entradas`),
+      api('GET', `/turnos/${turnoId}/saidas`)
+    ]);
+    const turno  = S.turnoData;
+    const stocks = turno?.stock || [];
+
+    // — Caixa (ler do DOM se disponível) —
+    const tpa    = parseFloat(document.getElementById('c-tpa')?.value)    || caixaBuf.tpa           || 0;
+    const transf = parseFloat(document.getElementById('c-transf')?.value) || caixaBuf.transferencia  || 0;
+    const din    = parseFloat(document.getElementById('c-din')?.value)    || caixaBuf.dinheiro       || 0;
+    const totalGerado   = tpa + transf + din;
+    const totalDespesas = saidas.reduce((s,r) => s + parseFloat(r.valor), 0);
+    const totalCompras  = entradas.filter(e => e.origem === 'compra' && e.tipo === 'entrada')
+                                  .reduce((s,e) => s + parseFloat(e.preco||0), 0);
+    const totalSaidas   = totalDespesas + totalCompras;
+    const totalFinal    = totalGerado - totalSaidas;
+
+    // — Stock —
+    let totalVend = 0, totalValStock = 0;
+    stocks.forEach(s => {
+      const b = stockBuf[s.produto_id] || { encontrado:0, entrada:0, deixado:0 };
+      const v = Math.max(0, b.encontrado + b.entrada - b.deixado);
+      totalVend    += v;
+      totalValStock += v * (parseFloat(s.preco) || 0);
+    });
+
+    // — Vendas de Menu —
+    let totalVendasVal = 0;
+    const vendasLines = [];
+    const allProdIds = [...new Set([...menuProdIds, ...avulsoProdIds])];
+    allProdIds.forEach(pid => {
+      const qty   = vendasBuf[pid] || 0;
+      const preco = vendasProdPrecos[pid] || 0;
+      if (qty > 0) {
+        const val = qty * preco;
+        totalVendasVal += val;
+        const si  = stocks.find(s => String(s.produto_id) === String(pid));
+        vendasLines.push({ nome: si?.produto_nome || `Produto ${pid}`, qty, preco, total: val });
+      }
+    });
+
+    // — Irregularidades —
+    const irr = [];
+
+    // 1. Falta de stock na abertura (comparação detectada pelo servidor)
+    stocks.filter(s => s.comparacao && s.comparacao.startsWith('falta')).forEach(s => {
+      irr.push({ level:'warn', msg:`Stock em falta ao abrir turno: <strong>${s.produto_nome}</strong> — ${s.comparacao}` });
+    });
+
+    // 2. Excedente de stock na abertura
+    stocks.filter(s => s.comparacao && s.comparacao.startsWith('sobra')).forEach(s => {
+      irr.push({ level:'info', msg:`Excedente ao abrir turno: <strong>${s.produto_nome}</strong> — ${s.comparacao}` });
+    });
+
+    // 3. Produto que constava no turno anterior mas apareceu a zero sem justificação
+    stocks.forEach(s => {
+      const b = stockBuf[s.produto_id] || { encontrado:0, entrada:0, deixado:0 };
+      const prevDei = parseFloat(s.prev_deixado) || 0;
+      if (prevDei > 0 && b.encontrado === 0 && b.entrada === 0) {
+        irr.push({ level:'warn', msg:`<strong>${s.produto_nome}</strong> — ${fmtNum(prevDei)} unidades no turno anterior, encontrado 0 sem entrada registada` });
+      }
+    });
+
+    // 4. Quantidade matematicamente impossível (deixado > encontrado + entrada)
+    stocks.forEach(s => {
+      const b = stockBuf[s.produto_id] || { encontrado:0, entrada:0, deixado:0 };
+      if (b.deixado > b.encontrado + b.entrada + 0.001) {
+        irr.push({ level:'error', msg:`Quantidade impossível: <strong>${s.produto_nome}</strong> — deixado (${fmtNum(b.deixado)}) superior a encontrado+entrada (${fmtNum(b.encontrado + b.entrada)})` });
+      }
+    });
+
+    // 5. Saídas excedem receita
+    if (totalSaidas > totalGerado && totalGerado > 0) {
+      irr.push({ level:'error', msg:`Total de saídas (${fmt(totalSaidas)}) superior à receita gerada (${fmt(totalGerado)})` });
+    }
+
+    // 6. Compras registadas mas caixa não preenchida
+    if (totalCompras > 0 && totalGerado === 0) {
+      irr.push({ level:'warn', msg:`Compras de stock registadas (${fmt(totalCompras)}) mas caixa com valor zero` });
+    }
+
+    // 7. Discrepância entre valor de stock e caixa (> 20% e > 500)
+    if (totalValStock > 100 && totalGerado > 100) {
+      const diff = Math.abs(totalValStock - totalGerado);
+      const pct  = diff / Math.max(totalValStock, totalGerado) * 100;
+      if (diff > 500 && pct > 20) {
+        irr.push({ level:'warn', msg:`Discrepância entre valor de stock vendido (${fmt(totalValStock)}) e receita de caixa (${fmt(totalGerado)}) — diferença de ${fmt(diff)} (${pct.toFixed(0)}%)` });
+      }
+    }
+
+    // — Helpers de render —
+    const icon  = { error:'🔴', warn:'🟡', info:'🔵' };
+    const color = { error:'#f87171', warn:'#fbbf24', info:'#60a5fa' };
+
+    const chip = (label, value, valueColor, bold) => `
+      <div style="background:#1e293b;border-radius:8px;padding:10px 12px">
+        <div style="color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">${label}</div>
+        <div style="font-weight:${bold?'700':'600'};font-size:${bold?'1.05rem':'0.95rem'};color:${valueColor||'#e2e8f0'}">${value}</div>
+      </div>`;
+
+    const financCard = `
+      <div class="card">
+        <div class="card-title">💰 Resumo Financeiro</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+          ${chip('TPA / Máquina', fmt(tpa))}
+          ${chip('Transferência', fmt(transf))}
+          ${chip('Dinheiro', fmt(din))}
+          ${chip('Total Gerado', fmt(totalGerado), '#4ade80', true)}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+          ${chip('Compras', fmt(totalCompras), '#fb923c')}
+          ${chip('Despesas', fmt(totalDespesas), '#f87171')}
+          ${chip('Total Saídas', fmt(totalSaidas), '#f87171', true)}
+        </div>
+        <div style="padding:12px 14px;background:#0f172a;border-radius:8px;display:flex;justify-content:space-between;align-items:center;border:1px solid #334155">
+          <span style="color:#94a3b8;font-weight:600;text-transform:uppercase;font-size:12px;letter-spacing:.05em">Total Final</span>
+          <span style="font-size:1.25rem;font-weight:700;color:${totalFinal >= 0 ? '#4ade80' : '#f87171'}">${fmt(totalFinal)}</span>
+        </div>
+      </div>`;
+
+    const stockCard = `
+      <div class="card mt-16">
+        <div class="card-title">📦 Resumo de Stock</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          ${chip('Total Vendido (und.)', fmtNum(totalVend))}
+          ${chip('Valor de Stock', fmt(totalValStock), '#4ade80', true)}
+        </div>
+      </div>`;
+
+    const vendasCard = vendasLines.length > 0 ? `
+      <div class="card mt-16">
+        <div class="card-title">🍽️ Resumo de Vendas (Menu)</div>
+        ${vendasLines.map(v => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1e293b">
+            <span style="font-size:13px;color:#cbd5e1">${v.nome}</span>
+            <span style="display:flex;gap:14px;align-items:center">
+              <span style="color:#64748b;font-size:12px">${v.qty} × ${fmt(v.preco)}</span>
+              <span style="font-weight:600;color:#e2e8f0;min-width:72px;text-align:right">${fmt(v.total)}</span>
+            </span>
+          </div>`).join('')}
+        <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:2px solid #334155">
+          <span style="font-weight:600;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.05em">Total Vendas Menu</span>
+          <span style="font-weight:700;color:#4ade80">${fmt(totalVendasVal)}</span>
+        </div>
+      </div>` : '';
+
+    const irrCard = `
+      <div class="card mt-16">
+        <div class="card-title">⚠️ Irregularidades</div>
+        ${irr.length === 0
+          ? '<div style="color:#4ade80;font-size:14px;padding:6px 0">✓ Nenhuma irregularidade detectada</div>'
+          : irr.map(i => `
+              <div style="display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid #1e293b">
+                <span style="flex-shrink:0;font-size:14px">${icon[i.level]}</span>
+                <span style="color:${color[i.level]};font-size:13px;line-height:1.45">${i.msg}</span>
+              </div>`).join('')}
+      </div>`;
+
+    el.innerHTML = financCard + stockCard + vendasCard + irrCard;
   } catch(e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }

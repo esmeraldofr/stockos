@@ -106,6 +106,7 @@ async function initDB() {
     ('Compal Lata',700,'bebida',31),('Sumol Ananas',700,'bebida',32),('Sumol Laranja',700,'bebida',33),
     ('Sumol Manga',700,'bebida',34),('Cuca Lata',700,'bebida',35),('Nocal Lata',700,'bebida',36),('Dopel',700,'bebida',37)
     ON CONFLICT (nome) DO NOTHING`, [], 'produtos-seed');
+  await qry(`UPDATE produtos SET venda_avulso=true, preco=1000 WHERE nome='Batata Pré-frita'`, [], 'batata-avulso');
   console.log('DB ready');
 }
 const dbReady = initDB();

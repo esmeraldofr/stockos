@@ -1,11 +1,14 @@
 name: Deploy to Vercel
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy (manual only)
+    name: Deploy — Produção
     runs-on: ubuntu-latest
 
     steps:

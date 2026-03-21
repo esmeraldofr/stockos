@@ -1,0 +1,31 @@
+name: Promover develop → qualidade
+
+on:
+  workflow_dispatch:
+
+jobs:
+  promote:
+    name: Merge develop into qualidade
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge develop into qualidade
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          git fetch origin develop qualidade
+
+          git checkout qualidade
+          git merge --no-ff origin/develop -m "chore: promote develop to qualidade"
+          git push origin qualidade
+
+          echo "Promoted develop to qualidade successfully."

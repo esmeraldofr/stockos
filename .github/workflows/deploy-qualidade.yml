@@ -25,11 +25,9 @@ jobs:
           npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
             --build-env NODE_ENV=staging \
             --env NODE_ENV=staging \
-            --env DATABASE_URL="${DATABASE_URL_QUALIDADE:-$DATABASE_URL_PROD}"
+            --env DATABASE_URL="$DATABASE_URL_PROD"
         env:
           _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
           _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
           _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
-          VERCEL_PROJECT_ID_QUALIDADE: ${{ secrets.VERCEL_PROJECT_ID_QUALIDADE }}
-          DATABASE_URL_QUALIDADE: ${{ secrets.DATABASE_URL_QUALIDADE }}
           DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}

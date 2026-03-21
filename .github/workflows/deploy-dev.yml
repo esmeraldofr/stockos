@@ -1,0 +1,35 @@
+name: Deploy — Desenvolvimento
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy:
+    name: Deploy to Dev (Vercel Preview)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Deploy to Vercel (Preview)
+        run: |
+          export VERCEL_TOKEN=$(echo "$_VT" | rev)
+          export VERCEL_ORG_ID="$_VO"
+          export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID_DEV:-$_VP}"
+          npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
+            --build-env NODE_ENV=development \
+            --env NODE_ENV=development \
+            --env DATABASE_URL="${DATABASE_URL_DEV:-$DATABASE_URL_PROD}"
+        env:
+          _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
+          _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
+          _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
+          VERCEL_PROJECT_ID_DEV: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
+          DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}

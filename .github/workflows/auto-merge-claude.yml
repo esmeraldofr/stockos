@@ -7,7 +7,7 @@ on:
 
 jobs:
   auto-merge:
-    name: Merge to main
+    name: Merge to develop
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -21,7 +21,27 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Ensure develop and qualidade branches exist
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git fetch origin
 
+          if ! git ls-remote --exit-code origin develop; then
+            echo "Creating develop branch from main..."
+            git checkout -b develop origin/main
+            git push origin develop
+          else
+            echo "Branch develop already exists."
+          fi
+
+          if ! git ls-remote --exit-code origin qualidade; then
+            echo "Creating qualidade branch from main..."
+            git checkout -b qualidade origin/main
+            git push origin qualidade
+          else
+            echo "Branch qualidade already exists."
+          fi
 
       - name: Query DB via REST API and save result
         run: |
@@ -48,54 +68,49 @@ jobs:
           git add data/produtos.json data/receitas.json data/db-result.json
           git diff --staged --quiet || (git commit -m "chore: db snapshot [skip ci]" && git push origin "$BRANCH")
 
-      - name: Merge branch into main
+      - name: Merge branch into develop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="${GITHUB_REF#refs/heads/}"
           echo "Branch: $BRANCH"
 
-          # Configure git
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
 
-          # Try direct git merge first (works if no branch protection on main)
-          git fetch origin main
-          git checkout main
-          git merge --no-ff "origin/$BRANCH" -m "chore: merge $BRANCH into main"
-          if git push origin main; then
-            echo "Direct git push succeeded."
+          # Try direct git merge into develop
+          git fetch origin develop
+          git checkout develop
+          git merge --no-ff "origin/$BRANCH" -m "chore: merge $BRANCH into develop"
+          if git push origin develop; then
+            echo "Merged into develop successfully."
             exit 0
           fi
 
-          echo "Direct push failed (branch protection active). Falling back to PR merge..."
+          echo "Direct push to develop failed. Falling back to PR..."
           git checkout "$BRANCH"
 
-          # Check PR state
-          PR_STATE=$(gh pr list --head "$BRANCH" --base main --json state --jq '.[0].state' 2>/dev/null)
-          PR_URL=$(gh pr list --head "$BRANCH" --base main --json url --jq '.[0].url' 2>/dev/null)
+          PR_STATE=$(gh pr list --head "$BRANCH" --base develop --json state --jq '.[0].state' 2>/dev/null)
+          PR_URL=$(gh pr list --head "$BRANCH" --base develop --json url --jq '.[0].url' 2>/dev/null)
 
           echo "PR state: $PR_STATE | PR URL: $PR_URL"
 
-          # If PR is already merged, we're done
           if [ "$PR_STATE" = "MERGED" ]; then
             echo "PR already merged. Nothing to do."
             exit 0
           fi
 
-          # If PR is closed, reopen or create new
           if [ "$PR_STATE" = "CLOSED" ] || [ -z "$PR_URL" ]; then
             PR_URL=$(gh pr create \
-              --base main \
+              --base develop \
               --head "$BRANCH" \
-              --title "chore: merge $BRANCH into main" \
+              --title "chore: merge $BRANCH into develop" \
               --body "Auto-merge triggered by push to \`$BRANCH\`.")
             echo "PR created: $PR_URL"
           else
             echo "Using existing open PR: $PR_URL"
           fi
 
-          # Merge the PR with --admin to bypass branch protection
           gh pr merge "$PR_URL" \
             --merge \
             --admin \

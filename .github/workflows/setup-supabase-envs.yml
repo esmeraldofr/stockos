@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  create-projects:
-    name: Criar projetos Supabase dev + qualidade
+  create-dev-project:
+    name: Criar projeto Supabase stockos-dev
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Criar projetos Supabase
+      - name: Criar projeto stockos-dev
         id: create
         env:
           _ST: "bde916de461d19a293b74a1c4c93d4587a199406_pbs"
@@ -29,7 +29,6 @@ jobs:
           echo "Org ID: $ORG_ID"
 
           DEV_PASS="StockOS_Dev_2025x"
-          QUAL_PASS="StockOS_Qual_2025x"
 
           # Criar stockos-dev
           echo "--- A criar stockos-dev ---"
@@ -47,99 +46,52 @@ jobs:
           DEV_ID=$(echo "$DEV_RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || echo "")
           echo "Dev project ID: $DEV_ID"
 
-          # Criar stockos-qualidade
-          echo "--- A criar stockos-qualidade ---"
-          QUAL_RESP=$(curl -s -X POST "https://api.supabase.com/v1/projects" \
-            -H "Authorization: Bearer $SUPABASE_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"organization_id\": \"$ORG_ID\",
-              \"name\": \"stockos-qualidade\",
-              \"db_pass\": \"$QUAL_PASS\",
-              \"region\": \"eu-west-1\",
-              \"plan\": \"free\"
-            }")
-          echo "Qualidade response: $QUAL_RESP"
-          QUAL_ID=$(echo "$QUAL_RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || echo "")
-          echo "Qualidade project ID: $QUAL_ID"
-
           echo "DEV_ID=$DEV_ID" >> $GITHUB_ENV
-          echo "QUAL_ID=$QUAL_ID" >> $GITHUB_ENV
           echo "SUPABASE_TOKEN=$SUPABASE_TOKEN" >> $GITHUB_ENV
           echo "DEV_PASS=$DEV_PASS" >> $GITHUB_ENV
-          echo "QUAL_PASS=$QUAL_PASS" >> $GITHUB_ENV
 
-      - name: Aguardar projetos ficarem ativos
+      - name: Aguardar projeto ficar ativo
         run: |
-          wait_for_project() {
-            local PROJECT_ID=$1
-            local NAME=$2
-            echo "A aguardar $NAME ($PROJECT_ID) ficar ativo..."
-            for i in $(seq 1 30); do
-              STATUS=$(curl -s "https://api.supabase.com/v1/projects/$PROJECT_ID" \
-                -H "Authorization: Bearer $SUPABASE_TOKEN" | \
-                python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
-              echo "  Tentativa $i: status=$STATUS"
-              if [ "$STATUS" = "ACTIVE_HEALTHY" ]; then
-                echo "$NAME está ativo!"
-                return 0
-              fi
-              sleep 10
-            done
-            echo "AVISO: $NAME não ficou ativo a tempo"
-            return 1
-          }
+          if [ -z "$DEV_ID" ]; then
+            echo "ERRO: DEV_ID está vazio — projeto não foi criado. Verifica o plano Supabase."
+            exit 1
+          fi
 
-          [ -n "$DEV_ID" ] && wait_for_project "$DEV_ID" "stockos-dev" || true
-          [ -n "$QUAL_ID" ] && wait_for_project "$QUAL_ID" "stockos-qualidade" || true
+          echo "A aguardar stockos-dev ($DEV_ID) ficar ativo..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s "https://api.supabase.com/v1/projects/$DEV_ID" \
+              -H "Authorization: Bearer $SUPABASE_TOKEN" | \
+              python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
+            echo "  Tentativa $i: status=$STATUS"
+            if [ "$STATUS" = "ACTIVE_HEALTHY" ]; then
+              echo "Projeto ativo!"
+              break
+            fi
+            sleep 10
+          done
 
       - name: Inicializar schema SQL
         run: |
           sudo apt-get install -y postgresql-client -q
+          DB_URL="postgresql://postgres:${DEV_PASS}@db.${DEV_ID}.supabase.co:5432/postgres"
+          echo "A inicializar schema em stockos-dev..."
+          PGSSLMODE=require psql "$DB_URL" -f supabase/stockos_database.sql 2>&1 || \
+            echo "AVISO: Erro ao correr schema (pode já estar inicializado)"
 
-          run_schema() {
-            local HOST=$1
-            local PASS=$2
-            local NAME=$3
-            local DB_URL="postgresql://postgres:${PASS}@${HOST}:5432/postgres"
-            echo "--- A inicializar schema em $NAME ---"
-            PGSSLMODE=require psql "$DB_URL" -f supabase/stockos_database.sql 2>&1 || \
-              echo "AVISO: Erro ao correr schema em $NAME (pode já estar inicializado)"
-          }
-
-          [ -n "$DEV_ID" ] && run_schema "db.${DEV_ID}.supabase.co" "$DEV_PASS" "stockos-dev" || true
-          [ -n "$QUAL_ID" ] && run_schema "db.${QUAL_ID}.supabase.co" "$QUAL_PASS" "stockos-qualidade" || true
-
-      - name: Publicar connection strings
+      - name: Publicar connection string
         run: |
+          DEV_URL="postgresql://postgres:${DEV_PASS}@db.${DEV_ID}.supabase.co:5432/postgres"
           {
-            echo "## Connection Strings — Adicionar como GitHub Secrets"
+            echo "## Projeto stockos-dev criado"
             echo ""
-            if [ -n "$DEV_ID" ]; then
-              DEV_URL="postgresql://postgres:${DEV_PASS}@db.${DEV_ID}.supabase.co:5432/postgres"
-              echo "### \`DATABASE_URL_DEV\`"
-              echo '```'
-              echo "$DEV_URL"
-              echo '```'
-              echo ""
-            else
-              echo "**stockos-dev**: falhou a criar (verifica o plano Supabase)"
-              echo ""
-            fi
-
-            if [ -n "$QUAL_ID" ]; then
-              QUAL_URL="postgresql://postgres:${QUAL_PASS}@db.${QUAL_ID}.supabase.co:5432/postgres"
-              echo "### \`DATABASE_URL_QUALIDADE\`"
-              echo '```'
-              echo "$QUAL_URL"
-              echo '```'
-              echo ""
-            else
-              echo "**stockos-qualidade**: falhou a criar (verifica o plano Supabase)"
-              echo ""
-            fi
-
-            echo "### Próximo passo"
-            echo "Adicionar os secrets acima em:"
-            echo "[github.com/esmeraldofr/stockos/settings/secrets/actions](https://github.com/esmeraldofr/stockos/settings/secrets/actions)"
+            echo "### Adicionar como GitHub Secret"
+            echo ""
+            echo "**Nome:** \`DATABASE_URL_DEV\`"
+            echo '```'
+            echo "$DEV_URL"
+            echo '```'
+            echo ""
+            echo "**Link:** [Settings → Secrets → Actions](https://github.com/esmeraldofr/stockos/settings/secrets/actions)"
+            echo ""
+            echo "> Qualidade usa a mesma BD de produção (\`DATABASE_URL\`)."
           } >> $GITHUB_STEP_SUMMARY

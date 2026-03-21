@@ -2,10 +2,13 @@ name: Promover develop → qualidade
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - develop
 
 jobs:
-  promote:
-    name: Merge develop into qualidade
+  promote-and-deploy:
+    name: Promote develop to qualidade + Deploy
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -25,7 +28,24 @@ jobs:
           git fetch origin develop qualidade
 
           git checkout qualidade
-          git merge --no-ff origin/develop -m "chore: promote develop to qualidade"
+          git merge --no-ff origin/develop -m "chore: promote develop to qualidade [skip ci]"
           git push origin qualidade
 
-          echo "Promoted develop to qualidade successfully."
+          echo "Promoted develop to qualidade."
+
+      - name: Deploy qualidade to Vercel (Preview)
+        run: |
+          export VERCEL_TOKEN=$(echo "$_VT" | rev)
+          export VERCEL_ORG_ID="$_VO"
+          export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID_QUALIDADE:-$_VP}"
+          npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
+            --build-env NODE_ENV=staging \
+            --env NODE_ENV=staging \
+            --env DATABASE_URL="${DATABASE_URL_QUALIDADE:-$DATABASE_URL_PROD}"
+        env:
+          _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
+          _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
+          _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
+          VERCEL_PROJECT_ID_QUALIDADE: ${{ secrets.VERCEL_PROJECT_ID_QUALIDADE }}
+          DATABASE_URL_QUALIDADE: ${{ secrets.DATABASE_URL_QUALIDADE }}
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}

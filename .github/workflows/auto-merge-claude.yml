@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Ensure develop and qualidade branches exist
         run: |
@@ -70,7 +70,7 @@ jobs:
 
       - name: Merge branch into develop
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="${GITHUB_REF#refs/heads/}"
           echo "Branch: $BRANCH"

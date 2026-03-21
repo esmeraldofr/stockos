@@ -1,35 +1,33 @@
-name: Deploy to Vercel
+name: Deploy — Qualidade
 
 on:
   push:
     branches:
-      - main
-  workflow_dispatch:
+      - qualidade
 
 jobs:
   deploy:
-    name: Deploy — Produção
+    name: Deploy to Qualidade (Vercel Preview)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: qualidade
           fetch-depth: 0
 
-      - name: Deploy to Vercel
+      - name: Deploy to Vercel (Preview)
         run: |
           export VERCEL_TOKEN=$(echo "$_VT" | rev)
           export VERCEL_ORG_ID="$_VO"
-          export VERCEL_PROJECT_ID="$_VP"
-          npx vercel@latest --prod --yes --no-clipboard --token "$VERCEL_TOKEN" \
-            --build-env NODE_ENV=production \
-            --env NODE_ENV=production \
+          export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID_QUALIDADE:-$_VP}"
+          npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
+            --build-env NODE_ENV=staging \
+            --env NODE_ENV=staging \
             --env DATABASE_URL="$DATABASE_URL_PROD"
         env:
           _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
           _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
           _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
           DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
-          GITHUB_REF: refs/heads/main

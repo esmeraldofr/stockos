@@ -7,6 +7,10 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+#env-banner{position:fixed;top:0;left:0;right:0;z-index:9999;text-align:center;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:3px 0;display:none}
+body.env-develop #env-banner{display:block;background:#d97706;color:#fff}
+body.env-qualidade #env-banner{display:block;background:#7c3aed;color:#fff}
+body.env-develop #app,body.env-qualidade #app{padding-top:22px}
 input,select,button,textarea{font-family:inherit}
 
 /* Layout */
@@ -179,7 +183,20 @@ tr:hover .td-name{background:#1e293b}
 </style>
 </head>
 <body>
+<div id="env-banner"></div>
 <div id="app"></div>
+<script>
+(function(){
+  var h = location.hostname;
+  var env = null;
+  if(h.includes('localhost') || h.includes('develop')) env = 'develop';
+  else if(h.includes('qualidade')) env = 'qualidade';
+  if(!env) return;
+  document.body.classList.add('env-' + env);
+  document.getElementById('env-banner').textContent =
+    env === 'develop' ? '⚠ Ambiente de Desenvolvimento' : '🔵 Ambiente de Qualidade';
+})();
+</script>
 
 <script>
 // ── STATE ─────────────────────────────────────────────────────

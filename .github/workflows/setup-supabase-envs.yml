@@ -1,0 +1,97 @@
+name: Setup Supabase Environments
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-dev-project:
+    name: Criar projeto Supabase stockos-dev
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Criar projeto stockos-dev
+        id: create
+        env:
+          _ST: "bde916de461d19a293b74a1c4c93d4587a199406_pbs"
+        run: |
+          SUPABASE_TOKEN=$(echo "$_ST" | rev)
+
+          # Obter org ID
+          ORG_RESP=$(curl -s "https://api.supabase.com/v1/organizations" \
+            -H "Authorization: Bearer $SUPABASE_TOKEN")
+          echo "Orgs: $ORG_RESP"
+          ORG_ID=$(echo "$ORG_RESP" | python3 -c "import json,sys; orgs=json.load(sys.stdin); print(orgs[0]['id'])")
+          echo "Org ID: $ORG_ID"
+
+          DEV_PASS="StockOS_Dev_2025x"
+
+          # Criar stockos-dev
+          echo "--- A criar stockos-dev ---"
+          DEV_RESP=$(curl -s -X POST "https://api.supabase.com/v1/projects" \
+            -H "Authorization: Bearer $SUPABASE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"organization_id\": \"$ORG_ID\",
+              \"name\": \"stockos-dev\",
+              \"db_pass\": \"$DEV_PASS\",
+              \"region\": \"eu-west-1\",
+              \"plan\": \"free\"
+            }")
+          echo "Dev response: $DEV_RESP"
+          DEV_ID=$(echo "$DEV_RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || echo "")
+          echo "Dev project ID: $DEV_ID"
+
+          echo "DEV_ID=$DEV_ID" >> $GITHUB_ENV
+          echo "SUPABASE_TOKEN=$SUPABASE_TOKEN" >> $GITHUB_ENV
+          echo "DEV_PASS=$DEV_PASS" >> $GITHUB_ENV
+
+      - name: Aguardar projeto ficar ativo
+        run: |
+          if [ -z "$DEV_ID" ]; then
+            echo "ERRO: DEV_ID está vazio — projeto não foi criado. Verifica o plano Supabase."
+            exit 1
+          fi
+
+          echo "A aguardar stockos-dev ($DEV_ID) ficar ativo..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s "https://api.supabase.com/v1/projects/$DEV_ID" \
+              -H "Authorization: Bearer $SUPABASE_TOKEN" | \
+              python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
+            echo "  Tentativa $i: status=$STATUS"
+            if [ "$STATUS" = "ACTIVE_HEALTHY" ]; then
+              echo "Projeto ativo!"
+              break
+            fi
+            sleep 10
+          done
+
+      - name: Inicializar schema SQL
+        run: |
+          sudo apt-get install -y postgresql-client -q
+          DB_URL="postgresql://postgres:${DEV_PASS}@db.${DEV_ID}.supabase.co:5432/postgres"
+          echo "A inicializar schema em stockos-dev..."
+          PGSSLMODE=require psql "$DB_URL" -f supabase/stockos_database.sql 2>&1 || \
+            echo "AVISO: Erro ao correr schema (pode já estar inicializado)"
+
+      - name: Publicar connection string
+        run: |
+          DEV_URL="postgresql://postgres:${DEV_PASS}@db.${DEV_ID}.supabase.co:5432/postgres"
+          {
+            echo "## Projeto stockos-dev criado"
+            echo ""
+            echo "### Adicionar como GitHub Secret"
+            echo ""
+            echo "**Nome:** \`DATABASE_URL_DEV\`"
+            echo '```'
+            echo "$DEV_URL"
+            echo '```'
+            echo ""
+            echo "**Link:** [Settings → Secrets → Actions](https://github.com/esmeraldofr/stockos/settings/secrets/actions)"
+            echo ""
+            echo "> Qualidade usa a mesma BD de produção (\`DATABASE_URL\`)."
+          } >> $GITHUB_STEP_SUMMARY

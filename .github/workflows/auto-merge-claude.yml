@@ -116,13 +116,19 @@ jobs:
             --admin \
             --delete-branch=false
 
-      - name: Promote develop to qualidade
+      - name: Promote develop to qualidade and main
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
 
-          git fetch origin develop qualidade
+          git fetch origin develop qualidade main
+
           git checkout qualidade
           git merge --no-ff origin/develop -m "chore: promote develop to qualidade"
           git push origin qualidade
-          echo "Promoted develop to qualidade. Vercel will auto-deploy via GitHub integration."
+          echo "Promoted develop to qualidade."
+
+          git checkout main
+          git merge --no-ff origin/develop -m "chore: promote develop to main (production)"
+          git push origin main
+          echo "Promoted develop to main. deploy.yml will trigger Vercel production deploy."

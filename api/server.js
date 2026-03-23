@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
 const crypto  = require('crypto');
-const { Pool } = require('pg');
+const postgres = require('postgres');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -11,8 +11,18 @@ const PWD_SALT   = 'stockos-pwd-salt-2025';
 
 const _dbUrl = process.env.DATABASE_URL;
 if (!_dbUrl) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
-const pool  = new Pool({ connectionString: _dbUrl, ssl: { rejectUnauthorized: false } });
-const query = (text, params) => pool.query(text, params);
+const _sql = postgres(_dbUrl, { ssl: 'require', prepare: false, max: 10, idle_timeout: 20, connect_timeout: 10 });
+const query = async (text, params) => { const rows = await _sql.unsafe(text, params || []); return { rows: Array.from(rows) }; };
+const pool = {
+  query,
+  connect: async () => {
+    const reserved = await _sql.reserve();
+    return {
+      query: async (text, params) => { const rows = await reserved.unsafe(text, params || []); return { rows: Array.from(rows) }; },
+      release: () => reserved.release()
+    };
+  }
+};
 
 
 async function qry(sql, params, label) {

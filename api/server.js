@@ -50,8 +50,9 @@ async function initDB() {
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
     produto_id UUID NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
     encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0,
-    deixado NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id)
+    deixado NUMERIC(10,3) NOT NULL DEFAULT 0, fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id)
   )`, [], 'turno_stock');
+  await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS fechados NUMERIC(10,3) NOT NULL DEFAULT 0`, [], 'turno_stock-fechados');
   await qry(`CREATE TABLE IF NOT EXISTS turno_caixa (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
     tpa NUMERIC(15,2) NOT NULL DEFAULT 0, transferencia NUMERIC(15,2) NOT NULL DEFAULT 0,
@@ -231,7 +232,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   results.push({ label: 'turno_stock-type-check', ok: true, type: _tsType });
   if (_tsType !== _pidType) {
     await run(`DROP TABLE IF EXISTS turno_stock CASCADE`, 'turno_stock-drop');
-    await run(`CREATE TABLE turno_stock (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0, deixado NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_stock-create');
+    await run(`CREATE TABLE turno_stock (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0, deixado NUMERIC(10,3) NOT NULL DEFAULT 0, fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_stock-create');
   }
   await run(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, 'produtos-dedup');
   await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='produtos_nome_key') THEN ALTER TABLE produtos ADD CONSTRAINT produtos_nome_key UNIQUE (nome); END IF; END $$`, 'produtos-unique');
@@ -486,14 +487,14 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
 
 app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   try {
-    const { produto_id, encontrado, deixado } = req.body;
+    const { produto_id, encontrado, deixado, fechados } = req.body;
     const r = await query(
-      `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado)
-       VALUES ($1,$2,$3,$4)
+      `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados)
+       VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (turno_id, produto_id)
-       DO UPDATE SET encontrado=$3, deixado=$4
+       DO UPDATE SET encontrado=$3, deixado=$4, fechados=$5
        RETURNING *`,
-      [req.params.id, produto_id, encontrado||0, deixado||0]
+      [req.params.id, produto_id, encontrado||0, deixado||0, fechados||0]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }

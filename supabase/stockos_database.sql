@@ -113,6 +113,17 @@ DO $$ BEGIN
 END $$;
 
 -- ============================================================
+--  ESCALA TEMPLATE (escala semanal reutilizável)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS escala_template (
+  id            SERIAL      PRIMARY KEY,
+  dia_semana    INTEGER     NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
+  turno         VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+  utilizador_id INTEGER     NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+  UNIQUE(dia_semana, turno, utilizador_id)
+);
+
+-- ============================================================
 --  DADOS INICIAIS — UTILIZADORES
 --  Password: usar /api/auth/setup com código STOCKOS2025
 -- ============================================================

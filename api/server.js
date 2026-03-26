@@ -103,7 +103,7 @@ async function initDB() {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    utilizador_id INTEGER,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)
@@ -262,7 +262,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    utilizador_id INTEGER,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)
@@ -922,7 +922,7 @@ async function ensureEscala() {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    utilizador_id INTEGER,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)

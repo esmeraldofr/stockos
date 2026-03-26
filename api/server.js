@@ -108,6 +108,13 @@ async function initDB() {
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)
   )`, [], 'escala');
+  await qry(`CREATE TABLE IF NOT EXISTS escala_template (
+    id SERIAL PRIMARY KEY,
+    dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
+    turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+    utilizador_id INTEGER NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+    UNIQUE(dia_semana, turno, utilizador_id)
+  )`, [], 'escala_template');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
@@ -973,6 +980,39 @@ app.put('/api/escala', auth, requireRole('admin', 'gestor'), async (req, res) =>
       try { await ensureEscala(); res.status(400).json({ erro: 'Tabela criada, tenta novamente' }); } catch(e2) { res.status(500).json({ erro: e2.message }); }
     } else { res.status(500).json({ erro: e.message }); }
   }
+});
+
+// ── ESCALA TEMPLATE ───────────────────────────────────────────
+app.get('/api/escala/template', auth, async (req, res) => {
+  try {
+    const r = await query(`
+      SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, u.nome as utilizador_nome
+      FROM escala_template et
+      JOIN utilizadores u ON et.utilizador_id = u.id
+      ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
+    `);
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const { dia_semana, turno, utilizador_id } = req.body;
+    if (dia_semana === undefined || !turno || !utilizador_id) return res.status(400).json({ erro: 'dia_semana, turno e utilizador_id são obrigatórios' });
+    const r = await query(
+      `INSERT INTO escala_template (dia_semana, turno, utilizador_id) VALUES ($1, $2, $3)
+       ON CONFLICT (dia_semana, turno, utilizador_id) DO NOTHING RETURNING *`,
+      [dia_semana, turno, utilizador_id]
+    );
+    res.json(r.rows[0] || { sucesso: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await query(`DELETE FROM escala_template WHERE id=$1`, [req.params.id]);
+    res.json({ sucesso: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 app.listen(PORT, () => console.log(`StockOS v3 na porta ${PORT}`));

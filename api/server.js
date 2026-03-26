@@ -99,6 +99,15 @@ async function initDB() {
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, [], 'turno_saidas');
+  await qry(`CREATE TABLE IF NOT EXISTS escala (
+    id SERIAL PRIMARY KEY,
+    data DATE NOT NULL,
+    turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(data, turno)
+  )`, [], 'escala');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
@@ -895,6 +904,44 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
       [nome, role, ativo, req.params.id]
     );
     res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── ESCALA ────────────────────────────────────────────────────
+app.get('/api/escala', auth, async (req, res) => {
+  try {
+    const { data_inicio, data_fim } = req.query;
+    if (!data_inicio || !data_fim) return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios' });
+    const r = await query(
+      `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id,
+              u.nome as utilizador_nome, u.role as utilizador_role
+       FROM escala e
+       LEFT JOIN utilizadores u ON e.utilizador_id = u.id
+       WHERE e.data >= $1 AND e.data <= $2
+       ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
+      [data_inicio, data_fim]
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/escala', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const { data, turno, utilizador_id, notas } = req.body;
+    if (!data || !turno) return res.status(400).json({ erro: 'Data e turno obrigatórios' });
+    if (utilizador_id) {
+      const r = await query(
+        `INSERT INTO escala (data, turno, utilizador_id, notas)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (data, turno) DO UPDATE SET utilizador_id=$3, notas=$4
+         RETURNING *`,
+        [data, turno, utilizador_id, notas || '']
+      );
+      res.json(r.rows[0]);
+    } else {
+      await query(`DELETE FROM escala WHERE data=$1 AND turno=$2`, [data, turno]);
+      res.json({ sucesso: true });
+    }
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

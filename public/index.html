@@ -208,8 +208,7 @@ const S = {
   turnoId: null,
   turnoData: null,
   produtos: [],
-  utilizadores: [],
-  escalaWeek: null
+  utilizadores: []
 };
 
 // ── API ───────────────────────────────────────────────────────
@@ -1860,142 +1859,113 @@ function getMondayOf(dateStr) {
 }
 
 async function drawEscala() {
-  if (!S.escalaWeek) S.escalaWeek = getMondayOf(new Date().toISOString().split('T')[0]);
   render(`
     <div id="header">
       <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Escala</div></div>
     </div>
     <div id="content">
-      <div id="escala-msg"></div>
       <div id="escala-body"><div style="padding:40px;text-align:center;color:#64748b"><div class="spinner"></div></div></div>
     </div>
     ${navBar()}
   `);
-  await loadEscala();
+  await loadEscalaTemplate();
 }
 
-async function loadEscala() {
+async function loadEscalaTemplate() {
   try {
-    const weekStart = S.escalaWeek;
-    const weekEnd = addDays(weekStart, 6);
     const canEdit = S.user?.role === 'admin' || S.user?.role === 'gestor';
-
-    const [escalaData, utilizadores] = await Promise.all([
-      api('GET', `/escala?data_inicio=${weekStart}&data_fim=${weekEnd}`),
+    const [templateData, utilizadores] = await Promise.all([
+      api('GET', '/escala/template'),
       canEdit ? api('GET', '/utilizadores') : Promise.resolve(S.utilizadores || [])
     ]);
     if (canEdit) S.utilizadores = utilizadores;
 
     const lookup = {};
-    escalaData.forEach(e => { lookup[`${e.data.split('T')[0]}_${e.turno}`] = e; });
+    templateData.forEach(e => {
+      const key = `${e.dia_semana}_${e.turno}`;
+      if (!lookup[key]) lookup[key] = [];
+      lookup[key].push(e);
+    });
 
-    const days = Array.from({length: 7}, (_, i) => addDays(weekStart, i));
     const dayShort = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'];
     const turnos = ['manha','tarde','noite'];
     const turnoLabel = {manha:'Manhã', tarde:'Tarde', noite:'Noite'};
     const turnoColor = {manha:'#fb923c', tarde:'#60a5fa', noite:'#a78bfa'};
 
-    const today = new Date().toISOString().split('T')[0];
-
-    const prevWeek = addDays(weekStart, -7);
-    const nextWeek = addDays(weekStart, 7);
-    const weekLabel = `${fmtDateShort(weekStart)} – ${fmtDateShort(weekEnd)}`;
-
-    let html = `
-      <div class="card" style="margin-bottom:12px">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-          <button class="btn btn-ghost btn-sm" onclick="S.escalaWeek='${prevWeek}';loadEscala()">&#8592;</button>
-          <span style="font-size:13px;font-weight:600;color:#f1f5f9">${weekLabel}</span>
-          <button class="btn btn-ghost btn-sm" onclick="S.escalaWeek='${nextWeek}';loadEscala()">&#8594;</button>
-        </div>
-      </div>`;
-
-    // Weekly grid: rows = turnos, cols = days
-    html += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:420px">
+    let html = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:420px">
       <thead><tr>
         <th style="padding:8px 6px;background:#0f172a;color:#64748b;font-weight:600;text-align:left;width:60px"></th>
-        ${days.map((d, i) => {
-          const isToday = d === today;
-          return `<th style="padding:8px 4px;background:#0f172a;color:${isToday?'#3b82f6':'#94a3b8'};font-weight:${isToday?700:600};text-align:center">
-            <div>${dayShort[i]}</div>
-            <div style="font-size:11px;color:${isToday?'#3b82f6':'#64748b'}">${d.slice(8)}</div>
-          </th>`;
-        }).join('')}
+        ${dayShort.map(d => `<th style="padding:8px 4px;background:#0f172a;color:#94a3b8;font-weight:600;text-align:center">${d}</th>`).join('')}
       </tr></thead>
       <tbody>
         ${turnos.map(turno => `
           <tr>
-            <td style="padding:8px 6px;border-bottom:1px solid #1e293b;font-weight:700;font-size:11px;color:${turnoColor[turno]};white-space:nowrap">${turnoLabel[turno]}</td>
-            ${days.map(d => {
-              const key = `${d}_${turno}`;
-              const entry = lookup[key];
-              const nome = entry?.utilizador_nome || '';
-              const cellStyle = `padding:6px 4px;border-bottom:1px solid #1e293b;text-align:center;`;
-              if (canEdit) {
-                return `<td style="${cellStyle}cursor:pointer;" onclick="showEscalaForm('${d}','${turno}','${entry?.utilizador_id||''}','${entry?.notas||''}')">
-                  ${nome ? `<span style="background:#172554;color:#93c5fd;padding:3px 7px;border-radius:6px;font-size:11px;font-weight:600">${nome.split(' ')[0]}</span>`
-                          : `<span style="color:#334155;font-size:18px">+</span>`}
-                </td>`;
-              } else {
-                return `<td style="${cellStyle}">
-                  ${nome ? `<span style="background:#172554;color:#93c5fd;padding:3px 7px;border-radius:6px;font-size:11px;font-weight:600">${nome.split(' ')[0]}</span>`
-                          : `<span style="color:#334155">—</span>`}
-                </td>`;
-              }
+            <td style="padding:8px 6px;border-bottom:1px solid #1e293b;font-weight:700;font-size:11px;color:${turnoColor[turno]};white-space:nowrap;vertical-align:top;padding-top:12px">${turnoLabel[turno]}</td>
+            ${[0,1,2,3,4,5,6].map(dia => {
+              const entries = lookup[`${dia}_${turno}`] || [];
+              const chips = entries.map(e =>
+                canEdit
+                  ? `<div style="display:inline-flex;align-items:center;gap:2px;margin:2px">
+                      <span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${e.utilizador_nome.split(' ')[0]}</span>
+                      <button onclick="removeEscalaTemplate(${e.id})" style="background:none;border:none;color:#ef4444;cursor:pointer;padding:0 1px;font-size:13px;line-height:1">×</button>
+                    </div>`
+                  : `<div style="display:inline-block;margin:2px"><span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${e.utilizador_nome.split(' ')[0]}</span></div>`
+              ).join('');
+              const addBtn = canEdit
+                ? `<button onclick="showAddEscalaTemplate(${dia},'${turno}')" style="background:none;border:1px dashed #334155;border-radius:6px;color:#475569;cursor:pointer;font-size:16px;padding:1px 6px;margin:2px;line-height:1.4">+</button>`
+                : '';
+              return `<td style="padding:6px 4px;border-bottom:1px solid #1e293b;text-align:center;vertical-align:top">
+                <div style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:2px">${chips}${addBtn}</div>
+              </td>`;
             }).join('')}
           </tr>`).join('')}
       </tbody>
-    </table></div>`;
-
-    if (canEdit) {
-      html += `<div id="escala-form" style="margin-top:12px"></div>`;
-    }
+    </table></div>
+    <div id="escala-add-form" style="margin-top:12px"></div>`;
 
     show('escala-body', html);
   } catch(e) { show('escala-body', `<div class="alert alert-error">${e.message}</div>`); }
 }
 
-function fmtDateShort(d) {
-  const months = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-  const [y, m, day] = d.split('-');
-  return `${parseInt(day)} ${months[parseInt(m)-1]}`;
-}
-
-function showEscalaForm(data, turno, utilizadorId, notas) {
+function showAddEscalaTemplate(dia_semana, turno) {
   const turnoLabel = {manha:'Manhã', tarde:'Tarde', noite:'Noite'};
-  const utilizadores = S.utilizadores || [];
-  show('escala-form', `
+  const dayShort = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'];
+  const utilizadores = (S.utilizadores || []).filter(u => u.ativo);
+  show('escala-add-form', `
     <div class="card">
-      <div class="card-title">Atribuir — ${fmtDateShort(data)}, ${turnoLabel[turno]}</div>
-      <div id="escala-form-msg"></div>
+      <div class="card-title">Adicionar — ${dayShort[dia_semana]}, ${turnoLabel[turno]}</div>
+      <div id="escala-add-msg"></div>
       <div class="field">
         <label>Funcionário</label>
-        <select id="ef-user">
-          <option value="">— Sem atribuição —</option>
-          ${utilizadores.filter(u => u.ativo).map(u => `<option value="${u.id}" ${u.id == utilizadorId ? 'selected' : ''}>${u.nome} (${u.role})</option>`).join('')}
+        <select id="ea-user">
+          <option value="">— Selecionar —</option>
+          ${utilizadores.map(u => `<option value="${u.id}">${u.nome} (${u.role})</option>`).join('')}
         </select>
       </div>
-      <div class="field">
-        <label>Notas (opcional)</label>
-        <input id="ef-notas" value="${notas}" placeholder="Ex: folga, substituição..."/>
-      </div>
       <div class="flex gap-8 mt-8">
-        <button class="btn btn-success" onclick="saveEscala('${data}','${turno}')">Guardar</button>
-        <button class="btn btn-ghost" onclick="show('escala-form','')">Cancelar</button>
+        <button class="btn btn-success" onclick="addEscalaTemplate(${dia_semana},'${turno}')">Adicionar</button>
+        <button class="btn btn-ghost" onclick="show('escala-add-form','')">Cancelar</button>
       </div>
     </div>
   `);
-  document.getElementById('escala-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  document.getElementById('escala-add-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-async function saveEscala(data, turno) {
+async function addEscalaTemplate(dia_semana, turno) {
   try {
-    const utilizador_id = val('ef-user') || null;
-    const notas = val('ef-notas');
-    await api('PUT', '/escala', { data, turno, utilizador_id: utilizador_id ? parseInt(utilizador_id) : null, notas });
-    show('escala-form', '');
-    await loadEscala();
-  } catch(e) { err('escala-form-msg', e.message); }
+    const utilizador_id = val('ea-user');
+    if (!utilizador_id) return err('escala-add-msg', 'Seleciona um funcionário');
+    await api('POST', '/escala/template', { dia_semana, turno, utilizador_id: parseInt(utilizador_id) });
+    show('escala-add-form', '');
+    await loadEscalaTemplate();
+  } catch(e) { err('escala-add-msg', e.message); }
+}
+
+async function removeEscalaTemplate(id) {
+  try {
+    await api('DELETE', `/escala/template/${id}`);
+    await loadEscalaTemplate();
+  } catch(e) { alert(e.message); }
 }
 
 // ── START ─────────────────────────────────────────────────────

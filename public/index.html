@@ -208,7 +208,8 @@ const S = {
   turnoId: null,
   turnoData: null,
   produtos: [],
-  utilizadores: []
+  utilizadores: [],
+  escalaWeek: null
 };
 
 // ── API ───────────────────────────────────────────────────────
@@ -270,6 +271,7 @@ function draw() {
     case 'turno':    drawTurno(); break;
     case 'historico':drawHistorico(); break;
     case 'produtos': drawProdutos(); break;
+    case 'escala':   drawEscala(); break;
     case 'admin':    drawAdmin(); break;
     default:         drawDia();
   }
@@ -360,6 +362,11 @@ function navBar() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
         Produtos
       </button>
+      ${(S.user?.role === 'admin' || S.user?.role === 'gestor') ? `
+      <button class="nav-btn ${S.page==='escala'?'active':''}" onclick="navigate('escala')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>
+        Escala
+      </button>` : ''}
       ${isAdmin ? `
       <button class="nav-btn ${S.page==='admin'?'active':''}" onclick="navigate('admin')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
@@ -1841,6 +1848,154 @@ async function alterarPassword() {
     document.getElementById('pass-atual').value='';
     document.getElementById('pass-nova').value='';
   } catch(e) { err('pass-msg',e.message); }
+}
+
+// ── ESCALA ────────────────────────────────────────────────────
+function getMondayOf(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  const day = d.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + diff);
+  return d.toISOString().split('T')[0];
+}
+
+async function drawEscala() {
+  if (!S.escalaWeek) S.escalaWeek = getMondayOf(new Date().toISOString().split('T')[0]);
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Escala</div></div>
+    </div>
+    <div id="content">
+      <div id="escala-msg"></div>
+      <div id="escala-body"><div style="padding:40px;text-align:center;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadEscala();
+}
+
+async function loadEscala() {
+  try {
+    const weekStart = S.escalaWeek;
+    const weekEnd = addDays(weekStart, 6);
+    const canEdit = S.user?.role === 'admin' || S.user?.role === 'gestor';
+
+    const [escalaData, utilizadores] = await Promise.all([
+      api('GET', `/escala?data_inicio=${weekStart}&data_fim=${weekEnd}`),
+      canEdit ? api('GET', '/utilizadores') : Promise.resolve(S.utilizadores || [])
+    ]);
+    if (canEdit) S.utilizadores = utilizadores;
+
+    const lookup = {};
+    escalaData.forEach(e => { lookup[`${e.data.split('T')[0]}_${e.turno}`] = e; });
+
+    const days = Array.from({length: 7}, (_, i) => addDays(weekStart, i));
+    const dayShort = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'];
+    const turnos = ['manha','tarde','noite'];
+    const turnoLabel = {manha:'Manhã', tarde:'Tarde', noite:'Noite'};
+    const turnoColor = {manha:'#fb923c', tarde:'#60a5fa', noite:'#a78bfa'};
+
+    const today = new Date().toISOString().split('T')[0];
+
+    const prevWeek = addDays(weekStart, -7);
+    const nextWeek = addDays(weekStart, 7);
+    const weekLabel = `${fmtDateShort(weekStart)} – ${fmtDateShort(weekEnd)}`;
+
+    let html = `
+      <div class="card" style="margin-bottom:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="S.escalaWeek='${prevWeek}';loadEscala()">&#8592;</button>
+          <span style="font-size:13px;font-weight:600;color:#f1f5f9">${weekLabel}</span>
+          <button class="btn btn-ghost btn-sm" onclick="S.escalaWeek='${nextWeek}';loadEscala()">&#8594;</button>
+        </div>
+      </div>`;
+
+    // Weekly grid: rows = turnos, cols = days
+    html += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:420px">
+      <thead><tr>
+        <th style="padding:8px 6px;background:#0f172a;color:#64748b;font-weight:600;text-align:left;width:60px"></th>
+        ${days.map((d, i) => {
+          const isToday = d === today;
+          return `<th style="padding:8px 4px;background:#0f172a;color:${isToday?'#3b82f6':'#94a3b8'};font-weight:${isToday?700:600};text-align:center">
+            <div>${dayShort[i]}</div>
+            <div style="font-size:11px;color:${isToday?'#3b82f6':'#64748b'}">${d.slice(8)}</div>
+          </th>`;
+        }).join('')}
+      </tr></thead>
+      <tbody>
+        ${turnos.map(turno => `
+          <tr>
+            <td style="padding:8px 6px;border-bottom:1px solid #1e293b;font-weight:700;font-size:11px;color:${turnoColor[turno]};white-space:nowrap">${turnoLabel[turno]}</td>
+            ${days.map(d => {
+              const key = `${d}_${turno}`;
+              const entry = lookup[key];
+              const nome = entry?.utilizador_nome || '';
+              const cellStyle = `padding:6px 4px;border-bottom:1px solid #1e293b;text-align:center;`;
+              if (canEdit) {
+                return `<td style="${cellStyle}cursor:pointer;" onclick="showEscalaForm('${d}','${turno}','${entry?.utilizador_id||''}','${entry?.notas||''}')">
+                  ${nome ? `<span style="background:#172554;color:#93c5fd;padding:3px 7px;border-radius:6px;font-size:11px;font-weight:600">${nome.split(' ')[0]}</span>`
+                          : `<span style="color:#334155;font-size:18px">+</span>`}
+                </td>`;
+              } else {
+                return `<td style="${cellStyle}">
+                  ${nome ? `<span style="background:#172554;color:#93c5fd;padding:3px 7px;border-radius:6px;font-size:11px;font-weight:600">${nome.split(' ')[0]}</span>`
+                          : `<span style="color:#334155">—</span>`}
+                </td>`;
+              }
+            }).join('')}
+          </tr>`).join('')}
+      </tbody>
+    </table></div>`;
+
+    if (canEdit) {
+      html += `<div id="escala-form" style="margin-top:12px"></div>`;
+    }
+
+    show('escala-body', html);
+  } catch(e) { show('escala-body', `<div class="alert alert-error">${e.message}</div>`); }
+}
+
+function fmtDateShort(d) {
+  const months = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const [y, m, day] = d.split('-');
+  return `${parseInt(day)} ${months[parseInt(m)-1]}`;
+}
+
+function showEscalaForm(data, turno, utilizadorId, notas) {
+  const turnoLabel = {manha:'Manhã', tarde:'Tarde', noite:'Noite'};
+  const utilizadores = S.utilizadores || [];
+  show('escala-form', `
+    <div class="card">
+      <div class="card-title">Atribuir — ${fmtDateShort(data)}, ${turnoLabel[turno]}</div>
+      <div id="escala-form-msg"></div>
+      <div class="field">
+        <label>Funcionário</label>
+        <select id="ef-user">
+          <option value="">— Sem atribuição —</option>
+          ${utilizadores.filter(u => u.ativo).map(u => `<option value="${u.id}" ${u.id == utilizadorId ? 'selected' : ''}>${u.nome} (${u.role})</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label>Notas (opcional)</label>
+        <input id="ef-notas" value="${notas}" placeholder="Ex: folga, substituição..."/>
+      </div>
+      <div class="flex gap-8 mt-8">
+        <button class="btn btn-success" onclick="saveEscala('${data}','${turno}')">Guardar</button>
+        <button class="btn btn-ghost" onclick="show('escala-form','')">Cancelar</button>
+      </div>
+    </div>
+  `);
+  document.getElementById('escala-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function saveEscala(data, turno) {
+  try {
+    const utilizador_id = val('ef-user') || null;
+    const notas = val('ef-notas');
+    await api('PUT', '/escala', { data, turno, utilizador_id: utilizador_id ? parseInt(utilizador_id) : null, notas });
+    show('escala-form', '');
+    await loadEscala();
+  } catch(e) { err('escala-form-msg', e.message); }
 }
 
 // ── START ─────────────────────────────────────────────────────

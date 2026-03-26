@@ -48,7 +48,7 @@ async function initDB() {
   )`, [], 'turnos');
   await qry(`CREATE TABLE IF NOT EXISTS turno_stock (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-    produto_id UUID NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
     encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0,
     deixado NUMERIC(10,3) NOT NULL DEFAULT 0, fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id)
   )`, [], 'turno_stock');
@@ -65,22 +65,22 @@ async function initDB() {
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`, [], 'alter-fechado');
   await qry(`CREATE TABLE IF NOT EXISTS receitas (
     id SERIAL PRIMARY KEY,
-    produto_id UUID NOT NULL,
-    componente_id UUID NOT NULL,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    componente_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
     quantidade NUMERIC(10,3) NOT NULL DEFAULT 1,
     UNIQUE(produto_id, componente_id)
   )`, [], 'receitas');
   await qry(`CREATE TABLE IF NOT EXISTS turno_vendas (
     id SERIAL PRIMARY KEY,
     turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-    produto_id UUID NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
     quantidade NUMERIC(10,3) NOT NULL DEFAULT 0,
     UNIQUE(turno_id, produto_id)
   )`, [], 'turno_vendas');
   await qry(`CREATE TABLE IF NOT EXISTS turno_entradas (
     id SERIAL PRIMARY KEY,
     turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-    produto_id UUID NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
     tipo VARCHAR(10) NOT NULL DEFAULT 'entrada' CHECK (tipo IN ('entrada','tirar')),
     origem VARCHAR(10) NOT NULL DEFAULT 'armazem' CHECK (origem IN ('armazem','compra')),
     preco NUMERIC(15,2) NOT NULL DEFAULT 0,
@@ -103,7 +103,7 @@ async function initDB() {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER,
+    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)
@@ -207,7 +207,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS estado VARCHAR(10) NOT NULL DEFAULT 'aberto'`, 'estado');
   await run(`CREATE TABLE IF NOT EXISTS turno_stock (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-    produto_id UUID NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
     encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0,
     deixado NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id))`, 'turno_stock');
   await run(`CREATE TABLE IF NOT EXISTS turno_caixa (
@@ -262,11 +262,12 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER,
+    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)
   )`, 'escala');
+  await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_utilizador_id_fkey') THEN ALTER TABLE escala ADD CONSTRAINT escala_utilizador_id_fkey FOREIGN KEY (utilizador_id) REFERENCES utilizadores(id) ON DELETE SET NULL; END IF; END $$`, 'escala-fk');
   res.json({ results });
 });
 
@@ -922,7 +923,7 @@ async function ensureEscala() {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER,
+    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)

@@ -90,17 +90,27 @@ ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAU
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ;
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS estado VARCHAR(10) NOT NULL DEFAULT 'aberto';
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS utilizador_id INTEGER;
-CREATE TABLE IF NOT EXISTS turno_entradas (
-  id          SERIAL          PRIMARY KEY,
-  turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-  produto_id  UUID            NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
-  tipo        VARCHAR(10)     NOT NULL DEFAULT 'entrada' CHECK (tipo IN ('entrada','tirar')),
-  origem      VARCHAR(10)     NOT NULL DEFAULT 'armazem' CHECK (origem IN ('armazem','compra')),
-  preco       NUMERIC(15,2)   NOT NULL DEFAULT 0,
-  quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
-  notas       TEXT            NOT NULL DEFAULT '',
-  criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+-- ============================================================
+--  ESCALA (escala semanal de turnos)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS escala (
+  id            SERIAL      PRIMARY KEY,
+  data          DATE        NOT NULL,
+  turno         VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+  utilizador_id INTEGER     REFERENCES utilizadores(id) ON DELETE SET NULL,
+  notas         TEXT        NOT NULL DEFAULT '',
+  criado_em     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(data, turno)
 );
+-- Add FK to existing escala tables created without it
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'escala_utilizador_id_fkey') THEN
+    -- Remove orphan rows first to avoid FK violation
+    UPDATE escala SET utilizador_id = NULL WHERE utilizador_id NOT IN (SELECT id FROM utilizadores);
+    ALTER TABLE escala ADD CONSTRAINT escala_utilizador_id_fkey
+      FOREIGN KEY (utilizador_id) REFERENCES utilizadores(id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 -- ============================================================
 --  DADOS INICIAIS — UTILIZADORES
@@ -165,7 +175,7 @@ INSERT INTO produtos (nome, preco, categoria, ordem) VALUES
 CREATE TABLE IF NOT EXISTS turno_entradas (
   id          SERIAL          PRIMARY KEY,
   turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-  produto_id  UUID            NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
   tipo        VARCHAR(10)     NOT NULL DEFAULT 'entrada' CHECK (tipo IN ('entrada','tirar')),
   origem      VARCHAR(10)     NOT NULL DEFAULT 'armazem' CHECK (origem IN ('armazem','compra')),
   preco       NUMERIC(15,2)   NOT NULL DEFAULT 0,
@@ -203,7 +213,7 @@ CREATE TABLE IF NOT EXISTS receitas (
 CREATE TABLE IF NOT EXISTS turno_vendas (
   id          SERIAL          PRIMARY KEY,
   turno_id    INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-  produto_id  UUID            NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
   quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
   UNIQUE(turno_id, produto_id)
 );

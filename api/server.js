@@ -11,7 +11,7 @@ const PWD_SALT   = 'stockos-pwd-salt-2025';
 
 const _dbUrl = process.env.DATABASE_URL;
 if (!_dbUrl) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
-const _sql = postgres(_dbUrl, { ssl: 'require', prepare: false, max: 10, idle_timeout: 20, connect_timeout: 10 });
+const _sql = postgres(_dbUrl, { ssl: 'require', prepare: false, max: 2, idle_timeout: 10, max_lifetime: 60, connect_timeout: 10 });
 const query = async (text, params) => { const rows = await _sql.unsafe(text, params || []); return { rows: Array.from(rows) }; };
 const pool = {
   query,

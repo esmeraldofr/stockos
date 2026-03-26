@@ -258,6 +258,15 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     ('Compal Lata',700,'bebida',31),('Sumol Ananas',700,'bebida',32),('Sumol Laranja',700,'bebida',33),
     ('Sumol Manga',700,'bebida',34),('Cuca Lata',700,'bebida',35),('Nocal Lata',700,'bebida',36),('Dopel',700,'bebida',37)
     ON CONFLICT (nome) DO NOTHING`, 'produtos-seed');
+  await run(`CREATE TABLE IF NOT EXISTS escala (
+    id SERIAL PRIMARY KEY,
+    data DATE NOT NULL,
+    turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(data, turno)
+  )`, 'escala');
   res.json({ results });
 });
 
@@ -908,6 +917,18 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
 });
 
 // ── ESCALA ────────────────────────────────────────────────────
+async function ensureEscala() {
+  await query(`CREATE TABLE IF NOT EXISTS escala (
+    id SERIAL PRIMARY KEY,
+    data DATE NOT NULL,
+    turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(data, turno)
+  )`);
+}
+
 app.get('/api/escala', auth, async (req, res) => {
   try {
     const { data_inicio, data_fim } = req.query;
@@ -922,7 +943,11 @@ app.get('/api/escala', auth, async (req, res) => {
       [data_inicio, data_fim]
     );
     res.json(r.rows);
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch(e) {
+    if (e.message.includes('does not exist')) {
+      try { await ensureEscala(); res.json([]); } catch(e2) { res.status(500).json({ erro: e2.message }); }
+    } else { res.status(500).json({ erro: e.message }); }
+  }
 });
 
 app.put('/api/escala', auth, requireRole('admin', 'gestor'), async (req, res) => {
@@ -942,7 +967,11 @@ app.put('/api/escala', auth, requireRole('admin', 'gestor'), async (req, res) =>
       await query(`DELETE FROM escala WHERE data=$1 AND turno=$2`, [data, turno]);
       res.json({ sucesso: true });
     }
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch(e) {
+    if (e.message.includes('does not exist')) {
+      try { await ensureEscala(); res.status(400).json({ erro: 'Tabela criada, tenta novamente' }); } catch(e2) { res.status(500).json({ erro: e2.message }); }
+    } else { res.status(500).json({ erro: e.message }); }
+  }
 });
 
 app.listen(PORT, () => console.log(`StockOS v3 na porta ${PORT}`));

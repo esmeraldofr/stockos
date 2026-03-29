@@ -11,7 +11,7 @@ const PWD_SALT   = 'stockos-pwd-salt-2025';
 
 const _dbUrl = process.env.DATABASE_URL;
 if (!_dbUrl) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
-const _sql = postgres(_dbUrl, { ssl: 'require', prepare: false, max: 2, idle_timeout: 10, max_lifetime: 60, connect_timeout: 10 });
+const _sql = postgres(_dbUrl, { ssl: 'require', prepare: false, max: 1, idle_timeout: 10, max_lifetime: 60, connect_timeout: 10 });
 const query = async (text, params) => { const rows = await _sql.unsafe(text, params || []); return { rows: Array.from(rows) }; };
 const pool = {
   query,
@@ -983,6 +983,16 @@ app.put('/api/escala', auth, requireRole('admin', 'gestor'), async (req, res) =>
 });
 
 // ── ESCALA TEMPLATE ───────────────────────────────────────────
+async function ensureEscalaTemplate() {
+  await query(`CREATE TABLE IF NOT EXISTS escala_template (
+    id SERIAL PRIMARY KEY,
+    dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
+    turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+    utilizador_id INTEGER NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+    UNIQUE(dia_semana, turno, utilizador_id)
+  )`);
+}
+
 app.get('/api/escala/template', auth, async (req, res) => {
   try {
     const r = await query(`
@@ -992,7 +1002,11 @@ app.get('/api/escala/template', auth, async (req, res) => {
       ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
     `);
     res.json(r.rows);
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch(e) {
+    if (e.message.includes('does not exist')) {
+      try { await ensureEscalaTemplate(); res.json([]); } catch(e2) { res.status(500).json({ erro: e2.message }); }
+    } else { res.status(500).json({ erro: e.message }); }
+  }
 });
 
 app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (req, res) => {
@@ -1005,7 +1019,11 @@ app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (re
       [dia_semana, turno, utilizador_id]
     );
     res.json(r.rows[0] || { sucesso: true });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch(e) {
+    if (e.message.includes('does not exist')) {
+      try { await ensureEscalaTemplate(); res.status(400).json({ erro: 'Tabela criada, tenta novamente' }); } catch(e2) { res.status(500).json({ erro: e2.message }); }
+    } else { res.status(500).json({ erro: e.message }); }
+  }
 });
 
 app.delete('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {

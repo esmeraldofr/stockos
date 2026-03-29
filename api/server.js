@@ -930,7 +930,7 @@ async function ensureEscala() {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    utilizador_id INTEGER,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)
@@ -988,7 +988,7 @@ async function ensureEscalaTemplate() {
     id SERIAL PRIMARY KEY,
     dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+    utilizador_id INTEGER NOT NULL,
     UNIQUE(dia_semana, turno, utilizador_id)
   )`);
 }

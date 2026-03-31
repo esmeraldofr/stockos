@@ -14,17 +14,25 @@ if (!_dbUrl) { console.error('[FATAL] DATABASE_URL não definida'); process.exit
 const _sqlOpts = { ssl: 'require', prepare: false, max: 1, idle_timeout: 1, max_lifetime: 5, connect_timeout: 10 };
 let _activeDbUrl = _dbUrl;
 function getDbCandidates() {
-  const out = [_activeDbUrl];
+  const out = [_activeDbUrl, _dbUrl];
   try {
     const u = new URL(_dbUrl);
     const m = u.hostname.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
     if (m) {
       const ref = m[1];
-      const pooler = new URL(_dbUrl);
-      pooler.hostname = 'aws-0-eu-west-1.pooler.supabase.com';
-      pooler.port = '6543';
-      if (pooler.username && !pooler.username.includes('.')) pooler.username = `${pooler.username}.${ref}`;
-      out.push(pooler.toString());
+      const baseUser = decodeURIComponent(u.username || 'postgres');
+      const users = new Set([
+        baseUser,
+        `${baseUser}.${ref}`,
+        `postgres.${ref}`
+      ]);
+      for (const usr of users) {
+        const pooler = new URL(_dbUrl);
+        pooler.hostname = 'aws-0-eu-west-1.pooler.supabase.com';
+        pooler.port = '6543';
+        pooler.username = usr;
+        out.push(pooler.toString());
+      }
     }
   } catch (_) {}
   return [...new Set(out)];

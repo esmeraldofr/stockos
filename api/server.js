@@ -178,7 +178,7 @@ async function initDB() {
     valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
     fornecedor TEXT NOT NULL DEFAULT '',
     notas TEXT NOT NULL DEFAULT '',
-    criado_por INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    criado_por TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, [], 'armazem_compras');
   await qry(`CREATE TABLE IF NOT EXISTS escala (
@@ -339,7 +339,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
     fornecedor TEXT NOT NULL DEFAULT '',
     notas TEXT NOT NULL DEFAULT '',
-    criado_por INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    criado_por TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, 'armazem_compras');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, 'notas');
@@ -588,7 +588,7 @@ async function ensureArmazemTables() {
     valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
     fornecedor TEXT NOT NULL DEFAULT '',
     notas TEXT NOT NULL DEFAULT '',
-    criado_por INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    criado_por TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
 }
@@ -618,7 +618,7 @@ app.get('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req,
       `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome
        FROM armazem_compras c
        JOIN produtos p ON p.id = c.produto_id
-       LEFT JOIN utilizadores u ON u.id = c.criado_por
+       LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
        ORDER BY c.criado_em DESC
        LIMIT ${limit}`
     );

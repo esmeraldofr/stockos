@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS armazem_compras (
   valor_total   NUMERIC(15,2)   NOT NULL DEFAULT 0,
   fornecedor    TEXT            NOT NULL DEFAULT '',
   notas         TEXT            NOT NULL DEFAULT '',
-  criado_por    INTEGER         REFERENCES utilizadores(id) ON DELETE SET NULL,
+  criado_por    TEXT            NOT NULL DEFAULT '',
   criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS armazem_compras (
   valor_total   NUMERIC(15,2)   NOT NULL DEFAULT 0,
   fornecedor    TEXT            NOT NULL DEFAULT '',
   notas         TEXT            NOT NULL DEFAULT '',
-  criado_por    INTEGER         REFERENCES utilizadores(id) ON DELETE SET NULL,
+  criado_por    TEXT            NOT NULL DEFAULT '',
   criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT '';

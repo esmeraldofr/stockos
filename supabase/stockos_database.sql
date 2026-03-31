@@ -354,6 +354,7 @@ CREATE TABLE IF NOT EXISTS depositos_banco (
   valor             NUMERIC(15,2)   NOT NULL,
   valor_saidas      NUMERIC(15,2)   NOT NULL DEFAULT 0,
   saidas_destino    TEXT            NOT NULL DEFAULT '',
+  bordero_foto_url  TEXT            NOT NULL DEFAULT '',
   valor_tpa         NUMERIC(15,2)   NOT NULL DEFAULT 0,
   referencia        TEXT            NOT NULL DEFAULT '',
   notas             TEXT            NOT NULL DEFAULT '',

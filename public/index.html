@@ -278,6 +278,19 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+function attrUrl(u) {
+  return String(u ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;');
+}
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
 function err(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-error">${msg}</div>`; }
 function suc(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-success">${msg}</div>`; }
 
@@ -605,6 +618,21 @@ async function loadDia() {
               <div class="field"><label>Valor registado no TPA (Kz)</label><input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
             </div>
             <div style="font-size:11px;color:#64748b;margin-bottom:2px">TPA na caixa: <strong style="color:#94a3b8">${fmt(caixaTpa)}</strong></div>
+            <div class="field" style="margin-bottom:8px">
+              <label>Foto do borderô (opcional)</label>
+              ${dep && dep.bordero_foto_url ? `
+                <div style="margin-bottom:8px">
+                  <a href="${attrUrl(dep.bordero_foto_url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block">
+                    <img src="${attrUrl(dep.bordero_foto_url)}" alt="Borderô" style="max-height:140px;max-width:100%;border-radius:8px;border:1px solid #334155;vertical-align:top"/>
+                  </a>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="removeBorderoDeposito(${dep.id})">Remover foto</button>
+                  </div>
+                </div>
+              ` : ''}
+              <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" id="dep-bordero-${t.id}" ${!pode ? 'disabled' : ''} ${dep ? `onchange="uploadBorderoDeposito(${dep.id}, this)"` : ''}/>
+              <div style="font-size:11px;color:#64748b;margin-top:4px">JPEG, PNG ou WebP. ${dep ? 'Escolhe outro ficheiro para substituir.' : 'Será enviada após registar o depósito.'}</div>
+            </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
               ${dep ? `<button type="button" class="btn btn-ghost btn-sm" onclick="deleteDepositoDia(${dep.id})">Remover este turno</button>` : ''}
             </div>
@@ -730,7 +758,42 @@ async function submitDepositosDia() {
       referencia: refDia,
       notas: notasDia
     }));
-    await api('POST', '/depositos/lote', { itens, valor_saidas_total: saidasUnica, saidas_destino: destinoSaidas });
+    const borderoFiles = [];
+    for (const r of rows) {
+      const inp = document.getElementById('dep-bordero-' + r.turno_id);
+      if (inp && inp.files && inp.files[0]) borderoFiles.push({ turno_id: r.turno_id, file: inp.files[0] });
+    }
+    const res = await api('POST', '/depositos/lote', { itens, valor_saidas_total: saidasUnica, saidas_destino: destinoSaidas });
+    const created = res.rows || [];
+    for (const row of created) {
+      const bf = borderoFiles.find((x) => String(x.turno_id) === String(row.turno_id));
+      if (bf) {
+        const b64 = await fileToDataUrl(bf.file);
+        await api('POST', `/depositos/${row.id}/bordero`, { foto_base64: b64 });
+      }
+    }
+    await loadDia();
+  } catch (e) {
+    alert(e.message || String(e));
+  }
+}
+
+async function uploadBorderoDeposito(depId, inputEl) {
+  if (!depId || !inputEl || !inputEl.files || !inputEl.files[0]) return;
+  try {
+    const b64 = await fileToDataUrl(inputEl.files[0]);
+    await api('POST', `/depositos/${depId}/bordero`, { foto_base64: b64 });
+    inputEl.value = '';
+    await loadDia();
+  } catch (e) {
+    alert(e.message || String(e));
+  }
+}
+
+async function removeBorderoDeposito(id) {
+  if (!confirm('Remover a foto do borderô deste depósito?')) return;
+  try {
+    await api('DELETE', `/depositos/${id}/bordero`);
     await loadDia();
   } catch (e) {
     alert(e.message || String(e));

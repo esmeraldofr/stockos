@@ -273,7 +273,7 @@ async function initDB() {
 const dbReady = initDB();
 
 app.use(cors({ origin: '*' }));
-app.use(express.json());
+app.use(express.json({ limit: '6mb' }));
 app.use(express.static('public'));
 app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { res.status(500).json({ erro: 'DB não disponível' }); } });
 
@@ -397,6 +397,7 @@ async function ensureDepositosBanco() {
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS bordero_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
   if (!depositosSaidasMigrationDone) {
     try {
       await migrateDepositosSaidasAntigasAgrupadas();
@@ -411,6 +412,72 @@ function sanitizeSaidasDestino(s) {
   return String(s ?? '')
     .trim()
     .slice(0, 2000);
+}
+
+const BORDERO_BUCKET = 'depositos-bordero';
+
+function detectSupabaseUrlFromDatabaseUrl() {
+  try {
+    const u = new URL(_dbUrl);
+    const m = u.hostname.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
+    if (m) return `https://${m[1]}.supabase.co`;
+  } catch (_) {}
+  return '';
+}
+
+function getSupabaseEnv() {
+  const url = (process.env.SUPABASE_URL || detectSupabaseUrlFromDatabaseUrl() || '').replace(/\/$/, '');
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  return { url, key };
+}
+
+function parseDataUrlFoto(dataUrl) {
+  const s = String(dataUrl || '').trim();
+  const m = /^data:(image\/(?:jpeg|png|webp));base64,([\s\S]+)$/i.exec(s);
+  if (!m) return null;
+  const buf = Buffer.from(m[2].replace(/\s/g, ''), 'base64');
+  if (buf.length < 80 || buf.length > 5 * 1024 * 1024) return null;
+  const ct = m[1].toLowerCase();
+  const ext = ct.includes('png') ? 'png' : ct.includes('webp') ? 'webp' : 'jpg';
+  return { contentType: ct, buffer: buf, ext };
+}
+
+async function uploadBorderoToSupabase(buffer, key, contentType) {
+  const { url: base, key: serviceKey } = getSupabaseEnv();
+  if (!base || !serviceKey) return null;
+  const uploadUrl = `${base}/storage/v1/object/${BORDERO_BUCKET}/${key}`;
+  const r = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceKey}`,
+      apikey: serviceKey,
+      'Content-Type': contentType,
+      'x-upsert': 'true'
+    },
+    body: buffer
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    const err = new Error(`Upload Storage falhou (${r.status}). Cria o bucket «${BORDERO_BUCKET}» (público) no Supabase. ${t}`);
+    err.code = 'STORAGE';
+    throw err;
+  }
+  return `${base}/storage/v1/object/public/${BORDERO_BUCKET}/${key}`;
+}
+
+async function deleteBorderoFromSupabaseStorage(publicUrl) {
+  const { url: base, key: serviceKey } = getSupabaseEnv();
+  if (!base || !serviceKey || !publicUrl || typeof publicUrl !== 'string') return;
+  const marker = `/storage/v1/object/public/${BORDERO_BUCKET}/`;
+  const i = publicUrl.indexOf(marker);
+  if (i < 0) return;
+  const path = publicUrl.slice(i + marker.length);
+  if (!path) return;
+  const delUrl = `${base}/storage/v1/object/${BORDERO_BUCKET}/${path}`;
+  await fetch(delUrl, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey }
+  }).catch(() => {});
 }
 
 /** valor = bruto por turno na coluna valor; saída no depósito só no total (valor_saidas num único registo do dia). Líquido total = Σ(valor) − Σ(valor_saidas). */
@@ -1753,10 +1820,63 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
 app.delete('/api/depositos/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     await ensureDepositosBanco();
+    const prev = await query('SELECT bordero_foto_url FROM depositos_banco WHERE id=$1', [req.params.id]);
+    if (!prev.rows.length) return res.status(404).json({ erro: 'Depósito não encontrado' });
+    const u = prev.rows[0].bordero_foto_url;
+    if (u && String(u).startsWith('http')) await deleteBorderoFromSupabaseStorage(String(u));
     const r = await query('DELETE FROM depositos_banco WHERE id=$1 RETURNING id', [req.params.id]);
     if (!r.rows.length) return res.status(404).json({ erro: 'Depósito não encontrado' });
     res.json({ ok: true });
   } catch(e) { res.status(400).json({ erro: e.message }); }
+});
+
+app.post('/api/depositos/:id/bordero', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const depId = parseInt(req.params.id, 10);
+    if (!depId) return res.status(400).json({ erro: 'ID inválido.' });
+    const ex = await query('SELECT id, bordero_foto_url FROM depositos_banco WHERE id=$1', [depId]);
+    if (!ex.rows.length) return res.status(404).json({ erro: 'Depósito não encontrado.' });
+    const oldUrl = ex.rows[0].bordero_foto_url;
+    const parsed = parseDataUrlFoto(req.body?.foto_base64);
+    if (!parsed) {
+      return res.status(400).json({ erro: 'Envia uma imagem (JPEG, PNG ou WebP) em base64 (data URL).' });
+    }
+    const { url: sbUrl, key: sbKey } = getSupabaseEnv();
+    let finalUrl;
+    if (sbUrl && sbKey) {
+      const day = new Date().toISOString().slice(0, 10);
+      const fileKey = `${day}/${depId}-${crypto.randomBytes(6).toString('hex')}.${parsed.ext}`;
+      if (oldUrl && String(oldUrl).startsWith('http')) await deleteBorderoFromSupabaseStorage(String(oldUrl));
+      finalUrl = await uploadBorderoToSupabase(parsed.buffer, fileKey, parsed.contentType);
+    } else {
+      const raw = String(req.body.foto_base64 || '').trim();
+      if (raw.length > 4 * 1024 * 1024) {
+        return res.status(400).json({ erro: 'Imagem demasiado grande. Define SUPABASE_SERVICE_ROLE_KEY no servidor para usar Storage.' });
+      }
+      finalUrl = raw;
+    }
+    await query('UPDATE depositos_banco SET bordero_foto_url=$1 WHERE id=$2', [finalUrl, depId]);
+    res.json({ ok: true, bordero_foto_url: finalUrl });
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
+});
+
+app.delete('/api/depositos/:id/bordero', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const depId = parseInt(req.params.id, 10);
+    if (!depId) return res.status(400).json({ erro: 'ID inválido.' });
+    const ex = await query('SELECT bordero_foto_url FROM depositos_banco WHERE id=$1', [depId]);
+    if (!ex.rows.length) return res.status(404).json({ erro: 'Depósito não encontrado.' });
+    const u = ex.rows[0].bordero_foto_url;
+    if (u && String(u).startsWith('http')) await deleteBorderoFromSupabaseStorage(String(u));
+    await query('UPDATE depositos_banco SET bordero_foto_url=$1 WHERE id=$2', ['', depId]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
 });
 
 // ── HISTÓRICO ─────────────────────────────────────────────────

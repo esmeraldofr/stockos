@@ -268,6 +268,14 @@ function addDays(d, n) {
   dt.setDate(dt.getDate() + n);
   return dt.toISOString().split('T')[0];
 }
+/** Segunda-feira (ISO YYYY-MM-DD) da semana que contém dateStr. */
+function mondayOfWeekIso(dateStr) {
+  const dt = new Date(dateStr + 'T12:00:00Z');
+  const day = dt.getUTCDay();
+  const daysBack = day === 0 ? 6 : day - 1;
+  dt.setUTCDate(dt.getUTCDate() - daysBack);
+  return dt.toISOString().split('T')[0];
+}
 function render(html) { document.getElementById('app').innerHTML = html; }
 function show(id, html) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
 function val(id) { return document.getElementById(id)?.value || ''; }
@@ -652,43 +660,60 @@ async function drawDepositos() {
   await loadDepositos();
 }
 
-/** Escala do dia na página Dia: só leitura (mesma lógica dia vs modelo que no turno). */
-function htmlEscalaDiaReadonly(rowsDia, rowsTemplate, dateStr) {
-  const dia = Array.isArray(rowsDia) ? rowsDia : [];
+const ESCALA_DIA_SEMANA_NOMES = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+
+function escalaRowDataStr(r) {
+  if (!r || r.data == null) return '';
+  return String(r.data).slice(0, 10);
+}
+
+/** Escala da semana (seg–dom) na página Dia: só leitura; por dia usa escala real ou modelo semanal. */
+function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
+  const week = Array.isArray(rowsWeek) ? rowsWeek : [];
   const tpl = Array.isArray(rowsTemplate) ? rowsTemplate : [];
-  const d = new Date(dateStr + 'T12:00:00Z');
-  const day = d.getUTCDay();
-  const diaSemana = day === 0 ? 6 : day - 1;
+  const mon = mondayOfWeekIso(anchorDateStr);
+  const dom = addDays(mon, 6);
   const nomes = ['manha', 'tarde', 'noite'];
-  const blocos = nomes.map(nome => {
-    const listaDia = dia.filter(r => r.turno === nome);
-    const listaTpl = tpl.filter(r => Number(r.dia_semana) === diaSemana && r.turno === nome);
-    const lista = listaDia.length ? listaDia : listaTpl;
-    const origem = listaDia.length ? 'Escala do dia' : 'Modelo semanal';
-    const pessoas = lista.length
-      ? lista.map((r, i) => `
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:8px 0;${i < lista.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
+  const diasHtml = [];
+  for (let i = 0; i < 7; i++) {
+    const dateStr = addDays(mon, i);
+    const diaSemana = i;
+    const isAnchor = dateStr === anchorDateStr;
+    const turnoBlocos = nomes.map(nome => {
+      const listaDia = week.filter(r => escalaRowDataStr(r) === dateStr && r.turno === nome);
+      const listaTpl = tpl.filter(r => Number(r.dia_semana) === diaSemana && r.turno === nome);
+      const lista = listaDia.length ? listaDia : listaTpl;
+      const origem = listaDia.length ? 'Dia' : 'Modelo';
+      const pessoas = lista.length
+        ? lista.map((r, j) => `
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:6px 0;${j < lista.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
           <div>
-            <div style="font-weight:600;color:#e2e8f0;font-size:14px">${escapeHtml(r.utilizador_nome || 'Sem nome')}</div>
-            <div style="font-size:11px;color:#64748b">${String(r.utilizador_role || 'operador').toUpperCase()}</div>
+            <div style="font-weight:600;color:#e2e8f0;font-size:13px">${escapeHtml(r.utilizador_nome || 'Sem nome')}</div>
+            <div style="font-size:10px;color:#64748b">${String(r.utilizador_role || 'operador').toUpperCase()}</div>
           </div>
-          ${r.notas ? `<div style="font-size:12px;color:#94a3b8;text-align:right;max-width:50%">${escapeHtml(r.notas)}</div>` : ''}
+          ${r.notas ? `<div style="font-size:11px;color:#94a3b8;text-align:right;max-width:48%">${escapeHtml(r.notas)}</div>` : ''}
         </div>`).join('')
-      : '<div style="font-size:13px;color:#64748b;padding:4px 0">Sem funcionários escalados.</div>';
-    return `
-      <div style="background:rgba(15,23,42,0.5);border:1px solid #334155;border-radius:8px;padding:10px 12px;margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px">
-          <span style="font-weight:600;color:#e2e8f0">${turnoLabel(nome)}</span>
-          <span style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em">${origem}</span>
-        </div>
-        ${pessoas}
-      </div>`;
-  }).join('');
+        : '<div style="font-size:12px;color:#64748b;padding:2px 0">—</div>';
+      return `
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e293b">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:4px">
+            <span style="font-size:12px;font-weight:600;color:#94a3b8">${turnoLabel(nome)}</span>
+            <span style="font-size:9px;color:#64748b;text-transform:uppercase">${origem}</span>
+          </div>
+          ${pessoas}
+        </div>`;
+    }).join('');
+    diasHtml.push(`
+      <div style="background:rgba(15,23,42,0.5);border:1px solid ${isAnchor ? '#3b82f6' : '#334155'};border-radius:8px;padding:10px 12px;margin-bottom:10px;${isAnchor ? 'box-shadow:0 0 0 1px rgba(59,130,246,0.25)' : ''}">
+        <div style="font-weight:700;color:#e2e8f0;font-size:14px">${ESCALA_DIA_SEMANA_NOMES[i]} <span style="font-weight:500;color:#64748b">${dateLabel(dateStr)}</span>${isAnchor ? ' <span style="font-size:11px;color:#60a5fa">· dia seleccionado</span>' : ''}</div>
+        ${turnoBlocos}
+      </div>`);
+  }
   return `
     <div class="card" id="dia-escala-readonly">
-      <div class="card-title">👥 Escala do dia</div>
-      <p style="font-size:12px;color:#94a3b8;margin:0 0 12px">Apenas consulta nesta página.</p>
-      ${blocos}
+      <div class="card-title">👥 Escala da semana</div>
+      <p style="font-size:12px;color:#94a3b8;margin:0 0 12px">Semana de <strong style="color:#cbd5e1">${dateLabel(mon)}</strong> a <strong style="color:#cbd5e1">${dateLabel(dom)}</strong>. Apenas consulta; onde não há escala definida para a data, mostra-se o modelo semanal.</p>
+      ${diasHtml.join('')}
     </div>`;
 }
 
@@ -696,11 +721,14 @@ async function loadDia() {
   try {
     const isAdmin = S.user?.role === 'admin';
     const podeDepositos = ['admin', 'gestor'].includes(S.user?.role);
-    const dq = encodeURIComponent(S.date);
-    const [turnos, dash, escRowsDia, escTpl] = await Promise.all([
+    const monEsc = mondayOfWeekIso(S.date);
+    const domEsc = addDays(monEsc, 6);
+    const qMon = encodeURIComponent(monEsc);
+    const qDom = encodeURIComponent(domEsc);
+    const [turnos, dash, escRowsWeek, escTpl] = await Promise.all([
       api('GET', `/dia?data=${S.date}`),
       isAdmin ? api('GET', `/dashboard?data=${S.date}`).catch(() => null) : Promise.resolve(null),
-      api('GET', `/escala?data_inicio=${dq}&data_fim=${dq}`).catch(() => []),
+      api('GET', `/escala?data_inicio=${qMon}&data_fim=${qDom}`).catch(() => []),
       api('GET', '/escala/template').catch(() => [])
     ]);
     S.turnosDia = turnos;
@@ -772,7 +800,7 @@ async function loadDia() {
       </div>` : '';
     show('dia-content', `
       <div class="turno-cards">${cards}</div>
-      ${htmlEscalaDiaReadonly(escRowsDia, escTpl, S.date)}
+      ${htmlEscalaSemanaReadonly(escRowsWeek, escTpl, S.date)}
       ${linkDepositos}
       ${resumoDia}
     `);

@@ -521,7 +521,7 @@ async function loadDia() {
     const blocoDepositos = podeDepositos ? `
       <div class="card" id="sec-depositos">
         <div class="card-title">🏦 Depósitos no banco</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: indica o <strong>valor bruto</strong>, as <strong>saídas no depósito</strong> (compras ou imprevistos retirados neste momento) e o <strong>TPA</strong>. O <strong>total depositado no banco</strong> é a soma dos valores <strong>líquidos</strong> (bruto − saídas). <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns; <strong>Registar depósito</strong> grava os turnos fechados com bruto maior que as saídas.</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>valor bruto</strong> e <strong>TPA</strong>. Há uma única <strong>saída no depósito</strong> (comum a todo o registo), repartida por turno na proporção dos brutos. O <strong>total depositado no banco</strong> é a soma dos líquidos (cada bruto menos a sua parte da saída). <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns.</p>
         ${depositosErro ? `<div class="alert alert-error" style="margin-bottom:10px">Não foi possível carregar os depósitos: ${depositosErro}</div>` : ''}
         ${!turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Não há turnos neste dia — abre turnos antes de registar depósitos.</div>` : ''}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
@@ -533,7 +533,7 @@ async function loadDia() {
           <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
             <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Saídas no depósito</div>
             <div style="font-size:22px;font-weight:700;color:#f87171;line-height:1.15">${fmt(totalSaidasNoDeposito)}</div>
-            <div style="font-size:11px;color:#64748b;margin-top:6px">retiradas neste registo</div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px">valor único no formulário</div>
           </div>
           <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
             <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total TPA registado</div>
@@ -541,7 +541,7 @@ async function loadDia() {
           </div>
         </div>
         <div style="margin-bottom:14px;padding:10px 14px;background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.22);border-radius:8px;font-size:13px;color:#cbd5e1">
-          Pré-visualização <strong>líquido</strong> (soma de bruto − saídas nos campos): <span id="dep-total-preview" style="color:#4ade80;font-weight:700;font-size:17px">${fmt(0)}</span>
+          Pré-visualização <strong>líquido total</strong> (soma dos brutos − saída única): <span id="dep-total-preview" style="color:#4ade80;font-weight:700;font-size:17px">${fmt(0)}</span>
         </div>
         ${(() => {
           let dataDepComum = hoje;
@@ -561,19 +561,18 @@ async function loadDia() {
             if (!refComum && String(d.referencia || '').trim()) refComum = String(d.referencia);
             if (!notasComum && String(d.notas || '').trim()) notasComum = String(d.notas);
           }
+          const saidasUnicaVal = totalSaidasNoDeposito > 0 ? String(totalSaidasNoDeposito) : '';
           return `
         ${turnosOrdenados.map(t => {
           const dep = depositosByTurno[String(t.id)];
           const pode = t.estado === 'fechado';
           const bid = `dep-bruto-${t.id}`;
-          const sid = `dep-saidas-${t.id}`;
           const tid = `dep-tpa-${t.id}`;
           const caixaTpa = parseFloat(t.caixa?.tpa) || 0;
           const liq = dep ? (parseFloat(dep.valor) || 0) : 0;
           const sd = dep ? (parseFloat(dep.valor_saidas) || 0) : 0;
           const brutoNum = dep ? liq + sd : 0;
           const brutoVal = dep && brutoNum > 0 ? String(brutoNum) : '';
-          const saidasVal = dep && sd > 0 ? String(sd) : (dep ? '0' : '');
           const tpaVal = dep && dep.valor_tpa != null && dep.valor_tpa !== ''
             ? String(dep.valor_tpa)
             : (dep ? '0' : String(caixaTpa));
@@ -581,23 +580,25 @@ async function loadDia() {
           <div style="border:1px solid #334155;border-radius:8px;padding:12px;margin-bottom:12px;background:rgba(15,23,42,0.4)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
               <span style="font-weight:600;color:#e2e8f0">${turnoLabel(t.nome)}</span>
-              ${dep ? `<span style="font-size:12px;color:#4ade80">Líq.: ${fmt(dep.valor)}${sd > 0 ? ` · Saídas: ${fmt(sd)}` : ''} · TPA: ${fmt(dep.valor_tpa ?? 0)} · ${dateLabel(dep.data_deposito)}</span>` : '<span style="font-size:12px;color:#64748b">Sem depósito</span>'}
+              ${dep ? `<span style="font-size:12px;color:#4ade80">Líq.: ${fmt(dep.valor)}${sd > 0 ? ` · Parte saídas: ${fmt(sd)}` : ''} · TPA: ${fmt(dep.valor_tpa ?? 0)} · ${dateLabel(dep.data_deposito)}</span>` : '<span style="font-size:12px;color:#64748b">Sem depósito</span>'}
             </div>
             ${!pode ? `<div class="alert alert-error" style="margin-bottom:8px;padding:8px;font-size:12px">Fecha este turno para incluir no registo.</div>` : ''}
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
               <div class="field"><label>Valor bruto (Kz)</label><input id="${bid}" type="number" min="0.01" step="any" placeholder="0" value="${brutoVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
-              <div class="field"><label>Saídas no depósito (Kz)</label><input id="${sid}" type="number" min="0" step="any" placeholder="0" value="${saidasVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
+              <div class="field"><label>Valor registado no TPA (Kz)</label><input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <div class="field"><label>Valor registado no TPA (Kz)</label><input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
-              <div class="field" style="display:flex;align-items:flex-end"><span style="font-size:11px;color:#64748b;padding-bottom:8px">TPA na caixa: <strong style="color:#94a3b8">${fmt(caixaTpa)}</strong></span></div>
-            </div>
+            <div style="font-size:11px;color:#64748b;margin-bottom:2px">TPA na caixa: <strong style="color:#94a3b8">${fmt(caixaTpa)}</strong></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
               ${dep ? `<button type="button" class="btn btn-ghost btn-sm" onclick="deleteDepositoDia(${dep.id})">Remover este turno</button>` : ''}
             </div>
             ${dep && dep.criado_por_nome ? `<div style="margin-top:6px;font-size:11px;color:#64748b">Registado por ${dep.criado_por_nome}</div>` : ''}
           </div>`;
         }).join('')}
+        <div class="field" style="margin-top:8px">
+          <label>Saídas no depósito (Kz) — única para todos os turnos</label>
+          <input id="dep-saidas-dia" type="number" min="0" step="any" placeholder="0" value="${saidasUnicaVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!temTurnoFechado ? 'disabled' : ''}/>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">Repartida por turno na proporção do valor bruto ao gravar.</div>
+        </div>
         <div class="field" style="margin-top:4px">
           <label>Referência (opcional)</label>
           <input id="dep-ref-dia" type="text" placeholder="Nº operação / guia" value="${String(refComum).replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
@@ -628,20 +629,35 @@ async function loadDia() {
 function updateDepPreviewTotal() {
   const el = document.getElementById('dep-total-preview');
   if (!el) return;
-  let sum = 0;
+  let sumB = 0;
   for (const t of (S.turnosDia || [])) {
     if (t.estado !== 'fechado') continue;
     const brutoEl = document.getElementById('dep-bruto-' + t.id);
-    const saidasEl = document.getElementById('dep-saidas-' + t.id);
     if (!brutoEl || brutoEl.disabled) continue;
     const b = parseFloat(brutoEl.value);
-    const s = saidasEl ? (parseFloat(saidasEl.value) || 0) : 0;
-    if (!isNaN(b) && b > 0) {
-      const liq = b - s;
-      if (liq > 0) sum += liq;
+    if (!isNaN(b) && b > 0) sumB += b;
+  }
+  const S = parseFloat(document.getElementById('dep-saidas-dia')?.value) || 0;
+  const liq = Math.max(0, sumB - S);
+  el.textContent = fmt(liq);
+}
+
+function splitSaidasProportional(S, brutos) {
+  const sumB = brutos.reduce((a, b) => a + b, 0);
+  if (sumB <= 0 || S <= 0) return brutos.map(() => 0);
+  let acc = 0;
+  const n = brutos.length;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    if (i === n - 1) {
+      out.push(Math.round((S - acc) * 100) / 100);
+    } else {
+      const s = Math.round(S * (brutos[i] / sumB) * 100) / 100;
+      acc += s;
+      out.push(s);
     }
   }
-  el.textContent = fmt(sum);
+  return out;
 }
 
 async function submitDepositosDia() {
@@ -649,38 +665,48 @@ async function submitDepositosDia() {
     const dataDep = val('dep-data-dia');
     const refDia = val('dep-ref-dia');
     const notasDia = val('dep-notas-dia');
-    const itens = [];
+    const S = parseFloat(val('dep-saidas-dia')) || 0;
+    if (S < 0) {
+      alert('A saída no depósito não pode ser negativa.');
+      return;
+    }
+    const rows = [];
     const turnos = S.turnosDia || [];
     for (const t of turnos) {
       if (t.estado !== 'fechado') continue;
       const id = t.id;
       const bruto = parseFloat(val('dep-bruto-' + id));
-      const saidas = parseFloat(val('dep-saidas-' + id)) || 0;
       if (!bruto || bruto <= 0) continue;
-      if (saidas < 0 || saidas >= bruto) {
-        alert('Em ' + turnoLabel(t.nome) + ': o valor bruto deve ser maior que as saídas no depósito (líquido tem de ser positivo).');
-        return;
-      }
-      const tid = 'dep-tpa-' + id;
-      const vtpa = parseFloat(val(tid));
+      const vtpa = parseFloat(val('dep-tpa-' + id));
       if (Number.isNaN(vtpa) || vtpa < 0) {
         alert('Indica o valor TPA (≥ 0) para ' + turnoLabel(t.nome) + '.');
         return;
       }
-      itens.push({
-        turno_id: id,
-        data_deposito: dataDep,
-        valor_bruto: bruto,
-        valor_saidas: saidas,
-        valor_tpa: vtpa,
-        referencia: refDia,
-        notas: notasDia
-      });
+      rows.push({ turno_id: id, bruto, valor_tpa: vtpa });
     }
-    if (!itens.length) {
-      alert('Indica pelo menos um turno fechado com valor bruto positivo e líquido positivo.');
+    if (!rows.length) {
+      alert('Indica pelo menos um turno fechado com valor bruto positivo.');
       return;
     }
+    const sumB = rows.reduce((s, r) => s + r.bruto, 0);
+    if (S > sumB) {
+      alert('A saída única no depósito não pode ser maior que a soma dos valores brutos (' + fmt(sumB) + ').');
+      return;
+    }
+    if (sumB - S <= 0) {
+      alert('O líquido total (soma dos brutos menos a saída) tem de ser positivo.');
+      return;
+    }
+    const shares = splitSaidasProportional(S, rows.map(r => r.bruto));
+    const itens = rows.map((r, i) => ({
+      turno_id: r.turno_id,
+      data_deposito: dataDep,
+      valor_bruto: r.bruto,
+      valor_saidas: shares[i],
+      valor_tpa: r.valor_tpa,
+      referencia: refDia,
+      notas: notasDia
+    }));
     await api('POST', '/depositos/lote', { itens });
     await loadDia();
   } catch (e) {

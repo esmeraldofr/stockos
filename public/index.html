@@ -520,7 +520,7 @@ async function loadDia() {
     const blocoDepositos = podeDepositos ? `
       <div class="card" id="sec-depositos">
         <div class="card-title">🏦 Depósitos no banco</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>dinheiro depositado</strong> e <strong>valor registado no TPA</strong> (${dateLabel(S.date)}). O TPA é sugerido a partir da caixa. Indica a <strong>data do depósito</strong> uma vez e carrega em <strong>Registar depósito</strong> para gravar todos os turnos fechados com valor &gt; 0.</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>dinheiro depositado</strong> e <strong>valor registado no TPA</strong> (${dateLabel(S.date)}). <strong>Referência</strong>, <strong>notas</strong> e <strong>data do depósito</strong> são comuns a todos os turnos; carrega em <strong>Registar depósito</strong> para gravar os turnos fechados com valor &gt; 0.</p>
         ${depositosErro ? `<div class="alert alert-error" style="margin-bottom:10px">Não foi possível carregar os depósitos: ${depositosErro}</div>` : ''}
         ${!turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Não há turnos neste dia — abre turnos antes de registar depósitos.</div>` : ''}
         ${depositos.length ? `<div style="margin-bottom:12px;font-size:13px;color:#94a3b8;display:flex;flex-wrap:wrap;gap:12px 20px">
@@ -537,14 +537,20 @@ async function loadDia() {
             }
           }
           const temTurnoFechado = turnosOrdenados.some(t => t.estado === 'fechado');
+          let refComum = '';
+          let notasComum = '';
+          for (const t of turnosOrdenados) {
+            const d = depositosByTurno[String(t.id)];
+            if (!d) continue;
+            if (!refComum && String(d.referencia || '').trim()) refComum = String(d.referencia);
+            if (!notasComum && String(d.notas || '').trim()) notasComum = String(d.notas);
+          }
           return `
         ${turnosOrdenados.map(t => {
           const dep = depositosByTurno[String(t.id)];
           const pode = t.estado === 'fechado';
           const vid = `dep-valor-${t.id}`;
           const tid = `dep-tpa-${t.id}`;
-          const rid = `dep-ref-${t.id}`;
-          const nid = `dep-notas-${t.id}`;
           const caixaTpa = parseFloat(t.caixa?.tpa) || 0;
           const vVal = dep && dep.valor != null ? String(dep.valor) : '';
           const tpaVal = dep && dep.valor_tpa != null && dep.valor_tpa !== ''
@@ -562,8 +568,6 @@ async function loadDia() {
               <div class="field"><label>Valor registado no TPA (Kz)</label><input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
             </div>
             <div style="font-size:11px;color:#64748b;margin-bottom:10px">TPA na caixa do turno: <strong style="color:#94a3b8">${fmt(caixaTpa)}</strong></div>
-            <div class="field"><label>Referência (opcional)</label><input id="${rid}" type="text" placeholder="Nº operação / guia" value="${String(dep?.referencia || '').replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
-            <div class="field"><label>Notas</label><input id="${nid}" type="text" placeholder="Opcional" value="${String(dep?.notas || '').replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
               ${dep ? `<button type="button" class="btn btn-ghost btn-sm" onclick="deleteDepositoDia(${dep.id})">Remover este turno</button>` : ''}
             </div>
@@ -571,6 +575,14 @@ async function loadDia() {
           </div>`;
         }).join('')}
         <div class="field" style="margin-top:4px">
+          <label>Referência (opcional)</label>
+          <input id="dep-ref-dia" type="text" placeholder="Nº operação / guia" value="${String(refComum).replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
+        </div>
+        <div class="field">
+          <label>Notas</label>
+          <input id="dep-notas-dia" type="text" placeholder="Opcional" value="${String(notasComum).replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
+        </div>
+        <div class="field">
           <label>Data do depósito (aplica a todos os turnos com valor)</label>
           <input id="dep-data-dia" type="date" value="${dataDepComum.replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
         </div>
@@ -591,6 +603,8 @@ async function loadDia() {
 async function submitDepositosDia() {
   try {
     const dataDep = val('dep-data-dia');
+    const refDia = val('dep-ref-dia');
+    const notasDia = val('dep-notas-dia');
     const itens = [];
     const turnos = S.turnosDia || [];
     for (const t of turnos) {
@@ -598,8 +612,6 @@ async function submitDepositosDia() {
       const id = t.id;
       const vid = 'dep-valor-' + id;
       const tid = 'dep-tpa-' + id;
-      const rid = 'dep-ref-' + id;
-      const nid = 'dep-notas-' + id;
       const v = parseFloat(val(vid));
       if (!v || v <= 0) continue;
       const vtpa = parseFloat(val(tid));
@@ -612,8 +624,8 @@ async function submitDepositosDia() {
         data_deposito: dataDep,
         valor: v,
         valor_tpa: vtpa,
-        referencia: val(rid),
-        notas: val(nid)
+        referencia: refDia,
+        notas: notasDia
       });
     }
     if (!itens.length) {

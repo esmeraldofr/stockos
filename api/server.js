@@ -189,6 +189,14 @@ async function initDB() {
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(turno_id, utilizador_id)
   )`, [], 'turno_equipa_real');
+  await qry(`CREATE TABLE IF NOT EXISTS turno_faltas (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    utilizador_id TEXT NOT NULL,
+    motivo_falta TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(turno_id, utilizador_id)
+  )`, [], 'turno_faltas');
   await qry(`ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'escala-userid-text');
   await qry(`ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key`, [], 'escala-drop-unique-old');
   await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_data_turno_utilizador_key') THEN ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id); END IF; END $$`, [], 'escala-add-unique-new');
@@ -199,6 +207,7 @@ async function initDB() {
   await qry(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT`, [], 'turno_equipa_real-cobrindo');
   await qry(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE`, [], 'turno_equipa_real-hora-extra');
   await qry(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT ''`, [], 'turno_equipa_real-motivo-falta');
+  await qry(`ALTER TABLE turno_faltas ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'turno_faltas-userid-text');
   await qry(`ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key`, [], 'escala_template-drop-unique-old');
   await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_template_dia_turno_utilizador_key') THEN ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id); END IF; END $$`, [], 'escala_template-add-unique-new');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
@@ -371,11 +380,20 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(turno_id, utilizador_id)
   )`, 'turno_equipa_real');
+  await run(`CREATE TABLE IF NOT EXISTS turno_faltas (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    utilizador_id TEXT NOT NULL,
+    motivo_falta TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(turno_id, utilizador_id)
+  )`, 'turno_faltas');
   await run(`ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, 'escala-userid-text');
   await run(`ALTER TABLE turno_equipa_real ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, 'turno_equipa_real-userid-text');
   await run(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT`, 'turno_equipa_real-cobrindo');
   await run(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE`, 'turno_equipa_real-hora-extra');
   await run(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT ''`, 'turno_equipa_real-motivo-falta');
+  await run(`ALTER TABLE turno_faltas ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, 'turno_faltas-userid-text');
   await run(`ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key`, 'escala-drop-unique-old');
   await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_data_turno_utilizador_key') THEN ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id); END IF; END $$`, 'escala-add-unique-new');
   res.json({ results });
@@ -1232,6 +1250,67 @@ app.post('/api/turnos/:id/equipa-real', auth, async (req, res) => {
 app.delete('/api/turnos/:id/equipa-real/:utilizador_id', auth, async (req, res) => {
   try {
     await query('DELETE FROM turno_equipa_real WHERE turno_id=$1 AND utilizador_id=$2', [req.params.id, req.params.utilizador_id]);
+    res.json({ sucesso: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/turnos/:id/faltas', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT f.*, u.nome AS utilizador_nome, u.role AS utilizador_role
+       FROM turno_faltas f
+       LEFT JOIN utilizadores u ON f.utilizador_id::text = u.id::text
+       WHERE f.turno_id=$1
+       ORDER BY f.criado_em ASC`,
+      [req.params.id]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    if (e.message.includes('does not exist')) {
+      try {
+        await query(`CREATE TABLE IF NOT EXISTS turno_faltas (
+          id SERIAL PRIMARY KEY,
+          turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+          utilizador_id TEXT NOT NULL,
+          motivo_falta TEXT NOT NULL DEFAULT '',
+          criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE(turno_id, utilizador_id)
+        )`);
+        const r2 = await query(
+          `SELECT f.*, u.nome AS utilizador_nome, u.role AS utilizador_role
+           FROM turno_faltas f
+           LEFT JOIN utilizadores u ON f.utilizador_id::text = u.id::text
+           WHERE f.turno_id=$1
+           ORDER BY f.criado_em ASC`,
+          [req.params.id]
+        );
+        return res.json(r2.rows);
+      } catch (e2) { return res.status(500).json({ erro: e2.message }); }
+    }
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.post('/api/turnos/:id/faltas', auth, async (req, res) => {
+  try {
+    const { utilizador_id, motivo_falta } = req.body || {};
+    if (!utilizador_id) return res.status(400).json({ erro: 'utilizador_id é obrigatório' });
+    const motivo = (motivo_falta || '').trim();
+    if (!motivo) return res.status(400).json({ erro: 'motivo_falta é obrigatório' });
+    const r = await query(
+      `INSERT INTO turno_faltas (turno_id, utilizador_id, motivo_falta)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (turno_id, utilizador_id) DO UPDATE SET motivo_falta=EXCLUDED.motivo_falta
+       RETURNING *`,
+      [req.params.id, String(utilizador_id), motivo]
+    );
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/turnos/:id/faltas/:utilizador_id', auth, async (req, res) => {
+  try {
+    await query('DELETE FROM turno_faltas WHERE turno_id=$1 AND utilizador_id=$2', [req.params.id, req.params.utilizador_id]);
     res.json({ sucesso: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

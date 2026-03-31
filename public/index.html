@@ -1490,11 +1490,12 @@ async function loadEscalaTurno() {
       el.innerHTML = '<span style="color:#64748b">Turno não selecionado.</span>';
       return;
     }
-    const [rowsDia, rowsTemplate, equipaReal, pessoas] = await Promise.all([
+    const [rowsDia, rowsTemplate, equipaReal, pessoas, faltasReg] = await Promise.all([
       api('GET', `/escala?data_inicio=${S.date}&data_fim=${S.date}`),
       api('GET', '/escala/template'),
       api('GET', `/turnos/${S.turnoData.id}/equipa-real`),
-      api('GET', '/equipa/pessoas')
+      api('GET', '/equipa/pessoas'),
+      api('GET', `/turnos/${S.turnoData.id}/faltas`)
     ]);
     const listaDia = rowsDia.filter(r => r.turno === turnoNome);
     const d = new Date(S.date + 'T12:00:00Z');
@@ -1511,6 +1512,9 @@ async function loadEscalaTurno() {
     const motivoPorFalta = {};
     equipaReal.forEach(r => {
       if (r.cobrindo_utilizador_id && r.motivo_falta) motivoPorFalta[String(r.cobrindo_utilizador_id)] = r.motivo_falta;
+    });
+    faltasReg.forEach(f => {
+      if (f.utilizador_id && f.motivo_falta) motivoPorFalta[String(f.utilizador_id)] = f.motivo_falta;
     });
 
     const info = `<div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">${origem}</div>`;
@@ -1546,7 +1550,13 @@ async function loadEscalaTurno() {
 
     const alertaHtml = `
       <div style="margin-top:10px;font-size:12px">
-        <div style="color:${faltas.length ? '#fbbf24' : '#4ade80'}">${faltas.length ? `⚠ Faltas: ${faltas.map(f => (f.utilizador_nome || 'Sem nome') + (motivoPorFalta[String(f.utilizador_id)] ? ` (${motivoPorFalta[String(f.utilizador_id)]})` : '')).join(', ')}` : '✓ Sem faltas nos escalados'}</div>
+        <div style="color:${faltas.length ? '#fbbf24' : '#4ade80'}">${faltas.length ? `⚠ Faltas: ${faltas.map(f => {
+          const motivo = motivoPorFalta[String(f.utilizador_id)];
+          const nome = f.utilizador_nome || 'Sem nome';
+          return motivo
+            ? `${nome} (${motivo})`
+            : `${nome}${canEdit ? ` <button class="btn btn-danger btn-sm" style="margin-left:6px" onclick="registarMotivoFalta('${S.turnoData.id}','${encodeURIComponent(f.utilizador_id)}','${(nome||'').replace(/'/g, "\\'")}')">Registar motivo</button>` : ''}`;
+        }).join(', ')}` : '✓ Sem faltas nos escalados'}</div>
         <div style="color:${coberturas.length ? '#60a5fa' : '#64748b'};margin-top:4px">${coberturas.length ? `↺ Coberturas: ${coberturas.map(c => c.utilizador_nome || 'Sem nome').join(', ')}` : 'Sem coberturas registadas'}</div>
       </div>`;
 
@@ -1632,6 +1642,18 @@ async function addTurnoPresenca(turnoId) {
 async function removeTurnoPresenca(turnoId, utilizadorIdEncoded) {
   try {
     await api('DELETE', `/turnos/${turnoId}/equipa-real/${utilizadorIdEncoded}`);
+    await loadEscalaTurno();
+  } catch (e) { alert(e.message); }
+}
+
+async function registarMotivoFalta(turnoId, utilizadorIdEncoded, nome) {
+  const motivo = prompt(`Motivo da falta de ${nome}:`);
+  if (!motivo || !motivo.trim()) return;
+  try {
+    await api('POST', `/turnos/${turnoId}/faltas`, {
+      utilizador_id: decodeURIComponent(utilizadorIdEncoded),
+      motivo_falta: motivo.trim()
+    });
     await loadEscalaTurno();
   } catch (e) { alert(e.message); }
 }

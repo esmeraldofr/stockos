@@ -12,29 +12,63 @@ const PWD_SALT   = 'stockos-pwd-salt-2025';
 const _dbUrl = process.env.DATABASE_URL;
 if (!_dbUrl) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
 const _sqlOpts = { ssl: 'require', prepare: false, max: 1, idle_timeout: 1, max_lifetime: 5, connect_timeout: 10 };
-function createSql() { return postgres(_dbUrl, _sqlOpts); }
-const query = async (text, params) => {
-  const sql = createSql();
+let _activeDbUrl = _dbUrl;
+function getDbCandidates() {
+  const out = [_activeDbUrl];
   try {
-    const rows = await sql.unsafe(text, params || []);
-    return { rows: Array.from(rows) };
-  } finally {
-    // Em serverless, fechar cedo reduz saturação do pool em Session mode.
-    await sql.end({ timeout: 1 }).catch(() => {});
+    const u = new URL(_dbUrl);
+    const m = u.hostname.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
+    if (m) {
+      const ref = m[1];
+      const pooler = new URL(_dbUrl);
+      pooler.hostname = 'aws-0-eu-west-1.pooler.supabase.com';
+      pooler.port = '6543';
+      if (pooler.username && !pooler.username.includes('.')) pooler.username = `${pooler.username}.${ref}`;
+      out.push(pooler.toString());
+    }
+  } catch (_) {}
+  return [...new Set(out)];
+}
+function createSql(url) { return postgres(url || _activeDbUrl, _sqlOpts); }
+const query = async (text, params) => {
+  let lastErr = null;
+  for (const url of getDbCandidates()) {
+    const sql = createSql(url);
+    try {
+      const rows = await sql.unsafe(text, params || []);
+      _activeDbUrl = url;
+      return { rows: Array.from(rows) };
+    } catch (e) {
+      lastErr = e;
+    } finally {
+      // Em serverless, fechar cedo reduz saturação do pool em Session mode.
+      await sql.end({ timeout: 1 }).catch(() => {});
+    }
   }
+  throw lastErr;
 };
 const pool = {
   query,
   connect: async () => {
-    const sql = createSql();
-    const reserved = await sql.reserve();
-    return {
-      query: async (text, params) => { const rows = await reserved.unsafe(text, params || []); return { rows: Array.from(rows) }; },
-      release: async () => {
-        await reserved.release().catch(() => {});
+    let lastErr = null;
+    for (const url of getDbCandidates()) {
+      const sql = createSql(url);
+      try {
+        const reserved = await sql.reserve();
+        _activeDbUrl = url;
+        return {
+          query: async (text, params) => { const rows = await reserved.unsafe(text, params || []); return { rows: Array.from(rows) }; },
+          release: async () => {
+            await reserved.release().catch(() => {});
+            await sql.end({ timeout: 1 }).catch(() => {});
+          }
+        };
+      } catch (e) {
+        lastErr = e;
         await sql.end({ timeout: 1 }).catch(() => {});
       }
-    };
+    }
+    throw lastErr;
   }
 };
 

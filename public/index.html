@@ -634,11 +634,11 @@ function updateDepPreviewTotal() {
     if (t.estado !== 'fechado') continue;
     const brutoEl = document.getElementById('dep-bruto-' + t.id);
     if (!brutoEl || brutoEl.disabled) continue;
-    const b = parseFloat(brutoEl.value);
-    if (!isNaN(b) && b > 0) sumB += b;
+    const b = parseRaw(brutoEl.value);
+    if (b > 0) sumB += b;
   }
-  const S = parseFloat(document.getElementById('dep-saidas-dia')?.value) || 0;
-  const liq = Math.max(0, sumB - S);
+  const saidasU = parseRaw(document.getElementById('dep-saidas-dia')?.value);
+  const liq = Math.max(0, sumB - saidasU);
   el.textContent = fmt(liq);
 }
 
@@ -665,8 +665,8 @@ async function submitDepositosDia() {
     const dataDep = val('dep-data-dia');
     const refDia = val('dep-ref-dia');
     const notasDia = val('dep-notas-dia');
-    const S = parseFloat(val('dep-saidas-dia')) || 0;
-    if (S < 0) {
+    const saidasUnica = parseRaw(val('dep-saidas-dia'));
+    if (saidasUnica < 0) {
       alert('A saída no depósito não pode ser negativa.');
       return;
     }
@@ -675,9 +675,9 @@ async function submitDepositosDia() {
     for (const t of turnos) {
       if (t.estado !== 'fechado') continue;
       const id = t.id;
-      const bruto = parseFloat(val('dep-bruto-' + id));
+      const bruto = parseRaw(val('dep-bruto-' + id));
       if (!bruto || bruto <= 0) continue;
-      const vtpa = parseFloat(val('dep-tpa-' + id));
+      const vtpa = parseRaw(val('dep-tpa-' + id));
       if (Number.isNaN(vtpa) || vtpa < 0) {
         alert('Indica o valor TPA (≥ 0) para ' + turnoLabel(t.nome) + '.');
         return;
@@ -685,19 +685,24 @@ async function submitDepositosDia() {
       rows.push({ turno_id: id, bruto, valor_tpa: vtpa });
     }
     if (!rows.length) {
-      alert('Indica pelo menos um turno fechado com valor bruto positivo.');
+      const temFechado = (S.turnosDia || []).some(t => t.estado === 'fechado');
+      alert(
+        temFechado
+          ? 'Indica valor bruto (> 0) em pelo menos um turno fechado.'
+          : 'Não há turnos fechados neste dia — fecha um turno antes de registar o depósito.'
+      );
       return;
     }
     const sumB = rows.reduce((s, r) => s + r.bruto, 0);
-    if (S > sumB) {
+    if (saidasUnica > sumB) {
       alert('A saída única no depósito não pode ser maior que a soma dos valores brutos (' + fmt(sumB) + ').');
       return;
     }
-    if (sumB - S <= 0) {
+    if (sumB - saidasUnica <= 0) {
       alert('O líquido total (soma dos brutos menos a saída) tem de ser positivo.');
       return;
     }
-    const shares = splitSaidasProportional(S, rows.map(r => r.bruto));
+    const shares = splitSaidasProportional(saidasUnica, rows.map(r => r.bruto));
     const itens = rows.map((r, i) => ({
       turno_id: r.turno_id,
       data_deposito: dataDep,

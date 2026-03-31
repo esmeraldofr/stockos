@@ -170,6 +170,7 @@ async function initDB() {
     utilizador_id TEXT NOT NULL,
     cobrindo_utilizador_id TEXT,
     hora_extra BOOLEAN NOT NULL DEFAULT FALSE,
+    motivo_falta TEXT NOT NULL DEFAULT '',
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(turno_id, utilizador_id)
@@ -183,6 +184,7 @@ async function initDB() {
   await qry(`ALTER TABLE turno_equipa_real ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'turno_equipa_real-userid-text');
   await qry(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT`, [], 'turno_equipa_real-cobrindo');
   await qry(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE`, [], 'turno_equipa_real-hora-extra');
+  await qry(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT ''`, [], 'turno_equipa_real-motivo-falta');
   await qry(`ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key`, [], 'escala_template-drop-unique-old');
   await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_template_dia_turno_utilizador_key') THEN ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id); END IF; END $$`, [], 'escala_template-add-unique-new');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
@@ -350,6 +352,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     utilizador_id TEXT NOT NULL,
     cobrindo_utilizador_id TEXT,
     hora_extra BOOLEAN NOT NULL DEFAULT FALSE,
+    motivo_falta TEXT NOT NULL DEFAULT '',
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(turno_id, utilizador_id)
@@ -358,6 +361,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   await run(`ALTER TABLE turno_equipa_real ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, 'turno_equipa_real-userid-text');
   await run(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT`, 'turno_equipa_real-cobrindo');
   await run(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE`, 'turno_equipa_real-hora-extra');
+  await run(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT ''`, 'turno_equipa_real-motivo-falta');
   await run(`ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key`, 'escala-drop-unique-old');
   await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_data_turno_utilizador_key') THEN ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id); END IF; END $$`, 'escala-add-unique-new');
   res.json({ results });
@@ -1162,12 +1166,14 @@ app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
           utilizador_id TEXT NOT NULL,
           cobrindo_utilizador_id TEXT,
           hora_extra BOOLEAN NOT NULL DEFAULT FALSE,
+          motivo_falta TEXT NOT NULL DEFAULT '',
           notas TEXT NOT NULL DEFAULT '',
           criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           UNIQUE(turno_id, utilizador_id)
         )`);
         await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT`).catch(()=>{});
         await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE`).catch(()=>{});
+        await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT ''`).catch(()=>{});
         const r2 = await query(
           `SELECT er.*,
                   u.nome AS utilizador_nome, u.role AS utilizador_role,
@@ -1188,19 +1194,22 @@ app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
 
 app.post('/api/turnos/:id/equipa-real', auth, async (req, res) => {
   try {
-    const { utilizador_id, cobrindo_utilizador_id, hora_extra, notas } = req.body || {};
+    const { utilizador_id, cobrindo_utilizador_id, hora_extra, motivo_falta, notas } = req.body || {};
     if (!utilizador_id) return res.status(400).json({ erro: 'utilizador_id é obrigatório' });
     const cobre = cobrindo_utilizador_id ? String(cobrindo_utilizador_id) : null;
     const he = !!hora_extra;
+    const motivo = (motivo_falta || '').trim();
+    if (cobre && !motivo) return res.status(400).json({ erro: 'motivo_falta é obrigatório quando há cobertura' });
     const r = await query(
-      `INSERT INTO turno_equipa_real (turno_id, utilizador_id, cobrindo_utilizador_id, hora_extra, notas)
-       VALUES ($1,$2,$3,$4,$5)
+      `INSERT INTO turno_equipa_real (turno_id, utilizador_id, cobrindo_utilizador_id, hora_extra, motivo_falta, notas)
+       VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (turno_id, utilizador_id) DO UPDATE
        SET cobrindo_utilizador_id=EXCLUDED.cobrindo_utilizador_id,
            hora_extra=EXCLUDED.hora_extra,
+           motivo_falta=EXCLUDED.motivo_falta,
            notas=EXCLUDED.notas
        RETURNING *`,
-      [req.params.id, String(utilizador_id), cobre, he, (notas || '').trim()]
+      [req.params.id, String(utilizador_id), cobre, he, motivo, (notas || '').trim()]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }

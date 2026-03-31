@@ -1508,6 +1508,10 @@ async function loadEscalaTurno() {
     const reaisIds = new Set(equipaReal.map(r => String(r.utilizador_id || '')).filter(Boolean));
     const faltas = lista.filter(r => r.utilizador_id && !reaisIds.has(String(r.utilizador_id)));
     const coberturas = equipaReal.filter(r => r.utilizador_id && !escaladosIds.has(String(r.utilizador_id)));
+    const motivoPorFalta = {};
+    equipaReal.forEach(r => {
+      if (r.cobrindo_utilizador_id && r.motivo_falta) motivoPorFalta[String(r.cobrindo_utilizador_id)] = r.motivo_falta;
+    });
 
     const info = `<div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">${origem}</div>`;
     const escaladosHtml = lista.length
@@ -1529,6 +1533,7 @@ async function loadEscalaTurno() {
           <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>
           <div style="font-size:12px;color:#64748b">${(r.utilizador_role || 'operador').toUpperCase()}</div>
           ${r.cobrindo_utilizador_nome ? `<div style="font-size:12px;color:#60a5fa;margin-top:2px">Cobrindo: ${r.cobrindo_utilizador_nome}</div>` : ''}
+          ${r.motivo_falta ? `<div style="font-size:12px;color:#fbbf24;margin-top:2px">Motivo da falta: ${r.motivo_falta}</div>` : ''}
           ${r.hora_extra ? `<div style="font-size:12px;color:#fbbf24;margin-top:2px">Hora extra aplicada</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px">
@@ -1541,7 +1546,7 @@ async function loadEscalaTurno() {
 
     const alertaHtml = `
       <div style="margin-top:10px;font-size:12px">
-        <div style="color:${faltas.length ? '#fbbf24' : '#4ade80'}">${faltas.length ? `⚠ Faltas: ${faltas.map(f => f.utilizador_nome || 'Sem nome').join(', ')}` : '✓ Sem faltas nos escalados'}</div>
+        <div style="color:${faltas.length ? '#fbbf24' : '#4ade80'}">${faltas.length ? `⚠ Faltas: ${faltas.map(f => (f.utilizador_nome || 'Sem nome') + (motivoPorFalta[String(f.utilizador_id)] ? ` (${motivoPorFalta[String(f.utilizador_id)]})` : '')).join(', ')}` : '✓ Sem faltas nos escalados'}</div>
         <div style="color:${coberturas.length ? '#60a5fa' : '#64748b'};margin-top:4px">${coberturas.length ? `↺ Coberturas: ${coberturas.map(c => c.utilizador_nome || 'Sem nome').join(', ')}` : 'Sem coberturas registadas'}</div>
       </div>`;
 
@@ -1558,6 +1563,7 @@ async function loadEscalaTurno() {
             <option value="">— Está cobrindo quem? —</option>
             ${lista.filter(r => r.utilizador_id).map(r => `<option value="${r.utilizador_id}">${r.utilizador_nome || r.utilizador_id}</option>`).join('')}
           </select>
+          <input id="tp-motivo-falta" class="entradas-notas" type="text" placeholder="Motivo da falta" style="display:none"/>
           <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#94a3b8">
             <input id="tp-he" type="checkbox" style="width:14px;height:14px"/>
             Aplicar hora extra
@@ -1579,13 +1585,16 @@ async function loadEscalaTurno() {
     if (canEdit) {
       const userSel = document.getElementById('tp-user');
       const cobSel = document.getElementById('tp-cobrindo');
+      const motEl = document.getElementById('tp-motivo-falta');
       const heEl = document.getElementById('tp-he');
       const toggleExtra = () => {
-        if (!userSel || !cobSel || !heEl) return;
+        if (!userSel || !cobSel || !heEl || !motEl) return;
         const uid = userSel.value;
         const naoEscalado = !!uid && !escaladosIds.has(String(uid));
         cobSel.style.display = naoEscalado ? '' : 'none';
+        motEl.style.display = naoEscalado ? '' : 'none';
         heEl.checked = naoEscalado ? heEl.checked : false;
+        if (!naoEscalado) motEl.value = '';
       };
       if (userSel) userSel.onchange = toggleExtra;
       toggleExtra();
@@ -1599,6 +1608,7 @@ async function addTurnoPresenca(turnoId) {
   const utilizador_id = val('tp-user');
   const cobrindo_utilizador_id = val('tp-cobrindo');
   const hora_extra = !!document.getElementById('tp-he')?.checked;
+  const motivo_falta = val('tp-motivo-falta');
   const notas = val('tp-notas');
   if (!utilizador_id) return err('turno-presenca-msg', 'Seleciona um funcionário');
   const turnoNome = S.turnoData?.nome;
@@ -1609,9 +1619,10 @@ async function addTurnoPresenca(turnoId) {
   const escaladosIds = new Set(template.filter(r => Number(r.dia_semana) === diaSemana && r.turno === turnoNome).map(r => String(r.utilizador_id || '')).filter(Boolean));
   const naoEscalado = !escaladosIds.has(String(utilizador_id));
   if (naoEscalado && !cobrindo_utilizador_id) return err('turno-presenca-msg', 'Seleciona quem este funcionário está cobrindo');
+  if (naoEscalado && !motivo_falta.trim()) return err('turno-presenca-msg', 'Regista o motivo da falta');
   if (naoEscalado && !hora_extra) return err('turno-presenca-msg', 'Confirma se deve aplicar pagamento de hora extra');
   try {
-    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, cobrindo_utilizador_id: naoEscalado ? cobrindo_utilizador_id : null, hora_extra: naoEscalado ? hora_extra : false, notas });
+    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, cobrindo_utilizador_id: naoEscalado ? cobrindo_utilizador_id : null, hora_extra: naoEscalado ? hora_extra : false, motivo_falta: naoEscalado ? motivo_falta.trim() : '', notas });
     show('turno-presenca-msg', '');
     if (document.getElementById('tp-notas')) document.getElementById('tp-notas').value = '';
     await loadEscalaTurno();

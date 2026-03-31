@@ -1480,13 +1480,23 @@ async function loadEscalaTurno() {
       el.innerHTML = '<span style="color:#64748b">Turno não selecionado.</span>';
       return;
     }
-    const rows = await api('GET', `/escala?data_inicio=${S.date}&data_fim=${S.date}`);
-    const lista = rows.filter(r => r.turno === turnoNome);
+    const [rowsDia, rowsTemplate] = await Promise.all([
+      api('GET', `/escala?data_inicio=${S.date}&data_fim=${S.date}`),
+      api('GET', '/escala/template')
+    ]);
+    const listaDia = rowsDia.filter(r => r.turno === turnoNome);
+    const d = new Date(S.date + 'T12:00:00Z');
+    const day = d.getUTCDay();
+    const diaSemana = day === 0 ? 6 : day - 1; // 0=Seg ... 6=Dom
+    const listaTpl = rowsTemplate.filter(r => Number(r.dia_semana) === diaSemana && r.turno === turnoNome);
+    const lista = listaDia.length ? listaDia : listaTpl;
+    const origem = listaDia.length ? 'escala do dia' : 'escala template';
     if (!lista.length) {
       el.innerHTML = '<span style="color:#64748b">Sem funcionários escalados para este turno.</span>';
       return;
     }
-    el.innerHTML = lista.map((r, i) => `
+    const info = `<div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">${origem}</div>`;
+    el.innerHTML = info + lista.map((r, i) => `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;${i < lista.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
         <div>
           <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>

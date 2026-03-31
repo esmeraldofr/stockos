@@ -1797,6 +1797,9 @@ async function drawArmazem() {
           <div class="field" style="margin:0"><label>Nº de caixas</label><input id="a-caixas" type="number" min="1" step="any" placeholder="Ex: 10"/></div>
           <div class="field" style="margin:0"><label>Qtd por caixa</label><input id="a-qtd-caixa" type="number" min="0.001" step="any" placeholder="Ex: 24"/></div>
         </div>
+        <div id="a-caixa-preco-wrap" style="display:none">
+          <div class="field"><label>Preço da caixa (Kz)</label><input id="a-preco-caixa" type="number" min="0.01" step="any" placeholder="Ex: 12000"/></div>
+        </div>
         <div class="field"><label>Fornecedor (opcional)</label><input id="a-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
         <div class="field"><label>Notas</label><input id="a-notas" type="text" placeholder="Ex: compra semanal"/></div>
         <button id="a-btn-submit" class="btn btn-success" onclick="submitCompraArmazem()">Registar compra</button>
@@ -1812,6 +1815,8 @@ async function drawArmazem() {
     </div>
     ${navBar()}
   `);
+  bindCompraCaixaInputs();
+  toggleCompraCaixa();
   await loadArmazemData();
 }
 
@@ -1884,12 +1889,41 @@ function toggleNovoProdutoArmazem() {
 function toggleCompraCaixa() {
   const check = document.getElementById('a-modo-caixa');
   const fields = document.getElementById('a-caixa-fields');
+  const precoCaixaWrap = document.getElementById('a-caixa-preco-wrap');
   const qty = document.getElementById('a-qty');
+  const precoUnit = document.getElementById('a-preco');
   if (!check || !fields || !qty) return;
   const on = !!check.checked;
   fields.style.display = on ? 'grid' : 'none';
+  if (precoCaixaWrap) precoCaixaWrap.style.display = on ? '' : 'none';
   qty.disabled = on;
+  if (precoUnit) precoUnit.readOnly = on;
   if (on) qty.value = '';
+  if (!on && precoUnit) precoUnit.value = '';
+  syncPrecoUnitFromCaixa();
+}
+
+function syncPrecoUnitFromCaixa() {
+  const check = document.getElementById('a-modo-caixa');
+  const precoUnit = document.getElementById('a-preco');
+  if (!check || !precoUnit || !check.checked) return;
+  const precoCaixa = parseFloat(val('a-preco-caixa')) || 0;
+  const qtdPorCaixa = parseFloat(val('a-qtd-caixa')) || 0;
+  if (precoCaixa > 0 && qtdPorCaixa > 0) {
+    precoUnit.value = (precoCaixa / qtdPorCaixa).toFixed(2);
+  } else {
+    precoUnit.value = '';
+  }
+}
+
+function bindCompraCaixaInputs() {
+  const ids = ['a-preco-caixa', 'a-qtd-caixa', 'a-caixas'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el || el.dataset.binded) return;
+    el.dataset.binded = '1';
+    el.addEventListener('input', syncPrecoUnitFromCaixa);
+  });
 }
 
 let armazemCompraSubmitting = false;
@@ -1928,6 +1962,7 @@ async function submitCompraArmazem() {
     document.getElementById('a-qty').value = '';
     document.getElementById('a-caixas').value = '';
     document.getElementById('a-qtd-caixa').value = '';
+    document.getElementById('a-preco-caixa').value = '';
     document.getElementById('a-preco').value = '';
     document.getElementById('a-fornecedor').value = '';
     document.getElementById('a-notas').value = '';

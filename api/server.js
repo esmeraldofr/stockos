@@ -480,6 +480,61 @@ async function deleteBorderoFromSupabaseStorage(publicUrl) {
   }).catch(() => {});
 }
 
+/** Uma foto de borderô por dia de depósito: limpa todas as linhas desse dia e grava só no registo canónico (primeiro turno). */
+async function purgeBorderoUrlsForDayAndStorage(dataStr) {
+  const r = await query(
+    `SELECT d.id, d.bordero_foto_url FROM depositos_banco d
+     JOIN turnos t ON t.id = d.turno_id
+     WHERE t.data = $1::date`,
+    [dataStr]
+  );
+  for (const row of r.rows) {
+    const u = row.bordero_foto_url;
+    if (u && String(u).startsWith('http')) await deleteBorderoFromSupabaseStorage(String(u));
+  }
+  await query(
+    `UPDATE depositos_banco d SET bordero_foto_url = ''
+     FROM turnos t
+     WHERE d.turno_id = t.id AND t.data = $1::date`,
+    [dataStr]
+  );
+}
+
+async function getCanonicalDepositIdForDay(dataStr) {
+  const r = await query(
+    `SELECT d.id FROM depositos_banco d
+     JOIN turnos t ON t.id = d.turno_id
+     WHERE t.data = $1::date
+     ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 ELSE 3 END
+     LIMIT 1`,
+    [dataStr]
+  );
+  return r.rows[0]?.id ?? null;
+}
+
+async function applyBorderoFotoCanonicalDay(dataStr, canonicalId, fotoBase64) {
+  const parsed = parseDataUrlFoto(fotoBase64);
+  if (!parsed) {
+    const err = new Error('Envia uma imagem (JPEG, PNG ou WebP) em base64 (data URL).');
+    err.code = 'BORDERO';
+    throw err;
+  }
+  await purgeBorderoUrlsForDayAndStorage(dataStr);
+  const { url: sbUrl, key: sbKey } = getSupabaseEnv();
+  let finalUrl;
+  if (sbUrl && sbKey) {
+    const fileKey = `${dataStr}/${canonicalId}-${crypto.randomBytes(6).toString('hex')}.${parsed.ext}`;
+    finalUrl = await uploadBorderoToSupabase(parsed.buffer, fileKey, parsed.contentType);
+  } else {
+    const raw = String(fotoBase64 || '').trim();
+    if (raw.length > 4 * 1024 * 1024) {
+      throw new Error('Imagem demasiado grande. Define SUPABASE_SERVICE_ROLE_KEY no servidor para usar Storage.');
+    }
+    finalUrl = raw;
+  }
+  await query('UPDATE depositos_banco SET bordero_foto_url=$1 WHERE id=$2', [finalUrl, canonicalId]);
+}
+
 /** valor = bruto por turno na coluna valor; saída no depósito só no total (valor_saidas num único registo do dia). Líquido total = Σ(valor) − Σ(valor_saidas). */
 function parseDepositoValores(body) {
   const saidasRaw = parseFloat(body.valor_saidas);
@@ -1711,7 +1766,7 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res
 app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     await ensureDepositosBanco();
-    const { itens, valor_saidas_total, saidas_destino: saidasDestinoBody } = req.body || {};
+    const { itens, valor_saidas_total, saidas_destino: saidasDestinoBody, bordero_foto_base64 } = req.body || {};
     const saidasTotalRaw = parseFloat(valor_saidas_total);
     const saidasTotal = Number.isNaN(saidasTotalRaw) ? 0 : Math.max(0, saidasTotalRaw);
     const saidasDestino = sanitizeSaidasDestino(saidasDestinoBody);
@@ -1805,6 +1860,11 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
         out.push(r.rows[0]);
       }
       await client.query('COMMIT');
+      if (bordero_foto_base64 && String(bordero_foto_base64).trim()) {
+        const td = await query('SELECT data::text FROM turnos WHERE id=$1', [dedup[0].turno_id]);
+        const calendarDay = (td.rows[0]?.data || dedup[0].data_deposito || '').toString().slice(0, 10);
+        await applyBorderoFotoCanonicalDay(calendarDay, out[0].id, bordero_foto_base64);
+      }
       res.json({ ok: true, registos: out.length, rows: out });
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {});
@@ -1812,6 +1872,37 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
     } finally {
       await client.release();
     }
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
+});
+
+app.post('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const dataStr = (req.body?.data || '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dataStr)) {
+      return res.status(400).json({ erro: 'Indica a data (YYYY-MM-DD).' });
+    }
+    const cid = await getCanonicalDepositIdForDay(dataStr);
+    if (!cid) return res.status(404).json({ erro: 'Não há depósitos registados neste dia.' });
+    await applyBorderoFotoCanonicalDay(dataStr, cid, req.body?.foto_base64);
+    const u = await query('SELECT bordero_foto_url FROM depositos_banco WHERE id=$1', [cid]);
+    res.json({ ok: true, bordero_foto_url: u.rows[0]?.bordero_foto_url || '' });
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
+});
+
+app.delete('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const dataStr = (req.query.data || '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dataStr)) {
+      return res.status(400).json({ erro: 'Indica ?data=YYYY-MM-DD.' });
+    }
+    await purgeBorderoUrlsForDayAndStorage(dataStr);
+    res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ erro: e.message });
   }
@@ -1828,55 +1919,6 @@ app.delete('/api/depositos/:id', auth, requireRole('admin', 'gestor'), async (re
     if (!r.rows.length) return res.status(404).json({ erro: 'Depósito não encontrado' });
     res.json({ ok: true });
   } catch(e) { res.status(400).json({ erro: e.message }); }
-});
-
-app.post('/api/depositos/:id/bordero', auth, requireRole('admin', 'gestor'), async (req, res) => {
-  try {
-    await ensureDepositosBanco();
-    const depId = parseInt(req.params.id, 10);
-    if (!depId) return res.status(400).json({ erro: 'ID inválido.' });
-    const ex = await query('SELECT id, bordero_foto_url FROM depositos_banco WHERE id=$1', [depId]);
-    if (!ex.rows.length) return res.status(404).json({ erro: 'Depósito não encontrado.' });
-    const oldUrl = ex.rows[0].bordero_foto_url;
-    const parsed = parseDataUrlFoto(req.body?.foto_base64);
-    if (!parsed) {
-      return res.status(400).json({ erro: 'Envia uma imagem (JPEG, PNG ou WebP) em base64 (data URL).' });
-    }
-    const { url: sbUrl, key: sbKey } = getSupabaseEnv();
-    let finalUrl;
-    if (sbUrl && sbKey) {
-      const day = new Date().toISOString().slice(0, 10);
-      const fileKey = `${day}/${depId}-${crypto.randomBytes(6).toString('hex')}.${parsed.ext}`;
-      if (oldUrl && String(oldUrl).startsWith('http')) await deleteBorderoFromSupabaseStorage(String(oldUrl));
-      finalUrl = await uploadBorderoToSupabase(parsed.buffer, fileKey, parsed.contentType);
-    } else {
-      const raw = String(req.body.foto_base64 || '').trim();
-      if (raw.length > 4 * 1024 * 1024) {
-        return res.status(400).json({ erro: 'Imagem demasiado grande. Define SUPABASE_SERVICE_ROLE_KEY no servidor para usar Storage.' });
-      }
-      finalUrl = raw;
-    }
-    await query('UPDATE depositos_banco SET bordero_foto_url=$1 WHERE id=$2', [finalUrl, depId]);
-    res.json({ ok: true, bordero_foto_url: finalUrl });
-  } catch (e) {
-    res.status(400).json({ erro: e.message });
-  }
-});
-
-app.delete('/api/depositos/:id/bordero', auth, requireRole('admin', 'gestor'), async (req, res) => {
-  try {
-    await ensureDepositosBanco();
-    const depId = parseInt(req.params.id, 10);
-    if (!depId) return res.status(400).json({ erro: 'ID inválido.' });
-    const ex = await query('SELECT bordero_foto_url FROM depositos_banco WHERE id=$1', [depId]);
-    if (!ex.rows.length) return res.status(404).json({ erro: 'Depósito não encontrado.' });
-    const u = ex.rows[0].bordero_foto_url;
-    if (u && String(u).startsWith('http')) await deleteBorderoFromSupabaseStorage(String(u));
-    await query('UPDATE depositos_banco SET bordero_foto_url=$1 WHERE id=$2', ['', depId]);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(400).json({ erro: e.message });
-  }
 });
 
 // ── HISTÓRICO ─────────────────────────────────────────────────

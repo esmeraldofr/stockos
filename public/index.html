@@ -509,6 +509,14 @@ async function loadDia() {
         break;
       }
     }
+    let borderoDiaUrl = '';
+    for (const t of [...turnos].sort((a, b) => (({ manha: 1, tarde: 2, noite: 3 }[a.nome]) || 9) - (({ manha: 1, tarde: 2, noite: 3 }[b.nome]) || 9))) {
+      const d = depositosByTurno[String(t.id)];
+      if (d && String(d.bordero_foto_url || '').trim()) {
+        borderoDiaUrl = String(d.bordero_foto_url).trim();
+        break;
+      }
+    }
     const ordemTurno = { manha: 1, tarde: 2, noite: 3 };
     const turnosOrdenados = [...turnos].sort((a, b) => (ordemTurno[a.nome] || 9) - (ordemTurno[b.nome] || 9));
 
@@ -552,7 +560,7 @@ async function loadDia() {
     const blocoDepositos = podeDepositos ? `
       <div class="card" id="sec-depositos">
         <div class="card-title">🏦 Depósitos no banco</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>valor bruto</strong> e <strong>TPA</strong>. A <strong>saída no depósito</strong> é um valor único que só reduz o <strong>total depositado no banco</strong>; indica <strong>produto ou destino</strong> dessa saída. <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns.</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>valor bruto</strong> e <strong>TPA</strong>. A <strong>saída no depósito</strong> e a <strong>foto do borderô</strong> são <strong>únicas</strong> para todo o registo do dia. <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns.</p>
         ${depositosErro ? `<div class="alert alert-error" style="margin-bottom:10px">Não foi possível carregar os depósitos: ${depositosErro}</div>` : ''}
         ${!turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Não há turnos neste dia — abre turnos antes de registar depósitos.</div>` : ''}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
@@ -618,21 +626,6 @@ async function loadDia() {
               <div class="field"><label>Valor registado no TPA (Kz)</label><input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
             </div>
             <div style="font-size:11px;color:#64748b;margin-bottom:2px">TPA na caixa: <strong style="color:#94a3b8">${fmt(caixaTpa)}</strong></div>
-            <div class="field" style="margin-bottom:8px">
-              <label>Foto do borderô (opcional)</label>
-              ${dep && dep.bordero_foto_url ? `
-                <div style="margin-bottom:8px">
-                  <a href="${attrUrl(dep.bordero_foto_url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block">
-                    <img src="${attrUrl(dep.bordero_foto_url)}" alt="Borderô" style="max-height:140px;max-width:100%;border-radius:8px;border:1px solid #334155;vertical-align:top"/>
-                  </a>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-                    <button type="button" class="btn btn-ghost btn-sm" onclick="removeBorderoDeposito(${dep.id})">Remover foto</button>
-                  </div>
-                </div>
-              ` : ''}
-              <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" id="dep-bordero-${t.id}" ${!pode ? 'disabled' : ''} ${dep ? `onchange="uploadBorderoDeposito(${dep.id}, this)"` : ''}/>
-              <div style="font-size:11px;color:#64748b;margin-top:4px">JPEG, PNG ou WebP. ${dep ? 'Escolhe outro ficheiro para substituir.' : 'Será enviada após registar o depósito.'}</div>
-            </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
               ${dep ? `<button type="button" class="btn btn-ghost btn-sm" onclick="deleteDepositoDia(${dep.id})">Remover este turno</button>` : ''}
             </div>
@@ -659,6 +652,21 @@ async function loadDia() {
         <div class="field">
           <label>Data do depósito (aplica a todos os turnos com valor)</label>
           <input id="dep-data-dia" type="date" value="${dataDepComum.replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
+        </div>
+        <div class="field">
+          <label>Foto do borderô (opcional) — uma para todo o registo</label>
+          ${borderoDiaUrl ? `
+            <div style="margin-bottom:8px">
+              <a href="${attrUrl(borderoDiaUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block">
+                <img src="${attrUrl(borderoDiaUrl)}" alt="Borderô" style="max-height:160px;max-width:100%;border-radius:8px;border:1px solid #334155;vertical-align:top"/>
+              </a>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                <button type="button" class="btn btn-ghost btn-sm" onclick="removeBorderoDia()">Remover foto</button>
+              </div>
+            </div>
+          ` : ''}
+          <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" id="dep-bordero-dia" ${!temTurnoFechado ? 'disabled' : ''} ${(depositos || []).length > 0 ? 'onchange="uploadBorderoDia(this)"' : ''}/>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">Uma imagem por operação; substitui a anterior ao escolher outro ficheiro (ou ao registar de novo com nova foto). JPEG, PNG ou WebP.</div>
         </div>
         <button type="button" class="btn btn-success" onclick="submitDepositosDia()" ${!temTurnoFechado ? 'disabled' : ''}>Registar depósito</button>
           `;
@@ -758,31 +766,25 @@ async function submitDepositosDia() {
       referencia: refDia,
       notas: notasDia
     }));
-    const borderoFiles = [];
-    for (const r of rows) {
-      const inp = document.getElementById('dep-bordero-' + r.turno_id);
-      if (inp && inp.files && inp.files[0]) borderoFiles.push({ turno_id: r.turno_id, file: inp.files[0] });
+    const borderoInp = document.getElementById('dep-bordero-dia');
+    let borderoB64 = '';
+    if (borderoInp && borderoInp.files && borderoInp.files[0]) {
+      borderoB64 = await fileToDataUrl(borderoInp.files[0]);
     }
-    const res = await api('POST', '/depositos/lote', { itens, valor_saidas_total: saidasUnica, saidas_destino: destinoSaidas });
-    const created = res.rows || [];
-    for (const row of created) {
-      const bf = borderoFiles.find((x) => String(x.turno_id) === String(row.turno_id));
-      if (bf) {
-        const b64 = await fileToDataUrl(bf.file);
-        await api('POST', `/depositos/${row.id}/bordero`, { foto_base64: b64 });
-      }
-    }
+    const payload = { itens, valor_saidas_total: saidasUnica, saidas_destino: destinoSaidas };
+    if (borderoB64) payload.bordero_foto_base64 = borderoB64;
+    await api('POST', '/depositos/lote', payload);
     await loadDia();
   } catch (e) {
     alert(e.message || String(e));
   }
 }
 
-async function uploadBorderoDeposito(depId, inputEl) {
-  if (!depId || !inputEl || !inputEl.files || !inputEl.files[0]) return;
+async function uploadBorderoDia(inputEl) {
+  if (!inputEl || !inputEl.files || !inputEl.files[0]) return;
   try {
     const b64 = await fileToDataUrl(inputEl.files[0]);
-    await api('POST', `/depositos/${depId}/bordero`, { foto_base64: b64 });
+    await api('POST', '/depositos/bordero-dia', { data: S.date, foto_base64: b64 });
     inputEl.value = '';
     await loadDia();
   } catch (e) {
@@ -790,10 +792,10 @@ async function uploadBorderoDeposito(depId, inputEl) {
   }
 }
 
-async function removeBorderoDeposito(id) {
-  if (!confirm('Remover a foto do borderô deste depósito?')) return;
+async function removeBorderoDia() {
+  if (!confirm('Remover a foto do borderô deste registo?')) return;
   try {
-    await api('DELETE', `/depositos/${id}/bordero`);
+    await api('DELETE', '/depositos/bordero-dia?data=' + encodeURIComponent(S.date));
     await loadDia();
   } catch (e) {
     alert(e.message || String(e));

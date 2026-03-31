@@ -1262,13 +1262,15 @@ async function loadTurno() {
       </div>
 
       <div id="tab-registos" class="turno-tab-panel">
-        <div class="card" id="entradas-card">
-          <div class="card-title">📦 Entradas de Stock</div>
+        <div class="card" id="registos-movimentos-card">
+          <div class="card-title">📦💸 Entradas de stock e saídas de caixa</div>
+          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 18px">No mesmo sítio: <strong style="color:#cbd5e1">quantidades</strong> que entram ou saem do stock (armazém ou compra) e <strong style="color:#cbd5e1">valores</strong> que saem da caixa — despesas e compras de stock (aparecem na lista abaixo com as entradas por compra).</p>
+          <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Stock — quantidades</div>
           <div id="entradas-section"><span style="color:#64748b">A carregar...</span></div>
-        </div>
-        <div class="card mt-16" id="saidas-card">
-          <div class="card-title">💸 Saídas de Caixa</div>
-          <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
+          <div style="margin-top:22px;padding-top:18px;border-top:1px solid #334155">
+            <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Caixa — dinheiro que saiu</div>
+            <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
+          </div>
         </div>
         <div class="card mt-16">
           <div class="card-title">💰 Caixa</div>
@@ -1549,10 +1551,7 @@ function switchTurnoTab(name, btn) {
   if (name === 'registos') {
     const tid = S.turnoData?.id;
     const stock = S.turnoData?.stock || [];
-    if (tid) {
-      loadEntradasSection(tid, stock, !!S.turnoCanEdit);
-      loadSaidasSection(tid, !!S.turnoCanEdit);
-    }
+    if (tid) loadRegistosMovimentosSection(tid, stock, !!S.turnoCanEdit);
   }
   if (name === 'vendas') {
     const tid = S.turnoData?.id;
@@ -1599,12 +1598,31 @@ async function fecharTurno(id) {
   } catch(e) { err('turno-msg', e.message); }
 }
 
-// ── ENTRADAS DE STOCK ─────────────────────────────────────────
-async function loadEntradasSection(turnoId, stocks, canEdit) {
+// ── REGISTOS: STOCK + SAÍDAS DE CAIXA (unificado) ──────────────
+async function loadRegistosMovimentosSection(turnoId, stocks, canEdit) {
+  const elE = document.getElementById('entradas-section');
+  const elS = document.getElementById('saidas-section');
+  if (!elE || !elS) return;
+  elE.innerHTML = '<span style="color:#64748b">A carregar...</span>';
+  elS.innerHTML = '<span style="color:#64748b">A carregar...</span>';
+  try {
+    const [entradas, saidas] = await Promise.all([
+      api('GET', `/turnos/${turnoId}/entradas`),
+      api('GET', `/turnos/${turnoId}/saidas`)
+    ]);
+    renderEntradasSection(turnoId, stocks, canEdit, entradas);
+    renderSaidasSection(turnoId, canEdit, saidas, entradas);
+  } catch (e) {
+    const msg = `<div class="alert alert-error">${e.message}</div>`;
+    elE.innerHTML = msg;
+    elS.innerHTML = msg;
+  }
+}
+
+function renderEntradasSection(turnoId, stocks, canEdit, entradas) {
   const el = document.getElementById('entradas-section');
   if (!el) return;
   try {
-    const entradas = await api('GET', `/turnos/${turnoId}/entradas`);
     const stockById = {};
     (stocks || []).forEach(s => { stockById[String(s.produto_id)] = s; });
 
@@ -1742,22 +1760,16 @@ async function submitEntrada(turnoId) {
     stockBuf[pid].entrada = soma;
     updateStock(pid, 'entrada', soma);
     const stocks = S.turnoData?.stock || [];
-    await loadEntradasSection(turnoId, stocks, true);
-    await loadSaidasSection(turnoId, true);
+    await loadRegistosMovimentosSection(turnoId, stocks, true);
   } catch(e) {
     if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
   }
 }
 
-// ── SAÍDAS DE CAIXA ───────────────────────────────────────────
-async function loadSaidasSection(turnoId, canEdit) {
+function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
   const el = document.getElementById('saidas-section');
   if (!el) return;
   try {
-    const [saidas, entradas] = await Promise.all([
-      api('GET', `/turnos/${turnoId}/saidas`),
-      api('GET', `/turnos/${turnoId}/entradas`)
-    ]);
     const totalDespesas = saidas.reduce((s, r) => s + parseFloat(r.valor), 0);
     const totalCompras  = entradas.filter(e => e.origem === 'compra' && e.tipo === 'entrada')
                                   .reduce((s, e) => s + parseFloat(e.preco), 0);
@@ -2191,7 +2203,7 @@ async function submitSaida(turnoId) {
     document.getElementById('s-desc').value  = '';
     document.getElementById('s-valor').value = '';
     document.getElementById('s-notas').value = '';
-    await loadSaidasSection(turnoId, true);
+    await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], true);
   } catch(e) {
     if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
   }

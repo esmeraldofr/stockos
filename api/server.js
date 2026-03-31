@@ -1516,7 +1516,7 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// ── ENTRADAS DE STOCK ──────────────────────────────────────────
+// ── TURNO: entradas de stock + saídas de caixa (caixa.saida = despesas + compras stock) ──
 async function ensureTurnoEntradas() {
   await query(`CREATE TABLE IF NOT EXISTS turno_entradas (
     id SERIAL PRIMARY KEY,
@@ -1634,7 +1634,6 @@ app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// ── SAÍDAS DE CAIXA ────────────────────────────────────────────
 async function ensureTurnoSaidas() {
   await query(`CREATE TABLE IF NOT EXISTS turno_saidas (
     id SERIAL PRIMARY KEY,

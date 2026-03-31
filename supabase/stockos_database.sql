@@ -109,6 +109,18 @@ CREATE TABLE IF NOT EXISTS armazem_compras (
 -- ============================================================
 --  MIGRATIONS — add missing columns to existing tables
 -- ============================================================
+-- Supabase: coluna role pode ser ENUM role_utilizador (acrescentar valor «compras»).
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role_utilizador') THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_enum e
+      JOIN pg_type t ON t.oid = e.enumtypid
+      WHERE t.typname = 'role_utilizador' AND e.enumlabel = 'compras'
+    ) THEN
+      ALTER TYPE role_utilizador ADD VALUE 'compras';
+    END IF;
+  END IF;
+END $$;
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'operador';

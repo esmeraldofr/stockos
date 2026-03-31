@@ -323,7 +323,25 @@ function isValidUsername(s) {
   return /^[a-z0-9._-]{3,50}$/.test(s);
 }
 
+/** Supabase pode usar ENUM role_utilizador; o código usa o valor «compras». */
+async function ensureRoleEnumCompras() {
+  await query(`
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role_utilizador') THEN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_enum e
+          JOIN pg_type t ON t.oid = e.enumtypid
+          WHERE t.typname = 'role_utilizador' AND e.enumlabel = 'compras'
+        ) THEN
+          ALTER TYPE role_utilizador ADD VALUE 'compras';
+        END IF;
+      END IF;
+    END $$;
+  `).catch(() => {});
+}
+
 async function ensureUsernameColumn() {
+  await ensureRoleEnumCompras();
   await query(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`);
   const r = await query(`SELECT id, email FROM utilizadores WHERE username IS NULL OR TRIM(username) = ''`).catch(() => ({ rows: [] }));
   for (const row of r.rows) {
@@ -360,6 +378,19 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     try { await query(sql); results.push({ label, ok: true }); }
     catch(e) { results.push({ label, ok: false, erro: e.message }); }
   }
+  await run(
+    `DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role_utilizador') THEN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+          WHERE t.typname = 'role_utilizador' AND e.enumlabel = 'compras'
+        ) THEN
+          ALTER TYPE role_utilizador ADD VALUE 'compras';
+        END IF;
+      END IF;
+    END $$`,
+    'role_enum_compras'
+  );
   await run(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`, 'utilizadores-username-col');
   await run(
     `UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = ''`,

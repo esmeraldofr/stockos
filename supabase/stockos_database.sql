@@ -345,7 +345,7 @@ CREATE TABLE IF NOT EXISTS escalas (
 
 -- ============================================================
 --  DEPÓSITOS BANCO: valor = bruto por turno; valor_saidas = saída no depósito
---  (total do dia) guardada só num dos registos do dia; líquido total = Σ(valor) − Σ(valor_saidas)
+--  (total do dia) num registo; saidas_destino = produto/destino dessa saída (no mesmo registo)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS depositos_banco (
   id                SERIAL          PRIMARY KEY,
@@ -353,6 +353,7 @@ CREATE TABLE IF NOT EXISTS depositos_banco (
   data_deposito     DATE            NOT NULL DEFAULT CURRENT_DATE,
   valor             NUMERIC(15,2)   NOT NULL,
   valor_saidas      NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  saidas_destino    TEXT            NOT NULL DEFAULT '',
   valor_tpa         NUMERIC(15,2)   NOT NULL DEFAULT 0,
   referencia        TEXT            NOT NULL DEFAULT '',
   notas             TEXT            NOT NULL DEFAULT '',

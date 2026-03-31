@@ -383,7 +383,14 @@ async function ensureDepositosBanco() {
   } catch (_) {}
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
   await migrateDepositosSaidasAntigasAgrupadas().catch((e) => console.error('migrateDepositosSaidasAntigasAgrupadas', e));
+}
+
+function sanitizeSaidasDestino(s) {
+  return String(s ?? '')
+    .trim()
+    .slice(0, 2000);
 }
 
 /** valor = bruto por turno na coluna valor; saída no depósito só no total (valor_saidas num único registo do dia). Líquido total = Σ(valor) − Σ(valor_saidas). */
@@ -1529,18 +1536,23 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res
     if (!pv) return res.status(400).json({ erro: 'Indique o valor bruto (antes de saídas) ou o valor líquido depositado.' });
     const v = pv.valor;
     const vsaida = pv.valor_saidas;
+    const saidasDestino = sanitizeSaidasDestino(req.body?.saidas_destino);
+    if (vsaida > 0 && !saidasDestino) {
+      return res.status(400).json({ erro: 'Indica o produto a comprar ou o destino desta saída no depósito.' });
+    }
     const vtpa = parseFloat(valor_tpa);
     if (Number.isNaN(vtpa) || vtpa < 0) return res.status(400).json({ erro: 'Indique o valor registado no TPA (≥ 0).' });
     await assertTurnoFechado(turno_id);
     const ddep = (data_deposito || new Date().toISOString().split('T')[0]).trim();
     const r = await query(
-      `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, referencia, notas, criado_por)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, saidas_destino, referencia, notas, criado_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        ON CONFLICT (turno_id) DO UPDATE SET
          data_deposito = EXCLUDED.data_deposito,
          valor = EXCLUDED.valor,
          valor_tpa = EXCLUDED.valor_tpa,
          valor_saidas = EXCLUDED.valor_saidas,
+         saidas_destino = EXCLUDED.saidas_destino,
          referencia = EXCLUDED.referencia,
          notas = EXCLUDED.notas,
          criado_em = NOW()
@@ -1551,6 +1563,7 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res
         v,
         vtpa,
         vsaida,
+        vsaida > 0 ? saidasDestino : '',
         String(referencia || '').trim(),
         String(notas || '').trim(),
         String(req.user.id || '')
@@ -1573,9 +1586,13 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res
 app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     await ensureDepositosBanco();
-    const { itens, valor_saidas_total } = req.body || {};
+    const { itens, valor_saidas_total, saidas_destino: saidasDestinoBody } = req.body || {};
     const saidasTotalRaw = parseFloat(valor_saidas_total);
     const saidasTotal = Number.isNaN(saidasTotalRaw) ? 0 : Math.max(0, saidasTotalRaw);
+    const saidasDestino = sanitizeSaidasDestino(saidasDestinoBody);
+    if (saidasTotal > 0 && !saidasDestino) {
+      return res.status(400).json({ erro: 'Indica o produto a comprar ou o destino desta saída no depósito.' });
+    }
     if (!Array.isArray(itens) || !itens.length) {
       return res.status(400).json({ erro: 'Envia os depósitos por turno (lista itens).' });
     }
@@ -1602,6 +1619,7 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
         data_deposito: (raw.data_deposito || new Date().toISOString().split('T')[0]).trim(),
         valor: v,
         valor_saidas: 0,
+        saidas_destino: '',
         valor_tpa: vtpa,
         referencia: String(raw.referencia || '').trim(),
         notas: String(raw.notas || '').trim()
@@ -1628,19 +1646,21 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
       return res.status(400).json({ erro: 'O total depositado no banco (soma dos brutos menos a saída) tem de ser positivo.' });
     }
     dedup[0].valor_saidas = saidasTotal;
+    dedup[0].saidas_destino = saidasTotal > 0 ? saidasDestino : '';
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       const out = [];
       for (const row of dedup) {
         const r = await client.query(
-          `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, referencia, notas, criado_por)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+          `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, saidas_destino, referencia, notas, criado_por)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
            ON CONFLICT (turno_id) DO UPDATE SET
              data_deposito = EXCLUDED.data_deposito,
              valor = EXCLUDED.valor,
              valor_tpa = EXCLUDED.valor_tpa,
              valor_saidas = EXCLUDED.valor_saidas,
+             saidas_destino = EXCLUDED.saidas_destino,
              referencia = EXCLUDED.referencia,
              notas = EXCLUDED.notas,
              criado_em = NOW()
@@ -1651,6 +1671,7 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
             row.valor,
             row.valor_tpa,
             row.valor_saidas,
+            row.saidas_destino || '',
             row.referencia,
             row.notas,
             String(req.user.id || '')

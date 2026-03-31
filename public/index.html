@@ -47,8 +47,9 @@ input,select,button,textarea{font-family:inherit}
 /* Inputs */
 .field{margin-bottom:14px}
 .field label{display:block;font-size:13px;color:#94a3b8;margin-bottom:5px}
-.field input,.field select{width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 12px;color:#f1f5f9;font-size:14px}
-.field input:focus,.field select:focus{outline:none;border-color:#3b82f6}
+.field input,.field select,.field textarea{width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 12px;color:#f1f5f9;font-size:14px}
+.field textarea{min-height:72px;resize:vertical;line-height:1.4}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:#3b82f6}
 
 /* Badges */
 .badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600}
@@ -270,6 +271,13 @@ function addDays(d, n) {
 function render(html) { document.getElementById('app').innerHTML = html; }
 function show(id, html) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
 function val(id) { return document.getElementById(id)?.value || ''; }
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 function err(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-error">${msg}</div>`; }
 function suc(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-success">${msg}</div>`; }
 
@@ -479,6 +487,13 @@ async function loadDia() {
     const totalSaidasNoDeposito = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor_saidas) || 0), 0);
     const totalDepositos = Math.max(0, sumValorBruto - totalSaidasNoDeposito);
     const totalTpaRegistado = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor_tpa) || 0), 0);
+    let destinoSaidasComum = '';
+    for (const d of depositos || []) {
+      if ((parseFloat(d.valor_saidas) || 0) > 0 && String(d.saidas_destino || '').trim()) {
+        destinoSaidasComum = String(d.saidas_destino || '').trim();
+        break;
+      }
+    }
     const ordemTurno = { manha: 1, tarde: 2, noite: 3 };
     const turnosOrdenados = [...turnos].sort((a, b) => (ordemTurno[a.nome] || 9) - (ordemTurno[b.nome] || 9));
 
@@ -522,7 +537,7 @@ async function loadDia() {
     const blocoDepositos = podeDepositos ? `
       <div class="card" id="sec-depositos">
         <div class="card-title">🏦 Depósitos no banco</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>valor bruto</strong> e <strong>TPA</strong>. A <strong>saída no depósito</strong> é um valor único que só reduz o <strong>total depositado no banco</strong> (não é retirada por turno). <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns.</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>valor bruto</strong> e <strong>TPA</strong>. A <strong>saída no depósito</strong> é um valor único que só reduz o <strong>total depositado no banco</strong>; indica <strong>produto ou destino</strong> dessa saída. <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns.</p>
         ${depositosErro ? `<div class="alert alert-error" style="margin-bottom:10px">Não foi possível carregar os depósitos: ${depositosErro}</div>` : ''}
         ${!turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Não há turnos neste dia — abre turnos antes de registar depósitos.</div>` : ''}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
@@ -535,6 +550,7 @@ async function loadDia() {
             <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Saídas no depósito</div>
             <div style="font-size:22px;font-weight:700;color:#f87171;line-height:1.15">${fmt(totalSaidasNoDeposito)}</div>
             <div style="font-size:11px;color:#64748b;margin-top:6px">valor único no formulário</div>
+            ${destinoSaidasComum ? `<div style="font-size:12px;color:#cbd5e1;margin-top:10px;line-height:1.35;text-align:left;max-width:280px;margin-left:auto;margin-right:auto"><span style="color:#94a3b8">Destino:</span> ${escapeHtml(destinoSaidasComum)}</div>` : ''}
           </div>
           <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
             <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total TPA registado</div>
@@ -595,8 +611,12 @@ async function loadDia() {
         }).join('')}
         <div class="field" style="margin-top:8px">
           <label>Saídas no depósito (Kz) — única para todos os turnos</label>
-          <input id="dep-saidas-dia" type="number" min="0" step="any" placeholder="0" value="${saidasUnicaVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!temTurnoFechado ? 'disabled' : ''}/>
+          <input id="dep-saidas-dia" type="number" min="0" step="any" placeholder="0" value="${saidasUnicaVal.replace(/"/g, '&quot;')}" oninput="updateDepSaidasDestinoRequired();updateDepPreviewTotal()" ${!temTurnoFechado ? 'disabled' : ''}/>
           <div style="font-size:11px;color:#64748b;margin-top:4px">Desconta apenas no total depositado no banco (cartão acima), não por turno.</div>
+        </div>
+        <div class="field">
+          <label id="dep-saidas-destino-label">Produto / destino da saída <span id="dep-saidas-destino-hint" style="font-weight:400;color:#64748b">(obrigatório se houver valor em saídas)</span></label>
+          <textarea id="dep-saidas-destino-dia" rows="2" placeholder="Ex.: compra de cerveja Super Bock; pagamento fornecedor X; transferência para…" ${!temTurnoFechado ? 'disabled' : ''}>${escapeHtml(destinoSaidasComum)}</textarea>
         </div>
         <div class="field" style="margin-top:4px">
           <label>Referência (opcional)</label>
@@ -619,10 +639,21 @@ async function loadDia() {
       ${blocoDepositos || blocoDepositosSemPerm}
       ${resumoDia}
     `);
-    if (podeDepositos) queueMicrotask(() => updateDepPreviewTotal());
+    if (podeDepositos) queueMicrotask(() => { updateDepPreviewTotal(); updateDepSaidasDestinoRequired(); });
   } catch(e) {
     show('dia-content', `<div class="alert alert-error">${e.message}</div>`);
   }
+}
+
+function updateDepSaidasDestinoRequired() {
+  const inp = document.getElementById('dep-saidas-dia');
+  const ta = document.getElementById('dep-saidas-destino-dia');
+  const hint = document.getElementById('dep-saidas-destino-hint');
+  if (!inp || !ta || !hint) return;
+  const s = parseRaw(inp.value);
+  const need = s > 0;
+  ta.required = need;
+  hint.style.display = need ? 'inline' : 'none';
 }
 
 function updateDepPreviewTotal() {
@@ -639,6 +670,7 @@ function updateDepPreviewTotal() {
   const saidasU = parseRaw(document.getElementById('dep-saidas-dia')?.value);
   const liq = Math.max(0, sumB - saidasU);
   el.textContent = fmt(liq);
+  updateDepSaidasDestinoRequired();
 }
 
 async function submitDepositosDia() {
@@ -647,8 +679,13 @@ async function submitDepositosDia() {
     const refDia = val('dep-ref-dia');
     const notasDia = val('dep-notas-dia');
     const saidasUnica = parseRaw(val('dep-saidas-dia'));
+    const destinoSaidas = val('dep-saidas-destino-dia').trim();
     if (saidasUnica < 0) {
       alert('A saída no depósito não pode ser negativa.');
+      return;
+    }
+    if (saidasUnica > 0 && !destinoSaidas) {
+      alert('Indica o produto a comprar ou o destino desta saída no depósito.');
       return;
     }
     const rows = [];
@@ -691,7 +728,7 @@ async function submitDepositosDia() {
       referencia: refDia,
       notas: notasDia
     }));
-    await api('POST', '/depositos/lote', { itens, valor_saidas_total: saidasUnica });
+    await api('POST', '/depositos/lote', { itens, valor_saidas_total: saidasUnica, saidas_destino: destinoSaidas });
     await loadDia();
   } catch (e) {
     alert(e.message || String(e));

@@ -1815,12 +1815,8 @@ async function drawArmazem() {
         </div>
         <div class="field"><label>Fornecedor</label><input id="fx-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
         <div class="field"><label>Notas</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
-        <div class="table-wrap">
-          <table style="font-size:13px">
-            <thead><tr><th>Produto</th><th style="text-align:right">Qtd</th><th style="text-align:right">Preço unit. (Kz)</th><th></th></tr></thead>
-            <tbody id="fatura-linhas-body"></tbody>
-          </table>
-        </div>
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Linhas (mesma estrutura que «Registar compra»)</div>
+        <div id="fatura-linhas-body"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
           <button type="button" class="btn btn-ghost btn-sm" onclick="addFaturaLinha()">+ Linha</button>
           <button id="fx-btn-submit" class="btn btn-success btn-sm" onclick="submitFaturaArmazem()">Registar fatura</button>
@@ -1923,13 +1919,6 @@ function renderArmazemProdutoOptions(sel, selectedValue, term, includeNovo) {
   if (selectedValue && sel.querySelector(`option[value="${selectedValue}"]`)) sel.value = selectedValue;
 }
 
-function renderArmazemProdutoOptionsPlain(sel, selectedValue) {
-  const filtrados = (S.produtos || []).filter(p => p.ativo);
-  sel.innerHTML = '<option value="">—</option>' +
-    filtrados.map(p => `<option value="${p.id}" data-medicao="${p.tipo_medicao || 'unidade'}">${p.nome} (${medicaoSigla(p.tipo_medicao)})</option>`).join('');
-  if (selectedValue && sel.querySelector(`option[value="${selectedValue}"]`)) sel.value = selectedValue;
-}
-
 function bindArmazemProdutoFilter(sel) {
   if (!sel || sel.dataset.filterBinded) return;
   sel.dataset.filterBinded = '1';
@@ -1973,6 +1962,125 @@ function bindArmazemProdutoFilter(sel) {
     updateIndicator();
   });
   toggleNovoProdutoArmazem();
+}
+
+function bindArmazemProdutoFilterOnLine(sel, indicatorEl) {
+  if (!sel || sel.dataset.filterBinded) return;
+  sel.dataset.filterBinded = '1';
+  const updateInd = () => {
+    if (!indicatorEl) return;
+    const q = sel._filterBuf || '';
+    indicatorEl.textContent = q ? `Filtro: ${q}` : 'Filtro vazio (digita para procurar, Esc limpa)';
+  };
+  sel._filterBuf = '';
+  updateInd();
+  sel.addEventListener('keydown', function(e) {
+    const key = e.key || '';
+    if (key === 'Escape') {
+      sel._filterBuf = '';
+      renderArmazemProdutoOptions(sel, sel.value || '', '', true);
+      toggleFaturaLinhaNovo(sel);
+      updateInd();
+      return;
+    }
+    if (key === 'Backspace') {
+      e.preventDefault();
+      sel._filterBuf = (sel._filterBuf || '').slice(0, -1);
+      renderArmazemProdutoOptions(sel, '', sel._filterBuf, true);
+      toggleFaturaLinhaNovo(sel);
+      updateInd();
+      return;
+    }
+    if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      sel._filterBuf = (sel._filterBuf || '') + key;
+      renderArmazemProdutoOptions(sel, '', sel._filterBuf, true);
+      if (sel.options.length > 0) sel.selectedIndex = 0;
+      toggleFaturaLinhaNovo(sel);
+      updateInd();
+    }
+  });
+  sel.addEventListener('blur', function() {
+    sel._filterBuf = '';
+    renderArmazemProdutoOptions(sel, sel.value || '', '', true);
+    toggleFaturaLinhaNovo(sel);
+    updateInd();
+  });
+}
+
+function toggleFaturaLinhaNovo(sel) {
+  const line = sel.closest('.fatura-linha');
+  if (!line) return;
+  const wrap = line.querySelector('.af-novo-wrap');
+  const qty = line.querySelector('.af-qty');
+  if (!wrap || !qty) return;
+  const isNovo = sel.value === '__novo__';
+  wrap.style.display = isNovo ? '' : 'none';
+  const med = isNovo
+    ? (line.querySelector('.af-medicao')?.value || 'unidade')
+    : (sel.options[sel.selectedIndex]?.getAttribute('data-medicao') || 'unidade');
+  qty.placeholder = `Qtd (${medicaoSigla(med)})`;
+  const medSel = line.querySelector('.af-medicao');
+  if (medSel && !medSel.dataset.binded) {
+    medSel.dataset.binded = '1';
+    medSel.addEventListener('change', () => toggleFaturaLinhaNovo(sel));
+  }
+}
+
+function toggleFaturaLinhaCaixa(chk) {
+  const line = chk.closest('.fatura-linha');
+  if (!line) return;
+  const fields = line.querySelector('.af-caixa-fields');
+  const precoCaixaWrap = line.querySelector('.af-caixa-preco-wrap');
+  const qty = line.querySelector('.af-qty');
+  const precoUnit = line.querySelector('.af-preco');
+  const on = !!chk.checked;
+  if (fields) fields.style.display = on ? 'grid' : 'none';
+  if (precoCaixaWrap) precoCaixaWrap.style.display = on ? '' : 'none';
+  if (qty) qty.disabled = on;
+  if (precoUnit) precoUnit.readOnly = on;
+  if (on && qty) qty.value = '';
+  if (!on && precoUnit) precoUnit.value = '';
+  syncFaturaLinhaPrecoUnit(line);
+}
+
+function syncFaturaLinhaPrecoUnit(line) {
+  const check = line.querySelector('.af-modo-caixa');
+  const precoUnit = line.querySelector('.af-preco');
+  if (!check || !precoUnit || !check.checked) return;
+  const precoCaixa = parseFloat(line.querySelector('.af-preco-caixa')?.value) || 0;
+  const qtdPorCaixa = parseFloat(line.querySelector('.af-qtd-caixa')?.value) || 0;
+  if (precoCaixa > 0 && qtdPorCaixa > 0) {
+    precoUnit.value = (precoCaixa / qtdPorCaixa).toFixed(2);
+  } else {
+    precoUnit.value = '';
+  }
+}
+
+function bindFaturaLinhaCaixaInputs(line) {
+  ['af-preco-caixa', 'af-qtd-caixa', 'af-caixas'].forEach(cls => {
+    const el = line.querySelector('.' + cls);
+    if (!el || el.dataset.binded) return;
+    el.dataset.binded = '1';
+    el.addEventListener('input', () => syncFaturaLinhaPrecoUnit(line));
+  });
+}
+
+function initFaturaLinha(line) {
+  const sel = line.querySelector('.af-prod');
+  const ind = line.querySelector('.af-prod-filter-indicator');
+  if (sel) {
+    renderArmazemProdutoOptions(sel, '', '', true);
+    bindArmazemProdutoFilterOnLine(sel, ind);
+    sel.addEventListener('change', () => toggleFaturaLinhaNovo(sel));
+    toggleFaturaLinhaNovo(sel);
+  }
+  bindFaturaLinhaCaixaInputs(line);
+}
+
+function removeFaturaLinha(btn) {
+  const line = btn.closest('.fatura-linha');
+  if (line) line.remove();
 }
 
 function toggleNovoProdutoArmazem() {
@@ -2034,17 +2142,45 @@ function bindCompraCaixaInputs() {
 }
 
 function addFaturaLinha() {
-  const tbody = document.getElementById('fatura-linhas-body');
-  if (!tbody) return;
-  const tr = document.createElement('tr');
-  tr.innerHTML =
-    '<td><select class="af-prod" style="width:100%;min-width:140px"></select></td>' +
-    '<td style="text-align:right"><input class="af-qty" type="number" min="0.001" step="any" placeholder="Qtd" style="width:88px;text-align:right"/></td>' +
-    '<td style="text-align:right"><input class="af-preco" type="number" min="0.01" step="any" placeholder="0" style="width:96px;text-align:right"/></td>' +
-    '<td><button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()">✕</button></td>';
-  tbody.appendChild(tr);
-  const sel = tr.querySelector('.af-prod');
-  if (sel) renderArmazemProdutoOptionsPlain(sel, '');
+  const wrap = document.getElementById('fatura-linhas-body');
+  if (!wrap) return;
+  const line = document.createElement('div');
+  line.className = 'fatura-linha';
+  line.style.cssText = 'border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:12px;background:#0f172a';
+  line.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<span style="font-size:12px;color:#64748b">Linha</span>' +
+      '<button type="button" class="btn btn-ghost btn-sm" onclick="removeFaturaLinha(this)">✕ Remover</button>' +
+    '</div>' +
+    '<div class="field"><label>Produto (digita para filtrar)</label>' +
+      '<select class="af-prod" style="width:100%"></select>' +
+      '<div class="af-prod-filter-indicator" style="margin-top:6px;font-size:12px;color:#94a3b8;min-height:16px"></div>' +
+    '</div>' +
+    '<div class="af-novo-wrap" style="display:none;border:1px solid #334155;border-radius:10px;padding:10px;margin-bottom:10px">' +
+      '<div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Novo produto</div>' +
+      '<div class="field"><label>Nome</label><input class="af-nome" type="text" placeholder="Nome do produto"/></div>' +
+      '<div class="field"><label>Categoria</label><select class="af-categoria"><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option><option value="menu">Menu</option></select></div>' +
+      '<div class="field"><label>Medição</label><select class="af-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>' +
+      '<div class="field"><label>Preço de venda (opcional)</label><input class="af-preco-venda" type="number" min="0" step="any" placeholder="0"/></div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+      '<div class="field"><label>Quantidade</label><input class="af-qty" type="number" min="0.001" step="any" placeholder="Qtd"/></div>' +
+      '<div class="field"><label>Preço unitário (Kz)</label><input class="af-preco" type="number" min="0.01" step="any" placeholder="0"/></div>' +
+    '</div>' +
+    '<div class="field">' +
+      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer">' +
+        '<input type="checkbox" class="af-modo-caixa" style="width:16px;height:16px" onchange="toggleFaturaLinhaCaixa(this)"/> Compra em caixa' +
+      '</label>' +
+    '</div>' +
+    '<div class="af-caixa-fields" style="display:none;grid-template-columns:1fr 1fr;gap:8px">' +
+      '<div class="field" style="margin:0"><label>Nº de caixas</label><input class="af-caixas" type="number" min="1" step="any" placeholder="Ex: 10"/></div>' +
+      '<div class="field" style="margin:0"><label>Qtd por caixa</label><input class="af-qtd-caixa" type="number" min="0.001" step="any" placeholder="Ex: 24"/></div>' +
+    '</div>' +
+    '<div class="af-caixa-preco-wrap" style="display:none">' +
+      '<div class="field"><label>Preço da caixa (Kz)</label><input class="af-preco-caixa" type="number" min="0.01" step="any" placeholder="Ex: 12000"/></div>' +
+    '</div>';
+  wrap.appendChild(line);
+  initFaturaLinha(line);
 }
 
 let faturaArmazemSubmitting = false;
@@ -2055,15 +2191,45 @@ async function submitFaturaArmazem() {
   faturaArmazemSubmitting = true;
   if (btn) { btn.disabled = true; btn.textContent = 'A registar...'; }
   const linhas = [];
-  document.querySelectorAll('#fatura-linhas-body tr').forEach(tr => {
-    const pid = tr.querySelector('.af-prod')?.value;
-    const qty = parseFloat(tr.querySelector('.af-qty')?.value);
-    const preco = parseFloat(tr.querySelector('.af-preco')?.value);
-    if (!pid || !qty || qty <= 0 || !preco || preco <= 0) return;
-    linhas.push({ produto_id: pid, quantidade: qty, preco_unitario: preco, notas: '' });
-  });
-  if (!linhas.length) {
-    if (msg) msg.innerHTML = '<div class="alert alert-error">Preencha pelo menos uma linha com produto, quantidade e preço.</div>';
+  try {
+    document.querySelectorAll('#fatura-linhas-body .fatura-linha').forEach(line => {
+      const sel = line.querySelector('.af-prod');
+      if (!sel || !sel.value) return;
+      const payload = {
+        quantidade: parseFloat(line.querySelector('.af-qty')?.value),
+        caixas: parseFloat(line.querySelector('.af-caixas')?.value) || 0,
+        qtd_por_caixa: parseFloat(line.querySelector('.af-qtd-caixa')?.value) || 0,
+        preco_unitario: parseFloat(line.querySelector('.af-preco')?.value),
+        notas: ''
+      };
+      if (sel.value === '__novo__') {
+        payload.novo_produto = {
+          nome: (line.querySelector('.af-nome')?.value || '').trim(),
+          categoria: line.querySelector('.af-categoria')?.value || 'outro',
+          tipo_medicao: line.querySelector('.af-medicao')?.value || 'unidade',
+          preco: parseFloat(line.querySelector('.af-preco-venda')?.value) || 0
+        };
+        if (!payload.novo_produto.nome) throw new Error('Numa linha com «Novo produto», o nome é obrigatório.');
+      } else {
+        payload.produto_id = sel.value;
+      }
+      const caixasNum = payload.caixas;
+      const qtdPor = payload.qtd_por_caixa;
+      const qtyEff = (caixasNum > 0 && qtdPor > 0) ? (caixasNum * qtdPor) : payload.quantidade;
+      const pu = payload.preco_unitario;
+      if (!qtyEff || qtyEff <= 0 || !pu || pu <= 0) {
+        throw new Error('Em cada linha com produto seleccionado, indique quantidade (ou caixas) e preço unitário válidos.');
+      }
+      linhas.push(payload);
+    });
+    if (!linhas.length) {
+      if (msg) msg.innerHTML = '<div class="alert alert-error">Adicione pelo menos uma linha com produto, quantidade e preço.</div>';
+      faturaArmazemSubmitting = false;
+      if (btn) { btn.disabled = false; btn.textContent = 'Registar fatura'; }
+      return;
+    }
+  } catch (err) {
+    if (msg) msg.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
     faturaArmazemSubmitting = false;
     if (btn) { btn.disabled = false; btn.textContent = 'Registar fatura'; }
     return;

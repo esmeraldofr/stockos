@@ -712,6 +712,7 @@ async function loadTurno() {
           <button class="turno-tab active" onclick="switchTurnoTab('stock',this)">📊 Stock</button>
           <button class="turno-tab" onclick="switchTurnoTab('registos',this)">📦 Registos</button>
           <button class="turno-tab" onclick="switchTurnoTab('vendas',this)">🍽️ Vendas</button>
+          <button class="turno-tab" onclick="switchTurnoTab('escala',this)">👥 Escala</button>
           <button class="turno-tab" onclick="switchTurnoTab('resumo',this)">📋 Resumo</button>
         </div>
         <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
@@ -803,6 +804,13 @@ async function loadTurno() {
         </div>
       </div>
 
+      <div id="tab-escala" class="turno-tab-panel">
+        <div class="card">
+          <div class="card-title">👥 Escala do Turno</div>
+          <div id="turno-escala-list"><span style="color:#64748b">A carregar...</span></div>
+        </div>
+      </div>
+
       <div id="tab-resumo" class="turno-tab-panel">
         <div style="color:#64748b;text-align:center;padding:32px"><div class="spinner"></div></div>
       </div>
@@ -823,6 +831,7 @@ async function loadTurno() {
     loadEntradasSection(turno.id, turno.stock, canEdit);
     loadSaidasSection(turno.id, canEdit);
     loadVendasMenu(turno.id, canEdit);
+    loadEscalaTurno();
     loadResumoTab(turno.id);
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
@@ -1026,6 +1035,9 @@ function switchTurnoTab(name, btn) {
   if (name === 'resumo') {
     const tid = S.turnoData?.id;
     if (tid) loadResumoTab(tid);
+  }
+  if (name === 'escala') {
+    loadEscalaTurno();
   }
 }
 
@@ -1454,6 +1466,36 @@ async function loadResumoTab(turnoId) {
 
     el.innerHTML = financCard + stockCard + vendasCard + irrCard;
   } catch(e) {
+    el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
+async function loadEscalaTurno() {
+  const el = document.getElementById('turno-escala-list');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#64748b">A carregar...</span>';
+  try {
+    const turnoNome = S.turnoData?.nome;
+    if (!turnoNome || !S.date) {
+      el.innerHTML = '<span style="color:#64748b">Turno não selecionado.</span>';
+      return;
+    }
+    const rows = await api('GET', `/escala?data_inicio=${S.date}&data_fim=${S.date}`);
+    const lista = rows.filter(r => r.turno === turnoNome);
+    if (!lista.length) {
+      el.innerHTML = '<span style="color:#64748b">Sem funcionários escalados para este turno.</span>';
+      return;
+    }
+    el.innerHTML = lista.map((r, i) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;${i < lista.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
+        <div>
+          <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>
+          <div style="font-size:12px;color:#64748b">${(r.utilizador_role || 'operador').toUpperCase()}</div>
+        </div>
+        ${r.notas ? `<div style="font-size:12px;color:#94a3b8;text-align:right;max-width:55%">${r.notas}</div>` : '<div style="font-size:12px;color:#475569">—</div>'}
+      </div>
+    `).join('');
+  } catch (e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }
 }

@@ -1789,7 +1789,7 @@ async function drawArmazem() {
         </div>
         <div class="field"><label>Fornecedor (opcional)</label><input id="a-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
         <div class="field"><label>Notas</label><input id="a-notas" type="text" placeholder="Ex: compra semanal"/></div>
-        <button class="btn btn-success" onclick="submitCompraArmazem()">Registar compra</button>
+        <button id="a-btn-submit" class="btn btn-success" onclick="submitCompraArmazem()">Registar compra</button>
       </div>
       <div class="card">
         <div class="card-title">📦 Inventário do Armazém</div>
@@ -1870,10 +1870,18 @@ function toggleNovoProdutoArmazem() {
   }
 }
 
+let armazemCompraSubmitting = false;
 async function submitCompraArmazem() {
   const produtoSel = document.getElementById('a-produto');
   const msg = document.getElementById('armazem-form-msg');
+  const submitBtn = document.getElementById('a-btn-submit');
   if (!produtoSel) return;
+  if (armazemCompraSubmitting) return;
+  armazemCompraSubmitting = true;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'A registar...';
+  }
   const payload = {
     quantidade: parseFloat(val('a-qty')),
     preco_unitario: parseFloat(val('a-preco')),
@@ -1906,6 +1914,12 @@ async function submitCompraArmazem() {
     await loadArmazemData();
   } catch(e) {
     if (msg) msg.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  } finally {
+    armazemCompraSubmitting = false;
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Registar compra';
+    }
   }
 }
 

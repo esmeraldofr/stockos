@@ -316,6 +316,33 @@ function prevTurno(nome, data) {
   return { nome: 'tarde', data };
 }
 
+function normalizeUsername(s) {
+  return String(s || '').trim().toLowerCase();
+}
+function isValidUsername(s) {
+  return /^[a-z0-9._-]{3,50}$/.test(s);
+}
+
+async function ensureUsernameColumn() {
+  await query(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`);
+  const r = await query(`SELECT id, email FROM utilizadores WHERE username IS NULL OR TRIM(username) = ''`).catch(() => ({ rows: [] }));
+  for (const row of r.rows) {
+    await query(`UPDATE utilizadores SET username=$1 WHERE id=$2`, [`u${row.id}`, row.id]).catch(() => {});
+  }
+  await query(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`).catch(() => {});
+  try {
+    await query(`ALTER TABLE utilizadores ALTER COLUMN username SET NOT NULL`);
+  } catch (_) {}
+  try {
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`);
+  } catch (_) {}
+}
+
+function loginFromBody(req) {
+  const v = (req.body.login || req.body.email || '').trim();
+  return v;
+}
+
 // ── AUTH ──────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok', v: 3 }));
 
@@ -333,6 +360,13 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     try { await query(sql); results.push({ label, ok: true }); }
     catch(e) { results.push({ label, ok: false, erro: e.message }); }
   }
+  await run(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`, 'utilizadores-username-col');
+  await run(
+    `UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = ''`,
+    'utilizadores-username-backfill'
+  );
+  await run(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`, 'utilizadores-username-admin');
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`, 'utilizadores-username-idx');
   await run(`ALTER TABLE produtos ALTER COLUMN sku SET DEFAULT ''`, 'sku-default');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0`, 'preco');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categoria VARCHAR(20) NOT NULL DEFAULT 'outro'`, 'categoria');
@@ -493,31 +527,47 @@ app.post('/api/reseed-produtos', auth, requireRole('admin'), async (req, res) =>
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ erro: 'Email e password obrigatórios' });
-    const r = await query('SELECT * FROM utilizadores WHERE email=$1 AND ativo=true', [email]);
+    await ensureUsernameColumn();
+    const password = (req.body.password || '').trim();
+    const login = loginFromBody(req);
+    if (!login || !password) return res.status(400).json({ erro: 'Nome de utilizador e senha são obrigatórios' });
+    const r = await query(
+      `SELECT * FROM utilizadores WHERE ativo=true AND (LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1))`,
+      [login]
+    );
     if (!r.rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
     const user = r.rows[0];
     if (user.senha_hash !== hashPassword(password)) return res.status(401).json({ erro: 'Credenciais inválidas' });
-    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role });
-    res.json({ token, user: { id: user.id, email: user.email, nome: user.nome, role: user.role } });
+    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username });
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username }
+    });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 app.post('/api/auth/setup', async (req, res) => {
   try {
-    const { email, codigo, password } = req.body;
+    await ensureUsernameColumn();
+    const { codigo, password } = req.body;
+    const login = loginFromBody(req);
     if (codigo !== 'STOCKOS2025') return res.status(400).json({ erro: 'Código inválido' });
     if (!password || password.length < 6) return res.status(400).json({ erro: 'Password deve ter pelo menos 6 caracteres' });
-    const r = await query('SELECT * FROM utilizadores WHERE email=$1', [email]);
+    if (!login) return res.status(400).json({ erro: 'Indica email ou nome de utilizador' });
+    const r = await query(
+      `SELECT * FROM utilizadores WHERE LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1)`,
+      [login]
+    );
     if (!r.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
-    await query('UPDATE utilizadores SET senha_hash=$1 WHERE email=$2', [hashPassword(password), email]);
+    const row = r.rows[0];
+    await query('UPDATE utilizadores SET senha_hash=$1 WHERE id=$2', [hashPassword(password), row.id]);
     res.json({ sucesso: true });
   } catch(e) { res.status(500).json({ erro: 'Erro interno' }); }
 });
 
 app.get('/api/auth/me', auth, async (req, res) => {
-  const r = await query('SELECT id,email,nome,role FROM utilizadores WHERE id=$1', [req.user.id]);
+  await ensureUsernameColumn().catch(() => {});
+  const r = await query('SELECT id,email,nome,role,username FROM utilizadores WHERE id=$1', [req.user.id]);
   res.json(r.rows[0]);
 });
 
@@ -1469,17 +1519,29 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
 // ── UTILIZADORES ──────────────────────────────────────────────
 app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
-    const r = await query('SELECT id,email,nome,role,ativo FROM utilizadores ORDER BY nome');
+    await ensureUsernameColumn();
+    const r = await query('SELECT id,email,nome,username,role,ativo FROM utilizadores ORDER BY nome');
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { email, nome, role } = req.body;
+    await ensureUsernameColumn();
+    const { email, nome, role, username } = req.body;
+    const un = normalizeUsername(username);
+    if (!email || !String(email).trim()) return res.status(400).json({ erro: 'Email é obrigatório' });
+    if (!isValidUsername(un)) {
+      return res.status(400).json({ erro: 'Nome de utilizador: 3 a 50 caracteres (letras minúsculas, números, . _ -)' });
+    }
+    const dup = await query(
+      'SELECT id FROM utilizadores WHERE LOWER(username)=LOWER($1)',
+      [un]
+    );
+    if (dup.rows.length) return res.status(400).json({ erro: 'Nome de utilizador já em uso' });
     const r = await query(
-      'INSERT INTO utilizadores (email,nome,role,senha_hash) VALUES ($1,$2,$3,$4) RETURNING id,email,nome,role',
-      [email, nome, role||'operador', hashPassword('StockOS2025!')]
+      'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
+      [String(email).trim(), nome, un, role || 'operador', hashPassword('StockOS2025!')]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -1487,14 +1549,31 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
 
 app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { nome, role, ativo, password } = req.body;
+    await ensureUsernameColumn();
+    const { nome, role, ativo, password, username } = req.body;
+    const un = normalizeUsername(username);
+    if (un && !isValidUsername(un)) {
+      return res.status(400).json({ erro: 'Nome de utilizador: 3 a 50 caracteres (letras minúsculas, números, . _ -)' });
+    }
+    if (un) {
+      const dup = await query(
+        'SELECT id FROM utilizadores WHERE LOWER(username)=LOWER($1) AND id <> $2',
+        [un, req.params.id]
+      );
+      if (dup.rows.length) return res.status(400).json({ erro: 'Nome de utilizador já em uso' });
+    }
     if (password) {
       await query('UPDATE utilizadores SET senha_hash=$1 WHERE id=$2', [hashPassword(password), req.params.id]);
     }
-    const r = await query(
-      'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3 WHERE id=$4 RETURNING id,email,nome,role,ativo',
-      [nome, role, ativo, req.params.id]
-    );
+    const r = un
+      ? await query(
+          'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,username=$4 WHERE id=$5 RETURNING id,email,nome,username,role,ativo',
+          [nome, role, ativo, un, req.params.id]
+        )
+      : await query(
+          'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3 WHERE id=$4 RETURNING id,email,nome,username,role,ativo',
+          [nome, role, ativo, req.params.id]
+        );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

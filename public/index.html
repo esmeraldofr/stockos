@@ -306,11 +306,11 @@ function drawLogin() {
         <div class="login-sub">Sistema de gestão de turnos</div>
         <div id="login-msg"></div>
         <div class="field">
-          <label>Email</label>
-          <input id="l-email" type="email" placeholder="admin@stockos.ao" autocomplete="email"/>
+          <label>Nome de utilizador</label>
+          <input id="l-login" type="text" placeholder="ex.: admin" autocomplete="username" autocapitalize="off"/>
         </div>
         <div class="field">
-          <label>Password</label>
+          <label>Senha</label>
           <input id="l-pass" type="password" placeholder="••••••" autocomplete="current-password"/>
         </div>
         <button class="btn btn-primary btn-full" onclick="doLogin()">Entrar</button>
@@ -321,13 +321,15 @@ function drawLogin() {
       </div>
     </div>
   `);
-  document.getElementById('l-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  const enterLogin = e => { if (e.key === 'Enter') doLogin(); };
+  document.getElementById('l-login').addEventListener('keydown', enterLogin);
+  document.getElementById('l-pass').addEventListener('keydown', enterLogin);
 }
 
 async function doLogin() {
-  const email = val('l-email'), password = val('l-pass');
+  const login = val('l-login'), password = val('l-pass');
   try {
-    const data = await api('POST', '/auth/login', { email, password });
+    const data = await api('POST', '/auth/login', { login, password });
     S.token = data.token; S.user = data.user;
     localStorage.setItem('token', S.token);
     localStorage.setItem('user', JSON.stringify(S.user));
@@ -342,7 +344,7 @@ function showSetup() {
       <div class="login-sub">Configurar conta</div>
       <div class="setup-banner">Usa o código <strong>STOCKOS2025</strong> para configurar a tua password.</div>
       <div id="setup-msg"></div>
-      <div class="field"><label>Email</label><input id="s-email" type="email" placeholder="admin@stockos.ao"/></div>
+      <div class="field"><label>Email ou nome de utilizador</label><input id="s-login" type="text" placeholder="admin ou admin@stockos.ao" autocapitalize="off"/></div>
       <div class="field"><label>Código</label><input id="s-code" type="text" placeholder="STOCKOS2025"/></div>
       <div class="field"><label>Nova Password</label><input id="s-pass" type="password" placeholder="Mínimo 6 caracteres"/></div>
       <button class="btn btn-success btn-full" onclick="doSetup()">Guardar Password</button>
@@ -353,7 +355,7 @@ function showSetup() {
 
 async function doSetup() {
   try {
-    await api('POST', '/auth/setup', { email: val('s-email'), codigo: val('s-code'), password: val('s-pass') });
+    await api('POST', '/auth/setup', { login: val('s-login'), codigo: val('s-code'), password: val('s-pass') });
     suc('setup-msg', 'Password configurada! Já podes fazer login.');
     setTimeout(drawLogin, 1500);
   } catch(e) { err('setup-msg', e.message); }
@@ -415,7 +417,7 @@ async function drawDia() {
     <div id="header">
       <div>
         <div id="header-h1" style="font-size:18px;font-weight:700;color:#f1f5f9">StockOS</div>
-        <div class="header-sub">${S.user?.nome}</div>
+        <div class="header-sub">${S.user?.nome}${S.user?.username ? ` · @${S.user.username}` : ''}</div>
       </div>
     </div>
     <div id="content">
@@ -2530,7 +2532,7 @@ async function loadUtilizadores() {
           <div class="produto-row">
             <div class="produto-info">
               <div class="produto-nome">${u.nome}</div>
-              <div class="produto-meta">${u.email} · ${u.role} ${!u.ativo?'· Inactivo':''}</div>
+              <div class="produto-meta">${u.username || '—'} · ${u.email} · ${u.role} ${!u.ativo?'· Inactivo':''}</div>
             </div>
             <button class="btn btn-ghost btn-sm" onclick='showUserForm(${JSON.stringify(u)})'>Editar</button>
           </div>`).join('')}
@@ -2545,6 +2547,7 @@ function showUserForm(u) {
       <div class="card-title">${isEdit?'Editar':'Novo'} Utilizador</div>
       <div id="user-form-msg"></div>
       <div class="field"><label>Nome</label><input id="u-nome" value="${u?.nome||''}"/></div>
+      <div class="field"><label>Nome de utilizador</label><input id="u-username" type="text" value="${u?.username||''}" placeholder="apenas letras minúsculas, números, . _ -" autocapitalize="off"/></div>
       ${!isEdit?`<div class="field"><label>Email</label><input id="u-email" type="email" value=""/></div>`:''}
       <div class="field"><label>Role</label>
         <select id="u-role">
@@ -2569,7 +2572,7 @@ function showUserForm(u) {
 
 async function createUser() {
   try {
-    await api('POST','/utilizadores',{nome:val('u-nome'),email:val('u-email'),role:val('u-role')});
+    await api('POST','/utilizadores',{nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role')});
     show('admin-form','');
     suc('admin-msg','Utilizador criado! Password padrão: StockOS2025!');
     await loadUtilizadores();
@@ -2578,7 +2581,7 @@ async function createUser() {
 
 async function saveUser(id) {
   try {
-    const body = {nome:val('u-nome'),role:val('u-role'),ativo:val('u-ativo')==='true'};
+    const body = {nome:val('u-nome'),username:val('u-username'),role:val('u-role'),ativo:val('u-ativo')==='true'};
     const p = val('u-pass');
     if (p) body.password = p;
     await api('PUT',`/utilizadores/${id}`,body);

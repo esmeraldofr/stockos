@@ -113,6 +113,10 @@ ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'operador';
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS senha_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50);
+UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = '';
+UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username));
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'produtos_nome_key') THEN
@@ -210,6 +214,8 @@ END $$;
 INSERT INTO utilizadores (nome, email, senha_hash, role) VALUES
   ('Admin', 'admin@stockos.ao', '', 'admin')
   ON CONFLICT (email) DO NOTHING;
+UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = '';
+UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao';
 
 -- ============================================================
 --  DADOS INICIAIS — PRODUTOS (INGREDIENTES)

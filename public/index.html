@@ -180,6 +180,78 @@ tr:hover .td-name{background:#1e293b}
 .scroll-mode .turno-tab-panel{display:block!important}
 .scroll-mode .turno-tabs .turno-tab{opacity:.5;pointer-events:none}
 .scroll-mode .turno-view-toggle{color:#3b82f6;border-color:#3b82f6}
+
+/* Escala da semana (página Dia) — grelha turnos × dias */
+.dia-escala-intro{font-size:12px;color:#94a3b8;margin:0 0 14px;line-height:1.45}
+.dia-escala-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
+.dia-escala-grid{
+  display:grid;
+  grid-template-columns:minmax(76px,92px) repeat(7,minmax(88px,1fr));
+  grid-template-rows:auto repeat(3,minmax(72px,auto));
+  min-width:700px;
+  border:1px solid #334155;
+  border-radius:10px;
+  overflow:hidden;
+  background:#0a0f1a;
+}
+.dia-escala-corner{
+  background:#0f172a;
+  border-bottom:1px solid #334155;
+  border-right:1px solid #334155;
+}
+.dia-escala-colhead{
+  text-align:center;
+  padding:10px 4px 8px;
+  background:#0f172a;
+  border-bottom:1px solid #334155;
+  border-right:1px solid #334155;
+  color:#94a3b8;
+  font-weight:800;
+  font-size:11px;
+  letter-spacing:.06em;
+}
+.dia-escala-colhead:last-of-type{border-right:none}
+.dia-escala-colhead-date{display:block;font-weight:500;font-size:10px;color:#64748b;margin-top:4px;letter-spacing:0}
+.dia-escala-colhead--anchor{background:rgba(59,130,246,0.14);color:#bfdbfe}
+.dia-escala-colhead--anchor .dia-escala-colhead-date{color:#93c5fd}
+.dia-escala-rowhead{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  padding:10px 10px 10px 6px;
+  font-weight:700;
+  font-size:13px;
+  border-bottom:1px solid #334155;
+  border-right:1px solid #334155;
+  background:#0c1222;
+}
+.dia-escala-shift--manha{color:#fb923c}
+.dia-escala-shift--tarde{color:#60a5fa}
+.dia-escala-shift--noite{color:#a78bfa}
+.dia-escala-cell{
+  border-bottom:1px solid #334155;
+  border-right:1px solid #334155;
+  padding:8px 6px;
+  background:rgba(15,23,42,0.9);
+  min-height:72px;
+}
+.dia-escala-cell:nth-child(8n){border-right:none}
+.dia-escala-cell--anchor{background:rgba(59,130,246,0.08)}
+.dia-escala-chips{display:flex;flex-wrap:wrap;gap:5px;align-content:flex-start;align-items:flex-start}
+.dia-escala-chip{
+  display:inline-block;
+  background:#1e3a5f;
+  color:#f8fafc;
+  padding:5px 10px;
+  border-radius:8px;
+  font-size:12px;
+  font-weight:500;
+  line-height:1.25;
+  border:1px solid #2d4a6f;
+  max-width:100%;
+  word-break:break-word;
+}
+.dia-escala-empty{color:#475569;font-size:12px;padding:6px 4px}
 </style>
 </head>
 <body>
@@ -660,60 +732,64 @@ async function drawDepositos() {
   await loadDepositos();
 }
 
-const ESCALA_DIA_SEMANA_NOMES = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+const ESCALA_DIA_ABREV = ['SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB', 'DOM'];
 
 function escalaRowDataStr(r) {
   if (!r || r.data == null) return '';
   return String(r.data).slice(0, 10);
 }
 
-/** Escala da semana (seg–dom) na página Dia: só leitura; por dia usa escala real ou modelo semanal. */
+/** Escala da semana na página Dia: grelha dias × turnos (só leitura; chips como referência visual). */
 function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
   const week = Array.isArray(rowsWeek) ? rowsWeek : [];
   const tpl = Array.isArray(rowsTemplate) ? rowsTemplate : [];
   const mon = mondayOfWeekIso(anchorDateStr);
   const dom = addDays(mon, 6);
-  const nomes = ['manha', 'tarde', 'noite'];
-  const diasHtml = [];
+  const turnos = [
+    { nome: 'manha', label: 'Manhã', cls: 'dia-escala-shift--manha' },
+    { nome: 'tarde', label: 'Tarde', cls: 'dia-escala-shift--tarde' },
+    { nome: 'noite', label: 'Noite', cls: 'dia-escala-shift--noite' }
+  ];
+  function listaCell(dayIdx, turnoNome) {
+    const dateStr = addDays(mon, dayIdx);
+    const listaDia = week.filter(r => escalaRowDataStr(r) === dateStr && r.turno === turnoNome);
+    const listaTpl = tpl.filter(r => Number(r.dia_semana) === dayIdx && r.turno === turnoNome);
+    return listaDia.length ? listaDia : listaTpl;
+  }
+  function chipsHtml(lista) {
+    if (!lista.length) return '<span class="dia-escala-empty">—</span>';
+    return lista.map(r => {
+      const tipParts = [];
+      if (r.utilizador_role) tipParts.push(String(r.utilizador_role).toUpperCase());
+      if (r.notas) tipParts.push(String(r.notas));
+      const tip = tipParts.join(' · ');
+      return `<span class="dia-escala-chip" ${tip ? `title="${escapeHtml(tip)}"` : ''}>${escapeHtml(r.utilizador_nome || 'Sem nome')}</span>`;
+    }).join('');
+  }
+  const parts = ['<div class="dia-escala-corner"></div>'];
   for (let i = 0; i < 7; i++) {
     const dateStr = addDays(mon, i);
-    const diaSemana = i;
-    const isAnchor = dateStr === anchorDateStr;
-    const turnoBlocos = nomes.map(nome => {
-      const listaDia = week.filter(r => escalaRowDataStr(r) === dateStr && r.turno === nome);
-      const listaTpl = tpl.filter(r => Number(r.dia_semana) === diaSemana && r.turno === nome);
-      const lista = listaDia.length ? listaDia : listaTpl;
-      const origem = listaDia.length ? 'Dia' : 'Modelo';
-      const pessoas = lista.length
-        ? lista.map((r, j) => `
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:6px 0;${j < lista.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
-          <div>
-            <div style="font-weight:600;color:#e2e8f0;font-size:13px">${escapeHtml(r.utilizador_nome || 'Sem nome')}</div>
-            <div style="font-size:10px;color:#64748b">${String(r.utilizador_role || 'operador').toUpperCase()}</div>
-          </div>
-          ${r.notas ? `<div style="font-size:11px;color:#94a3b8;text-align:right;max-width:48%">${escapeHtml(r.notas)}</div>` : ''}
-        </div>`).join('')
-        : '<div style="font-size:12px;color:#64748b;padding:2px 0">—</div>';
-      return `
-        <div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e293b">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:4px">
-            <span style="font-size:12px;font-weight:600;color:#94a3b8">${turnoLabel(nome)}</span>
-            <span style="font-size:9px;color:#64748b;text-transform:uppercase">${origem}</span>
-          </div>
-          ${pessoas}
-        </div>`;
-    }).join('');
-    diasHtml.push(`
-      <div style="background:rgba(15,23,42,0.5);border:1px solid ${isAnchor ? '#3b82f6' : '#334155'};border-radius:8px;padding:10px 12px;margin-bottom:10px;${isAnchor ? 'box-shadow:0 0 0 1px rgba(59,130,246,0.25)' : ''}">
-        <div style="font-weight:700;color:#e2e8f0;font-size:14px">${ESCALA_DIA_SEMANA_NOMES[i]} <span style="font-weight:500;color:#64748b">${dateLabel(dateStr)}</span>${isAnchor ? ' <span style="font-size:11px;color:#60a5fa">· dia seleccionado</span>' : ''}</div>
-        ${turnoBlocos}
-      </div>`);
+    const anchor = dateStr === anchorDateStr;
+    parts.push(`<div class="dia-escala-colhead${anchor ? ' dia-escala-colhead--anchor' : ''}">${ESCALA_DIA_ABREV[i]}<span class="dia-escala-colhead-date">${dateLabel(dateStr)}</span></div>`);
+  }
+  for (const t of turnos) {
+    parts.push(`<div class="dia-escala-rowhead ${t.cls}">${t.label}</div>`);
+    for (let i = 0; i < 7; i++) {
+      const dateStr = addDays(mon, i);
+      const anchor = dateStr === anchorDateStr;
+      const lista = listaCell(i, t.nome);
+      parts.push(`<div class="dia-escala-cell${anchor ? ' dia-escala-cell--anchor' : ''}"><div class="dia-escala-chips">${chipsHtml(lista)}</div></div>`);
+    }
   }
   return `
     <div class="card" id="dia-escala-readonly">
       <div class="card-title">👥 Escala da semana</div>
-      <p style="font-size:12px;color:#94a3b8;margin:0 0 12px">Semana de <strong style="color:#cbd5e1">${dateLabel(mon)}</strong> a <strong style="color:#cbd5e1">${dateLabel(dom)}</strong>. Apenas consulta; onde não há escala definida para a data, mostra-se o modelo semanal.</p>
-      ${diasHtml.join('')}
+      <p class="dia-escala-intro">Semana de <strong style="color:#cbd5e1">${dateLabel(mon)}</strong> a <strong style="color:#cbd5e1">${dateLabel(dom)}</strong>. Apenas consulta. Onde não há escala para a data, usa-se o modelo semanal. Coluna realçada: dia seleccionado.</p>
+      <div class="dia-escala-scroll">
+        <div class="dia-escala-grid">
+          ${parts.join('')}
+        </div>
+      </div>
     </div>`;
 }
 

@@ -382,6 +382,28 @@ async function ensureDepositosBanco() {
     await query(`CREATE UNIQUE INDEX IF NOT EXISTS depositos_banco_turno_id_key ON depositos_banco(turno_id)`);
   } catch (_) {}
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+}
+
+/** valor = líquido a depositar; valor_bruto e valor_saidas no body → líquido = bruto - saidas */
+function parseDepositoValores(body) {
+  const saidasRaw = parseFloat(body.valor_saidas);
+  const saidas = Number.isNaN(saidasRaw) ? 0 : Math.max(0, saidasRaw);
+  const bruto = parseFloat(body.valor_bruto);
+  if (!Number.isNaN(bruto) && bruto > 0) {
+    const liquido = bruto - saidas;
+    if (liquido <= 0) {
+      const err = new Error('O valor bruto deve ser maior que as saídas no depósito.');
+      err.code = 'DEP';
+      throw err;
+    }
+    return { valor: liquido, valor_saidas: saidas };
+  }
+  const v = parseFloat(body.valor);
+  if (!Number.isNaN(v) && v > 0) {
+    return { valor: v, valor_saidas: saidas };
+  }
+  return null;
 }
 
 async function assertTurnoFechado(turnoId) {
@@ -1451,20 +1473,28 @@ app.get('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res)
 app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     await ensureDepositosBanco();
-    const { turno_id, data_deposito, valor, valor_tpa, referencia, notas } = req.body || {};
-    const v = parseFloat(valor);
-    if (!v || v <= 0) return res.status(400).json({ erro: 'Indique o dinheiro depositado (valor positivo).' });
+    const { turno_id, data_deposito, valor_tpa, referencia, notas } = req.body || {};
+    let pv;
+    try {
+      pv = parseDepositoValores(req.body || {});
+    } catch (e) {
+      return res.status(400).json({ erro: e.message });
+    }
+    if (!pv) return res.status(400).json({ erro: 'Indique o valor bruto (antes de saídas) ou o valor líquido depositado.' });
+    const v = pv.valor;
+    const vsaida = pv.valor_saidas;
     const vtpa = parseFloat(valor_tpa);
     if (Number.isNaN(vtpa) || vtpa < 0) return res.status(400).json({ erro: 'Indique o valor registado no TPA (≥ 0).' });
     await assertTurnoFechado(turno_id);
     const ddep = (data_deposito || new Date().toISOString().split('T')[0]).trim();
     const r = await query(
-      `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, referencia, notas, criado_por)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, referencia, notas, criado_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT (turno_id) DO UPDATE SET
          data_deposito = EXCLUDED.data_deposito,
          valor = EXCLUDED.valor,
          valor_tpa = EXCLUDED.valor_tpa,
+         valor_saidas = EXCLUDED.valor_saidas,
          referencia = EXCLUDED.referencia,
          notas = EXCLUDED.notas,
          criado_em = NOW()
@@ -1474,6 +1504,7 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res
         ddep,
         v,
         vtpa,
+        vsaida,
         String(referencia || '').trim(),
         String(notas || '').trim(),
         String(req.user.id || '')
@@ -1503,8 +1534,16 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
     const valid = [];
     for (const raw of itens) {
       const tid = parseInt(raw.turno_id, 10);
-      const v = parseFloat(raw.valor);
-      if (!tid || !v || v <= 0) continue;
+      if (!tid) continue;
+      let pv;
+      try {
+        pv = parseDepositoValores(raw);
+      } catch (e) {
+        return res.status(400).json({ erro: e.message });
+      }
+      if (!pv) continue;
+      const v = pv.valor;
+      const vsaida = pv.valor_saidas;
       const vtpa = parseFloat(raw.valor_tpa);
       if (Number.isNaN(vtpa) || vtpa < 0) {
         return res.status(400).json({ erro: 'Indica o valor registado no TPA (≥ 0) em cada turno com depósito.' });
@@ -1514,6 +1553,7 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
         turno_id: tid,
         data_deposito: (raw.data_deposito || new Date().toISOString().split('T')[0]).trim(),
         valor: v,
+        valor_saidas: vsaida,
         valor_tpa: vtpa,
         referencia: String(raw.referencia || '').trim(),
         notas: String(raw.notas || '').trim()
@@ -1534,12 +1574,13 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
       const out = [];
       for (const row of dedup) {
         const r = await client.query(
-          `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, referencia, notas, criado_por)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
+          `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, referencia, notas, criado_por)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
            ON CONFLICT (turno_id) DO UPDATE SET
              data_deposito = EXCLUDED.data_deposito,
              valor = EXCLUDED.valor,
              valor_tpa = EXCLUDED.valor_tpa,
+             valor_saidas = EXCLUDED.valor_saidas,
              referencia = EXCLUDED.referencia,
              notas = EXCLUDED.notas,
              criado_em = NOW()
@@ -1549,6 +1590,7 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
             row.data_deposito,
             row.valor,
             row.valor_tpa,
+            row.valor_saidas,
             row.referencia,
             row.notas,
             String(req.user.id || '')

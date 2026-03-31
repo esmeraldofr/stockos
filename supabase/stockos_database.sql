@@ -351,6 +351,7 @@ CREATE TABLE IF NOT EXISTS depositos_banco (
   turno_id          INTEGER         NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
   data_deposito     DATE            NOT NULL DEFAULT CURRENT_DATE,
   valor             NUMERIC(15,2)   NOT NULL,
+  valor_saidas      NUMERIC(15,2)   NOT NULL DEFAULT 0,
   valor_tpa         NUMERIC(15,2)   NOT NULL DEFAULT 0,
   referencia        TEXT            NOT NULL DEFAULT '',
   notas             TEXT            NOT NULL DEFAULT '',

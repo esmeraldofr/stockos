@@ -208,7 +208,8 @@ const S = {
   turnoData: null,
   turnoCanEdit: false,
   produtos: [],
-  utilizadores: []
+  utilizadores: [],
+  turnosDia: []
 };
 
 // ── API ───────────────────────────────────────────────────────
@@ -438,6 +439,7 @@ async function loadDia() {
       }
     }
 
+    S.turnosDia = turnos;
     const turnoMap = {};
     turnos.forEach(t => { turnoMap[t.nome] = t; });
 
@@ -518,19 +520,29 @@ async function loadDia() {
     const blocoDepositos = podeDepositos ? `
       <div class="card" id="sec-depositos">
         <div class="card-title">🏦 Depósitos no banco</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>dinheiro depositado</strong> na conta e <strong>valor registado no TPA</strong> (${dateLabel(S.date)}). O TPA é sugerido a partir da caixa do turno. Só podes registar com o turno <strong>fechado</strong>.</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>dinheiro depositado</strong> e <strong>valor registado no TPA</strong> (${dateLabel(S.date)}). O TPA é sugerido a partir da caixa. Indica a <strong>data do depósito</strong> uma vez e carrega em <strong>Registar depósito</strong> para gravar todos os turnos fechados com valor &gt; 0.</p>
         ${depositosErro ? `<div class="alert alert-error" style="margin-bottom:10px">Não foi possível carregar os depósitos: ${depositosErro}</div>` : ''}
         ${!turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Não há turnos neste dia — abre turnos antes de registar depósitos.</div>` : ''}
         ${depositos.length ? `<div style="margin-bottom:12px;font-size:13px;color:#94a3b8;display:flex;flex-wrap:wrap;gap:12px 20px">
           <span>Total dinheiro depositado: <strong style="color:#e2e8f0">${fmt(totalDepositos)}</strong></span>
           <span>Total TPA registado: <strong style="color:#e2e8f0">${fmt(totalTpaRegistado)}</strong></span>
         </div>` : ''}
+        ${(() => {
+          let dataDepComum = hoje;
+          for (const t of turnosOrdenados) {
+            const d = depositosByTurno[String(t.id)];
+            if (d && d.data_deposito) {
+              dataDepComum = String(d.data_deposito).slice(0, 10);
+              break;
+            }
+          }
+          const temTurnoFechado = turnosOrdenados.some(t => t.estado === 'fechado');
+          return `
         ${turnosOrdenados.map(t => {
           const dep = depositosByTurno[String(t.id)];
           const pode = t.estado === 'fechado';
           const vid = `dep-valor-${t.id}`;
           const tid = `dep-tpa-${t.id}`;
-          const did = `dep-data-dep-${t.id}`;
           const rid = `dep-ref-${t.id}`;
           const nid = `dep-notas-${t.id}`;
           const caixaTpa = parseFloat(t.caixa?.tpa) || 0;
@@ -538,31 +550,33 @@ async function loadDia() {
           const tpaVal = dep && dep.valor_tpa != null && dep.valor_tpa !== ''
             ? String(dep.valor_tpa)
             : (dep ? '0' : String(caixaTpa));
-          const dVal = dep && dep.data_deposito ? String(dep.data_deposito).slice(0, 10) : hoje;
           return `
           <div style="border:1px solid #334155;border-radius:8px;padding:12px;margin-bottom:12px;background:rgba(15,23,42,0.4)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
               <span style="font-weight:600;color:#e2e8f0">${turnoLabel(t.nome)}</span>
               ${dep ? `<span style="font-size:12px;color:#4ade80">Dep.: ${fmt(dep.valor)} · TPA: ${fmt(dep.valor_tpa ?? 0)} · ${dateLabel(dep.data_deposito)}</span>` : '<span style="font-size:12px;color:#64748b">Sem depósito</span>'}
             </div>
-            ${!pode ? `<div class="alert alert-error" style="margin-bottom:8px;padding:8px;font-size:12px">Fecha este turno para registar o depósito.</div>` : ''}
+            ${!pode ? `<div class="alert alert-error" style="margin-bottom:8px;padding:8px;font-size:12px">Fecha este turno para incluir no registo.</div>` : ''}
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
               <div class="field"><label>Dinheiro depositado (Kz)</label><input id="${vid}" type="number" min="0.01" step="any" placeholder="0" value="${vVal.replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
               <div class="field"><label>Valor registado no TPA (Kz)</label><input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <div class="field"><label>Data do depósito</label><input id="${did}" type="date" value="${dVal.replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
-              <div class="field" style="display:flex;align-items:flex-end"><span style="font-size:11px;color:#64748b;padding-bottom:8px">TPA na caixa do turno: <strong style="color:#94a3b8">${fmt(caixaTpa)}</strong></span></div>
-            </div>
+            <div style="font-size:11px;color:#64748b;margin-bottom:10px">TPA na caixa do turno: <strong style="color:#94a3b8">${fmt(caixaTpa)}</strong></div>
             <div class="field"><label>Referência (opcional)</label><input id="${rid}" type="text" placeholder="Nº operação / guia" value="${String(dep?.referencia || '').replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
             <div class="field"><label>Notas</label><input id="${nid}" type="text" placeholder="Opcional" value="${String(dep?.notas || '').replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-              <button type="button" class="btn btn-success btn-sm" onclick="submitDepositoTurno(${t.id})" ${!pode ? 'disabled' : ''}>${dep ? 'Atualizar depósito' : 'Registar depósito'}</button>
-              ${dep ? `<button type="button" class="btn btn-ghost btn-sm" onclick="deleteDepositoDia(${dep.id})">Remover</button>` : ''}
+              ${dep ? `<button type="button" class="btn btn-ghost btn-sm" onclick="deleteDepositoDia(${dep.id})">Remover este turno</button>` : ''}
             </div>
             ${dep && dep.criado_por_nome ? `<div style="margin-top:6px;font-size:11px;color:#64748b">Registado por ${dep.criado_por_nome}</div>` : ''}
           </div>`;
         }).join('')}
+        <div class="field" style="margin-top:4px">
+          <label>Data do depósito (aplica a todos os turnos com valor)</label>
+          <input id="dep-data-dia" type="date" value="${dataDepComum.replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
+        </div>
+        <button type="button" class="btn btn-success" onclick="submitDepositosDia()" ${!temTurnoFechado ? 'disabled' : ''}>Registar depósito</button>
+          `;
+        })()}
       </div>` : '';
     show('dia-content', `
       <div class="turno-cards">${cards}</div>
@@ -574,21 +588,39 @@ async function loadDia() {
   }
 }
 
-async function submitDepositoTurno(turnoId) {
+async function submitDepositosDia() {
   try {
-    const vid = 'dep-valor-' + turnoId;
-    const tid = 'dep-tpa-' + turnoId;
-    const did = 'dep-data-dep-' + turnoId;
-    const rid = 'dep-ref-' + turnoId;
-    const nid = 'dep-notas-' + turnoId;
-    await api('POST', '/depositos', {
-      turno_id: turnoId,
-      data_deposito: val(did),
-      valor: parseFloat(val(vid)),
-      valor_tpa: parseFloat(val(tid)),
-      referencia: val(rid),
-      notas: val(nid)
-    });
+    const dataDep = val('dep-data-dia');
+    const itens = [];
+    const turnos = S.turnosDia || [];
+    for (const t of turnos) {
+      if (t.estado !== 'fechado') continue;
+      const id = t.id;
+      const vid = 'dep-valor-' + id;
+      const tid = 'dep-tpa-' + id;
+      const rid = 'dep-ref-' + id;
+      const nid = 'dep-notas-' + id;
+      const v = parseFloat(val(vid));
+      if (!v || v <= 0) continue;
+      const vtpa = parseFloat(val(tid));
+      if (Number.isNaN(vtpa) || vtpa < 0) {
+        alert('Indica o valor TPA (≥ 0) para ' + turnoLabel(t.nome) + '.');
+        return;
+      }
+      itens.push({
+        turno_id: id,
+        data_deposito: dataDep,
+        valor: v,
+        valor_tpa: vtpa,
+        referencia: val(rid),
+        notas: val(nid)
+      });
+    }
+    if (!itens.length) {
+      alert('Indica pelo menos um turno fechado com dinheiro depositado (> 0).');
+      return;
+    }
+    await api('POST', '/depositos/lote', { itens });
     await loadDia();
   } catch (e) {
     alert(e.message || String(e));

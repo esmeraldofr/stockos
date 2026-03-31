@@ -1493,6 +1493,82 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res
   }
 });
 
+app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const { itens } = req.body || {};
+    if (!Array.isArray(itens) || !itens.length) {
+      return res.status(400).json({ erro: 'Envia os depósitos por turno (lista itens).' });
+    }
+    const valid = [];
+    for (const raw of itens) {
+      const tid = parseInt(raw.turno_id, 10);
+      const v = parseFloat(raw.valor);
+      if (!tid || !v || v <= 0) continue;
+      const vtpa = parseFloat(raw.valor_tpa);
+      if (Number.isNaN(vtpa) || vtpa < 0) {
+        return res.status(400).json({ erro: 'Indica o valor registado no TPA (≥ 0) em cada turno com depósito.' });
+      }
+      await assertTurnoFechado(tid);
+      valid.push({
+        turno_id: tid,
+        data_deposito: (raw.data_deposito || new Date().toISOString().split('T')[0]).trim(),
+        valor: v,
+        valor_tpa: vtpa,
+        referencia: String(raw.referencia || '').trim(),
+        notas: String(raw.notas || '').trim()
+      });
+    }
+    if (!valid.length) {
+      return res.status(400).json({ erro: 'Indica pelo menos um turno fechado com dinheiro depositado (> 0).' });
+    }
+    const seen = new Set();
+    const dedup = valid.filter((row) => {
+      if (seen.has(row.turno_id)) return false;
+      seen.add(row.turno_id);
+      return true;
+    });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const out = [];
+      for (const row of dedup) {
+        const r = await client.query(
+          `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, referencia, notas, criado_por)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT (turno_id) DO UPDATE SET
+             data_deposito = EXCLUDED.data_deposito,
+             valor = EXCLUDED.valor,
+             valor_tpa = EXCLUDED.valor_tpa,
+             referencia = EXCLUDED.referencia,
+             notas = EXCLUDED.notas,
+             criado_em = NOW()
+           RETURNING *`,
+          [
+            row.turno_id,
+            row.data_deposito,
+            row.valor,
+            row.valor_tpa,
+            row.referencia,
+            row.notas,
+            String(req.user.id || '')
+          ]
+        );
+        out.push(r.rows[0]);
+      }
+      await client.query('COMMIT');
+      res.json({ ok: true, registos: out.length, rows: out });
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      await client.release();
+    }
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
+});
+
 app.delete('/api/depositos/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     await ensureDepositosBanco();

@@ -583,20 +583,20 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
   return `
       <div class="card" id="sec-depositos">
         <div class="card-title">🏦 Depósitos no banco</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>valor bruto</strong> e <strong>TPA</strong>. A <strong>saída no depósito</strong> e a <strong>foto do borderô</strong> são <strong>únicas</strong> para todo o registo do dia. <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns.</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>valor bruto</strong> e <strong>TPA</strong>. As <strong>saídas no depósito</strong> são valores retirados do depósito para <strong>compras de stock / armazém</strong> (não são outras despesas genéricas). Esse montante e a <strong>foto do borderô</strong> são <strong>únicos</strong> para todo o registo do dia. <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns.</p>
         ${depositosErro ? `<div class="alert alert-error" style="margin-bottom:10px">Não foi possível carregar os depósitos: ${depositosErro}</div>` : ''}
         ${!turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Não há turnos neste dia — abre turnos antes de registar depósitos.</div>` : ''}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
           <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
             <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total depositado no banco</div>
             <div style="font-size:26px;font-weight:700;color:#4ade80;line-height:1.15">${fmt(totalDepositos)}</div>
-            <div style="font-size:11px;color:#64748b;margin-top:6px">soma dos brutos − saídas no depósito (total)</div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px">soma dos brutos − compras armazém (total)</div>
           </div>
           <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
-            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Saídas no depósito</div>
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Saídas p/ armazém</div>
             <div style="font-size:22px;font-weight:700;color:#f87171;line-height:1.15">${fmt(totalSaidasNoDeposito)}</div>
-            <div style="font-size:11px;color:#64748b;margin-top:6px">valor único no formulário</div>
-            ${destinoSaidasComum ? `<div style="font-size:12px;color:#cbd5e1;margin-top:10px;line-height:1.35;text-align:left;max-width:280px;margin-left:auto;margin-right:auto"><span style="color:#94a3b8">Destino:</span> ${escapeHtml(destinoSaidasComum)}</div>` : ''}
+            <div style="font-size:11px;color:#64748b;margin-top:6px">retirado do depósito p/ stock</div>
+            ${destinoSaidasComum ? `<div style="font-size:12px;color:#cbd5e1;margin-top:10px;line-height:1.35;text-align:left;max-width:280px;margin-left:auto;margin-right:auto"><span style="color:#94a3b8">Compra / stock:</span> ${escapeHtml(destinoSaidasComum)}</div>` : ''}
           </div>
           <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
             <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total TPA registado</div>
@@ -604,7 +604,7 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
           </div>
         </div>
         <div style="margin-bottom:14px;padding:10px 14px;background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.22);border-radius:8px;font-size:13px;color:#cbd5e1">
-          Pré-visualização <strong>total depositado no banco</strong> (soma dos brutos − saída única): <span id="dep-total-preview" style="color:#4ade80;font-weight:700;font-size:17px">${fmt(0)}</span>
+          Pré-visualização <strong>total depositado no banco</strong> (brutos − valor para compras de armazém): <span id="dep-total-preview" style="color:#4ade80;font-weight:700;font-size:17px">${fmt(0)}</span>
         </div>
         ${(() => {
           let dataDepComum = hoje;
@@ -650,13 +650,13 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
           </div>`;
         }).join('')}
         <div class="field" style="margin-top:8px">
-          <label>Saídas no depósito (Kz) — única para todos os turnos</label>
+          <label>Saída no depósito para armazém / stock (Kz) — única para o dia</label>
           <input id="dep-saidas-dia" type="number" min="0" step="any" placeholder="0" value="${saidasUnicaVal.replace(/"/g, '&quot;')}" oninput="updateDepSaidasDestinoRequired();updateDepPreviewTotal()" ${!temTurnoFechado ? 'disabled' : ''}/>
-          <div style="font-size:11px;color:#64748b;margin-top:4px">Desconta apenas no total depositado no banco (cartão acima), não por turno.</div>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">Valor retirado do depósito para compras de stock (armazém). Desconta no total depositado (cartão acima), não por turno.</div>
         </div>
         <div class="field">
-          <label id="dep-saidas-destino-label">Produto / destino da saída <span id="dep-saidas-destino-hint" style="font-weight:400;color:#64748b">(obrigatório se houver valor em saídas)</span></label>
-          <textarea id="dep-saidas-destino-dia" rows="2" placeholder="Ex.: compra de cerveja Super Bock; pagamento fornecedor X; transferência para…" ${!temTurnoFechado ? 'disabled' : ''}>${escapeHtml(destinoSaidasComum)}</textarea>
+          <label id="dep-saidas-destino-label">O que se comprou para o armazém <span id="dep-saidas-destino-hint" style="font-weight:400;color:#64748b">(obrigatório se houver valor acima)</span></label>
+          <textarea id="dep-saidas-destino-dia" rows="2" placeholder="Ex.: compra de ingredientes X; fatura fornecedor Y; enchidos e bebidas para stock…" ${!temTurnoFechado ? 'disabled' : ''}>${escapeHtml(destinoSaidasComum)}</textarea>
         </div>
         <div class="field" style="margin-top:4px">
           <label>Referência (opcional)</label>
@@ -921,11 +921,11 @@ async function submitDepositosDia() {
     const saidasUnica = parseRaw(val('dep-saidas-dia'));
     const destinoSaidas = val('dep-saidas-destino-dia').trim();
     if (saidasUnica < 0) {
-      alert('A saída no depósito não pode ser negativa.');
+      alert('O valor para compras de armazém (saída no depósito) não pode ser negativo.');
       return;
     }
     if (saidasUnica > 0 && !destinoSaidas) {
-      alert('Indica o produto a comprar ou o destino desta saída no depósito.');
+      alert('Indica o que foi comprado para o armazém / stock (descrição obrigatória quando há valor retirado do depósito).');
       return;
     }
     const rows = [];
@@ -953,11 +953,11 @@ async function submitDepositosDia() {
     }
     const sumB = rows.reduce((s, r) => s + r.bruto, 0);
     if (saidasUnica > sumB) {
-      alert('A saída única no depósito não pode ser maior que a soma dos valores brutos (' + fmt(sumB) + ').');
+      alert('O valor para armazém não pode ser maior que a soma dos valores brutos (' + fmt(sumB) + ').');
       return;
     }
     if (sumB - saidasUnica <= 0) {
-      alert('O líquido total (soma dos brutos menos a saída) tem de ser positivo.');
+      alert('O líquido depositado (brutos menos compras de armazém) tem de ser positivo.');
       return;
     }
     const itens = rows.map((r) => ({

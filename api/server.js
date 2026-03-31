@@ -565,7 +565,7 @@ function parseDepositoValores(body) {
   if (!Number.isNaN(bruto) && bruto > 0) {
     const liquido = bruto - saidas;
     if (liquido <= 0) {
-      const err = new Error('O valor bruto deve ser maior que as saídas no depósito.');
+      const err = new Error('O valor bruto deve ser maior que o montante para compras de armazém (saída no depósito).');
       err.code = 'DEP';
       throw err;
     }
@@ -1766,7 +1766,7 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res
     const vsaida = pv.valor_saidas;
     const saidasDestino = sanitizeSaidasDestino(req.body?.saidas_destino);
     if (vsaida > 0 && !saidasDestino) {
-      return res.status(400).json({ erro: 'Indica o produto a comprar ou o destino desta saída no depósito.' });
+      return res.status(400).json({ erro: 'Indica o que foi comprado para o armazém / stock (obrigatório quando há valor retirado do depósito).' });
     }
     const vtpa = parseFloat(valor_tpa);
     if (Number.isNaN(vtpa) || vtpa < 0) return res.status(400).json({ erro: 'Indique o valor registado no TPA (≥ 0).' });
@@ -1819,7 +1819,7 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
     const saidasTotal = Number.isNaN(saidasTotalRaw) ? 0 : Math.max(0, saidasTotalRaw);
     const saidasDestino = sanitizeSaidasDestino(saidasDestinoBody);
     if (saidasTotal > 0 && !saidasDestino) {
-      return res.status(400).json({ erro: 'Indica o produto a comprar ou o destino desta saída no depósito.' });
+      return res.status(400).json({ erro: 'Indica o que foi comprado para o armazém / stock (obrigatório quando há valor retirado do depósito).' });
     }
     if (!Array.isArray(itens) || !itens.length) {
       return res.status(400).json({ erro: 'Envia os depósitos por turno (lista itens).' });
@@ -1868,10 +1868,10 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
     dedup.sort((a, b) => ordemTurnoNome(nomeById[a.turno_id]) - ordemTurnoNome(nomeById[b.turno_id]));
     const sumBruto = dedup.reduce((s, r) => s + (parseFloat(r.valor) || 0), 0);
     if (saidasTotal > sumBruto) {
-      return res.status(400).json({ erro: 'A saída no depósito não pode ser maior que a soma dos valores brutos.' });
+      return res.status(400).json({ erro: 'O valor para compras de armazém não pode ser maior que a soma dos valores brutos.' });
     }
     if (sumBruto - saidasTotal <= 0) {
-      return res.status(400).json({ erro: 'O total depositado no banco (soma dos brutos menos a saída) tem de ser positivo.' });
+      return res.status(400).json({ erro: 'O líquido depositado (brutos menos compras de armazém) tem de ser positivo.' });
     }
     dedup[0].valor_saidas = saidasTotal;
     dedup[0].saidas_destino = saidasTotal > 0 ? saidasDestino : '';

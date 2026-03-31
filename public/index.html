@@ -523,10 +523,20 @@ async function loadDia() {
         <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>dinheiro depositado</strong> e <strong>valor registado no TPA</strong> (${dateLabel(S.date)}). <strong>Referência</strong>, <strong>notas</strong> e <strong>data do depósito</strong> são comuns a todos os turnos; carrega em <strong>Registar depósito</strong> para gravar os turnos fechados com valor &gt; 0.</p>
         ${depositosErro ? `<div class="alert alert-error" style="margin-bottom:10px">Não foi possível carregar os depósitos: ${depositosErro}</div>` : ''}
         ${!turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Não há turnos neste dia — abre turnos antes de registar depósitos.</div>` : ''}
-        ${depositos.length ? `<div style="margin-bottom:12px;font-size:13px;color:#94a3b8;display:flex;flex-wrap:wrap;gap:12px 20px">
-          <span>Total dinheiro depositado: <strong style="color:#e2e8f0">${fmt(totalDepositos)}</strong></span>
-          <span>Total TPA registado: <strong style="color:#e2e8f0">${fmt(totalTpaRegistado)}</strong></span>
-        </div>` : ''}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px">
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total depositado no banco</div>
+            <div style="font-size:26px;font-weight:700;color:#4ade80;line-height:1.15">${fmt(totalDepositos)}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px">soma do dia (${dateLabel(S.date)})</div>
+          </div>
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total TPA registado</div>
+            <div style="font-size:20px;font-weight:700;color:#e2e8f0;line-height:1.15">${fmt(totalTpaRegistado)}</div>
+          </div>
+        </div>
+        <div style="margin-bottom:14px;padding:10px 14px;background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.22);border-radius:8px;font-size:13px;color:#cbd5e1">
+          Soma dos valores em <strong>dinheiro depositado</strong> (campos abaixo, turnos fechados): <span id="dep-total-preview" style="color:#4ade80;font-weight:700;font-size:17px">${fmt(0)}</span>
+        </div>
         ${(() => {
           let dataDepComum = hoje;
           for (const t of turnosOrdenados) {
@@ -564,7 +574,7 @@ async function loadDia() {
             </div>
             ${!pode ? `<div class="alert alert-error" style="margin-bottom:8px;padding:8px;font-size:12px">Fecha este turno para incluir no registo.</div>` : ''}
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <div class="field"><label>Dinheiro depositado (Kz)</label><input id="${vid}" type="number" min="0.01" step="any" placeholder="0" value="${vVal.replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
+              <div class="field"><label>Dinheiro depositado (Kz)</label><input id="${vid}" type="number" min="0.01" step="any" placeholder="0" value="${vVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
               <div class="field"><label>Valor registado no TPA (Kz)</label><input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" ${!pode ? 'disabled' : ''}/></div>
             </div>
             <div style="font-size:11px;color:#64748b;margin-bottom:10px">TPA na caixa do turno: <strong style="color:#94a3b8">${fmt(caixaTpa)}</strong></div>
@@ -595,9 +605,24 @@ async function loadDia() {
       ${blocoDepositos || blocoDepositosSemPerm}
       ${resumoDia}
     `);
+    if (podeDepositos) queueMicrotask(() => updateDepPreviewTotal());
   } catch(e) {
     show('dia-content', `<div class="alert alert-error">${e.message}</div>`);
   }
+}
+
+function updateDepPreviewTotal() {
+  const el = document.getElementById('dep-total-preview');
+  if (!el) return;
+  let sum = 0;
+  for (const t of (S.turnosDia || [])) {
+    if (t.estado !== 'fechado') continue;
+    const inp = document.getElementById('dep-valor-' + t.id);
+    if (!inp || inp.disabled) continue;
+    const v = parseFloat(inp.value);
+    if (!isNaN(v) && v > 0) sum += v;
+  }
+  el.textContent = fmt(sum);
 }
 
 async function submitDepositosDia() {

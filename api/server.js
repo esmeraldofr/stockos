@@ -398,6 +398,19 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   );
   await run(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`, 'utilizadores-username-admin');
   await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`, 'utilizadores-username-idx');
+  await run(
+    `CREATE TABLE IF NOT EXISTS depositos_banco (
+      id SERIAL PRIMARY KEY,
+      data_referencia DATE NOT NULL,
+      data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
+      valor NUMERIC(15,2) NOT NULL,
+      referencia TEXT NOT NULL DEFAULT '',
+      notas TEXT NOT NULL DEFAULT '',
+      criado_por TEXT NOT NULL DEFAULT '',
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    'depositos_banco'
+  );
   await run(`ALTER TABLE produtos ALTER COLUMN sku SET DEFAULT ''`, 'sku-default');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0`, 'preco');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categoria VARCHAR(20) NOT NULL DEFAULT 'outro'`, 'categoria');
@@ -1376,6 +1389,89 @@ app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
       caixa: caixa.rows[0]
     });
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+async function ensureDepositosBanco() {
+  await query(`CREATE TABLE IF NOT EXISTS depositos_banco (
+    id SERIAL PRIMARY KEY,
+    data_referencia DATE NOT NULL,
+    data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
+    valor NUMERIC(15,2) NOT NULL,
+    referencia TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_por TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+}
+
+async function assertTodosTurnosDiaFechados(dataStr) {
+  const r = await query(
+    `SELECT COUNT(*)::int AS tot, COALESCE(SUM(CASE WHEN estado = 'fechado' THEN 1 ELSE 0 END),0)::int AS fech
+     FROM turnos WHERE data = $1`,
+    [dataStr]
+  );
+  const tot = r.rows[0].tot || 0;
+  const fech = r.rows[0].fech || 0;
+  if (tot === 0) {
+    const err = new Error('Não há turnos registados neste dia.');
+    err.code = 'TURNOS';
+    throw err;
+  }
+  if (fech < tot) {
+    const err = new Error('Todos os turnos do dia devem estar fechados antes de registar o depósito.');
+    err.code = 'TURNOS';
+    throw err;
+  }
+}
+
+app.get('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const data = (req.query.data || '').trim();
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
+    let sql = `SELECT d.*, u.nome AS criado_por_nome FROM depositos_banco d
+               LEFT JOIN utilizadores u ON u.id::text = d.criado_por::text`;
+    const params = [];
+    if (data) {
+      sql += ` WHERE d.data_referencia = $1`;
+      params.push(data);
+    }
+    sql += ` ORDER BY d.data_deposito DESC, d.criado_em DESC LIMIT ${limit}`;
+    const r = await query(sql, params);
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const { data_referencia, data_deposito, valor, referencia, notas } = req.body || {};
+    const dref = (data_referencia || '').trim();
+    if (!dref) return res.status(400).json({ erro: 'Indica o dia a que o depósito se refere.' });
+    const v = parseFloat(valor);
+    if (!v || v <= 0) return res.status(400).json({ erro: 'Indique um valor positivo.' });
+    await assertTodosTurnosDiaFechados(dref);
+    const ddep = (data_deposito || new Date().toISOString().split('T')[0]).trim();
+    const r = await query(
+      `INSERT INTO depositos_banco (data_referencia, data_deposito, valor, referencia, notas, criado_por)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [dref, ddep, v, String(referencia || '').trim(), String(notas || '').trim(), String(req.user.id || '')]
+    );
+    const row = r.rows[0];
+    const u = await query('SELECT nome FROM utilizadores WHERE id=$1', [req.user.id]).catch(() => ({ rows: [] }));
+    res.json({ ...row, criado_por_nome: u.rows[0]?.nome || '' });
+  } catch(e) {
+    res.status(400).json({ erro: e.message });
+  }
+});
+
+app.delete('/api/depositos/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const r = await query('DELETE FROM depositos_banco WHERE id=$1 RETURNING id', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Depósito não encontrado' });
+    res.json({ ok: true });
+  } catch(e) { res.status(400).json({ erro: e.message }); }
 });
 
 // ── HISTÓRICO ─────────────────────────────────────────────────

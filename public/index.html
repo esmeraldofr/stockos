@@ -424,8 +424,17 @@ function pickDate(val) {
 async function loadDia() {
   try {
     const isAdmin = S.user?.role === 'admin';
+    const podeDepositos = ['admin', 'gestor'].includes(S.user?.role);
     const turnos = await api('GET', `/dia?data=${S.date}`);
     const dash = isAdmin ? await api('GET', `/dashboard?data=${S.date}`).catch(() => null) : null;
+    let depositos = [];
+    if (podeDepositos) {
+      try {
+        depositos = await api('GET', `/depositos?data=${encodeURIComponent(S.date)}`);
+      } catch (_) {
+        depositos = [];
+      }
+    }
 
     const turnoMap = {};
     turnos.forEach(t => { turnoMap[t.nome] = t; });
@@ -458,6 +467,9 @@ async function loadDia() {
         </div>`;
     }).join('');
 
+    const todosTurnosFechados = turnos.length > 0 && turnos.every(t => t.estado === 'fechado');
+    const totalDepositos = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor) || 0), 0);
+
     const c = dash?.caixa;
     const resumoDia = isAdmin && dash ? `
       <div class="card">
@@ -489,12 +501,62 @@ async function loadDia() {
           </div>
         </div>
       </div>` : '';
+    const blocoDepositos = podeDepositos ? `
+      <div class="card">
+        <div class="card-title">🏦 Depósitos no banco</div>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista o dinheiro depositado na conta, referente ao dia <strong>${dateLabel(S.date)}</strong>. Só é possível registar quando todos os turnos desse dia estão fechados.</p>
+        ${!todosTurnosFechados && turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Ainda há turnos abertos neste dia — fecha-os antes de registar o depósito.</div>` : ''}
+        ${depositos.length ? `<div class="table-wrap" style="margin-bottom:12px"><table style="font-size:12px">
+          <thead><tr><th>Valor</th><th>Data depósito</th><th>Ref.</th><th>Notas</th><th>Registado</th><th></th></tr></thead>
+          <tbody>${depositos.map(d => `<tr>
+            <td style="color:#4ade80;font-weight:600">${fmt(d.valor)}</td>
+            <td>${dateLabel(d.data_deposito)}</td>
+            <td>${d.referencia || '—'}</td>
+            <td>${(d.notas || '').slice(0, 40)}${(d.notas || '').length > 40 ? '…' : ''}</td>
+            <td style="color:#64748b;font-size:11px">${d.criado_por_nome || '—'}</td>
+            <td><button type="button" class="btn btn-ghost btn-sm" onclick="deleteDepositoDia(${d.id})">Remover</button></td>
+          </tr>`).join('')}</tbody></table>
+          <div style="margin-top:8px;font-size:13px;color:#94a3b8">Total depositado (este dia): <strong style="color:#e2e8f0">${fmt(totalDepositos)}</strong></div></div>` : '<div style="font-size:12px;color:#64748b;margin-bottom:10px">Nenhum depósito registado para este dia.</div>'}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field"><label>Valor (Kz)</label><input id="dep-valor" type="number" min="0.01" step="any" placeholder="0" ${!todosTurnosFechados || !turnos.length ? 'disabled' : ''}/></div>
+          <div class="field"><label>Data do depósito</label><input id="dep-data-dep" type="date" value="${new Date().toISOString().split('T')[0]}" ${!todosTurnosFechados || !turnos.length ? 'disabled' : ''}/></div>
+        </div>
+        <div class="field"><label>Referência (opcional)</label><input id="dep-ref" type="text" placeholder="Nº operação / guia" ${!todosTurnosFechados || !turnos.length ? 'disabled' : ''}/></div>
+        <div class="field"><label>Notas</label><input id="dep-notas" type="text" placeholder="Opcional" ${!todosTurnosFechados || !turnos.length ? 'disabled' : ''}/></div>
+        <button type="button" class="btn btn-success btn-sm" onclick="submitDepositoDia()" ${!todosTurnosFechados || !turnos.length ? 'disabled' : ''}>Registar depósito</button>
+      </div>` : '';
     show('dia-content', `
       <div class="turno-cards">${cards}</div>
       ${resumoDia}
+      ${blocoDepositos}
     `);
   } catch(e) {
     show('dia-content', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+async function submitDepositoDia() {
+  try {
+    await api('POST', '/depositos', {
+      data_referencia: S.date,
+      data_deposito: val('dep-data-dep'),
+      valor: parseFloat(val('dep-valor')),
+      referencia: val('dep-ref'),
+      notas: val('dep-notas')
+    });
+    await loadDia();
+  } catch (e) {
+    alert(e.message || String(e));
+  }
+}
+
+async function deleteDepositoDia(id) {
+  if (!confirm('Remover este registo de depósito?')) return;
+  try {
+    await api('DELETE', '/depositos/' + id);
+    await loadDia();
+  } catch (e) {
+    alert(e.message || String(e));
   }
 }
 

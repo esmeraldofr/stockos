@@ -344,6 +344,20 @@ CREATE TABLE IF NOT EXISTS escalas (
 );
 
 -- ============================================================
+--  DEPÓSITOS BANCO (dinheiro depositado após fecho dos turnos do dia)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS depositos_banco (
+  id                SERIAL          PRIMARY KEY,
+  data_referencia   DATE            NOT NULL,
+  data_deposito     DATE            NOT NULL DEFAULT CURRENT_DATE,
+  valor             NUMERIC(15,2)   NOT NULL,
+  referencia        TEXT            NOT NULL DEFAULT '',
+  notas             TEXT            NOT NULL DEFAULT '',
+  criado_por        TEXT            NOT NULL DEFAULT '',
+  criado_em         TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
 --  RECEITAS (composição de produtos de menu)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS receitas (

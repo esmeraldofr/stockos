@@ -547,16 +547,42 @@ app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => 
 
 // ── ARMAZÉM ────────────────────────────────────────────────────
 async function ensureArmazemTables() {
+  const pidCheck = await query(
+    `SELECT data_type
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
+  ).catch(() => ({ rows: [] }));
+  const pidType = (pidCheck.rows[0] && pidCheck.rows[0].data_type) || 'integer';
+  const pidCol = pidType === 'uuid' ? 'UUID' : 'INTEGER';
+
+  const stockType = await query(
+    `SELECT data_type
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='armazem_stock' AND column_name='produto_id'`
+  ).catch(() => ({ rows: [] }));
+  const comprasType = await query(
+    `SELECT data_type
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='armazem_compras' AND column_name='produto_id'`
+  ).catch(() => ({ rows: [] }));
+
+  if (stockType.rows.length && stockType.rows[0].data_type !== pidType) {
+    await query(`DROP TABLE IF EXISTS armazem_stock CASCADE`);
+  }
+  if (comprasType.rows.length && comprasType.rows[0].data_type !== pidType) {
+    await query(`DROP TABLE IF EXISTS armazem_compras CASCADE`);
+  }
+
   await query(`CREATE TABLE IF NOT EXISTS armazem_stock (
     id SERIAL PRIMARY KEY,
-    produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+    produto_id ${pidCol} NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
     quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
     custo_medio NUMERIC(15,2) NOT NULL DEFAULT 0,
     atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
   await query(`CREATE TABLE IF NOT EXISTS armazem_compras (
     id SERIAL PRIMARY KEY,
-    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+    produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
     quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
     preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
     valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,

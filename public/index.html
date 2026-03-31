@@ -1603,7 +1603,6 @@ async function loadEscalaTurno() {
         const naoEscalado = !!uid && !escaladosIds.has(String(uid));
         cobSel.style.display = naoEscalado ? '' : 'none';
         motEl.style.display = naoEscalado ? '' : 'none';
-        heEl.checked = naoEscalado ? heEl.checked : false;
         if (!naoEscalado) motEl.value = '';
       };
       if (userSel) userSel.onchange = toggleExtra;
@@ -1632,7 +1631,7 @@ async function addTurnoPresenca(turnoId) {
   if (naoEscalado && !motivo_falta.trim()) return err('turno-presenca-msg', 'Regista o motivo da falta');
   if (naoEscalado && !hora_extra) return err('turno-presenca-msg', 'Confirma se deve aplicar pagamento de hora extra');
   try {
-    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, cobrindo_utilizador_id: naoEscalado ? cobrindo_utilizador_id : null, hora_extra: naoEscalado ? hora_extra : false, motivo_falta: naoEscalado ? motivo_falta.trim() : '', notas });
+    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, cobrindo_utilizador_id: naoEscalado ? cobrindo_utilizador_id : null, hora_extra, motivo_falta: naoEscalado ? motivo_falta.trim() : '', notas });
     show('turno-presenca-msg', '');
     if (document.getElementById('tp-notas')) document.getElementById('tp-notas').value = '';
     await loadEscalaTurno();

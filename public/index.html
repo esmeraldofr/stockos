@@ -626,9 +626,6 @@ async function loadDia() {
               <div class="field"><label>Valor registado no TPA (Kz)</label><input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
             </div>
             <div style="font-size:11px;color:#64748b;margin-bottom:2px">TPA na caixa: <strong style="color:#94a3b8">${fmt(caixaTpa)}</strong></div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-              ${dep ? `<button type="button" class="btn btn-ghost btn-sm" onclick="deleteDepositoDia(${dep.id})">Remover este turno</button>` : ''}
-            </div>
             ${dep && dep.criado_por_nome ? `<div style="margin-top:6px;font-size:11px;color:#64748b">Registado por ${dep.criado_por_nome}</div>` : ''}
           </div>`;
         }).join('')}
@@ -796,16 +793,6 @@ async function removeBorderoDia() {
   if (!confirm('Remover a foto do borderô deste registo?')) return;
   try {
     await api('DELETE', '/depositos/bordero-dia?data=' + encodeURIComponent(S.date));
-    await loadDia();
-  } catch (e) {
-    alert(e.message || String(e));
-  }
-}
-
-async function deleteDepositoDia(id) {
-  if (!confirm('Remover este registo de depósito?')) return;
-  try {
-    await api('DELETE', '/depositos/' + id);
     await loadDia();
   } catch (e) {
     alert(e.message || String(e));

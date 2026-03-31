@@ -1908,19 +1908,6 @@ app.delete('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor'), a
   }
 });
 
-app.delete('/api/depositos/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
-  try {
-    await ensureDepositosBanco();
-    const prev = await query('SELECT bordero_foto_url FROM depositos_banco WHERE id=$1', [req.params.id]);
-    if (!prev.rows.length) return res.status(404).json({ erro: 'Depósito não encontrado' });
-    const u = prev.rows[0].bordero_foto_url;
-    if (u && String(u).startsWith('http')) await deleteBorderoFromSupabaseStorage(String(u));
-    const r = await query('DELETE FROM depositos_banco WHERE id=$1 RETURNING id', [req.params.id]);
-    if (!r.rows.length) return res.status(404).json({ erro: 'Depósito não encontrado' });
-    res.json({ ok: true });
-  } catch(e) { res.status(400).json({ erro: e.message }); }
-});
-
 // ── HISTÓRICO ─────────────────────────────────────────────────
 app.get('/api/historico', auth, async (req, res) => {
   try {

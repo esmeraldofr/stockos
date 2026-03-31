@@ -40,18 +40,21 @@ function getDbCandidates() {
 function createSql(url) { return postgres(url || _activeDbUrl, _sqlOpts); }
 const query = async (text, params) => {
   let lastErr = null;
-  for (const url of getDbCandidates()) {
-    const sql = createSql(url);
-    try {
-      const rows = await sql.unsafe(text, params || []);
-      _activeDbUrl = url;
-      return { rows: Array.from(rows) };
-    } catch (e) {
-      lastErr = e;
-    } finally {
-      // Em serverless, fechar cedo reduz saturação do pool em Session mode.
-      await sql.end({ timeout: 1 }).catch(() => {});
+  for (let round = 0; round < 2; round++) {
+    for (const url of getDbCandidates()) {
+      const sql = createSql(url);
+      try {
+        const rows = await sql.unsafe(text, params || []);
+        _activeDbUrl = url;
+        return { rows: Array.from(rows) };
+      } catch (e) {
+        lastErr = e;
+      } finally {
+        // Em serverless, fechar cedo reduz saturação do pool em Session mode.
+        await sql.end({ timeout: 1 }).catch(() => {});
+      }
     }
+    if (round === 0) await new Promise(r => setTimeout(r, 120));
   }
   throw lastErr;
 };
@@ -59,22 +62,25 @@ const pool = {
   query,
   connect: async () => {
     let lastErr = null;
-    for (const url of getDbCandidates()) {
-      const sql = createSql(url);
-      try {
-        const reserved = await sql.reserve();
-        _activeDbUrl = url;
-        return {
-          query: async (text, params) => { const rows = await reserved.unsafe(text, params || []); return { rows: Array.from(rows) }; },
-          release: async () => {
-            await reserved.release().catch(() => {});
-            await sql.end({ timeout: 1 }).catch(() => {});
-          }
-        };
-      } catch (e) {
-        lastErr = e;
-        await sql.end({ timeout: 1 }).catch(() => {});
+    for (let round = 0; round < 2; round++) {
+      for (const url of getDbCandidates()) {
+        const sql = createSql(url);
+        try {
+          const reserved = await sql.reserve();
+          _activeDbUrl = url;
+          return {
+            query: async (text, params) => { const rows = await reserved.unsafe(text, params || []); return { rows: Array.from(rows) }; },
+            release: async () => {
+              await reserved.release().catch(() => {});
+              await sql.end({ timeout: 1 }).catch(() => {});
+            }
+          };
+        } catch (e) {
+          lastErr = e;
+          await sql.end({ timeout: 1 }).catch(() => {});
+        }
       }
+      if (round === 0) await new Promise(r => setTimeout(r, 120));
     }
     throw lastErr;
   }

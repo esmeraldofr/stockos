@@ -86,6 +86,10 @@ const pool = {
   }
 };
 
+/** Evita correr a migração de depósitos em cada pedido (scan completo à BD). */
+let depositosSaidasMigrationDone = false;
+/** ALTER/enum de utilizadores só na primeira vez por processo. */
+let usernameColumnEnsured = false;
 
 async function qry(sql, params, label) {
   try { await query(sql, params); }
@@ -316,6 +320,13 @@ function prevTurno(nome, data) {
   return { nome: 'tarde', data };
 }
 
+function normDataPostgres(d) {
+  if (d == null || d === '') return '';
+  if (typeof d === 'string') return d.slice(0, 10);
+  if (d instanceof Date) return d.toISOString().slice(0, 10);
+  return String(d).slice(0, 10);
+}
+
 function normalizeUsername(s) {
   return String(s || '').trim().toLowerCase();
 }
@@ -341,6 +352,7 @@ async function ensureRoleEnumCompras() {
 }
 
 async function ensureUsernameColumn() {
+  if (usernameColumnEnsured) return;
   await ensureRoleEnumCompras();
   await query(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`);
   const r = await query(`SELECT id, email FROM utilizadores WHERE username IS NULL OR TRIM(username) = ''`).catch(() => ({ rows: [] }));
@@ -354,6 +366,7 @@ async function ensureUsernameColumn() {
   try {
     await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`);
   } catch (_) {}
+  usernameColumnEnsured = true;
 }
 
 function loginFromBody(req) {
@@ -384,7 +397,14 @@ async function ensureDepositosBanco() {
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
-  await migrateDepositosSaidasAntigasAgrupadas().catch((e) => console.error('migrateDepositosSaidasAntigasAgrupadas', e));
+  if (!depositosSaidasMigrationDone) {
+    try {
+      await migrateDepositosSaidasAntigasAgrupadas();
+      depositosSaidasMigrationDone = true;
+    } catch (e) {
+      console.error('migrateDepositosSaidasAntigasAgrupadas', e);
+    }
+  }
 }
 
 function sanitizeSaidasDestino(s) {
@@ -1157,38 +1177,74 @@ app.get('/api/dia', auth, async (req, res) => {
       [data]
     );
 
-    const result = [];
-    for (const turno of turnos.rows) {
-      // Stock com produto info
-      const stock = await query(
+    if (!turnos.rows.length) {
+      return res.json([]);
+    }
+
+    const ids = turnos.rows.map((t) => t.id);
+    const [stockAll, caixaAll] = await Promise.all([
+      query(
         `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem, p.tipo_medicao
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
-         WHERE ts.turno_id=$1
-         ORDER BY p.ordem, p.nome`,
-        [turno.id]
-      );
+         WHERE ts.turno_id = ANY($1::int[])
+         ORDER BY ts.turno_id, p.ordem, p.nome`,
+        [ids]
+      ),
+      query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids])
+    ]);
 
-      // Caixa
-      const caixa = await query('SELECT * FROM turno_caixa WHERE turno_id=$1', [turno.id]);
+    const stockByTurno = {};
+    for (const row of stockAll.rows) {
+      if (!stockByTurno[row.turno_id]) stockByTurno[row.turno_id] = [];
+      stockByTurno[row.turno_id].push(row);
+    }
+    const caixaByTurno = {};
+    for (const row of caixaAll.rows) {
+      caixaByTurno[row.turno_id] = row;
+    }
 
-      // Comparação com turno anterior
-      const prev = prevTurno(turno.nome, data);
+    const prevKeys = new Set();
+    const prevPairs = [];
+    for (const turno of turnos.rows) {
+      const p = prevTurno(turno.nome, data);
+      const k = `${p.data}\t${p.nome}`;
+      if (!prevKeys.has(k)) {
+        prevKeys.add(k);
+        prevPairs.push([p.data, p.nome]);
+      }
+    }
+
+    const prevMapByDN = {};
+    if (prevPairs.length) {
+      const conds = prevPairs.map((_, i) => `(t.data = $${i * 2 + 1} AND t.nome = $${i * 2 + 2})`).join(' OR ');
+      const params = prevPairs.flat();
       const prevStock = await query(
-        `SELECT ts.produto_id, ts.deixado FROM turno_stock ts
+        `SELECT ts.produto_id, ts.deixado, t.data, t.nome
+         FROM turno_stock ts
          JOIN turnos t ON ts.turno_id=t.id
-         WHERE t.data=$1 AND t.nome=$2`,
-        [prev.data, prev.nome]
+         WHERE ${conds}`,
+        params
       );
-      const prevMap = {};
-      prevStock.rows.forEach(r => { prevMap[r.produto_id] = parseFloat(r.deixado); });
+      for (const r of prevStock.rows) {
+        const dk = `${normDataPostgres(r.data)}|${r.nome}`;
+        if (!prevMapByDN[dk]) prevMapByDN[dk] = {};
+        prevMapByDN[dk][r.produto_id] = parseFloat(r.deixado);
+      }
+    }
 
-      const stockFinal = stock.rows.map(s => {
-        const enc  = parseFloat(s.encontrado);
-        const ent  = parseFloat(s.entrada);
-        const dei  = parseFloat(s.deixado);
+    const result = [];
+    for (const turno of turnos.rows) {
+      const stock = stockByTurno[turno.id] || [];
+      const prev = prevTurno(turno.nome, data);
+      const prevMap = prevMapByDN[`${normDataPostgres(prev.data)}|${prev.nome}`] || {};
+
+      const stockFinal = stock.map((s) => {
+        const enc = parseFloat(s.encontrado);
+        const ent = parseFloat(s.entrada);
+        const dei = parseFloat(s.deixado);
         const vend = Math.max(0, enc + ent - dei);
-        const val  = vend * parseFloat(s.preco);
+        const val = vend * parseFloat(s.preco);
 
         let comparacao = null;
         if (prevMap[s.produto_id] !== undefined) {
@@ -1201,9 +1257,9 @@ app.get('/api/dia', auth, async (req, res) => {
         return { ...s, vendido: vend, valor: val, comparacao, prev_deixado: prevDeixado };
       });
 
-      const c = caixa.rows[0] || { tpa:0, transferencia:0, dinheiro:0, saida:0 };
-      const totalGerado = parseFloat(c.tpa||0) + parseFloat(c.transferencia||0) + parseFloat(c.dinheiro||0);
-      const totalFinal  = totalGerado - parseFloat(c.saida||0);
+      const c = caixaByTurno[turno.id] || { tpa: 0, transferencia: 0, dinheiro: 0, saida: 0 };
+      const totalGerado = parseFloat(c.tpa || 0) + parseFloat(c.transferencia || 0) + parseFloat(c.dinheiro || 0);
+      const totalFinal = totalGerado - parseFloat(c.saida || 0);
       const totalVendas = stockFinal.reduce((sum, s) => sum + s.valor, 0);
 
       result.push({
@@ -1214,7 +1270,9 @@ app.get('/api/dia', auth, async (req, res) => {
       });
     }
     res.json(result);
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 app.post('/api/turnos/abrir', auth, async (req, res) => {

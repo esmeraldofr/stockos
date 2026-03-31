@@ -434,17 +434,19 @@ async function loadDia() {
   try {
     const isAdmin = S.user?.role === 'admin';
     const podeDepositos = ['admin', 'gestor'].includes(S.user?.role);
-    const turnos = await api('GET', `/dia?data=${S.date}`);
-    const dash = isAdmin ? await api('GET', `/dashboard?data=${S.date}`).catch(() => null) : null;
+    const depUrl = `/depositos?data=${encodeURIComponent(S.date)}`;
+    const [turnos, dash, depWrap] = await Promise.all([
+      api('GET', `/dia?data=${S.date}`),
+      isAdmin ? api('GET', `/dashboard?data=${S.date}`).catch(() => null) : Promise.resolve(null),
+      podeDepositos
+        ? api('GET', depUrl).then((d) => ({ ok: true, data: d })).catch((e) => ({ ok: false, err: e }))
+        : Promise.resolve({ ok: true, data: [] })
+    ]);
     let depositos = [];
     let depositosErro = '';
     if (podeDepositos) {
-      try {
-        depositos = await api('GET', `/depositos?data=${encodeURIComponent(S.date)}`);
-      } catch (e) {
-        depositos = [];
-        depositosErro = (e && e.message) ? e.message : String(e);
-      }
+      if (depWrap.ok) depositos = depWrap.data || [];
+      else depositosErro = (depWrap.err && depWrap.err.message) ? depWrap.err.message : String(depWrap.err);
     }
 
     S.turnosDia = turnos;

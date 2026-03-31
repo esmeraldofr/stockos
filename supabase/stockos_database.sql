@@ -97,18 +97,16 @@ CREATE TABLE IF NOT EXISTS escala (
   id            SERIAL      PRIMARY KEY,
   data          DATE        NOT NULL,
   turno         VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-  utilizador_id INTEGER     REFERENCES utilizadores(id) ON DELETE SET NULL,
+  utilizador_id TEXT,
   notas         TEXT        NOT NULL DEFAULT '',
   criado_em     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(data, turno)
+  UNIQUE(data, turno, utilizador_id)
 );
--- Add FK to existing escala tables created without it
+ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text;
+ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key;
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'escala_utilizador_id_fkey') THEN
-    -- Remove orphan rows first to avoid FK violation
-    UPDATE escala SET utilizador_id = NULL WHERE utilizador_id NOT IN (SELECT id FROM utilizadores);
-    ALTER TABLE escala ADD CONSTRAINT escala_utilizador_id_fkey
-      FOREIGN KEY (utilizador_id) REFERENCES utilizadores(id) ON DELETE SET NULL;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'escala_data_turno_utilizador_key') THEN
+    ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id);
   END IF;
 END $$;
 
@@ -119,9 +117,19 @@ CREATE TABLE IF NOT EXISTS escala_template (
   id            SERIAL      PRIMARY KEY,
   dia_semana    INTEGER     NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
   turno         VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-  utilizador_id INTEGER     NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+  utilizador_id TEXT,
+  notas         TEXT        NOT NULL DEFAULT '',
   UNIQUE(dia_semana, turno, utilizador_id)
 );
+ALTER TABLE escala_template ALTER COLUMN utilizador_id DROP NOT NULL;
+ALTER TABLE escala_template ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text;
+ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT '';
+ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'escala_template_dia_turno_utilizador_key') THEN
+    ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id);
+  END IF;
+END $$;
 
 -- ============================================================
 --  DADOS INICIAIS — UTILIZADORES
@@ -215,10 +223,10 @@ CREATE TABLE IF NOT EXISTS escala_template (
   id              SERIAL        PRIMARY KEY,
   dia_semana      SMALLINT      NOT NULL CHECK (dia_semana >= 0 AND dia_semana <= 6),
   turno           VARCHAR(10)   NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-  utilizador_id   INTEGER       REFERENCES utilizadores(id) ON DELETE SET NULL,
+  utilizador_id   TEXT,
   notas           TEXT          NOT NULL DEFAULT '',
   criado_em       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-  UNIQUE(dia_semana, turno)
+  UNIQUE(dia_semana, turno, utilizador_id)
 );
 
 -- ============================================================
@@ -228,10 +236,10 @@ CREATE TABLE IF NOT EXISTS escalas (
   id              SERIAL        PRIMARY KEY,
   data            DATE          NOT NULL,
   turno           VARCHAR(10)   NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-  utilizador_id   INTEGER       REFERENCES utilizadores(id) ON DELETE SET NULL,
+  utilizador_id   TEXT,
   notas           TEXT          NOT NULL DEFAULT '',
   criado_em       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-  UNIQUE(data, turno)
+  UNIQUE(data, turno, utilizador_id)
 );
 
 -- ============================================================

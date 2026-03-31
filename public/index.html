@@ -1906,10 +1906,10 @@ async function loadEscalaTemplate() {
               const chips = entries.map(e =>
                 canEdit
                   ? `<div style="display:inline-flex;align-items:center;gap:2px;margin:2px">
-                      <span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${e.utilizador_nome.split(' ')[0]}</span>
+                      <span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${(e.utilizador_nome || 'Sem').split(' ')[0]}</span>
                       <button onclick="removeEscalaTemplate(${e.id})" style="background:none;border:none;color:#ef4444;cursor:pointer;padding:0 1px;font-size:13px;line-height:1">×</button>
                     </div>`
-                  : `<div style="display:inline-block;margin:2px"><span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${e.utilizador_nome.split(' ')[0]}</span></div>`
+                  : `<div style="display:inline-block;margin:2px"><span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${(e.utilizador_nome || 'Sem').split(' ')[0]}</span></div>`
               ).join('');
               const addBtn = canEdit
                 ? `<button onclick="showAddEscalaTemplate(${dia},'${turno}')" style="background:none;border:1px dashed #334155;border-radius:6px;color:#475569;cursor:pointer;font-size:16px;padding:1px 6px;margin:2px;line-height:1.4">+</button>`
@@ -1955,7 +1955,7 @@ async function addEscalaTemplate(dia_semana, turno) {
   try {
     const utilizador_id = val('ea-user');
     if (!utilizador_id) return err('escala-add-msg', 'Seleciona um funcionário');
-    await api('POST', '/escala/template', { dia_semana, turno, utilizador_id: parseInt(utilizador_id) });
+    await api('POST', '/escala/template', { dia_semana, turno, utilizador_id });
     show('escala-add-form', '');
     await loadEscalaTemplate();
   } catch(e) { err('escala-add-msg', e.message); }

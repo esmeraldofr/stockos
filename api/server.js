@@ -103,7 +103,7 @@ async function initDB() {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    utilizador_id TEXT,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)
@@ -112,11 +112,13 @@ async function initDB() {
     id SERIAL PRIMARY KEY,
     dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    utilizador_id TEXT,
     notas TEXT NOT NULL DEFAULT '',
     UNIQUE(dia_semana, turno)
   )`, [], 'escala_template');
+  await qry(`ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'escala-userid-text');
   await qry(`ALTER TABLE escala_template ALTER COLUMN utilizador_id DROP NOT NULL`, [], 'escala_template-nullable-user');
+  await qry(`ALTER TABLE escala_template ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'escala_template-userid-text');
   await qry(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'escala_template-notas');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
@@ -272,12 +274,12 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    utilizador_id TEXT,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)
   )`, 'escala');
-  await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_utilizador_id_fkey') THEN ALTER TABLE escala ADD CONSTRAINT escala_utilizador_id_fkey FOREIGN KEY (utilizador_id) REFERENCES utilizadores(id) ON DELETE SET NULL; END IF; END $$`, 'escala-fk');
+  await run(`ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, 'escala-userid-text');
   res.json({ results });
 });
 
@@ -933,11 +935,12 @@ async function ensureEscala() {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER,
+    utilizador_id TEXT,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(data, turno)
   )`);
+  await query(`ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`).catch(()=>{});
 }
 
 app.get('/api/escala', auth, async (req, res) => {
@@ -948,7 +951,7 @@ app.get('/api/escala', auth, async (req, res) => {
       `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id,
               u.nome as utilizador_nome, u.role as utilizador_role
        FROM escala e
-       LEFT JOIN utilizadores u ON e.utilizador_id = u.id
+       LEFT JOIN utilizadores u ON e.utilizador_id::text = u.id::text
        WHERE e.data >= $1 AND e.data <= $2
        ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
       [data_inicio, data_fim]
@@ -991,11 +994,12 @@ async function ensureEscalaTemplate() {
     id SERIAL PRIMARY KEY,
     dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER,
+    utilizador_id TEXT,
     notas TEXT NOT NULL DEFAULT '',
     UNIQUE(dia_semana, turno)
   )`);
   await query(`ALTER TABLE escala_template ALTER COLUMN utilizador_id DROP NOT NULL`).catch(()=>{});
+  await query(`ALTER TABLE escala_template ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`).catch(()=>{});
   await query(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`).catch(()=>{});
 }
 
@@ -1004,7 +1008,7 @@ app.get('/api/escala/template', auth, async (req, res) => {
     const r = await query(`
       SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, u.nome as utilizador_nome
       FROM escala_template et
-      JOIN utilizadores u ON et.utilizador_id = u.id
+      LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text
       ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
     `);
     res.json(r.rows);

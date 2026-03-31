@@ -11,15 +11,29 @@ const PWD_SALT   = 'stockos-pwd-salt-2025';
 
 const _dbUrl = process.env.DATABASE_URL;
 if (!_dbUrl) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
-const _sql = postgres(_dbUrl, { ssl: 'require', prepare: false, max: 1, idle_timeout: 10, max_lifetime: 60, connect_timeout: 10 });
-const query = async (text, params) => { const rows = await _sql.unsafe(text, params || []); return { rows: Array.from(rows) }; };
+const _sqlOpts = { ssl: 'require', prepare: false, max: 1, idle_timeout: 1, max_lifetime: 5, connect_timeout: 10 };
+function createSql() { return postgres(_dbUrl, _sqlOpts); }
+const query = async (text, params) => {
+  const sql = createSql();
+  try {
+    const rows = await sql.unsafe(text, params || []);
+    return { rows: Array.from(rows) };
+  } finally {
+    // Em serverless, fechar cedo reduz saturação do pool em Session mode.
+    await sql.end({ timeout: 1 }).catch(() => {});
+  }
+};
 const pool = {
   query,
   connect: async () => {
-    const reserved = await _sql.reserve();
+    const sql = createSql();
+    const reserved = await sql.reserve();
     return {
       query: async (text, params) => { const rows = await reserved.unsafe(text, params || []); return { rows: Array.from(rows) }; },
-      release: () => reserved.release()
+      release: async () => {
+        await reserved.release().catch(() => {});
+        await sql.end({ timeout: 1 }).catch(() => {});
+      }
     };
   }
 };

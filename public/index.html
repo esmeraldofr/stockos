@@ -1770,8 +1770,19 @@ async function drawArmazem() {
     <div id="content">
       <div id="armazem-msg"></div>
       <div class="card">
+        <div class="card-title">💰 Fundos para compras (dia)</div>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Libertações ao longo do dia. O saldo é libertado menos faturas já registadas na mesma data (usa a data da fatura abaixo).</p>
+        <div id="armazem-fundos-banner"></div>
+        <div id="armazem-libertacoes-list" style="margin-bottom:12px"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field"><label>Valor (Kz)</label><input id="lib-valor" type="number" min="0.01" step="any" placeholder="0"/></div>
+          <div class="field"><label>Notas</label><input id="lib-notas" type="text" placeholder="Ex.: manhã, gerência"/></div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="submitLibertacaoArmazem()">+ Registar libertação</button>
+      </div>
+      <div class="card">
         <div class="card-title">📄 Fatura de compra</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha.</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha. Se o total exceder o saldo do dia, deves justificar a origem do dinheiro (podes associar uma saída de caixa do mesmo dia).</p>
         <div id="fatura-form-msg"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="Ex: FT 2025/012"/></div>
@@ -1779,6 +1790,11 @@ async function drawArmazem() {
         </div>
         <div class="field"><label>Fornecedor</label><input id="fx-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
         <div class="field"><label>Notas</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
+        <div id="fx-excesso-wrap" style="display:none;border:1px solid #d97706;border-radius:10px;padding:12px;margin-bottom:10px;background:#1c1917">
+          <div style="font-size:12px;color:#fbbf24;margin-bottom:8px">O total desta fatura excede o saldo disponível para a data seleccionada. Indica a origem do dinheiro (obrigatório). Opcionalmente associa uma saída de caixa registada nesse dia.</div>
+          <div class="field"><label>Justificação da origem do dinheiro</label><textarea id="fx-justificacao" rows="2" placeholder="Ex.: pago com saída de caixa do turno da tarde, aprovado pela gerência."></textarea></div>
+          <div class="field"><label>Saída de caixa do dia (opcional)</label><select id="fx-turno-saida"><option value="">— Nenhuma / outra origem —</option></select></div>
+        </div>
         <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Linhas</div>
         <div id="fatura-linhas-body"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
@@ -1805,6 +1821,14 @@ async function drawArmazem() {
   if (fxData) fxData.value = new Date().toISOString().split('T')[0];
   document.getElementById('fatura-linhas-body').innerHTML = '';
   addFaturaLinha();
+  const fxD = document.getElementById('fx-data');
+  if (fxD) fxD.addEventListener('change', () => refreshArmazemFundos());
+  const flb = document.getElementById('fatura-linhas-body');
+  if (flb) {
+    flb.addEventListener('input', () => updateFaturaExcessoUI());
+    flb.addEventListener('change', () => updateFaturaExcessoUI());
+  }
+  await refreshArmazemFundos();
   await loadArmazemData();
 }
 
@@ -1834,13 +1858,20 @@ async function loadArmazemData() {
       show('armazem-faturas', '<div style="color:#64748b">Nenhuma fatura registada.</div>');
     } else {
       show('armazem-faturas', `<div class="table-wrap"><table>
-        <thead><tr><th>Data</th><th>Nº</th><th>Fornecedor</th><th style="text-align:right">Total</th></tr></thead>
-        <tbody>${faturas.map(f => `<tr>
+        <thead><tr><th>Data</th><th>Nº</th><th>Fornecedor</th><th style="text-align:right">Total</th><th>Fundos</th></tr></thead>
+        <tbody>${faturas.map(f => {
+          const exc = (f.justificacao_excesso || '').trim();
+          const tag = exc
+            ? `<span style="font-size:11px;color:#fbbf24">Acima do saldo</span>`
+            : '—';
+          return `<tr>
           <td style="font-size:12px;color:#94a3b8">${dateLabel(f.data_emissao)}</td>
           <td style="font-weight:600">${f.numero_fatura || '—'}</td>
           <td>${f.fornecedor || '—'}</td>
           <td style="text-align:right;color:#fbbf24">${fmt(f.total_valor)}</td>
-        </tr>`).join('')}</tbody></table></div>`);
+          <td style="font-size:12px">${tag}</td>
+        </tr>`;
+        }).join('')}</tbody></table></div>`);
     }
 
     if (!compras.length) {
@@ -1862,6 +1893,115 @@ async function loadArmazemData() {
     show('armazem-inventario', `<div class="alert alert-error">${e.message}</div>`);
     show('armazem-faturas', `<div class="alert alert-error">${e.message}</div>`);
     show('armazem-compras', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+async function refreshArmazemFundos() {
+  const banner = document.getElementById('armazem-fundos-banner');
+  const list = document.getElementById('armazem-libertacoes-list');
+  const fxData = document.getElementById('fx-data');
+  const data = (fxData && fxData.value) ? fxData.value : new Date().toISOString().split('T')[0];
+  try {
+    const [saldoInfo, saidas] = await Promise.all([
+      api('GET', '/armazem/saldo?data=' + encodeURIComponent(data)),
+      api('GET', '/armazem/saidas-dia?data=' + encodeURIComponent(data))
+    ]);
+    S.armazemSaldoDia = parseFloat(saldoInfo.saldo) || 0;
+    if (banner) {
+      banner.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:13px;margin-bottom:8px">
+        <span style="color:#94a3b8">Libertado: <strong style="color:#e2e8f0">${fmt(saldoInfo.total_libertacoes)}</strong></span>
+        <span style="color:#94a3b8">Faturas (dia): <strong style="color:#e2e8f0">${fmt(saldoInfo.total_faturas)}</strong></span>
+        <span style="color:#94a3b8">Saldo disponível: <strong style="color:${S.armazemSaldoDia >= 0 ? '#4ade80' : '#f87171'}">${fmt(saldoInfo.saldo)}</strong></span>
+      </div>`;
+    }
+    if (list) {
+      const rows = saldoInfo.libertacoes || [];
+      if (!rows.length) {
+        list.innerHTML = '<div style="font-size:12px;color:#64748b">Sem libertações neste dia.</div>';
+      } else {
+        list.innerHTML = `<div class="table-wrap"><table style="font-size:12px">
+          <thead><tr><th>Valor</th><th>Notas</th><th></th></tr></thead>
+          <tbody>${rows.map(l => `<tr>
+            <td style="color:#fbbf24">${fmt(l.valor)}</td>
+            <td>${l.notas || '—'}</td>
+            <td><button type="button" class="btn btn-ghost btn-sm" onclick="deleteLibertacaoArmazem(${l.id})">Remover</button></td>
+          </tr>`).join('')}</tbody></table></div>`;
+      }
+    }
+    const sel = document.getElementById('fx-turno-saida');
+    if (sel) {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">— Nenhuma / outra origem —</option>' +
+        (saidas || []).map(s => `<option value="${s.id}">${fmt(s.valor)} — ${turnoLabel(s.turno_nome)} — ${(s.descricao || '').slice(0, 40)}</option>`).join('');
+      if (cur && sel.querySelector(`option[value="${cur}"]`)) sel.value = cur;
+    }
+    updateFaturaExcessoUI();
+  } catch (e) {
+    if (banner) banner.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+    S.armazemSaldoDia = 0;
+    updateFaturaExcessoUI();
+  }
+}
+
+async function submitLibertacaoArmazem() {
+  const data = val('fx-data') || new Date().toISOString().split('T')[0];
+  const valor = parseFloat(document.getElementById('lib-valor')?.value);
+  const notas = val('lib-notas');
+  if (!valor || valor <= 0) {
+    show('armazem-msg', '<div class="alert alert-error">Indica um valor positivo para a libertação.</div>');
+    return;
+  }
+  try {
+    await api('POST', '/armazem/libertacoes', { data, valor, notas });
+    document.getElementById('lib-valor').value = '';
+    document.getElementById('lib-notas').value = '';
+    show('armazem-msg', '');
+    await refreshArmazemFundos();
+    await loadArmazemData();
+  } catch (e) {
+    show('armazem-msg', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+async function deleteLibertacaoArmazem(id) {
+  if (!confirm('Remover esta libertação?')) return;
+  try {
+    await api('DELETE', '/armazem/libertacoes/' + id);
+    await refreshArmazemFundos();
+    await loadArmazemData();
+  } catch (e) {
+    show('armazem-msg', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+function computeFaturaTotalEstimado() {
+  let sum = 0;
+  document.querySelectorAll('#fatura-linhas-body .fatura-linha').forEach(line => {
+    const sel = line.querySelector('.af-prod');
+    if (!sel || !sel.value) return;
+    const caixasNum = parseFloat(line.querySelector('.af-caixas')?.value) || 0;
+    const qtdPor = parseFloat(line.querySelector('.af-qtd-caixa')?.value) || 0;
+    const qtyRaw = parseFloat(line.querySelector('.af-qty')?.value);
+    const qty = (caixasNum > 0 && qtdPor > 0) ? (caixasNum * qtdPor) : qtyRaw;
+    const pu = parseFloat(line.querySelector('.af-preco')?.value);
+    if (qty > 0 && pu > 0) sum += qty * pu;
+  });
+  return sum;
+}
+
+function updateFaturaExcessoUI() {
+  const wrap = document.getElementById('fx-excesso-wrap');
+  if (!wrap) return;
+  const t = computeFaturaTotalEstimado();
+  const saldo = S.armazemSaldoDia != null ? S.armazemSaldoDia : 0;
+  if (t > saldo + 0.01) {
+    wrap.style.display = '';
+  } else {
+    wrap.style.display = 'none';
+    const j = document.getElementById('fx-justificacao');
+    const s = document.getElementById('fx-turno-saida');
+    if (j) j.value = '';
+    if (s) s.value = '';
   }
 }
 
@@ -1972,7 +2112,7 @@ function bindFaturaLinhaCaixaInputs(line) {
     const el = line.querySelector('.' + cls);
     if (!el || el.dataset.binded) return;
     el.dataset.binded = '1';
-    el.addEventListener('input', () => syncFaturaLinhaPrecoUnit(line));
+    el.addEventListener('input', () => { syncFaturaLinhaPrecoUnit(line); updateFaturaExcessoUI(); });
   });
 }
 
@@ -1982,10 +2122,11 @@ function initFaturaLinha(line) {
   if (sel) {
     renderArmazemProdutoOptions(sel, '', '', true);
     bindArmazemProdutoFilterOnLine(sel, ind);
-    sel.addEventListener('change', () => toggleFaturaLinhaNovo(sel));
+    sel.addEventListener('change', () => { toggleFaturaLinhaNovo(sel); updateFaturaExcessoUI(); });
     toggleFaturaLinhaNovo(sel);
   }
   bindFaturaLinhaCaixaInputs(line);
+  updateFaturaExcessoUI();
 }
 
 function removeFaturaLinha(btn) {
@@ -2087,19 +2228,32 @@ async function submitFaturaArmazem() {
     return;
   }
   try {
-    await api('POST', '/armazem/faturas', {
+    const totalEst = computeFaturaTotalEstimado();
+    const saldo = S.armazemSaldoDia != null ? S.armazemSaldoDia : 0;
+    const payload = {
       numero_fatura: val('fx-numero'),
       fornecedor: val('fx-fornecedor'),
       data_emissao: val('fx-data'),
       notas: val('fx-notas'),
       linhas
-    });
+    };
+    if (totalEst > saldo + 0.01) {
+      payload.justificacao_excesso = val('fx-justificacao');
+      const ts = val('fx-turno-saida');
+      if (ts) payload.turno_saida_id = parseInt(ts, 10);
+    }
+    await api('POST', '/armazem/faturas', payload);
     if (msg) msg.innerHTML = '<div class="alert alert-success">Fatura registada com sucesso.</div>';
     document.getElementById('fx-numero').value = '';
     document.getElementById('fx-fornecedor').value = '';
     document.getElementById('fx-notas').value = '';
+    const jf = document.getElementById('fx-justificacao');
+    if (jf) jf.value = '';
+    const ts = document.getElementById('fx-turno-saida');
+    if (ts) ts.value = '';
     document.getElementById('fatura-linhas-body').innerHTML = '';
     addFaturaLinha();
+    await refreshArmazemFundos();
     await loadArmazemData();
   } catch(e) {
     if (msg) msg.innerHTML = `<div class="alert alert-error">${e.message}</div>`;

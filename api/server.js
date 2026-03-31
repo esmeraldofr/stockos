@@ -706,7 +706,88 @@ async function ensureArmazemTables() {
   await query(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0`).catch(()=>{});
   await query(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0`).catch(()=>{});
   await query(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS fatura_id INTEGER REFERENCES armazem_faturas(id) ON DELETE SET NULL`).catch(()=>{});
+  await ensureTurnoSaidas();
+  await query(`CREATE TABLE IF NOT EXISTS armazem_libertacoes (
+    id SERIAL PRIMARY KEY,
+    data DATE NOT NULL,
+    valor NUMERIC(15,2) NOT NULL,
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    criado_por TEXT NOT NULL DEFAULT ''
+  )`).catch(() => {});
+  await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS justificacao_excesso TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS turno_saida_id INTEGER`).catch(() => {});
+  await query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_turno_saida_id_fkey') THEN
+      ALTER TABLE armazem_faturas ADD CONSTRAINT armazem_faturas_turno_saida_id_fkey
+      FOREIGN KEY (turno_saida_id) REFERENCES turno_saidas(id) ON DELETE SET NULL;
+    END IF;
+  END $$`).catch(() => {});
 }
+
+app.get('/api/armazem/saldo', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const data = req.query.data || new Date().toISOString().split('T')[0];
+    const lib = await query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [data]);
+    const fat = await query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [data]);
+    const lis = await query(
+      `SELECT l.*, u.nome as criado_por_nome FROM armazem_libertacoes l
+       LEFT JOIN utilizadores u ON u.id::text = l.criado_por::text
+       WHERE l.data=$1 ORDER BY l.criado_em DESC`,
+      [data]
+    );
+    const totalLib = parseFloat(lib.rows[0].t) || 0;
+    const totalFat = parseFloat(fat.rows[0].t) || 0;
+    res.json({
+      data,
+      total_libertacoes: totalLib,
+      total_faturas: totalFat,
+      saldo: totalLib - totalFat,
+      libertacoes: lis.rows
+    });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/armazem/saidas-dia', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    await ensureTurnoSaidas();
+    const data = req.query.data || new Date().toISOString().split('T')[0];
+    const r = await query(
+      `SELECT s.id, s.turno_id, s.descricao, s.valor, s.notas, s.criado_em, t.nome as turno_nome
+       FROM turno_saidas s
+       JOIN turnos t ON t.id = s.turno_id
+       WHERE t.data = $1
+       ORDER BY s.criado_em DESC`,
+      [data]
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/armazem/libertacoes', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const { data, valor, notas } = req.body || {};
+    const d = (data || new Date().toISOString().split('T')[0]).trim();
+    const v = parseFloat(valor);
+    if (!v || v <= 0) return res.status(400).json({ erro: 'Indique um valor positivo para a libertação.' });
+    const r = await query(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [d, v, String(notas || '').trim(), String(req.user.id || '')]
+    );
+    res.json(r.rows[0]);
+  } catch(e) { res.status(400).json({ erro: e.message }); }
+});
+
+app.delete('/api/armazem/libertacoes/:id', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const r = await query('DELETE FROM armazem_libertacoes WHERE id=$1 RETURNING id', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Libertação não encontrada' });
+    res.json({ ok: true });
+  } catch(e) { res.status(400).json({ erro: e.message }); }
+});
 
 app.get('/api/armazem/inventario', auth, requireRole('admin','gestor'), async (req, res) => {
   try {
@@ -794,22 +875,69 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor'), async (req
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { numero_fatura, fornecedor, data_emissao, notas, linhas } = req.body || {};
+    const { numero_fatura, fornecedor, data_emissao, notas, linhas, justificacao_excesso, turno_saida_id } = req.body || {};
     if (!Array.isArray(linhas) || !linhas.length) throw new Error('Adicione pelo menos uma linha à fatura');
+    const dataFat = (data_emissao || new Date().toISOString().split('T')[0]).trim();
+    const libRow = await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);
+    const fatRow = await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [dataFat]);
+    const totalLib = parseFloat(libRow.rows[0].t) || 0;
+    const totalFatExistente = parseFloat(fatRow.rows[0].t) || 0;
+    const saldoDisponivel = totalLib - totalFatExistente;
+
+    let sumTotal = 0;
+    for (const linha of linhas) {
+      const qty = (() => {
+        const caixasNum = parseFloat(linha.caixas) || 0;
+        const qtdPor = parseFloat(linha.qtd_por_caixa) || 0;
+        const qtyRaw = parseFloat(linha.quantidade);
+        return (caixasNum > 0 && qtdPor > 0) ? (caixasNum * qtdPor) : qtyRaw;
+      })();
+      const pu = parseFloat(linha.preco_unitario);
+      if (!qty || qty <= 0 || !pu || pu <= 0) throw new Error('Cada linha válida precisa de quantidade e preço unitário.');
+      sumTotal += qty * pu;
+    }
+
+    let just = String(justificacao_excesso || '').trim();
+    let tsid = turno_saida_id != null && turno_saida_id !== '' ? parseInt(turno_saida_id, 10) : null;
+    if (Number.isNaN(tsid)) tsid = null;
+
+    if (sumTotal > saldoDisponivel + 0.005) {
+      if (just.length < 8) {
+        throw new Error(
+          'O total da fatura excede o saldo disponível para este dia (libertações − faturas já registadas). ' +
+          'Indica uma justificação da origem do dinheiro (ex.: saída de caixa, outro fundo).'
+        );
+      }
+      if (tsid != null) {
+        const chk = await client.query(
+          `SELECT s.id FROM turno_saidas s JOIN turnos t ON t.id = s.turno_id WHERE s.id = $1 AND t.data = $2`,
+          [tsid, dataFat]
+        );
+        if (!chk.rows.length) {
+          throw new Error('A saída de caixa seleccionada não pertence ao mesmo dia da fatura.');
+        }
+      }
+    } else {
+      just = '';
+      tsid = null;
+    }
+
     const ins = await client.query(
-      `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [
         (numero_fatura || '').trim(),
         (fornecedor || '').trim(),
-        data_emissao || new Date().toISOString().split('T')[0],
+        dataFat,
         (notas || '').trim(),
-        String(req.user.id || '')
+        String(req.user.id || ''),
+        just,
+        tsid
       ]
     );
     const fid = ins.rows[0].id;
     const forn = (fornecedor || '').trim();
-    let sumTotal = 0;
+    sumTotal = 0;
     for (const linha of linhas) {
       const row = await processArmazemCompraLine(client, req, linha, { fatura_id: fid, fornecedor_header: forn });
       sumTotal += parseFloat(row.valor_total) || 0;

@@ -287,6 +287,17 @@ CREATE TABLE IF NOT EXISTS turno_saidas (
   criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS armazem_libertacoes (
+  id            SERIAL          PRIMARY KEY,
+  data          DATE            NOT NULL,
+  valor         NUMERIC(15,2)   NOT NULL,
+  notas         TEXT            NOT NULL DEFAULT '',
+  criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+  criado_por    TEXT            NOT NULL DEFAULT ''
+);
+ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS justificacao_excesso TEXT NOT NULL DEFAULT '';
+ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS turno_saida_id INTEGER REFERENCES turno_saidas(id) ON DELETE SET NULL;
+
 -- ============================================================
 --  ESCALA_TEMPLATE (modelo semanal: dia da semana + turno)
 --  dia_semana: 0=Segunda … 6=Domingo

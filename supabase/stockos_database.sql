@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS produtos (
   preco     NUMERIC(15,2) NOT NULL DEFAULT 0,
   categoria VARCHAR(20)   NOT NULL DEFAULT 'outro', -- ingredientes, bebida, outro
   ordem     INTEGER       NOT NULL DEFAULT 0,
-  ativo     BOOLEAN       NOT NULL DEFAULT TRUE
+  ativo     BOOLEAN       NOT NULL DEFAULT TRUE,
+  tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade' CHECK (tipo_medicao IN ('unidade','peso'))
 );
 
 -- ============================================================
@@ -85,6 +86,7 @@ ALTER TABLE produtos ALTER COLUMN sku SET DEFAULT '';
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categoria VARCHAR(20) NOT NULL DEFAULT 'outro';
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade';
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT '';
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ;

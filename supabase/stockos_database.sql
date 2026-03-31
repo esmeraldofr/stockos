@@ -208,6 +208,33 @@ CREATE TABLE IF NOT EXISTS turno_saidas (
 );
 
 -- ============================================================
+--  ESCALA_TEMPLATE (modelo semanal: dia da semana + turno)
+--  dia_semana: 0=Segunda … 6=Domingo
+-- ============================================================
+CREATE TABLE IF NOT EXISTS escala_template (
+  id              SERIAL        PRIMARY KEY,
+  dia_semana      SMALLINT      NOT NULL CHECK (dia_semana >= 0 AND dia_semana <= 6),
+  turno           VARCHAR(10)   NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+  utilizador_id   INTEGER       REFERENCES utilizadores(id) ON DELETE SET NULL,
+  notas           TEXT          NOT NULL DEFAULT '',
+  criado_em       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  UNIQUE(dia_semana, turno)
+);
+
+-- ============================================================
+--  ESCALAS (atribuições por data concreta: dia + turno)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS escalas (
+  id              SERIAL        PRIMARY KEY,
+  data            DATE          NOT NULL,
+  turno           VARCHAR(10)   NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+  utilizador_id   INTEGER       REFERENCES utilizadores(id) ON DELETE SET NULL,
+  notas           TEXT          NOT NULL DEFAULT '',
+  criado_em       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  UNIQUE(data, turno)
+);
+
+-- ============================================================
 --  RECEITAS (composição de produtos de menu)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS receitas (

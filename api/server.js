@@ -112,9 +112,12 @@ async function initDB() {
     id SERIAL PRIMARY KEY,
     dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
-    UNIQUE(dia_semana, turno, utilizador_id)
+    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    notas TEXT NOT NULL DEFAULT '',
+    UNIQUE(dia_semana, turno)
   )`, [], 'escala_template');
+  await qry(`ALTER TABLE escala_template ALTER COLUMN utilizador_id DROP NOT NULL`, [], 'escala_template-nullable-user');
+  await qry(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'escala_template-notas');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
@@ -988,9 +991,12 @@ async function ensureEscalaTemplate() {
     id SERIAL PRIMARY KEY,
     dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER NOT NULL,
-    UNIQUE(dia_semana, turno, utilizador_id)
+    utilizador_id INTEGER,
+    notas TEXT NOT NULL DEFAULT '',
+    UNIQUE(dia_semana, turno)
   )`);
+  await query(`ALTER TABLE escala_template ALTER COLUMN utilizador_id DROP NOT NULL`).catch(()=>{});
+  await query(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`).catch(()=>{});
 }
 
 app.get('/api/escala/template', auth, async (req, res) => {
@@ -1011,12 +1017,13 @@ app.get('/api/escala/template', auth, async (req, res) => {
 
 app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
-    const { dia_semana, turno, utilizador_id } = req.body;
-    if (dia_semana === undefined || !turno || !utilizador_id) return res.status(400).json({ erro: 'dia_semana, turno e utilizador_id são obrigatórios' });
+    const { dia_semana, turno, utilizador_id, notas } = req.body;
+    if (dia_semana === undefined || !turno) return res.status(400).json({ erro: 'dia_semana e turno são obrigatórios' });
     const r = await query(
-      `INSERT INTO escala_template (dia_semana, turno, utilizador_id) VALUES ($1, $2, $3)
-       ON CONFLICT (dia_semana, turno, utilizador_id) DO NOTHING RETURNING *`,
-      [dia_semana, turno, utilizador_id]
+      `INSERT INTO escala_template (dia_semana, turno, utilizador_id, notas) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (dia_semana, turno) DO UPDATE SET utilizador_id=EXCLUDED.utilizador_id, notas=EXCLUDED.notas
+       RETURNING *`,
+      [dia_semana, turno, utilizador_id || null, notas || '']
     );
     res.json(r.rows[0] || { sucesso: true });
   } catch(e) {

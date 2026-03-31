@@ -236,6 +236,9 @@ function fmtNum(v) {
   const n = parseFloat(v) || 0;
   return n.toLocaleString('pt-AO', { maximumFractionDigits: 2 });
 }
+function medicaoSigla(tipo) {
+  return tipo === 'peso' ? 'kg' : 'un';
+}
 function parseRaw(v) {
   return parseFloat(String(v).replace(/\./g, '').replace(',', '.')) || 0;
 }
@@ -678,7 +681,7 @@ async function loadTurno() {
         const inputAttr = canEdit ? '' : 'disabled';
         return `
           <tr>
-            <td class="td-name">${s.produto_nome}${s.preco > 0 ? `<span style="color:#64748b;font-size:11px;margin-left:6px">${fmt(s.preco)}</span>` : ''}</td>
+            <td class="td-name">${s.produto_nome}<span style="color:#64748b;font-size:11px;margin-left:6px">${medicaoSigla(s.tipo_medicao)}</span>${s.preco > 0 ? `<span style="color:#64748b;font-size:11px;margin-left:6px">${fmt(s.preco)}</span>` : ''}</td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.encontrado)}"
@@ -691,7 +694,7 @@ async function loadTurno() {
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.fechados||0)}"
               onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
               oninput="updateStock('${pid}','fechados',this.value)" ${inputAttr}/></td>
-            <td class="td-calc" id="vend-${pid}">${fmtNum(vend)}</td>
+            <td class="td-calc" id="vend-${pid}">${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}</td>
             <td class="td-valor" id="val-${pid}">${s.preco > 0 ? fmt(val) : '—'}</td>
           </tr>`;
       }).join('');
@@ -1096,6 +1099,8 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
   if (!el) return;
   try {
     const entradas = await api('GET', `/turnos/${turnoId}/entradas`);
+    const stockById = {};
+    (stocks || []).forEach(s => { stockById[String(s.produto_id)] = s; });
 
     // Opções do select agrupadas por categoria
     const cats = ['ingredientes','bebida','outro'];
@@ -1105,7 +1110,7 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
       const items = stocks.filter(s => (s.categoria === cat || (!['ingredientes','bebida'].includes(s.categoria) && cat === 'outro')));
       if (!items.length) return;
       opts += `<optgroup label="${labels[cat] || cat}">`;
-      items.forEach(s => { opts += `<option value="${s.produto_id}">${s.produto_nome}</option>`; });
+      items.forEach(s => { opts += `<option value="${s.produto_id}" data-medicao="${s.tipo_medicao || 'unidade'}">${s.produto_nome} (${medicaoSigla(s.tipo_medicao)})</option>`; });
       opts += '</optgroup>';
     });
 
@@ -1120,7 +1125,7 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
           <button id="e-orig-compra" class="tipo-btn" onclick="setOrigem('compra')">Compra</button>
         </div>
         <select id="e-produto" class="entradas-select">${opts}</select>
-        <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd" class="entradas-qty"/>
+        <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd (un)" class="entradas-qty"/>
         <input id="e-preco" type="number" min="0" step="any" placeholder="Preço" class="entradas-qty" style="display:none"/>
         <input id="e-notas" type="text" placeholder="Nota obrigatória" class="entradas-notas"/>
         <button class="btn btn-success btn-sm" onclick="submitEntrada(${turnoId})">Registar</button>
@@ -1155,7 +1160,7 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
               <td style="font-size:12px">${tipoLabel}</td>
               <td style="font-size:12px">${origemLabel}</td>
               <td style="font-size:13px">${e.produto_nome}</td>
-              <td style="text-align:right;font-weight:600;color:#e2e8f0">${fmtNum(e.quantidade)}</td>
+              <td style="text-align:right;font-weight:600;color:#e2e8f0">${fmtNum(e.quantidade)} ${medicaoSigla(e.tipo_medicao || stockById[String(e.produto_id)]?.tipo_medicao)}</td>
               <td style="text-align:right;font-size:12px">${precoLabel}</td>
               <td style="color:#94a3b8;font-size:12px">${e.notas}</td>
             </tr>`;
@@ -1163,6 +1168,16 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
         </table></div>`;
 
     el.innerHTML = formHtml + listaHtml;
+    const prodEl = document.getElementById('e-produto');
+    const qtyEl = document.getElementById('e-qty');
+    function syncEntradaQtyPlaceholder() {
+      if (!prodEl || !qtyEl) return;
+      const opt = prodEl.options[prodEl.selectedIndex];
+      const med = opt?.getAttribute('data-medicao') || 'unidade';
+      qtyEl.placeholder = `Qtd (${medicaoSigla(med)})`;
+    }
+    if (prodEl) prodEl.addEventListener('change', syncEntradaQtyPlaceholder);
+    syncEntradaQtyPlaceholder();
     window._entradaTipo   = 'entrada';
     window._entradaOrigem = 'armazem';
   } catch(e) {

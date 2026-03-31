@@ -525,7 +525,7 @@ app.get('/api/dia', auth, async (req, res) => {
     for (const turno of turnos.rows) {
       // Stock com produto info
       const stock = await query(
-        `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem
+        `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem, p.tipo_medicao
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
          WHERE ts.turno_id=$1
@@ -673,7 +673,7 @@ async function ensureTurnoEntradas() {
 app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
   try {
     const r = await query(
-      `SELECT te.*, p.nome as produto_nome
+      `SELECT te.*, p.nome as produto_nome, p.tipo_medicao
        FROM turno_entradas te JOIN produtos p ON te.produto_id=p.id
        WHERE te.turno_id=$1 ORDER BY te.criado_em DESC`,
       [req.params.id]

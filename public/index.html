@@ -1490,9 +1490,11 @@ async function loadEscalaTurno() {
       el.innerHTML = '<span style="color:#64748b">Turno não selecionado.</span>';
       return;
     }
-    const [rowsDia, rowsTemplate] = await Promise.all([
+    const [rowsDia, rowsTemplate, equipaReal, pessoas] = await Promise.all([
       api('GET', `/escala?data_inicio=${S.date}&data_fim=${S.date}`),
-      api('GET', '/escala/template')
+      api('GET', '/escala/template'),
+      api('GET', `/turnos/${S.turnoData.id}/equipa-real`),
+      api('GET', '/equipa/pessoas')
     ]);
     const listaDia = rowsDia.filter(r => r.turno === turnoNome);
     const d = new Date(S.date + 'T12:00:00Z');
@@ -1501,12 +1503,15 @@ async function loadEscalaTurno() {
     const listaTpl = rowsTemplate.filter(r => Number(r.dia_semana) === diaSemana && r.turno === turnoNome);
     const lista = listaDia.length ? listaDia : listaTpl;
     const origem = listaDia.length ? 'escala do dia' : 'escala template';
-    if (!lista.length) {
-      el.innerHTML = '<span style="color:#64748b">Sem funcionários escalados para este turno.</span>';
-      return;
-    }
+    const canEdit = !!S.turnoCanEdit;
+    const escaladosIds = new Set(lista.map(r => String(r.utilizador_id || '')).filter(Boolean));
+    const reaisIds = new Set(equipaReal.map(r => String(r.utilizador_id || '')).filter(Boolean));
+    const faltas = lista.filter(r => r.utilizador_id && !reaisIds.has(String(r.utilizador_id)));
+    const coberturas = equipaReal.filter(r => r.utilizador_id && !escaladosIds.has(String(r.utilizador_id)));
+
     const info = `<div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">${origem}</div>`;
-    el.innerHTML = info + lista.map((r, i) => `
+    const escaladosHtml = lista.length
+      ? lista.map((r, i) => `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;${i < lista.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
         <div>
           <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>
@@ -1514,10 +1519,75 @@ async function loadEscalaTurno() {
         </div>
         ${r.notas ? `<div style="font-size:12px;color:#94a3b8;text-align:right;max-width:55%">${r.notas}</div>` : '<div style="font-size:12px;color:#475569">—</div>'}
       </div>
-    `).join('');
+    `).join('')
+      : '<span style="color:#64748b">Sem funcionários escalados para este turno.</span>';
+
+    const reaisHtml = equipaReal.length
+      ? equipaReal.map((r, i) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;${i < equipaReal.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
+        <div>
+          <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>
+          <div style="font-size:12px;color:#64748b">${(r.utilizador_role || 'operador').toUpperCase()}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${r.notas ? `<div style="font-size:12px;color:#94a3b8;max-width:240px;text-align:right">${r.notas}</div>` : '<div style="font-size:12px;color:#475569">—</div>'}
+          ${canEdit ? `<button class="btn btn-danger btn-sm" onclick="removeTurnoPresenca('${S.turnoData.id}','${encodeURIComponent(r.utilizador_id)}')">Remover</button>` : ''}
+        </div>
+      </div>
+    `).join('')
+      : '<span style="color:#64748b">Nenhum funcionário registado como presente.</span>';
+
+    const alertaHtml = `
+      <div style="margin-top:10px;font-size:12px">
+        <div style="color:${faltas.length ? '#fbbf24' : '#4ade80'}">${faltas.length ? `⚠ Faltas: ${faltas.map(f => f.utilizador_nome || 'Sem nome').join(', ')}` : '✓ Sem faltas nos escalados'}</div>
+        <div style="color:${coberturas.length ? '#60a5fa' : '#64748b'};margin-top:4px">${coberturas.length ? `↺ Coberturas: ${coberturas.map(c => c.utilizador_nome || 'Sem nome').join(', ')}` : 'Sem coberturas registadas'}</div>
+      </div>`;
+
+    const addForm = canEdit ? `
+      <div class="card mt-16">
+        <div class="card-title">➕ Registar quem trabalhou</div>
+        <div id="turno-presenca-msg"></div>
+        <div class="entradas-form">
+          <select id="tp-user" class="entradas-select">
+            <option value="">— Funcionário —</option>
+            ${pessoas.map(p => `<option value="${p.id}">${p.nome} (${p.role})</option>`).join('')}
+          </select>
+          <input id="tp-notas" class="entradas-notas" type="text" placeholder="Nota opcional (falta, cobertura, etc.)"/>
+          <button class="btn btn-success btn-sm" onclick="addTurnoPresenca('${S.turnoData.id}')">Registar</button>
+        </div>
+      </div>` : '';
+
+    el.innerHTML = `
+      ${info}
+      <div class="card-title" style="margin-bottom:6px">📅 Escalados</div>
+      ${escaladosHtml}
+      <div class="card-title" style="margin:16px 0 6px">✅ Quem realmente trabalhou</div>
+      ${reaisHtml}
+      ${alertaHtml}
+      ${addForm}
+    `;
   } catch (e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }
+}
+
+async function addTurnoPresenca(turnoId) {
+  const utilizador_id = val('tp-user');
+  const notas = val('tp-notas');
+  if (!utilizador_id) return err('turno-presenca-msg', 'Seleciona um funcionário');
+  try {
+    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, notas });
+    show('turno-presenca-msg', '');
+    if (document.getElementById('tp-notas')) document.getElementById('tp-notas').value = '';
+    await loadEscalaTurno();
+  } catch (e) { err('turno-presenca-msg', e.message); }
+}
+
+async function removeTurnoPresenca(turnoId, utilizadorIdEncoded) {
+  try {
+    await api('DELETE', `/turnos/${turnoId}/equipa-real/${utilizadorIdEncoded}`);
+    await loadEscalaTurno();
+  } catch (e) { alert(e.message); }
 }
 
 async function submitSaida(turnoId) {

@@ -2223,11 +2223,10 @@ async function loadArmazemData() {
       show('armazem-inventario', '<div style="color:#64748b">Sem produtos no inventário.</div>');
     } else {
       show('armazem-inventario', `<div class="table-wrap"><table>
-        <thead><tr><th>Produto</th><th style="text-align:right">Qtd</th><th style="text-align:right">Custo médio</th></tr></thead>
+        <thead><tr><th>Produto</th><th style="text-align:right">Qtd</th></tr></thead>
         <tbody>${inventario.map(i => `<tr>
           <td>${i.produto_nome} <span style="color:#64748b;font-size:11px">(${medicaoSigla(i.tipo_medicao)})</span></td>
           <td style="text-align:right">${fmtNum(i.quantidade)} ${medicaoSigla(i.tipo_medicao)}</td>
-          <td style="text-align:right">${fmt(i.custo_medio)}</td>
         </tr>`).join('')}</tbody></table></div>`);
     }
 

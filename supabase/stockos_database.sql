@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS turno_caixa (
 -- ============================================================
 --  ARMAZÉM (inventário e compras)
 -- ============================================================
+CREATE TABLE IF NOT EXISTS armazem_faturas (
+  id SERIAL PRIMARY KEY,
+  numero_fatura TEXT NOT NULL DEFAULT '',
+  fornecedor TEXT NOT NULL DEFAULT '',
+  data_emissao DATE NOT NULL DEFAULT CURRENT_DATE,
+  notas TEXT NOT NULL DEFAULT '',
+  total_valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+  criado_por TEXT NOT NULL DEFAULT '',
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS armazem_stock (
   id            SERIAL          PRIMARY KEY,
   produto_id    INTEGER         NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
@@ -83,6 +94,7 @@ CREATE TABLE IF NOT EXISTS armazem_stock (
 CREATE TABLE IF NOT EXISTS armazem_compras (
   id            SERIAL          PRIMARY KEY,
   produto_id    INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+  fatura_id     INTEGER         REFERENCES armazem_faturas(id) ON DELETE SET NULL,
   quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
   caixas        NUMERIC(12,3)   NOT NULL DEFAULT 0,
   qtd_por_caixa NUMERIC(12,3)   NOT NULL DEFAULT 0,
@@ -134,6 +146,17 @@ CREATE TABLE IF NOT EXISTS armazem_compras (
 );
 ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0;
 ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS armazem_faturas (
+  id SERIAL PRIMARY KEY,
+  numero_fatura TEXT NOT NULL DEFAULT '',
+  fornecedor TEXT NOT NULL DEFAULT '',
+  data_emissao DATE NOT NULL DEFAULT CURRENT_DATE,
+  notas TEXT NOT NULL DEFAULT '',
+  total_valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+  criado_por TEXT NOT NULL DEFAULT '',
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS fatura_id INTEGER REFERENCES armazem_faturas(id) ON DELETE SET NULL;
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT '';
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ;

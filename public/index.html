@@ -1806,8 +1806,33 @@ async function drawArmazem() {
         <button id="a-btn-submit" class="btn btn-success" onclick="submitCompraArmazem()">Registar compra</button>
       </div>
       <div class="card">
+        <div class="card-title">📄 Fatura de compra</div>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Um documento com várias linhas (actualiza o inventário como as compras individuais).</p>
+        <div id="fatura-form-msg"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="Ex: FT 2025/012"/></div>
+          <div class="field"><label>Data</label><input id="fx-data" type="date"/></div>
+        </div>
+        <div class="field"><label>Fornecedor</label><input id="fx-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
+        <div class="field"><label>Notas</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
+        <div class="table-wrap">
+          <table style="font-size:13px">
+            <thead><tr><th>Produto</th><th style="text-align:right">Qtd</th><th style="text-align:right">Preço unit. (Kz)</th><th></th></tr></thead>
+            <tbody id="fatura-linhas-body"></tbody>
+          </table>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="addFaturaLinha()">+ Linha</button>
+          <button id="fx-btn-submit" class="btn btn-success btn-sm" onclick="submitFaturaArmazem()">Registar fatura</button>
+        </div>
+      </div>
+      <div class="card">
         <div class="card-title">📦 Inventário do Armazém</div>
         <div id="armazem-inventario"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">📑 Últimas faturas</div>
+        <div id="armazem-faturas"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
       </div>
       <div class="card">
         <div class="card-title">🧾 Últimas Compras</div>
@@ -1818,20 +1843,25 @@ async function drawArmazem() {
   `);
   bindCompraCaixaInputs();
   toggleCompraCaixa();
+  const fxData = document.getElementById('fx-data');
+  if (fxData) fxData.value = new Date().toISOString().split('T')[0];
+  document.getElementById('fatura-linhas-body').innerHTML = '';
+  addFaturaLinha();
   await loadArmazemData();
 }
 
 async function loadArmazemData() {
   try {
-    const [inventario, compras, produtos] = await Promise.all([
+    const [inventario, compras, produtos, faturas] = await Promise.all([
       api('GET', '/armazem/inventario'),
       api('GET', '/armazem/compras?limit=50'),
-      api('GET', '/produtos?todos=1')
+      api('GET', '/produtos?todos=1'),
+      api('GET', '/armazem/faturas?limit=20')
     ]);
     S.produtos = produtos;
     const sel = document.getElementById('a-produto');
     if (sel) {
-      renderArmazemProdutoOptions(sel, sel.value || '', window._armazemProdutoFilter || '');
+      renderArmazemProdutoOptions(sel, sel.value || '', window._armazemProdutoFilter || '', true);
       sel.addEventListener('change', toggleNovoProdutoArmazem);
       bindArmazemProdutoFilter(sel);
     }
@@ -1849,13 +1879,27 @@ async function loadArmazemData() {
         </tr>`).join('')}</tbody></table></div>`);
     }
 
+    if (!faturas.length) {
+      show('armazem-faturas', '<div style="color:#64748b">Nenhuma fatura registada.</div>');
+    } else {
+      show('armazem-faturas', `<div class="table-wrap"><table>
+        <thead><tr><th>Data</th><th>Nº</th><th>Fornecedor</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${faturas.map(f => `<tr>
+          <td style="font-size:12px;color:#94a3b8">${dateLabel(f.data_emissao)}</td>
+          <td style="font-weight:600">${f.numero_fatura || '—'}</td>
+          <td>${f.fornecedor || '—'}</td>
+          <td style="text-align:right;color:#fbbf24">${fmt(f.total_valor)}</td>
+        </tr>`).join('')}</tbody></table></div>`);
+    }
+
     if (!compras.length) {
       show('armazem-compras', '<div style="color:#64748b">Nenhuma compra registada.</div>');
     } else {
       show('armazem-compras', `<div class="table-wrap"><table>
-        <thead><tr><th>Data</th><th>Produto</th><th>Embalagem</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th></tr></thead>
+        <thead><tr><th>Data</th><th>Fatura</th><th>Produto</th><th>Embalagem</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th></tr></thead>
         <tbody>${compras.map(c => `<tr>
           <td style="font-size:12px;color:#94a3b8">${new Date(c.criado_em).toLocaleString('pt-PT')}</td>
+          <td style="font-size:11px;color:#64748b">${c.fatura_numero ? c.fatura_numero : '—'}</td>
           <td>${c.produto_nome}</td>
           <td style="font-size:12px;color:#94a3b8">${(parseFloat(c.caixas)||0) > 0 && (parseFloat(c.qtd_por_caixa)||0) > 0 ? `${fmtNum(c.caixas)} cx x ${fmtNum(c.qtd_por_caixa)}` : '—'}</td>
           <td style="text-align:right">${fmtNum(c.quantidade)} ${medicaoSigla(c.tipo_medicao)}</td>
@@ -1865,14 +1909,23 @@ async function loadArmazemData() {
     }
   } catch(e) {
     show('armazem-inventario', `<div class="alert alert-error">${e.message}</div>`);
+    show('armazem-faturas', `<div class="alert alert-error">${e.message}</div>`);
     show('armazem-compras', `<div class="alert alert-error">${e.message}</div>`);
   }
 }
 
-function renderArmazemProdutoOptions(sel, selectedValue, term) {
+function renderArmazemProdutoOptions(sel, selectedValue, term, includeNovo) {
+  const showNovo = includeNovo !== false;
   const q = (term || '').trim().toLowerCase();
   const filtrados = (S.produtos || []).filter(p => p.ativo && (!q || String(p.nome || '').toLowerCase().includes(q)));
-  sel.innerHTML = '<option value="">— Seleciona —</option><option value="__novo__">+ Novo produto</option>' +
+  sel.innerHTML = '<option value="">— Seleciona —</option>' + (showNovo ? '<option value="__novo__">+ Novo produto</option>' : '') +
+    filtrados.map(p => `<option value="${p.id}" data-medicao="${p.tipo_medicao || 'unidade'}">${p.nome} (${medicaoSigla(p.tipo_medicao)})</option>`).join('');
+  if (selectedValue && sel.querySelector(`option[value="${selectedValue}"]`)) sel.value = selectedValue;
+}
+
+function renderArmazemProdutoOptionsPlain(sel, selectedValue) {
+  const filtrados = (S.produtos || []).filter(p => p.ativo);
+  sel.innerHTML = '<option value="">—</option>' +
     filtrados.map(p => `<option value="${p.id}" data-medicao="${p.tipo_medicao || 'unidade'}">${p.nome} (${medicaoSigla(p.tipo_medicao)})</option>`).join('');
   if (selectedValue && sel.querySelector(`option[value="${selectedValue}"]`)) sel.value = selectedValue;
 }
@@ -1891,7 +1944,7 @@ function bindArmazemProdutoFilter(sel) {
     const key = e.key || '';
     if (key === 'Escape') {
       window._armazemProdutoFilter = '';
-      renderArmazemProdutoOptions(sel, sel.value || '', '');
+      renderArmazemProdutoOptions(sel, sel.value || '', '', true);
       toggleNovoProdutoArmazem();
       updateIndicator();
       return;
@@ -1899,7 +1952,7 @@ function bindArmazemProdutoFilter(sel) {
     if (key === 'Backspace') {
       e.preventDefault();
       window._armazemProdutoFilter = (window._armazemProdutoFilter || '').slice(0, -1);
-      renderArmazemProdutoOptions(sel, '', window._armazemProdutoFilter);
+      renderArmazemProdutoOptions(sel, '', window._armazemProdutoFilter, true);
       toggleNovoProdutoArmazem();
       updateIndicator();
       return;
@@ -1907,7 +1960,7 @@ function bindArmazemProdutoFilter(sel) {
     if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       window._armazemProdutoFilter = (window._armazemProdutoFilter || '') + key;
-      renderArmazemProdutoOptions(sel, '', window._armazemProdutoFilter);
+      renderArmazemProdutoOptions(sel, '', window._armazemProdutoFilter, true);
       if (sel.options.length > 0) sel.selectedIndex = 0;
       toggleNovoProdutoArmazem();
       updateIndicator();
@@ -1915,7 +1968,7 @@ function bindArmazemProdutoFilter(sel) {
   });
   sel.addEventListener('blur', function() {
     window._armazemProdutoFilter = '';
-    renderArmazemProdutoOptions(sel, sel.value || '', '');
+    renderArmazemProdutoOptions(sel, sel.value || '', '', true);
     toggleNovoProdutoArmazem();
     updateIndicator();
   });
@@ -1978,6 +2031,64 @@ function bindCompraCaixaInputs() {
     el.dataset.binded = '1';
     el.addEventListener('input', syncPrecoUnitFromCaixa);
   });
+}
+
+function addFaturaLinha() {
+  const tbody = document.getElementById('fatura-linhas-body');
+  if (!tbody) return;
+  const tr = document.createElement('tr');
+  tr.innerHTML =
+    '<td><select class="af-prod" style="width:100%;min-width:140px"></select></td>' +
+    '<td style="text-align:right"><input class="af-qty" type="number" min="0.001" step="any" placeholder="Qtd" style="width:88px;text-align:right"/></td>' +
+    '<td style="text-align:right"><input class="af-preco" type="number" min="0.01" step="any" placeholder="0" style="width:96px;text-align:right"/></td>' +
+    '<td><button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()">✕</button></td>';
+  tbody.appendChild(tr);
+  const sel = tr.querySelector('.af-prod');
+  if (sel) renderArmazemProdutoOptionsPlain(sel, '');
+}
+
+let faturaArmazemSubmitting = false;
+async function submitFaturaArmazem() {
+  if (faturaArmazemSubmitting) return;
+  const btn = document.getElementById('fx-btn-submit');
+  const msg = document.getElementById('fatura-form-msg');
+  faturaArmazemSubmitting = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'A registar...'; }
+  const linhas = [];
+  document.querySelectorAll('#fatura-linhas-body tr').forEach(tr => {
+    const pid = tr.querySelector('.af-prod')?.value;
+    const qty = parseFloat(tr.querySelector('.af-qty')?.value);
+    const preco = parseFloat(tr.querySelector('.af-preco')?.value);
+    if (!pid || !qty || qty <= 0 || !preco || preco <= 0) return;
+    linhas.push({ produto_id: pid, quantidade: qty, preco_unitario: preco, notas: '' });
+  });
+  if (!linhas.length) {
+    if (msg) msg.innerHTML = '<div class="alert alert-error">Preencha pelo menos uma linha com produto, quantidade e preço.</div>';
+    faturaArmazemSubmitting = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Registar fatura'; }
+    return;
+  }
+  try {
+    await api('POST', '/armazem/faturas', {
+      numero_fatura: val('fx-numero'),
+      fornecedor: val('fx-fornecedor'),
+      data_emissao: val('fx-data'),
+      notas: val('fx-notas'),
+      linhas
+    });
+    if (msg) msg.innerHTML = '<div class="alert alert-success">Fatura registada com sucesso.</div>';
+    document.getElementById('fx-numero').value = '';
+    document.getElementById('fx-fornecedor').value = '';
+    document.getElementById('fx-notas').value = '';
+    document.getElementById('fatura-linhas-body').innerHTML = '';
+    addFaturaLinha();
+    await loadArmazemData();
+  } catch(e) {
+    if (msg) msg.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  } finally {
+    faturaArmazemSubmitting = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Registar fatura'; }
+  }
 }
 
 let armazemCompraSubmitting = false;

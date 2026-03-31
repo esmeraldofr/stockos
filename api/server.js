@@ -361,6 +361,50 @@ function loginFromBody(req) {
   return v;
 }
 
+async function ensureDepositosBanco() {
+  await query(`CREATE TABLE IF NOT EXISTS depositos_banco (
+    id SERIAL PRIMARY KEY,
+    data_referencia DATE,
+    data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
+    valor NUMERIC(15,2) NOT NULL,
+    referencia TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_por TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS turno_id INTEGER REFERENCES turnos(id) ON DELETE CASCADE`).catch(() => {});
+  await query(`DELETE FROM depositos_banco WHERE turno_id IS NULL`).catch(() => {});
+  await query(`ALTER TABLE depositos_banco DROP COLUMN IF EXISTS data_referencia`).catch(() => {});
+  try {
+    await query(`ALTER TABLE depositos_banco ALTER COLUMN turno_id SET NOT NULL`);
+  } catch (_) {}
+  try {
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS depositos_banco_turno_id_key ON depositos_banco(turno_id)`);
+  } catch (_) {}
+  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+}
+
+async function assertTurnoFechado(turnoId) {
+  const n = parseInt(turnoId, 10);
+  if (!n) {
+    const err = new Error('Indica o turno válido.');
+    err.code = 'TURNOS';
+    throw err;
+  }
+  const r = await query(`SELECT id, estado, data FROM turnos WHERE id = $1`, [n]);
+  if (!r.rows.length) {
+    const err = new Error('Turno não encontrado.');
+    err.code = 'TURNOS';
+    throw err;
+  }
+  if (r.rows[0].estado !== 'fechado') {
+    const err = new Error('O turno deve estar fechado para registar o depósito.');
+    err.code = 'TURNOS';
+    throw err;
+  }
+  return r.rows[0];
+}
+
 // ── AUTH ──────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok', v: 3 }));
 
@@ -398,19 +442,12 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   );
   await run(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`, 'utilizadores-username-admin');
   await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`, 'utilizadores-username-idx');
-  await run(
-    `CREATE TABLE IF NOT EXISTS depositos_banco (
-      id SERIAL PRIMARY KEY,
-      data_referencia DATE NOT NULL,
-      data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
-      valor NUMERIC(15,2) NOT NULL,
-      referencia TEXT NOT NULL DEFAULT '',
-      notas TEXT NOT NULL DEFAULT '',
-      criado_por TEXT NOT NULL DEFAULT '',
-      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`,
-    'depositos_banco'
-  );
+  try {
+    await ensureDepositosBanco();
+    results.push({ label: 'depositos_banco', ok: true });
+  } catch (e) {
+    results.push({ label: 'depositos_banco', ok: false, erro: e.message });
+  }
   await run(`ALTER TABLE produtos ALTER COLUMN sku SET DEFAULT ''`, 'sku-default');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0`, 'preco');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categoria VARCHAR(20) NOT NULL DEFAULT 'outro'`, 'categoria');
@@ -1391,52 +1428,21 @@ app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-async function ensureDepositosBanco() {
-  await query(`CREATE TABLE IF NOT EXISTS depositos_banco (
-    id SERIAL PRIMARY KEY,
-    data_referencia DATE NOT NULL,
-    data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
-    valor NUMERIC(15,2) NOT NULL,
-    referencia TEXT NOT NULL DEFAULT '',
-    notas TEXT NOT NULL DEFAULT '',
-    criado_por TEXT NOT NULL DEFAULT '',
-    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )`);
-}
-
-async function assertTodosTurnosDiaFechados(dataStr) {
-  const r = await query(
-    `SELECT COUNT(*)::int AS tot, COALESCE(SUM(CASE WHEN estado = 'fechado' THEN 1 ELSE 0 END),0)::int AS fech
-     FROM turnos WHERE data = $1`,
-    [dataStr]
-  );
-  const tot = r.rows[0].tot || 0;
-  const fech = r.rows[0].fech || 0;
-  if (tot === 0) {
-    const err = new Error('Não há turnos registados neste dia.');
-    err.code = 'TURNOS';
-    throw err;
-  }
-  if (fech < tot) {
-    const err = new Error('Todos os turnos do dia devem estar fechados antes de registar o depósito.');
-    err.code = 'TURNOS';
-    throw err;
-  }
-}
-
 app.get('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     await ensureDepositosBanco();
     const data = (req.query.data || '').trim();
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
-    let sql = `SELECT d.*, u.nome AS criado_por_nome FROM depositos_banco d
+    let sql = `SELECT d.*, u.nome AS criado_por_nome, t.nome AS turno_nome, t.data AS turno_data
+               FROM depositos_banco d
+               JOIN turnos t ON t.id = d.turno_id
                LEFT JOIN utilizadores u ON u.id::text = d.criado_por::text`;
     const params = [];
     if (data) {
-      sql += ` WHERE d.data_referencia = $1`;
+      sql += ` WHERE t.data = $1`;
       params.push(data);
     }
-    sql += ` ORDER BY d.data_deposito DESC, d.criado_em DESC LIMIT ${limit}`;
+    sql += ` ORDER BY t.data DESC, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 ELSE 3 END, d.criado_em DESC LIMIT ${limit}`;
     const r = await query(sql, params);
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -1445,21 +1451,43 @@ app.get('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res)
 app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     await ensureDepositosBanco();
-    const { data_referencia, data_deposito, valor, referencia, notas } = req.body || {};
-    const dref = (data_referencia || '').trim();
-    if (!dref) return res.status(400).json({ erro: 'Indica o dia a que o depósito se refere.' });
+    const { turno_id, data_deposito, valor, valor_tpa, referencia, notas } = req.body || {};
     const v = parseFloat(valor);
-    if (!v || v <= 0) return res.status(400).json({ erro: 'Indique um valor positivo.' });
-    await assertTodosTurnosDiaFechados(dref);
+    if (!v || v <= 0) return res.status(400).json({ erro: 'Indique o dinheiro depositado (valor positivo).' });
+    const vtpa = parseFloat(valor_tpa);
+    if (Number.isNaN(vtpa) || vtpa < 0) return res.status(400).json({ erro: 'Indique o valor registado no TPA (≥ 0).' });
+    await assertTurnoFechado(turno_id);
     const ddep = (data_deposito || new Date().toISOString().split('T')[0]).trim();
     const r = await query(
-      `INSERT INTO depositos_banco (data_referencia, data_deposito, valor, referencia, notas, criado_por)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [dref, ddep, v, String(referencia || '').trim(), String(notas || '').trim(), String(req.user.id || '')]
+      `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, referencia, notas, criado_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (turno_id) DO UPDATE SET
+         data_deposito = EXCLUDED.data_deposito,
+         valor = EXCLUDED.valor,
+         valor_tpa = EXCLUDED.valor_tpa,
+         referencia = EXCLUDED.referencia,
+         notas = EXCLUDED.notas,
+         criado_em = NOW()
+       RETURNING *`,
+      [
+        parseInt(turno_id, 10),
+        ddep,
+        v,
+        vtpa,
+        String(referencia || '').trim(),
+        String(notas || '').trim(),
+        String(req.user.id || '')
+      ]
     );
     const row = r.rows[0];
     const u = await query('SELECT nome FROM utilizadores WHERE id=$1', [req.user.id]).catch(() => ({ rows: [] }));
-    res.json({ ...row, criado_por_nome: u.rows[0]?.nome || '' });
+    const tn = await query(`SELECT nome, data FROM turnos WHERE id = $1`, [row.turno_id]).catch(() => ({ rows: [] }));
+    res.json({
+      ...row,
+      criado_por_nome: u.rows[0]?.nome || '',
+      turno_nome: tn.rows[0]?.nome || '',
+      turno_data: tn.rows[0]?.data || null
+    });
   } catch(e) {
     res.status(400).json({ erro: e.message });
   }

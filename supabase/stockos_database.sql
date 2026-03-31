@@ -344,13 +344,14 @@ CREATE TABLE IF NOT EXISTS escalas (
 );
 
 -- ============================================================
---  DEPÓSITOS BANCO (dinheiro depositado após fecho dos turnos do dia)
+--  DEPÓSITOS BANCO (valor depositado por turno, após fecho do turno)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS depositos_banco (
   id                SERIAL          PRIMARY KEY,
-  data_referencia   DATE            NOT NULL,
+  turno_id          INTEGER         NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
   data_deposito     DATE            NOT NULL DEFAULT CURRENT_DATE,
   valor             NUMERIC(15,2)   NOT NULL,
+  valor_tpa         NUMERIC(15,2)   NOT NULL DEFAULT 0,
   referencia        TEXT            NOT NULL DEFAULT '',
   notas             TEXT            NOT NULL DEFAULT '',
   criado_por        TEXT            NOT NULL DEFAULT '',

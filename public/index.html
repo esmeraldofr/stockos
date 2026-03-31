@@ -1770,44 +1770,8 @@ async function drawArmazem() {
     <div id="content">
       <div id="armazem-msg"></div>
       <div class="card">
-        <div class="card-title">🛒 Registar Compra</div>
-        <div id="armazem-form-msg"></div>
-        <div class="field">
-          <label>Produto (digita para filtrar)</label>
-          <select id="a-produto"></select>
-          <div id="a-produto-filter-indicator" style="margin-top:6px;font-size:12px;color:#94a3b8;min-height:16px"></div>
-        </div>
-        <div id="a-novo-wrap" style="display:none;border:1px solid #334155;border-radius:10px;padding:10px;margin-bottom:10px">
-          <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Novo produto</div>
-          <div class="field"><label>Nome</label><input id="a-nome" type="text" placeholder="Nome do produto"/></div>
-          <div class="field"><label>Categoria</label><select id="a-categoria"><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option><option value="menu">Menu</option></select></div>
-          <div class="field"><label>Medição</label><select id="a-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>
-          <div class="field"><label>Preço de venda (opcional)</label><input id="a-preco-venda" type="number" min="0" step="any" placeholder="0"/></div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="field"><label>Quantidade</label><input id="a-qty" type="number" min="0.001" step="any" placeholder="Qtd"/></div>
-          <div class="field"><label>Preço unitário (Kz)</label><input id="a-preco" type="number" min="0.01" step="any" placeholder="0"/></div>
-        </div>
-        <div class="field">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-            <input id="a-modo-caixa" type="checkbox" style="width:16px;height:16px" onchange="toggleCompraCaixa()"/>
-            Compra em caixa
-          </label>
-        </div>
-        <div id="a-caixa-fields" style="display:none;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="field" style="margin:0"><label>Nº de caixas</label><input id="a-caixas" type="number" min="1" step="any" placeholder="Ex: 10"/></div>
-          <div class="field" style="margin:0"><label>Qtd por caixa</label><input id="a-qtd-caixa" type="number" min="0.001" step="any" placeholder="Ex: 24"/></div>
-        </div>
-        <div id="a-caixa-preco-wrap" style="display:none">
-          <div class="field"><label>Preço da caixa (Kz)</label><input id="a-preco-caixa" type="number" min="0.01" step="any" placeholder="Ex: 12000"/></div>
-        </div>
-        <div class="field"><label>Fornecedor (opcional)</label><input id="a-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
-        <div class="field"><label>Notas</label><input id="a-notas" type="text" placeholder="Ex: compra semanal"/></div>
-        <button id="a-btn-submit" class="btn btn-success" onclick="submitCompraArmazem()">Registar compra</button>
-      </div>
-      <div class="card">
         <div class="card-title">📄 Fatura de compra</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Um documento com várias linhas (actualiza o inventário como as compras individuais).</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha.</p>
         <div id="fatura-form-msg"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="Ex: FT 2025/012"/></div>
@@ -1815,7 +1779,7 @@ async function drawArmazem() {
         </div>
         <div class="field"><label>Fornecedor</label><input id="fx-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
         <div class="field"><label>Notas</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
-        <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Linhas (mesma estrutura que «Registar compra»)</div>
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Linhas</div>
         <div id="fatura-linhas-body"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
           <button type="button" class="btn btn-ghost btn-sm" onclick="addFaturaLinha()">+ Linha</button>
@@ -1837,8 +1801,6 @@ async function drawArmazem() {
     </div>
     ${navBar()}
   `);
-  bindCompraCaixaInputs();
-  toggleCompraCaixa();
   const fxData = document.getElementById('fx-data');
   if (fxData) fxData.value = new Date().toISOString().split('T')[0];
   document.getElementById('fatura-linhas-body').innerHTML = '';
@@ -1855,13 +1817,6 @@ async function loadArmazemData() {
       api('GET', '/armazem/faturas?limit=20')
     ]);
     S.produtos = produtos;
-    const sel = document.getElementById('a-produto');
-    if (sel) {
-      renderArmazemProdutoOptions(sel, sel.value || '', window._armazemProdutoFilter || '', true);
-      sel.addEventListener('change', toggleNovoProdutoArmazem);
-      bindArmazemProdutoFilter(sel);
-    }
-    toggleNovoProdutoArmazem();
 
     if (!inventario.length) {
       show('armazem-inventario', '<div style="color:#64748b">Sem produtos no inventário.</div>');
@@ -1917,51 +1872,6 @@ function renderArmazemProdutoOptions(sel, selectedValue, term, includeNovo) {
   sel.innerHTML = '<option value="">— Seleciona —</option>' + (showNovo ? '<option value="__novo__">+ Novo produto</option>' : '') +
     filtrados.map(p => `<option value="${p.id}" data-medicao="${p.tipo_medicao || 'unidade'}">${p.nome} (${medicaoSigla(p.tipo_medicao)})</option>`).join('');
   if (selectedValue && sel.querySelector(`option[value="${selectedValue}"]`)) sel.value = selectedValue;
-}
-
-function bindArmazemProdutoFilter(sel) {
-  if (!sel || sel.dataset.filterBinded) return;
-  sel.dataset.filterBinded = '1';
-  const updateIndicator = () => {
-    const el = document.getElementById('a-produto-filter-indicator');
-    if (!el) return;
-    const q = window._armazemProdutoFilter || '';
-    el.textContent = q ? `Filtro: ${q}` : 'Filtro vazio (digita para procurar, Esc limpa)';
-  };
-  updateIndicator();
-  sel.addEventListener('keydown', function(e) {
-    const key = e.key || '';
-    if (key === 'Escape') {
-      window._armazemProdutoFilter = '';
-      renderArmazemProdutoOptions(sel, sel.value || '', '', true);
-      toggleNovoProdutoArmazem();
-      updateIndicator();
-      return;
-    }
-    if (key === 'Backspace') {
-      e.preventDefault();
-      window._armazemProdutoFilter = (window._armazemProdutoFilter || '').slice(0, -1);
-      renderArmazemProdutoOptions(sel, '', window._armazemProdutoFilter, true);
-      toggleNovoProdutoArmazem();
-      updateIndicator();
-      return;
-    }
-    if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault();
-      window._armazemProdutoFilter = (window._armazemProdutoFilter || '') + key;
-      renderArmazemProdutoOptions(sel, '', window._armazemProdutoFilter, true);
-      if (sel.options.length > 0) sel.selectedIndex = 0;
-      toggleNovoProdutoArmazem();
-      updateIndicator();
-    }
-  });
-  sel.addEventListener('blur', function() {
-    window._armazemProdutoFilter = '';
-    renderArmazemProdutoOptions(sel, sel.value || '', '', true);
-    toggleNovoProdutoArmazem();
-    updateIndicator();
-  });
-  toggleNovoProdutoArmazem();
 }
 
 function bindArmazemProdutoFilterOnLine(sel, indicatorEl) {
@@ -2083,64 +1993,6 @@ function removeFaturaLinha(btn) {
   if (line) line.remove();
 }
 
-function toggleNovoProdutoArmazem() {
-  const sel = document.getElementById('a-produto');
-  const wrap = document.getElementById('a-novo-wrap');
-  const qty = document.getElementById('a-qty');
-  if (!sel || !wrap || !qty) return;
-  const isNovo = sel.value === '__novo__';
-  wrap.style.display = isNovo ? '' : 'none';
-  const med = isNovo
-    ? (document.getElementById('a-medicao')?.value || 'unidade')
-    : (sel.options[sel.selectedIndex]?.getAttribute('data-medicao') || 'unidade');
-  qty.placeholder = `Qtd (${medicaoSigla(med)})`;
-  const medSel = document.getElementById('a-medicao');
-  if (medSel && !medSel.dataset.binded) {
-    medSel.dataset.binded = '1';
-    medSel.addEventListener('change', toggleNovoProdutoArmazem);
-  }
-}
-
-function toggleCompraCaixa() {
-  const check = document.getElementById('a-modo-caixa');
-  const fields = document.getElementById('a-caixa-fields');
-  const precoCaixaWrap = document.getElementById('a-caixa-preco-wrap');
-  const qty = document.getElementById('a-qty');
-  const precoUnit = document.getElementById('a-preco');
-  if (!check || !fields || !qty) return;
-  const on = !!check.checked;
-  fields.style.display = on ? 'grid' : 'none';
-  if (precoCaixaWrap) precoCaixaWrap.style.display = on ? '' : 'none';
-  qty.disabled = on;
-  if (precoUnit) precoUnit.readOnly = on;
-  if (on) qty.value = '';
-  if (!on && precoUnit) precoUnit.value = '';
-  syncPrecoUnitFromCaixa();
-}
-
-function syncPrecoUnitFromCaixa() {
-  const check = document.getElementById('a-modo-caixa');
-  const precoUnit = document.getElementById('a-preco');
-  if (!check || !precoUnit || !check.checked) return;
-  const precoCaixa = parseFloat(val('a-preco-caixa')) || 0;
-  const qtdPorCaixa = parseFloat(val('a-qtd-caixa')) || 0;
-  if (precoCaixa > 0 && qtdPorCaixa > 0) {
-    precoUnit.value = (precoCaixa / qtdPorCaixa).toFixed(2);
-  } else {
-    precoUnit.value = '';
-  }
-}
-
-function bindCompraCaixaInputs() {
-  const ids = ['a-preco-caixa', 'a-qtd-caixa', 'a-caixas'];
-  ids.forEach(id => {
-    const el = document.getElementById(id);
-    if (!el || el.dataset.binded) return;
-    el.dataset.binded = '1';
-    el.addEventListener('input', syncPrecoUnitFromCaixa);
-  });
-}
-
 function addFaturaLinha() {
   const wrap = document.getElementById('fatura-linhas-body');
   if (!wrap) return;
@@ -2254,67 +2106,6 @@ async function submitFaturaArmazem() {
   } finally {
     faturaArmazemSubmitting = false;
     if (btn) { btn.disabled = false; btn.textContent = 'Registar fatura'; }
-  }
-}
-
-let armazemCompraSubmitting = false;
-async function submitCompraArmazem() {
-  const produtoSel = document.getElementById('a-produto');
-  const msg = document.getElementById('armazem-form-msg');
-  const submitBtn = document.getElementById('a-btn-submit');
-  if (!produtoSel) return;
-  if (armazemCompraSubmitting) return;
-  armazemCompraSubmitting = true;
-  if (submitBtn) {
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'A registar...';
-  }
-  const payload = {
-    quantidade: parseFloat(val('a-qty')),
-    caixas: parseFloat(val('a-caixas')) || 0,
-    qtd_por_caixa: parseFloat(val('a-qtd-caixa')) || 0,
-    preco_unitario: parseFloat(val('a-preco')),
-    fornecedor: val('a-fornecedor'),
-    notas: val('a-notas')
-  };
-  if (produtoSel.value === '__novo__') {
-    payload.novo_produto = {
-      nome: val('a-nome'),
-      categoria: val('a-categoria'),
-      tipo_medicao: val('a-medicao'),
-      preco: parseFloat(val('a-preco-venda')) || 0
-    };
-  } else {
-    payload.produto_id = produtoSel.value;
-  }
-  try {
-    await api('POST', '/armazem/compras', payload);
-    if (msg) msg.innerHTML = '<div class="alert alert-success">Compra registada com sucesso.</div>';
-    document.getElementById('a-qty').value = '';
-    document.getElementById('a-caixas').value = '';
-    document.getElementById('a-qtd-caixa').value = '';
-    document.getElementById('a-preco-caixa').value = '';
-    document.getElementById('a-preco').value = '';
-    document.getElementById('a-fornecedor').value = '';
-    document.getElementById('a-notas').value = '';
-    if (produtoSel.value === '__novo__') {
-      document.getElementById('a-nome').value = '';
-      document.getElementById('a-preco-venda').value = '';
-      produtoSel.value = '';
-      toggleNovoProdutoArmazem();
-    }
-    const check = document.getElementById('a-modo-caixa');
-    if (check) check.checked = false;
-    toggleCompraCaixa();
-    await loadArmazemData();
-  } catch(e) {
-    if (msg) msg.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
-  } finally {
-    armazemCompraSubmitting = false;
-    if (submitBtn) {
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Registar compra';
-    }
   }
 }
 

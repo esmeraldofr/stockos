@@ -174,6 +174,8 @@ async function initDB() {
     id SERIAL PRIMARY KEY,
     produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
     quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    caixas NUMERIC(12,3) NOT NULL DEFAULT 0,
+    qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0,
     preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
     valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
     fornecedor TEXT NOT NULL DEFAULT '',
@@ -181,6 +183,8 @@ async function initDB() {
     criado_por TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, [], 'armazem_compras');
+  await qry(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0`, [], 'armazem_compras-caixas');
+  await qry(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0`, [], 'armazem_compras-qtd-caixa');
   await qry(`CREATE TABLE IF NOT EXISTS escala (
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
@@ -335,6 +339,8 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     id SERIAL PRIMARY KEY,
     produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
     quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    caixas NUMERIC(12,3) NOT NULL DEFAULT 0,
+    qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0,
     preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
     valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
     fornecedor TEXT NOT NULL DEFAULT '',
@@ -342,6 +348,8 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     criado_por TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, 'armazem_compras');
+  await run(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0`, 'armazem_compras-caixas');
+  await run(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0`, 'armazem_compras-qtd-caixa');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, 'notas');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, 'criado_em');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`, 'fechado_em');
@@ -584,6 +592,8 @@ async function ensureArmazemTables() {
     id SERIAL PRIMARY KEY,
     produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
     quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    caixas NUMERIC(12,3) NOT NULL DEFAULT 0,
+    qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0,
     preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
     valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
     fornecedor TEXT NOT NULL DEFAULT '',
@@ -591,6 +601,8 @@ async function ensureArmazemTables() {
     criado_por TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  await query(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0`).catch(()=>{});
+  await query(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0`).catch(()=>{});
 }
 
 app.get('/api/armazem/inventario', auth, requireRole('admin','gestor'), async (req, res) => {
@@ -634,13 +646,18 @@ app.post('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req
     const {
       produto_id,
       quantidade,
+      caixas,
+      qtd_por_caixa,
       preco_unitario,
       fornecedor,
       notas,
       novo_produto
     } = req.body || {};
 
-    const qty = parseFloat(quantidade);
+    const caixasNum = parseFloat(caixas) || 0;
+    const qtdPorCaixaNum = parseFloat(qtd_por_caixa) || 0;
+    const qtyRaw = parseFloat(quantidade);
+    const qty = (caixasNum > 0 && qtdPorCaixaNum > 0) ? (caixasNum * qtdPorCaixaNum) : qtyRaw;
     const precoUnit = parseFloat(preco_unitario);
     if (!qty || qty <= 0) throw new Error('Quantidade inválida');
     if (!precoUnit || precoUnit <= 0) throw new Error('Preço unitário inválido');
@@ -667,10 +684,10 @@ app.post('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req
     const total = qty * precoUnit;
     const compra = await client.query(
       `INSERT INTO armazem_compras
-       (produto_id, quantidade, preco_unitario, valor_total, fornecedor, notas, criado_por)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       (produto_id, quantidade, caixas, qtd_por_caixa, preco_unitario, valor_total, fornecedor, notas, criado_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING *`,
-      [pid, qty, precoUnit, total, (fornecedor || '').trim(), (notas || '').trim(), req.user.id]
+      [pid, qty, caixasNum, qtdPorCaixaNum, precoUnit, total, (fornecedor || '').trim(), (notas || '').trim(), String(req.user.id || '')]
     );
 
     const prev = await client.query('SELECT quantidade, custo_medio FROM armazem_stock WHERE produto_id=$1', [pid]);

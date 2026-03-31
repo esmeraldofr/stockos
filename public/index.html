@@ -1787,6 +1787,16 @@ async function drawArmazem() {
           <div class="field"><label>Quantidade</label><input id="a-qty" type="number" min="0.001" step="any" placeholder="Qtd"/></div>
           <div class="field"><label>Preço unitário (Kz)</label><input id="a-preco" type="number" min="0.01" step="any" placeholder="0"/></div>
         </div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input id="a-modo-caixa" type="checkbox" style="width:16px;height:16px" onchange="toggleCompraCaixa()"/>
+            Compra em caixa
+          </label>
+        </div>
+        <div id="a-caixa-fields" style="display:none;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field" style="margin:0"><label>Nº de caixas</label><input id="a-caixas" type="number" min="1" step="any" placeholder="Ex: 10"/></div>
+          <div class="field" style="margin:0"><label>Qtd por caixa</label><input id="a-qtd-caixa" type="number" min="0.001" step="any" placeholder="Ex: 24"/></div>
+        </div>
         <div class="field"><label>Fornecedor (opcional)</label><input id="a-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
         <div class="field"><label>Notas</label><input id="a-notas" type="text" placeholder="Ex: compra semanal"/></div>
         <button id="a-btn-submit" class="btn btn-success" onclick="submitCompraArmazem()">Registar compra</button>
@@ -1837,10 +1847,11 @@ async function loadArmazemData() {
       show('armazem-compras', '<div style="color:#64748b">Nenhuma compra registada.</div>');
     } else {
       show('armazem-compras', `<div class="table-wrap"><table>
-        <thead><tr><th>Data</th><th>Produto</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th></tr></thead>
+        <thead><tr><th>Data</th><th>Produto</th><th>Embalagem</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th></tr></thead>
         <tbody>${compras.map(c => `<tr>
           <td style="font-size:12px;color:#94a3b8">${new Date(c.criado_em).toLocaleString('pt-PT')}</td>
           <td>${c.produto_nome}</td>
+          <td style="font-size:12px;color:#94a3b8">${(parseFloat(c.caixas)||0) > 0 && (parseFloat(c.qtd_por_caixa)||0) > 0 ? `${fmtNum(c.caixas)} cx x ${fmtNum(c.qtd_por_caixa)}` : '—'}</td>
           <td style="text-align:right">${fmtNum(c.quantidade)} ${medicaoSigla(c.tipo_medicao)}</td>
           <td style="text-align:right">${fmt(c.preco_unitario)}</td>
           <td style="text-align:right;color:#fbbf24">${fmt(c.valor_total)}</td>
@@ -1870,6 +1881,17 @@ function toggleNovoProdutoArmazem() {
   }
 }
 
+function toggleCompraCaixa() {
+  const check = document.getElementById('a-modo-caixa');
+  const fields = document.getElementById('a-caixa-fields');
+  const qty = document.getElementById('a-qty');
+  if (!check || !fields || !qty) return;
+  const on = !!check.checked;
+  fields.style.display = on ? 'grid' : 'none';
+  qty.disabled = on;
+  if (on) qty.value = '';
+}
+
 let armazemCompraSubmitting = false;
 async function submitCompraArmazem() {
   const produtoSel = document.getElementById('a-produto');
@@ -1884,6 +1906,8 @@ async function submitCompraArmazem() {
   }
   const payload = {
     quantidade: parseFloat(val('a-qty')),
+    caixas: parseFloat(val('a-caixas')) || 0,
+    qtd_por_caixa: parseFloat(val('a-qtd-caixa')) || 0,
     preco_unitario: parseFloat(val('a-preco')),
     fornecedor: val('a-fornecedor'),
     notas: val('a-notas')
@@ -1902,6 +1926,8 @@ async function submitCompraArmazem() {
     await api('POST', '/armazem/compras', payload);
     if (msg) msg.innerHTML = '<div class="alert alert-success">Compra registada com sucesso.</div>';
     document.getElementById('a-qty').value = '';
+    document.getElementById('a-caixas').value = '';
+    document.getElementById('a-qtd-caixa').value = '';
     document.getElementById('a-preco').value = '';
     document.getElementById('a-fornecedor').value = '';
     document.getElementById('a-notas').value = '';
@@ -1911,6 +1937,9 @@ async function submitCompraArmazem() {
       produtoSel.value = '';
       toggleNovoProdutoArmazem();
     }
+    const check = document.getElementById('a-modo-caixa');
+    if (check) check.checked = false;
+    toggleCompraCaixa();
     await loadArmazemData();
   } catch(e) {
     if (msg) msg.innerHTML = `<div class="alert alert-error">${e.message}</div>`;

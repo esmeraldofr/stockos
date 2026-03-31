@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS armazem_compras (
   id            SERIAL          PRIMARY KEY,
   produto_id    INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
   quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  caixas        NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  qtd_por_caixa NUMERIC(12,3)   NOT NULL DEFAULT 0,
   preco_unitario NUMERIC(15,2)  NOT NULL DEFAULT 0,
   valor_total   NUMERIC(15,2)   NOT NULL DEFAULT 0,
   fornecedor    TEXT            NOT NULL DEFAULT '',
@@ -121,6 +123,8 @@ CREATE TABLE IF NOT EXISTS armazem_compras (
   id            SERIAL          PRIMARY KEY,
   produto_id    INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
   quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  caixas        NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  qtd_por_caixa NUMERIC(12,3)   NOT NULL DEFAULT 0,
   preco_unitario NUMERIC(15,2)  NOT NULL DEFAULT 0,
   valor_total   NUMERIC(15,2)   NOT NULL DEFAULT 0,
   fornecedor    TEXT            NOT NULL DEFAULT '',
@@ -128,6 +132,8 @@ CREATE TABLE IF NOT EXISTS armazem_compras (
   criado_por    TEXT            NOT NULL DEFAULT '',
   criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
+ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0;
+ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0;
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT '';
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ;

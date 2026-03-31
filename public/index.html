@@ -207,6 +207,7 @@ const S = {
   date: new Date().toISOString().split('T')[0],
   turnoId: null,
   turnoData: null,
+  turnoCanEdit: false,
   produtos: [],
   utilizadores: []
 };
@@ -651,6 +652,7 @@ async function loadTurno() {
 
     const isAberto = turno.estado === 'aberto';
     const canEdit  = isAberto;
+    S.turnoCanEdit = canEdit;
 
     show('turno-header-actions', isAberto
       ? `<button class="btn btn-danger btn-sm" onclick="fecharTurno('${turno.id}')">Fechar</button>`
@@ -828,11 +830,7 @@ async function loadTurno() {
   if (tv) tv.textContent = fmtNum(initTotalVend);
   if (tva) tva.textContent = fmt(initTotalVal);
 
-    loadEntradasSection(turno.id, turno.stock, canEdit);
-    loadSaidasSection(turno.id, canEdit);
-    loadVendasMenu(turno.id, canEdit);
-    loadEscalaTurno();
-    loadResumoTab(turno.id);
+    // Lazy load por aba para reduzir chamadas simultâneas e pressão no DB.
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -1038,6 +1036,18 @@ function switchTurnoTab(name, btn) {
   }
   if (name === 'escala') {
     loadEscalaTurno();
+  }
+  if (name === 'registos') {
+    const tid = S.turnoData?.id;
+    const stock = S.turnoData?.stock || [];
+    if (tid) {
+      loadEntradasSection(tid, stock, !!S.turnoCanEdit);
+      loadSaidasSection(tid, !!S.turnoCanEdit);
+    }
+  }
+  if (name === 'vendas') {
+    const tid = S.turnoData?.id;
+    if (tid) loadVendasMenu(tid, !!S.turnoCanEdit);
   }
 }
 

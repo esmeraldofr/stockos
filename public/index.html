@@ -1528,6 +1528,8 @@ async function loadEscalaTurno() {
         <div>
           <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>
           <div style="font-size:12px;color:#64748b">${(r.utilizador_role || 'operador').toUpperCase()}</div>
+          ${r.cobrindo_utilizador_nome ? `<div style="font-size:12px;color:#60a5fa;margin-top:2px">Cobrindo: ${r.cobrindo_utilizador_nome}</div>` : ''}
+          ${r.hora_extra ? `<div style="font-size:12px;color:#fbbf24;margin-top:2px">Hora extra aplicada</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           ${r.notas ? `<div style="font-size:12px;color:#94a3b8;max-width:240px;text-align:right">${r.notas}</div>` : '<div style="font-size:12px;color:#475569">—</div>'}
@@ -1552,6 +1554,14 @@ async function loadEscalaTurno() {
             <option value="">— Funcionário —</option>
             ${pessoas.map(p => `<option value="${p.id}">${p.nome} (${p.role})</option>`).join('')}
           </select>
+          <select id="tp-cobrindo" class="entradas-select" style="display:none">
+            <option value="">— Está cobrindo quem? —</option>
+            ${lista.filter(r => r.utilizador_id).map(r => `<option value="${r.utilizador_id}">${r.utilizador_nome || r.utilizador_id}</option>`).join('')}
+          </select>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#94a3b8">
+            <input id="tp-he" type="checkbox" style="width:14px;height:14px"/>
+            Aplicar hora extra
+          </label>
           <input id="tp-notas" class="entradas-notas" type="text" placeholder="Nota opcional (falta, cobertura, etc.)"/>
           <button class="btn btn-success btn-sm" onclick="addTurnoPresenca('${S.turnoData.id}')">Registar</button>
         </div>
@@ -1566,6 +1576,20 @@ async function loadEscalaTurno() {
       ${alertaHtml}
       ${addForm}
     `;
+    if (canEdit) {
+      const userSel = document.getElementById('tp-user');
+      const cobSel = document.getElementById('tp-cobrindo');
+      const heEl = document.getElementById('tp-he');
+      const toggleExtra = () => {
+        if (!userSel || !cobSel || !heEl) return;
+        const uid = userSel.value;
+        const naoEscalado = !!uid && !escaladosIds.has(String(uid));
+        cobSel.style.display = naoEscalado ? '' : 'none';
+        heEl.checked = naoEscalado ? heEl.checked : false;
+      };
+      if (userSel) userSel.onchange = toggleExtra;
+      toggleExtra();
+    }
   } catch (e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }
@@ -1573,10 +1597,21 @@ async function loadEscalaTurno() {
 
 async function addTurnoPresenca(turnoId) {
   const utilizador_id = val('tp-user');
+  const cobrindo_utilizador_id = val('tp-cobrindo');
+  const hora_extra = !!document.getElementById('tp-he')?.checked;
   const notas = val('tp-notas');
   if (!utilizador_id) return err('turno-presenca-msg', 'Seleciona um funcionário');
+  const turnoNome = S.turnoData?.nome;
+  const d = new Date(S.date + 'T12:00:00Z');
+  const day = d.getUTCDay();
+  const diaSemana = day === 0 ? 6 : day - 1;
+  const template = await api('GET', '/escala/template');
+  const escaladosIds = new Set(template.filter(r => Number(r.dia_semana) === diaSemana && r.turno === turnoNome).map(r => String(r.utilizador_id || '')).filter(Boolean));
+  const naoEscalado = !escaladosIds.has(String(utilizador_id));
+  if (naoEscalado && !cobrindo_utilizador_id) return err('turno-presenca-msg', 'Seleciona quem este funcionário está cobrindo');
+  if (naoEscalado && !hora_extra) return err('turno-presenca-msg', 'Confirma se deve aplicar pagamento de hora extra');
   try {
-    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, notas });
+    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, cobrindo_utilizador_id: naoEscalado ? cobrindo_utilizador_id : null, hora_extra: naoEscalado ? hora_extra : false, notas });
     show('turno-presenca-msg', '');
     if (document.getElementById('tp-notas')) document.getElementById('tp-notas').value = '';
     await loadEscalaTurno();

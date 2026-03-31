@@ -253,6 +253,15 @@ function dateLabel(d) {
   if (!y || !m || !dd) return raw;
   return `${dd}/${m}/${y}`;
 }
+/** Data e hora local (DD/MM/AAAA HH:mm:ss) a partir de ISO ou timestamp. */
+function dateTimeLabel(d) {
+  if (d == null || d === '') return '—';
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return dateLabel(d);
+  const datePart = dt.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const timePart = dt.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  return `${datePart} ${timePart}`;
+}
 function addDays(d, n) {
   const dt = new Date(d + 'T12:00:00Z');
   dt.setDate(dt.getDate() + n);
@@ -1862,14 +1871,15 @@ async function loadArmazemData() {
       show('armazem-faturas', '<div style="color:#64748b">Nenhuma fatura registada.</div>');
     } else {
       show('armazem-faturas', `<div class="table-wrap"><table>
-        <thead><tr><th>Data</th><th>Nº</th><th>Fornecedor</th><th style="text-align:right">Total</th><th>Fundos</th></tr></thead>
+        <thead><tr><th>Data / hora</th><th>Nº</th><th>Fornecedor</th><th style="text-align:right">Total</th><th>Fundos</th></tr></thead>
         <tbody>${faturas.map(f => {
           const exc = (f.justificacao_excesso || '').trim();
           const tag = exc
             ? `<span style="font-size:11px;color:#fbbf24">Acima do saldo</span>`
             : '—';
+          const quando = f.criado_em ? dateTimeLabel(f.criado_em) : dateLabel(f.data_emissao);
           return `<tr>
-          <td style="font-size:12px;color:#94a3b8">${dateLabel(f.data_emissao)}</td>
+          <td style="font-size:12px;color:#94a3b8">${quando}</td>
           <td style="font-weight:600">${f.numero_fatura || '—'}</td>
           <td>${f.fornecedor || '—'}</td>
           <td style="text-align:right;color:#fbbf24">${fmt(f.total_valor)}</td>
@@ -1882,9 +1892,9 @@ async function loadArmazemData() {
       show('armazem-compras', '<div style="color:#64748b">Nenhuma compra registada.</div>');
     } else {
       show('armazem-compras', `<div class="table-wrap"><table>
-        <thead><tr><th>Data</th><th>Fatura</th><th>Produto</th><th>Embalagem</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th></tr></thead>
+        <thead><tr><th>Data / hora</th><th>Fatura</th><th>Produto</th><th>Embalagem</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th></tr></thead>
         <tbody>${compras.map(c => `<tr>
-          <td style="font-size:12px;color:#94a3b8">${new Date(c.criado_em).toLocaleString('pt-PT')}</td>
+          <td style="font-size:12px;color:#94a3b8">${dateTimeLabel(c.criado_em)}</td>
           <td style="font-size:11px;color:#64748b">${c.fatura_numero ? c.fatura_numero : '—'}</td>
           <td>${c.produto_nome}</td>
           <td style="font-size:12px;color:#94a3b8">${(parseFloat(c.caixas)||0) > 0 && (parseFloat(c.qtd_por_caixa)||0) > 0 ? `${fmtNum(c.caixas)} cx x ${fmtNum(c.qtd_por_caixa)}` : '—'}</td>

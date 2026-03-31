@@ -308,6 +308,10 @@ function draw() {
   }
   switch (S.page) {
     case 'dia':      drawDia(); break;
+    case 'depositos':
+      if (!['admin', 'gestor'].includes(S.user?.role)) { navigate('dia'); return; }
+      drawDepositos();
+      break;
     case 'turno':    drawTurno(); break;
     case 'historico':drawHistorico(); break;
     case 'armazem':  drawArmazem(); break;
@@ -366,12 +370,18 @@ function navBar() {
   const showHistorico = S.user?.role !== 'compras';
   const showArmazem = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   const showEscala = S.user?.role === 'admin' || S.user?.role === 'gestor';
+  const showDepositos = ['admin', 'gestor'].includes(S.user?.role);
   return `
     <div id="navbar">
       <button class="nav-btn ${S.page==='dia'?'active':''}" onclick="navigate('dia')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         Dia
       </button>
+      ${showDepositos ? `
+      <button class="nav-btn ${S.page==='depositos'?'active':''}" onclick="navigate('depositos')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h3l2-7h8l2 7h3"/><path d="M5 10v10a2 2 0 002 2h10a2 2 0 002-2V10"/><rect x="9" y="14" width="6" height="4" rx="1"/></svg>
+        Banco
+      </button>` : ''}
       ${showHistorico ? `
       <button class="nav-btn ${S.page==='historico'?'active':''}" onclick="navigate('historico')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
@@ -431,133 +441,55 @@ async function drawDia() {
 
 function changeDate(n) {
   S.date = addDays(S.date, n);
-  document.getElementById('date-label').textContent = dateLabel(S.date);
+  const dl = document.getElementById('date-label');
+  if (dl) dl.textContent = dateLabel(S.date);
   const dp = document.getElementById('date-picker');
   if (dp) dp.value = S.date;
-  loadDia();
+  if (S.page === 'depositos') loadDepositos();
+  else loadDia();
 }
 function pickDate(val) {
   if (!val) return;
   S.date = val;
-  document.getElementById('date-label').textContent = dateLabel(S.date);
-  loadDia();
+  const dl = document.getElementById('date-label');
+  if (dl) dl.textContent = dateLabel(S.date);
+  if (S.page === 'depositos') loadDepositos();
+  else loadDia();
 }
 
-async function loadDia() {
-  try {
-    const isAdmin = S.user?.role === 'admin';
-    const podeDepositos = ['admin', 'gestor'].includes(S.user?.role);
-    const depUrl = `/depositos?data=${encodeURIComponent(S.date)}`;
-    const [turnos, dash, depWrap] = await Promise.all([
-      api('GET', `/dia?data=${S.date}`),
-      isAdmin ? api('GET', `/dashboard?data=${S.date}`).catch(() => null) : Promise.resolve(null),
-      podeDepositos
-        ? api('GET', depUrl).then((d) => ({ ok: true, data: d })).catch((e) => ({ ok: false, err: e }))
-        : Promise.resolve({ ok: true, data: [] })
-    ]);
-    let depositos = [];
-    let depositosErro = '';
-    if (podeDepositos) {
-      if (depWrap.ok) depositos = depWrap.data || [];
-      else depositosErro = (depWrap.err && depWrap.err.message) ? depWrap.err.message : String(depWrap.err);
+async function reloadDepositsView() {
+  if (S.page === 'depositos') await loadDepositos();
+  else await loadDia();
+}
+
+function renderDepositosSection(turnos, depositos, depositosErro) {
+  const depositosByTurno = {};
+  (depositos || []).forEach(d => {
+    if (d.turno_id != null) depositosByTurno[String(d.turno_id)] = d;
+  });
+  const sumValorBruto = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor) || 0), 0);
+  const totalSaidasNoDeposito = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor_saidas) || 0), 0);
+  const totalDepositos = Math.max(0, sumValorBruto - totalSaidasNoDeposito);
+  const totalTpaRegistado = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor_tpa) || 0), 0);
+  let destinoSaidasComum = '';
+  for (const d of depositos || []) {
+    if ((parseFloat(d.valor_saidas) || 0) > 0 && String(d.saidas_destino || '').trim()) {
+      destinoSaidasComum = String(d.saidas_destino || '').trim();
+      break;
     }
-
-    S.turnosDia = turnos;
-    const turnoMap = {};
-    turnos.forEach(t => { turnoMap[t.nome] = t; });
-
-    const cards = ['manha','tarde','noite'].map(nome => {
-      const t = turnoMap[nome];
-      if (!t) {
-        return `
-          <div class="turno-card" onclick="abrirTurno('${nome}')">
-            <div class="turno-card-nome">${turnoLabel(nome)}</div>
-            <div class="badge badge-grey" style="margin-bottom:8px">Não iniciado</div>
-            <div class="turno-card-abrir">
-              <button class="btn btn-primary btn-sm btn-full">Abrir Turno</button>
-            </div>
-          </div>`;
-      }
-      const totalVendas = t.total_vendas || 0;
-      const totalCaixa  = t.caixa?.total_final || 0;
-      const cls = t.estado === 'aberto' ? 'aberto' : 'fechado';
-      const badge = t.estado === 'aberto'
-        ? '<span class="badge badge-green">Aberto</span>'
-        : '<span class="badge badge-grey">Fechado</span>';
-      return `
-        <div class="turno-card ${cls}" onclick="navigate('turno',{turnoId:'${t.id}'})">
-          <div class="turno-card-nome">${turnoLabel(nome)}</div>
-          <div class="turno-card-status">${badge}</div>
-          <div class="turno-card-value">${fmt(totalCaixa)}</div>
-          <div class="turno-card-label">Total Caixa</div>
-          <div style="font-size:12px;color:#64748b;margin-top:4px">Vendas: ${fmt(totalVendas)}</div>
-        </div>`;
-    }).join('');
-
-    const depositosByTurno = {};
-    (depositos || []).forEach(d => {
-      if (d.turno_id != null) depositosByTurno[String(d.turno_id)] = d;
-    });
-    const sumValorBruto = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor) || 0), 0);
-    const totalSaidasNoDeposito = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor_saidas) || 0), 0);
-    const totalDepositos = Math.max(0, sumValorBruto - totalSaidasNoDeposito);
-    const totalTpaRegistado = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor_tpa) || 0), 0);
-    let destinoSaidasComum = '';
-    for (const d of depositos || []) {
-      if ((parseFloat(d.valor_saidas) || 0) > 0 && String(d.saidas_destino || '').trim()) {
-        destinoSaidasComum = String(d.saidas_destino || '').trim();
-        break;
-      }
+  }
+  let borderoDiaUrl = '';
+  for (const t of [...turnos].sort((a, b) => (({ manha: 1, tarde: 2, noite: 3 }[a.nome]) || 9) - (({ manha: 1, tarde: 2, noite: 3 }[b.nome]) || 9))) {
+    const d = depositosByTurno[String(t.id)];
+    if (d && String(d.bordero_foto_url || '').trim()) {
+      borderoDiaUrl = String(d.bordero_foto_url).trim();
+      break;
     }
-    let borderoDiaUrl = '';
-    for (const t of [...turnos].sort((a, b) => (({ manha: 1, tarde: 2, noite: 3 }[a.nome]) || 9) - (({ manha: 1, tarde: 2, noite: 3 }[b.nome]) || 9))) {
-      const d = depositosByTurno[String(t.id)];
-      if (d && String(d.bordero_foto_url || '').trim()) {
-        borderoDiaUrl = String(d.bordero_foto_url).trim();
-        break;
-      }
-    }
-    const ordemTurno = { manha: 1, tarde: 2, noite: 3 };
-    const turnosOrdenados = [...turnos].sort((a, b) => (ordemTurno[a.nome] || 9) - (ordemTurno[b.nome] || 9));
-
-    const c = dash?.caixa;
-    const resumoDia = isAdmin && dash ? `
-      <div class="card">
-        <div class="card-title">Resumo do dia</div>
-        <div class="total-grid">
-          <div class="total-item">
-            <div class="total-item-label">Total Vendas</div>
-            <div class="total-item-value" style="color:#4ade80">${fmt(dash.total_vendas)}</div>
-          </div>
-          <div class="total-item">
-            <div class="total-item-label">Total Caixa</div>
-            <div class="total-item-value" style="color:#4ade80">${fmt(c?.total_final||0)}</div>
-          </div>
-          <div class="total-item">
-            <div class="total-item-label">TPA</div>
-            <div class="total-item-value" style="font-size:16px">${fmt(c?.tpa||0)}</div>
-          </div>
-          <div class="total-item">
-            <div class="total-item-label">Dinheiro</div>
-            <div class="total-item-value" style="font-size:16px">${fmt(c?.dinheiro||0)}</div>
-          </div>
-          <div class="total-item">
-            <div class="total-item-label">Transferência</div>
-            <div class="total-item-value" style="font-size:16px">${fmt(c?.transferencia||0)}</div>
-          </div>
-          <div class="total-item">
-            <div class="total-item-label">Saída</div>
-            <div class="total-item-value" style="font-size:16px;color:#f87171">${fmt(c?.saida||0)}</div>
-          </div>
-        </div>
-      </div>` : '';
-    const hoje = new Date().toISOString().split('T')[0];
-    const blocoDepositosSemPerm = !podeDepositos ? `
-      <div class="card" id="sec-depositos">
-        <div class="card-title">🏦 Depósitos no banco</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0">A consulta e o registo de depósitos estão disponíveis apenas para perfis <strong>Administrador</strong> e <strong>Gestor</strong>. (O teu perfil: ${S.user?.role || '—'}.)</p>
-      </div>` : '';
-    const blocoDepositos = podeDepositos ? `
+  }
+  const ordemTurno = { manha: 1, tarde: 2, noite: 3 };
+  const turnosOrdenados = [...turnos].sort((a, b) => (ordemTurno[a.nome] || 9) - (ordemTurno[b.nome] || 9));
+  const hoje = new Date().toISOString().split('T')[0];
+  return `
       <div class="card" id="sec-depositos">
         <div class="card-title">🏦 Depósitos no banco</div>
         <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>valor bruto</strong> e <strong>TPA</strong>. A <strong>saída no depósito</strong> e a <strong>foto do borderô</strong> são <strong>únicas</strong> para todo o registo do dia. <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns.</p>
@@ -665,13 +597,130 @@ async function loadDia() {
         <button type="button" class="btn btn-success" onclick="submitDepositosDia()" ${!temTurnoFechado ? 'disabled' : ''}>Registar depósito</button>
           `;
         })()}
+      </div>`;
+}
+
+async function loadDepositos() {
+  try {
+    const depUrl = `/depositos?data=${encodeURIComponent(S.date)}`;
+    const depWrap = await api('GET', depUrl).then((d) => ({ ok: true, data: d })).catch((e) => ({ ok: false, err: e }));
+    let depositos = [];
+    let depositosErro = '';
+    if (depWrap.ok) depositos = depWrap.data || [];
+    else depositosErro = (depWrap.err && depWrap.err.message) ? depWrap.err.message : String(depWrap.err);
+    const turnos = await api('GET', `/dia?data=${S.date}`);
+    S.turnosDia = turnos;
+    show('depositos-content', renderDepositosSection(turnos, depositos, depositosErro));
+    queueMicrotask(() => { updateDepPreviewTotal(); updateDepSaidasDestinoRequired(); });
+  } catch (e) {
+    show('depositos-content', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+async function drawDepositos() {
+  render(`
+    <div id="header">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:#f1f5f9">Depósitos no banco</div>
+        <div class="header-sub">${S.user?.nome}${S.user?.username ? ` · @${S.user.username}` : ''}</div>
+      </div>
+    </div>
+    <div id="content">
+      <div class="date-nav">
+        <button onclick="changeDate(-1)">‹</button>
+        <span style="position:relative;cursor:pointer">
+          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
+          <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
+        </span>
+        <button onclick="changeDate(1)">›</button>
+      </div>
+      <div id="depositos-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadDepositos();
+}
+
+async function loadDia() {
+  try {
+    const isAdmin = S.user?.role === 'admin';
+    const podeDepositos = ['admin', 'gestor'].includes(S.user?.role);
+    const [turnos, dash] = await Promise.all([
+      api('GET', `/dia?data=${S.date}`),
+      isAdmin ? api('GET', `/dashboard?data=${S.date}`).catch(() => null) : Promise.resolve(null)
+    ]);
+    S.turnosDia = turnos;
+    const turnoMap = {};
+    turnos.forEach(t => { turnoMap[t.nome] = t; });
+
+    const cards = ['manha','tarde','noite'].map(nome => {
+      const t = turnoMap[nome];
+      if (!t) {
+        return `
+          <div class="turno-card" onclick="abrirTurno('${nome}')">
+            <div class="turno-card-nome">${turnoLabel(nome)}</div>
+            <div class="badge badge-grey" style="margin-bottom:8px">Não iniciado</div>
+            <div class="turno-card-abrir">
+              <button class="btn btn-primary btn-sm btn-full">Abrir Turno</button>
+            </div>
+          </div>`;
+      }
+      const totalVendas = t.total_vendas || 0;
+      const totalCaixa  = t.caixa?.total_final || 0;
+      const cls = t.estado === 'aberto' ? 'aberto' : 'fechado';
+      const badge = t.estado === 'aberto'
+        ? '<span class="badge badge-green">Aberto</span>'
+        : '<span class="badge badge-grey">Fechado</span>';
+      return `
+        <div class="turno-card ${cls}" onclick="navigate('turno',{turnoId:'${t.id}'})">
+          <div class="turno-card-nome">${turnoLabel(nome)}</div>
+          <div class="turno-card-status">${badge}</div>
+          <div class="turno-card-value">${fmt(totalCaixa)}</div>
+          <div class="turno-card-label">Total Caixa</div>
+          <div style="font-size:12px;color:#64748b;margin-top:4px">Vendas: ${fmt(totalVendas)}</div>
+        </div>`;
+    }).join('');
+
+    const c = dash?.caixa;
+    const resumoDia = isAdmin && dash ? `
+      <div class="card">
+        <div class="card-title">Resumo do dia</div>
+        <div class="total-grid">
+          <div class="total-item">
+            <div class="total-item-label">Total Vendas</div>
+            <div class="total-item-value" style="color:#4ade80">${fmt(dash.total_vendas)}</div>
+          </div>
+          <div class="total-item">
+            <div class="total-item-label">Total Caixa</div>
+            <div class="total-item-value" style="color:#4ade80">${fmt(c?.total_final||0)}</div>
+          </div>
+          <div class="total-item">
+            <div class="total-item-label">TPA</div>
+            <div class="total-item-value" style="font-size:16px">${fmt(c?.tpa||0)}</div>
+          </div>
+          <div class="total-item">
+            <div class="total-item-label">Dinheiro</div>
+            <div class="total-item-value" style="font-size:16px">${fmt(c?.dinheiro||0)}</div>
+          </div>
+          <div class="total-item">
+            <div class="total-item-label">Transferência</div>
+            <div class="total-item-value" style="font-size:16px">${fmt(c?.transferencia||0)}</div>
+          </div>
+          <div class="total-item">
+            <div class="total-item-label">Saída</div>
+            <div class="total-item-value" style="font-size:16px;color:#f87171">${fmt(c?.saida||0)}</div>
+          </div>
+        </div>
+      </div>` : '';
+    const linkDepositos = podeDepositos ? `
+      <div class="card" style="padding:12px 16px;margin-bottom:12px">
+        <button type="button" class="btn btn-primary btn-sm" onclick="navigate('depositos')" style="width:100%;justify-content:center">🏦 Depósitos no banco</button>
       </div>` : '';
     show('dia-content', `
       <div class="turno-cards">${cards}</div>
-      ${blocoDepositos || blocoDepositosSemPerm}
+      ${linkDepositos}
       ${resumoDia}
     `);
-    if (podeDepositos) queueMicrotask(() => { updateDepPreviewTotal(); updateDepSaidasDestinoRequired(); });
   } catch(e) {
     show('dia-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -768,7 +817,7 @@ async function submitDepositosDia() {
     const payload = { itens, valor_saidas_total: saidasUnica, saidas_destino: destinoSaidas };
     if (borderoB64) payload.bordero_foto_base64 = borderoB64;
     await api('POST', '/depositos/lote', payload);
-    await loadDia();
+    await reloadDepositsView();
   } catch (e) {
     alert(e.message || String(e));
   }
@@ -780,7 +829,7 @@ async function uploadBorderoDia(inputEl) {
     const b64 = await fileToDataUrl(inputEl.files[0]);
     await api('POST', '/depositos/bordero-dia', { data: S.date, foto_base64: b64 });
     inputEl.value = '';
-    await loadDia();
+    await reloadDepositsView();
   } catch (e) {
     alert(e.message || String(e));
   }
@@ -790,7 +839,7 @@ async function removeBorderoDia() {
   if (!confirm('Remover a foto do borderô deste registo?')) return;
   try {
     await api('DELETE', '/depositos/bordero-dia?data=' + encodeURIComponent(S.date));
-    await loadDia();
+    await reloadDepositsView();
   } catch (e) {
     alert(e.message || String(e));
   }

@@ -535,6 +535,28 @@ async function applyBorderoFotoCanonicalDay(dataStr, canonicalId, fotoBase64) {
   await query('UPDATE depositos_banco SET bordero_foto_url=$1 WHERE id=$2', [finalUrl, canonicalId]);
 }
 
+async function applyFaturaFotoUrl(client, faturaId, fotoBase64) {
+  const parsed = parseDataUrlFoto(fotoBase64);
+  if (!parsed) {
+    const err = new Error('Envia uma imagem (JPEG, PNG ou WebP) em base64 (data URL).');
+    err.code = 'FATURA_FOTO';
+    throw err;
+  }
+  const { url: sbUrl, key: sbKey } = getSupabaseEnv();
+  let finalUrl;
+  if (sbUrl && sbKey) {
+    const fileKey = `faturas-compra/${faturaId}-${crypto.randomBytes(6).toString('hex')}.${parsed.ext}`;
+    finalUrl = await uploadBorderoToSupabase(parsed.buffer, fileKey, parsed.contentType);
+  } else {
+    const raw = String(fotoBase64 || '').trim();
+    if (raw.length > 4 * 1024 * 1024) {
+      throw new Error('Imagem demasiado grande. Define SUPABASE_SERVICE_ROLE_KEY no servidor para usar Storage.');
+    }
+    finalUrl = raw;
+  }
+  await client.query('UPDATE armazem_faturas SET foto_fatura_url=$1 WHERE id=$2', [finalUrl, faturaId]);
+}
+
 /** valor = bruto por turno na coluna valor; saída no depósito só no total (valor_saidas num único registo do dia). Líquido total = Σ(valor) − Σ(valor_saidas). */
 function parseDepositoValores(body) {
   const saidasRaw = parseFloat(body.valor_saidas);
@@ -704,6 +726,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, 'armazem_faturas');
   await run(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS fatura_id INTEGER REFERENCES armazem_faturas(id) ON DELETE SET NULL`, 'armazem_compras-fatura');
+  await run(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS foto_fatura_url TEXT NOT NULL DEFAULT ''`, 'armazem_faturas-foto');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, 'notas');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, 'criado_em');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`, 'fechado_em');
@@ -1046,6 +1069,7 @@ async function ensureArmazemTables() {
   )`).catch(() => {});
   await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS justificacao_excesso TEXT NOT NULL DEFAULT ''`).catch(() => {});
   await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS turno_saida_id INTEGER`).catch(() => {});
+  await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS foto_fatura_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
   await query(`DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_turno_saida_id_fkey') THEN
       ALTER TABLE armazem_faturas ADD CONSTRAINT armazem_faturas_turno_saida_id_fkey
@@ -1204,7 +1228,7 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { numero_fatura, fornecedor, data_emissao, notas, linhas, justificacao_excesso, turno_saida_id } = req.body || {};
+    const { numero_fatura, fornecedor, data_emissao, notas, linhas, justificacao_excesso, turno_saida_id, foto_fatura_base64 } = req.body || {};
     if (!Array.isArray(linhas) || !linhas.length) throw new Error('Adicione pelo menos uma linha à fatura');
     const dataFat = (data_emissao || new Date().toISOString().split('T')[0]).trim();
     const libRow = await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);
@@ -1272,6 +1296,8 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
       sumTotal += parseFloat(row.valor_total) || 0;
     }
     await client.query('UPDATE armazem_faturas SET total_valor=$1 WHERE id=$2', [sumTotal, fid]);
+    const fotoRaw = String(foto_fatura_base64 || '').trim();
+    if (fotoRaw) await applyFaturaFotoUrl(client, fid, fotoRaw);
     await client.query('COMMIT');
     const fat = await query('SELECT * FROM armazem_faturas WHERE id=$1', [fid]);
     const linhasOut = await query(

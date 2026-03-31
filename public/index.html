@@ -2074,7 +2074,7 @@ async function drawArmazem() {
       </div>
       <div class="card">
         <div class="card-title">📄 Fatura de compra</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha. Se o total exceder o saldo do dia, deves justificar a origem do dinheiro (podes associar uma saída de caixa do mesmo dia).</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha. Anexa a <strong>foto da fatura</strong> (obrigatório). Se o total exceder o saldo do dia, deves justificar a origem do dinheiro (podes associar uma saída de caixa do mesmo dia).</p>
         <div id="fatura-form-msg"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="Ex: FT 2025/012"/></div>
@@ -2082,6 +2082,11 @@ async function drawArmazem() {
         </div>
         <div class="field"><label>Fornecedor</label><input id="fx-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
         <div class="field"><label>Notas</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
+        <div class="field">
+          <label>Foto da fatura</label>
+          <input type="file" id="fx-foto-fatura" accept="image/jpeg,image/png,image/webp" capture="environment"/>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">JPEG, PNG ou WebP. Obrigatório para registar.</div>
+        </div>
         <div id="fx-excesso-wrap" style="display:none;border:1px solid #d97706;border-radius:10px;padding:12px;margin-bottom:10px;background:#1c1917">
           <div style="font-size:12px;color:#fbbf24;margin-bottom:8px">O total desta fatura excede o saldo disponível para a data seleccionada. Indica a origem do dinheiro (obrigatório). Opcionalmente associa uma saída de caixa registada nesse dia.</div>
           <div class="field"><label>Justificação da origem do dinheiro</label><textarea id="fx-justificacao" rows="2" placeholder="Ex.: pago com saída de caixa do turno da tarde, aprovado pela gerência."></textarea></div>
@@ -2150,17 +2155,22 @@ async function loadArmazemData() {
       show('armazem-faturas', '<div style="color:#64748b">Nenhuma fatura registada.</div>');
     } else {
       show('armazem-faturas', `<div class="table-wrap"><table>
-        <thead><tr><th>Data / hora</th><th>Nº</th><th>Fornecedor</th><th style="text-align:right">Total</th><th>Fundos</th></tr></thead>
+        <thead><tr><th>Data / hora</th><th>Nº</th><th>Fornecedor</th><th>Foto</th><th style="text-align:right">Total</th><th>Fundos</th></tr></thead>
         <tbody>${faturas.map(f => {
           const exc = (f.justificacao_excesso || '').trim();
           const tag = exc
             ? `<span style="font-size:11px;color:#fbbf24">Acima do saldo</span>`
             : '—';
           const quando = f.criado_em ? dateTimeLabel(f.criado_em) : dateLabel(f.data_emissao);
+          const fotoUrl = (f.foto_fatura_url || '').trim();
+          const fotoCell = fotoUrl
+            ? `<a href="${attrUrl(fotoUrl)}" target="_blank" rel="noopener noreferrer" title="Ver foto"><img src="${attrUrl(fotoUrl)}" alt="" style="max-height:44px;max-width:72px;object-fit:cover;border-radius:6px;border:1px solid #334155;vertical-align:middle"/></a>`
+            : '<span style="color:#64748b;font-size:12px">—</span>';
           return `<tr>
           <td style="font-size:12px;color:#94a3b8">${quando}</td>
           <td style="font-weight:600">${f.numero_fatura || '—'}</td>
           <td>${f.fornecedor || '—'}</td>
+          <td style="vertical-align:middle">${fotoCell}</td>
           <td style="text-align:right;color:#fbbf24">${fmt(f.total_valor)}</td>
           <td style="font-size:12px">${tag}</td>
         </tr>`;
@@ -2521,6 +2531,14 @@ async function submitFaturaArmazem() {
     return;
   }
   try {
+    const fotoInp = document.getElementById('fx-foto-fatura');
+    if (!fotoInp || !fotoInp.files || !fotoInp.files[0]) {
+      if (msg) msg.innerHTML = '<div class="alert alert-error">Anexa a foto da fatura (JPEG, PNG ou WebP).</div>';
+      faturaArmazemSubmitting = false;
+      if (btn) { btn.disabled = false; btn.textContent = 'Registar fatura'; }
+      return;
+    }
+    const fotoB64 = await fileToDataUrl(fotoInp.files[0]);
     const totalEst = computeFaturaTotalEstimado();
     const saldo = S.armazemSaldoDia != null ? S.armazemSaldoDia : 0;
     const payload = {
@@ -2528,7 +2546,8 @@ async function submitFaturaArmazem() {
       fornecedor: val('fx-fornecedor'),
       data_emissao: val('fx-data'),
       notas: val('fx-notas'),
-      linhas
+      linhas,
+      foto_fatura_base64: fotoB64
     };
     if (totalEst > saldo + 0.01) {
       payload.justificacao_excesso = val('fx-justificacao');
@@ -2546,6 +2565,7 @@ async function submitFaturaArmazem() {
     if (ts) ts.value = '';
     document.getElementById('fatura-linhas-body').innerHTML = '';
     addFaturaLinha();
+    if (fotoInp) fotoInp.value = '';
     await refreshArmazemFundos();
     await loadArmazemData();
   } catch(e) {

@@ -315,6 +315,7 @@ CREATE TABLE IF NOT EXISTS armazem_libertacoes (
 );
 ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS justificacao_excesso TEXT NOT NULL DEFAULT '';
 ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS turno_saida_id INTEGER REFERENCES turno_saidas(id) ON DELETE SET NULL;
+ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS foto_fatura_url TEXT NOT NULL DEFAULT '';
 
 -- ============================================================
 --  ESCALA_TEMPLATE (modelo semanal: dia da semana + turno)

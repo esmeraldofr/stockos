@@ -546,8 +546,30 @@ app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => 
 });
 
 // ── ARMAZÉM ────────────────────────────────────────────────────
+async function ensureArmazemTables() {
+  await query(`CREATE TABLE IF NOT EXISTS armazem_stock (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    custo_medio NUMERIC(15,2) NOT NULL DEFAULT 0,
+    atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await query(`CREATE TABLE IF NOT EXISTS armazem_compras (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
+    valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
+    fornecedor TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_por INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+}
+
 app.get('/api/armazem/inventario', auth, requireRole('admin','gestor'), async (req, res) => {
   try {
+    await ensureArmazemTables();
     const r = await query(
       `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
               COALESCE(a.quantidade, 0) as quantidade,
@@ -564,6 +586,7 @@ app.get('/api/armazem/inventario', auth, requireRole('admin','gestor'), async (r
 
 app.get('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req, res) => {
   try {
+    await ensureArmazemTables();
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
     const r = await query(
       `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome
@@ -578,6 +601,7 @@ app.get('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req,
 });
 
 app.post('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req, res) => {
+  await ensureArmazemTables();
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

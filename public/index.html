@@ -479,6 +479,7 @@ async function loadDia() {
     const totalTpaRegistado = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor_tpa) || 0), 0);
     const ordemTurno = { manha: 1, tarde: 2, noite: 3 };
     const turnosOrdenados = [...turnos].sort((a, b) => (ordemTurno[a.nome] || 9) - (ordemTurno[b.nome] || 9));
+    const totalSaidasDia = turnos.reduce((s, t) => s + (parseFloat(t.caixa?.saida) || 0), 0);
 
     const c = dash?.caixa;
     const resumoDia = isAdmin && dash ? `
@@ -521,6 +522,13 @@ async function loadDia() {
       <div class="card" id="sec-depositos">
         <div class="card-title">🏦 Depósitos no banco</div>
         <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>dinheiro depositado</strong> e <strong>valor registado no TPA</strong> (${dateLabel(S.date)}). <strong>Referência</strong>, <strong>notas</strong> e <strong>data do depósito</strong> são comuns a todos os turnos; carrega em <strong>Registar depósito</strong> para gravar os turnos fechados com valor &gt; 0.</p>
+        <div style="margin-bottom:14px;padding:12px 14px;background:rgba(251,146,60,0.07);border:1px solid rgba(251,146,60,0.22);border-radius:8px;font-size:13px;color:#cbd5e1;line-height:1.5">
+          <strong style="color:#fb923c">Saídas antes do depósito</strong> — Sim: compras de produtos ou despesas não previstas devem ser registadas <strong>por turno</strong>, <em>antes</em> de fechares e de registares o depósito no banco. Abre o turno (Manhã / Tarde / Noite) e usa a secção <strong>💸 Saídas de caixa</strong> (descrição, valor e nota). Compras ao armazém ligadas ao turno também entram na saída. Esses montantes reduzem o <strong>Total final</strong> da caixa desse turno.
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(148,163,184,0.2);display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px">
+            <span style="font-size:12px;color:#94a3b8">Total de saídas neste dia (soma dos turnos):</span>
+            <strong style="color:#f87171;font-size:16px">${fmt(totalSaidasDia)}</strong>
+          </div>
+        </div>
         ${depositosErro ? `<div class="alert alert-error" style="margin-bottom:10px">Não foi possível carregar os depósitos: ${depositosErro}</div>` : ''}
         ${!turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Não há turnos neste dia — abre turnos antes de registar depósitos.</div>` : ''}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px">

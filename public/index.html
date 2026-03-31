@@ -1773,11 +1773,7 @@ async function drawArmazem() {
         <div class="card-title">🛒 Registar Compra</div>
         <div id="armazem-form-msg"></div>
         <div class="field">
-          <label>Procurar produto</label>
-          <input id="a-produto-search" type="text" placeholder="Escreve para filtrar..."/>
-        </div>
-        <div class="field">
-          <label>Produto</label>
+          <label>Produto (digita para filtrar)</label>
           <select id="a-produto"></select>
         </div>
         <div id="a-novo-wrap" style="display:none;border:1px solid #334155;border-radius:10px;padding:10px;margin-bottom:10px">
@@ -1833,19 +1829,10 @@ async function loadArmazemData() {
     ]);
     S.produtos = produtos;
     const sel = document.getElementById('a-produto');
-    const searchEl = document.getElementById('a-produto-search');
     if (sel) {
-      const previous = sel.value || '';
-      const term = (searchEl?.value || '').trim().toLowerCase();
-      const filtrados = produtos.filter(p => p.ativo && (!term || String(p.nome || '').toLowerCase().includes(term)));
-      sel.innerHTML = '<option value="">— Seleciona —</option><option value="__novo__">+ Novo produto</option>' +
-        filtrados.map(p => `<option value="${p.id}" data-medicao="${p.tipo_medicao || 'unidade'}">${p.nome} (${medicaoSigla(p.tipo_medicao)})</option>`).join('');
-      if (previous && sel.querySelector(`option[value="${previous}"]`)) sel.value = previous;
+      renderArmazemProdutoOptions(sel, sel.value || '', window._armazemProdutoFilter || '');
       sel.addEventListener('change', toggleNovoProdutoArmazem);
-    }
-    if (searchEl && !searchEl.dataset.binded) {
-      searchEl.dataset.binded = '1';
-      searchEl.addEventListener('input', filterArmazemProdutos);
+      bindArmazemProdutoFilter(sel);
     }
     toggleNovoProdutoArmazem();
 
@@ -1881,16 +1868,45 @@ async function loadArmazemData() {
   }
 }
 
-function filterArmazemProdutos() {
-  const sel = document.getElementById('a-produto');
-  const searchEl = document.getElementById('a-produto-search');
-  if (!sel || !searchEl) return;
-  const previous = sel.value || '';
-  const term = (searchEl.value || '').trim().toLowerCase();
-  const filtrados = (S.produtos || []).filter(p => p.ativo && (!term || String(p.nome || '').toLowerCase().includes(term)));
+function renderArmazemProdutoOptions(sel, selectedValue, term) {
+  const q = (term || '').trim().toLowerCase();
+  const filtrados = (S.produtos || []).filter(p => p.ativo && (!q || String(p.nome || '').toLowerCase().includes(q)));
   sel.innerHTML = '<option value="">— Seleciona —</option><option value="__novo__">+ Novo produto</option>' +
     filtrados.map(p => `<option value="${p.id}" data-medicao="${p.tipo_medicao || 'unidade'}">${p.nome} (${medicaoSigla(p.tipo_medicao)})</option>`).join('');
-  if (previous && sel.querySelector(`option[value="${previous}"]`)) sel.value = previous;
+  if (selectedValue && sel.querySelector(`option[value="${selectedValue}"]`)) sel.value = selectedValue;
+}
+
+function bindArmazemProdutoFilter(sel) {
+  if (!sel || sel.dataset.filterBinded) return;
+  sel.dataset.filterBinded = '1';
+  sel.addEventListener('keydown', function(e) {
+    const key = e.key || '';
+    if (key === 'Escape') {
+      window._armazemProdutoFilter = '';
+      renderArmazemProdutoOptions(sel, sel.value || '', '');
+      toggleNovoProdutoArmazem();
+      return;
+    }
+    if (key === 'Backspace') {
+      e.preventDefault();
+      window._armazemProdutoFilter = (window._armazemProdutoFilter || '').slice(0, -1);
+      renderArmazemProdutoOptions(sel, '', window._armazemProdutoFilter);
+      toggleNovoProdutoArmazem();
+      return;
+    }
+    if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      window._armazemProdutoFilter = (window._armazemProdutoFilter || '') + key;
+      renderArmazemProdutoOptions(sel, '', window._armazemProdutoFilter);
+      if (sel.options.length > 0) sel.selectedIndex = 0;
+      toggleNovoProdutoArmazem();
+    }
+  });
+  sel.addEventListener('blur', function() {
+    window._armazemProdutoFilter = '';
+    renderArmazemProdutoOptions(sel, sel.value || '', '');
+    toggleNovoProdutoArmazem();
+  });
   toggleNovoProdutoArmazem();
 }
 

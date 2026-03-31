@@ -1163,15 +1163,30 @@ app.get('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), a
   try {
     await ensureArmazemTables();
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
-    const r = await query(
-      `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero
-       FROM armazem_compras c
-       JOIN produtos p ON p.id = c.produto_id
-       LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
-       LEFT JOIN armazem_faturas f ON f.id = c.fatura_id
-       ORDER BY c.criado_em DESC
-       LIMIT ${limit}`
-    );
+    const dataDia = (req.query.data || '').trim();
+    const filtroDia = /^\d{4}-\d{2}-\d{2}$/.test(dataDia);
+    const r = filtroDia
+      ? await query(
+          `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero
+           FROM armazem_compras c
+           JOIN produtos p ON p.id = c.produto_id
+           LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
+           LEFT JOIN armazem_faturas f ON f.id = c.fatura_id
+           WHERE (c.fatura_id IS NOT NULL AND f.data_emissao = $1::date)
+              OR (c.fatura_id IS NULL AND c.criado_em::date = $1::date)
+           ORDER BY c.criado_em DESC
+           LIMIT ${limit}`,
+          [dataDia]
+        )
+      : await query(
+          `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero
+           FROM armazem_compras c
+           JOIN produtos p ON p.id = c.produto_id
+           LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
+           LEFT JOIN armazem_faturas f ON f.id = c.fatura_id
+           ORDER BY c.criado_em DESC
+           LIMIT ${limit}`
+        );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -1201,9 +1216,16 @@ app.get('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), a
   try {
     await ensureArmazemTables();
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '40', 10)));
-    const r = await query(
-      `SELECT * FROM armazem_faturas ORDER BY data_emissao DESC, criado_em DESC LIMIT ${limit}`
-    );
+    const dataDia = (req.query.data || '').trim();
+    const filtroDia = /^\d{4}-\d{2}-\d{2}$/.test(dataDia);
+    const r = filtroDia
+      ? await query(
+          `SELECT * FROM armazem_faturas WHERE data_emissao = $1::date ORDER BY criado_em DESC LIMIT ${limit}`,
+          [dataDia]
+        )
+      : await query(
+          `SELECT * FROM armazem_faturas ORDER BY data_emissao DESC, criado_em DESC LIMIT ${limit}`
+        );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

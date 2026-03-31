@@ -439,22 +439,33 @@ async function drawDia() {
   await loadDia();
 }
 
-function changeDate(n) {
-  S.date = addDays(S.date, n);
+function syncDatePickersAcrossPages() {
   const dl = document.getElementById('date-label');
   if (dl) dl.textContent = dateLabel(S.date);
   const dp = document.getElementById('date-picker');
   if (dp) dp.value = S.date;
+  const fx = document.getElementById('fx-data');
+  if (fx) fx.value = S.date;
+}
+
+function changeDate(n) {
+  S.date = addDays(S.date, n);
+  syncDatePickersAcrossPages();
   if (S.page === 'depositos') loadDepositos();
-  else loadDia();
+  else if (S.page === 'armazem') {
+    refreshArmazemFundos();
+    loadArmazemData();
+  } else loadDia();
 }
 function pickDate(val) {
   if (!val) return;
   S.date = val;
-  const dl = document.getElementById('date-label');
-  if (dl) dl.textContent = dateLabel(S.date);
+  syncDatePickersAcrossPages();
   if (S.page === 'depositos') loadDepositos();
-  else loadDia();
+  else if (S.page === 'armazem') {
+    refreshArmazemFundos();
+    loadArmazemData();
+  } else loadDia();
 }
 
 async function reloadDepositsView() {
@@ -2106,13 +2117,23 @@ async function loadHistorico() {
 async function drawArmazem() {
   render(`
     <div id="header">
-      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Armazém</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Armazém</div>
+        <div class="header-sub">Registo diário · ${dateLabel(S.date)}</div>
+      </div>
     </div>
     <div id="content">
       <div id="armazem-msg"></div>
+      <div class="date-nav">
+        <button onclick="changeDate(-1)">‹</button>
+        <span style="position:relative;cursor:pointer">
+          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
+          <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
+        </span>
+        <button onclick="changeDate(1)">›</button>
+      </div>
       <div class="card">
         <div class="card-title">💰 Fundos para compras (dia)</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Libertações ao longo do dia. O saldo é libertado menos faturas já registadas na mesma data (usa a data da fatura abaixo).</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Tudo nesta página refere-se ao <strong>dia seleccionado</strong> acima. Libertações e saldo são desse dia; a data da fatura de compra sincroniza com esse dia.</p>
         <div id="armazem-fundos-banner"></div>
         <div id="armazem-libertacoes-list" style="margin-bottom:12px"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -2150,25 +2171,33 @@ async function drawArmazem() {
       </div>
       <div class="card">
         <div class="card-title">📦 Inventário do Armazém</div>
+        <p style="font-size:12px;color:#64748b;margin:0 0 10px">Stock e custo médio <strong>acumulados</strong> (não filtrados por dia).</p>
         <div id="armazem-inventario"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
       </div>
       <div class="card">
-        <div class="card-title">📑 Últimas faturas</div>
+        <div class="card-title">📑 Faturas do dia</div>
         <div id="armazem-faturas"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
       </div>
       <div class="card">
-        <div class="card-title">🧾 Últimas Compras</div>
+        <div class="card-title">🧾 Compras do dia</div>
         <div id="armazem-compras"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
       </div>
     </div>
     ${navBar()}
   `);
   const fxData = document.getElementById('fx-data');
-  if (fxData) fxData.value = new Date().toISOString().split('T')[0];
+  if (fxData) fxData.value = S.date;
   document.getElementById('fatura-linhas-body').innerHTML = '';
   addFaturaLinha();
   const fxD = document.getElementById('fx-data');
-  if (fxD) fxD.addEventListener('change', () => refreshArmazemFundos());
+  if (fxD) {
+    fxD.addEventListener('change', () => {
+      S.date = fxD.value || S.date;
+      syncDatePickersAcrossPages();
+      refreshArmazemFundos();
+      loadArmazemData();
+    });
+  }
   const flb = document.getElementById('fatura-linhas-body');
   if (flb) {
     flb.addEventListener('input', () => updateFaturaExcessoUI());
@@ -2180,11 +2209,13 @@ async function drawArmazem() {
 
 async function loadArmazemData() {
   try {
+    const dataDia = S.date || new Date().toISOString().split('T')[0];
+    const q = encodeURIComponent(dataDia);
     const [inventario, compras, produtos, faturas] = await Promise.all([
       api('GET', '/armazem/inventario'),
-      api('GET', '/armazem/compras?limit=50'),
+      api('GET', '/armazem/compras?limit=50&data=' + q),
       api('GET', '/produtos?todos=1'),
-      api('GET', '/armazem/faturas?limit=20')
+      api('GET', '/armazem/faturas?limit=40&data=' + q)
     ]);
     S.produtos = produtos;
 
@@ -2201,7 +2232,7 @@ async function loadArmazemData() {
     }
 
     if (!faturas.length) {
-      show('armazem-faturas', '<div style="color:#64748b">Nenhuma fatura registada.</div>');
+      show('armazem-faturas', `<div style="color:#64748b">Nenhuma fatura com data ${dateLabel(dataDia)}.</div>`);
     } else {
       show('armazem-faturas', `<div class="table-wrap"><table>
         <thead><tr><th>Data / hora</th><th>Nº</th><th>Fornecedor</th><th>Foto</th><th style="text-align:right">Total</th><th>Fundos</th></tr></thead>
@@ -2227,7 +2258,7 @@ async function loadArmazemData() {
     }
 
     if (!compras.length) {
-      show('armazem-compras', '<div style="color:#64748b">Nenhuma compra registada.</div>');
+      show('armazem-compras', `<div style="color:#64748b">Nenhuma linha de compra para ${dateLabel(dataDia)}.</div>`);
     } else {
       show('armazem-compras', `<div class="table-wrap"><table>
         <thead><tr><th>Data / hora</th><th>Fatura</th><th>Produto</th><th>Embalagem</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th></tr></thead>

@@ -383,9 +383,10 @@ async function ensureDepositosBanco() {
   } catch (_) {}
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
   await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+  await migrateDepositosSaidasAntigasAgrupadas().catch((e) => console.error('migrateDepositosSaidasAntigasAgrupadas', e));
 }
 
-/** valor = líquido a depositar; valor_bruto e valor_saidas no body → líquido = bruto - saidas */
+/** valor = bruto por turno na coluna valor; saída no depósito só no total (valor_saidas num único registo do dia). Líquido total = Σ(valor) − Σ(valor_saidas). */
 function parseDepositoValores(body) {
   const saidasRaw = parseFloat(body.valor_saidas);
   const saidas = Number.isNaN(saidasRaw) ? 0 : Math.max(0, saidasRaw);
@@ -397,13 +398,58 @@ function parseDepositoValores(body) {
       err.code = 'DEP';
       throw err;
     }
-    return { valor: liquido, valor_saidas: saidas };
+    return { valor: bruto, valor_saidas: saidas };
   }
   const v = parseFloat(body.valor);
   if (!Number.isNaN(v) && v > 0) {
-    return { valor: v, valor_saidas: saidas };
+    const brutoLegacy = v + saidas;
+    return { valor: brutoLegacy, valor_saidas: saidas };
   }
   return null;
+}
+
+function ordemTurnoNome(nome) {
+  if (nome === 'manha') return 1;
+  if (nome === 'tarde') return 2;
+  if (nome === 'noite') return 3;
+  return 9;
+}
+
+/** Migra formato antigo (saídas repartidas por turno) para bruto por linha + saída total só no primeiro turno do dia. */
+async function migrateDepositosSaidasAntigasAgrupadas() {
+  const r = await query(`
+    SELECT d.id, d.valor, d.valor_saidas, t.data::text AS data, t.nome
+    FROM depositos_banco d
+    JOIN turnos t ON t.id = d.turno_id
+    ORDER BY t.data, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 ELSE 3 END
+  `);
+  const byData = new Map();
+  for (const row of r.rows) {
+    if (!byData.has(row.data)) byData.set(row.data, []);
+    byData.get(row.data).push(row);
+  }
+  for (const grp of byData.values()) {
+    const nComSaidas = grp.filter((x) => (parseFloat(x.valor_saidas) || 0) > 0).length;
+    if (nComSaidas <= 1) continue;
+    const totalSaidas = grp.reduce((s, x) => s + (parseFloat(x.valor_saidas) || 0), 0);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const row of grp) {
+        const v = parseFloat(row.valor) || 0;
+        const vs = parseFloat(row.valor_saidas) || 0;
+        await client.query(`UPDATE depositos_banco SET valor = $1, valor_saidas = 0 WHERE id = $2`, [v + vs, row.id]);
+      }
+      const sorted = [...grp].sort((a, b) => ordemTurnoNome(a.nome) - ordemTurnoNome(b.nome));
+      await client.query(`UPDATE depositos_banco SET valor_saidas = $1 WHERE id = $2`, [totalSaidas, sorted[0].id]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 async function assertTurnoFechado(turnoId) {
@@ -1527,7 +1573,9 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res
 app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     await ensureDepositosBanco();
-    const { itens } = req.body || {};
+    const { itens, valor_saidas_total } = req.body || {};
+    const saidasTotalRaw = parseFloat(valor_saidas_total);
+    const saidasTotal = Number.isNaN(saidasTotalRaw) ? 0 : Math.max(0, saidasTotalRaw);
     if (!Array.isArray(itens) || !itens.length) {
       return res.status(400).json({ erro: 'Envia os depósitos por turno (lista itens).' });
     }
@@ -1537,13 +1585,13 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
       if (!tid) continue;
       let pv;
       try {
-        pv = parseDepositoValores(raw);
+        const rawSemSaidasPorTurno = { ...raw, valor_saidas: 0 };
+        pv = parseDepositoValores(rawSemSaidasPorTurno);
       } catch (e) {
         return res.status(400).json({ erro: e.message });
       }
       if (!pv) continue;
       const v = pv.valor;
-      const vsaida = pv.valor_saidas;
       const vtpa = parseFloat(raw.valor_tpa);
       if (Number.isNaN(vtpa) || vtpa < 0) {
         return res.status(400).json({ erro: 'Indica o valor registado no TPA (≥ 0) em cada turno com depósito.' });
@@ -1553,7 +1601,7 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
         turno_id: tid,
         data_deposito: (raw.data_deposito || new Date().toISOString().split('T')[0]).trim(),
         valor: v,
-        valor_saidas: vsaida,
+        valor_saidas: 0,
         valor_tpa: vtpa,
         referencia: String(raw.referencia || '').trim(),
         notas: String(raw.notas || '').trim()
@@ -1568,6 +1616,18 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
       seen.add(row.turno_id);
       return true;
     });
+    const ids = dedup.map((r) => r.turno_id);
+    const tr = await query(`SELECT id, nome FROM turnos WHERE id = ANY($1::int[])`, [ids]);
+    const nomeById = Object.fromEntries(tr.rows.map((x) => [x.id, x.nome]));
+    dedup.sort((a, b) => ordemTurnoNome(nomeById[a.turno_id]) - ordemTurnoNome(nomeById[b.turno_id]));
+    const sumBruto = dedup.reduce((s, r) => s + (parseFloat(r.valor) || 0), 0);
+    if (saidasTotal > sumBruto) {
+      return res.status(400).json({ erro: 'A saída no depósito não pode ser maior que a soma dos valores brutos.' });
+    }
+    if (sumBruto - saidasTotal <= 0) {
+      return res.status(400).json({ erro: 'O total depositado no banco (soma dos brutos menos a saída) tem de ser positivo.' });
+    }
+    dedup[0].valor_saidas = saidasTotal;
     const client = await pool.connect();
     try {
       await client.query('BEGIN');

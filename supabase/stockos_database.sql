@@ -344,7 +344,8 @@ CREATE TABLE IF NOT EXISTS escalas (
 );
 
 -- ============================================================
---  DEPÓSITOS BANCO (valor depositado por turno, após fecho do turno)
+--  DEPÓSITOS BANCO: valor = bruto por turno; valor_saidas = saída no depósito
+--  (total do dia) guardada só num dos registos do dia; líquido total = Σ(valor) − Σ(valor_saidas)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS depositos_banco (
   id                SERIAL          PRIMARY KEY,

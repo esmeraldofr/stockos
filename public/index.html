@@ -423,10 +423,9 @@ function pickDate(val) {
 
 async function loadDia() {
   try {
-    const [turnos, dash] = await Promise.all([
-      api('GET', `/dia?data=${S.date}`),
-      api('GET', `/dashboard?data=${S.date}`)
-    ]);
+    const isAdmin = S.user?.role === 'admin';
+    const turnos = await api('GET', `/dia?data=${S.date}`);
+    const dash = isAdmin ? await api('GET', `/dashboard?data=${S.date}`).catch(() => null) : null;
 
     const turnoMap = {};
     turnos.forEach(t => { turnoMap[t.nome] = t; });
@@ -459,9 +458,8 @@ async function loadDia() {
         </div>`;
     }).join('');
 
-    const c = dash.caixa;
-    show('dia-content', `
-      <div class="turno-cards">${cards}</div>
+    const c = dash?.caixa;
+    const resumoDia = isAdmin && dash ? `
       <div class="card">
         <div class="card-title">Resumo do dia</div>
         <div class="total-grid">
@@ -490,7 +488,10 @@ async function loadDia() {
             <div class="total-item-value" style="font-size:16px;color:#f87171">${fmt(c?.saida||0)}</div>
           </div>
         </div>
-      </div>
+      </div>` : '';
+    show('dia-content', `
+      <div class="turno-cards">${cards}</div>
+      ${resumoDia}
     `);
   } catch(e) {
     show('dia-content', `<div class="alert alert-error">${e.message}</div>`);

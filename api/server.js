@@ -1333,8 +1333,8 @@ app.post('/api/turnos/:id/saidas', auth, async (req, res) => {
   } finally { client.release(); }
 });
 
-// ── DASHBOARD ─────────────────────────────────────────────────
-app.get('/api/dashboard', auth, async (req, res) => {
+// ── DASHBOARD (agregado do dia — só admin) ────────────────────
+app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
   try {
     const data = req.query.data || new Date().toISOString().split('T')[0];
 

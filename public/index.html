@@ -139,7 +139,6 @@ tr:hover .td-name{background:#1e293b}
 .modal-close{background:none;border:none;color:#64748b;cursor:pointer;font-size:22px;line-height:1}
 
 /* Setup */
-.setup-banner{background:#172554;border:1px solid #1d4ed8;border-radius:10px;padding:14px;margin-bottom:16px;font-size:13px;color:#93c5fd}
 
 /* Produto list */
 .produto-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #334155}
@@ -314,10 +313,6 @@ function drawLogin() {
           <input id="l-pass" type="password" placeholder="••••••" autocomplete="current-password"/>
         </div>
         <button class="btn btn-primary btn-full" onclick="doLogin()">Entrar</button>
-        <div style="margin-top:20px;border-top:1px solid #334155;padding-top:16px">
-          <div style="font-size:12px;color:#64748b;margin-bottom:12px">Primeira vez? Configura a password:</div>
-          <button class="btn btn-ghost btn-sm btn-full" onclick="showSetup()">Configurar conta</button>
-        </div>
       </div>
     </div>
   `);
@@ -335,30 +330,6 @@ async function doLogin() {
     localStorage.setItem('user', JSON.stringify(S.user));
     navigate('dia');
   } catch(e) { err('login-msg', e.message); }
-}
-
-function showSetup() {
-  document.getElementById('login-screen').innerHTML = `
-    <div class="login-box">
-      <div class="login-logo">StockOS</div>
-      <div class="login-sub">Configurar conta</div>
-      <div class="setup-banner">Usa o código <strong>STOCKOS2025</strong> para configurar a tua password.</div>
-      <div id="setup-msg"></div>
-      <div class="field"><label>Email ou nome de utilizador</label><input id="s-login" type="text" placeholder="admin ou admin@stockos.ao" autocapitalize="off"/></div>
-      <div class="field"><label>Código</label><input id="s-code" type="text" placeholder="STOCKOS2025"/></div>
-      <div class="field"><label>Nova Password</label><input id="s-pass" type="password" placeholder="Mínimo 6 caracteres"/></div>
-      <button class="btn btn-success btn-full" onclick="doSetup()">Guardar Password</button>
-      <button class="btn btn-ghost btn-full mt-8" onclick="drawLogin()">Voltar</button>
-    </div>
-  `;
-}
-
-async function doSetup() {
-  try {
-    await api('POST', '/auth/setup', { login: val('s-login'), codigo: val('s-code'), password: val('s-pass') });
-    suc('setup-msg', 'Password configurada! Já podes fazer login.');
-    setTimeout(drawLogin, 1500);
-  } catch(e) { err('setup-msg', e.message); }
 }
 
 function doLogout() {

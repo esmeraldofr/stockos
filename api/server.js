@@ -577,25 +577,6 @@ app.post('/api/auth/login', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.post('/api/auth/setup', async (req, res) => {
-  try {
-    await ensureUsernameColumn();
-    const { codigo, password } = req.body;
-    const login = loginFromBody(req);
-    if (codigo !== 'STOCKOS2025') return res.status(400).json({ erro: 'Código inválido' });
-    if (!password || password.length < 6) return res.status(400).json({ erro: 'Password deve ter pelo menos 6 caracteres' });
-    if (!login) return res.status(400).json({ erro: 'Indica email ou nome de utilizador' });
-    const r = await query(
-      `SELECT * FROM utilizadores WHERE LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1)`,
-      [login]
-    );
-    if (!r.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
-    const row = r.rows[0];
-    await query('UPDATE utilizadores SET senha_hash=$1 WHERE id=$2', [hashPassword(password), row.id]);
-    res.json({ sucesso: true });
-  } catch(e) { res.status(500).json({ erro: 'Erro interno' }); }
-});
-
 app.get('/api/auth/me', auth, async (req, res) => {
   await ensureUsernameColumn().catch(() => {});
   const r = await query('SELECT id,email,nome,role,username FROM utilizadores WHERE id=$1', [req.user.id]);

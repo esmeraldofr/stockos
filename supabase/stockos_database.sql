@@ -221,7 +221,7 @@ END $$;
 
 -- ============================================================
 --  DADOS INICIAIS — UTILIZADORES
---  Password: usar /api/auth/setup com código STOCKOS2025
+--  Senhas: definidas pelo admin ou password inicial na criação do utilizador
 -- ============================================================
 INSERT INTO utilizadores (nome, email, senha_hash, role) VALUES
   ('Admin', 'admin@stockos.ao', '', 'admin')

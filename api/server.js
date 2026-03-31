@@ -543,7 +543,7 @@ app.get('/api/produtos', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.post('/api/produtos', auth, requireRole('admin','gestor'), async (req, res) => {
+app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     const { nome, preco, categoria, venda_avulso, tipo_medicao } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
@@ -556,7 +556,7 @@ app.post('/api/produtos', auth, requireRole('admin','gestor'), async (req, res) 
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.put('/api/produtos/:id', auth, requireRole('admin','gestor'), async (req, res) => {
+app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
@@ -725,7 +725,7 @@ async function ensureArmazemTables() {
   END $$`).catch(() => {});
 }
 
-app.get('/api/armazem/saldo', auth, requireRole('admin','gestor'), async (req, res) => {
+app.get('/api/armazem/saldo', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
     const data = req.query.data || new Date().toISOString().split('T')[0];
@@ -749,7 +749,7 @@ app.get('/api/armazem/saldo', auth, requireRole('admin','gestor'), async (req, r
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.get('/api/armazem/saidas-dia', auth, requireRole('admin','gestor'), async (req, res) => {
+app.get('/api/armazem/saidas-dia', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureTurnoSaidas();
     const data = req.query.data || new Date().toISOString().split('T')[0];
@@ -765,7 +765,7 @@ app.get('/api/armazem/saidas-dia', auth, requireRole('admin','gestor'), async (r
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.post('/api/armazem/libertacoes', auth, requireRole('admin','gestor'), async (req, res) => {
+app.post('/api/armazem/libertacoes', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
     const { data, valor, notas } = req.body || {};
@@ -780,7 +780,7 @@ app.post('/api/armazem/libertacoes', auth, requireRole('admin','gestor'), async 
   } catch(e) { res.status(400).json({ erro: e.message }); }
 });
 
-app.delete('/api/armazem/libertacoes/:id', auth, requireRole('admin','gestor'), async (req, res) => {
+app.delete('/api/armazem/libertacoes/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
     const r = await query('DELETE FROM armazem_libertacoes WHERE id=$1 RETURNING id', [req.params.id]);
@@ -789,7 +789,7 @@ app.delete('/api/armazem/libertacoes/:id', auth, requireRole('admin','gestor'), 
   } catch(e) { res.status(400).json({ erro: e.message }); }
 });
 
-app.get('/api/armazem/inventario', auth, requireRole('admin','gestor'), async (req, res) => {
+app.get('/api/armazem/inventario', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
     const r = await query(
@@ -806,7 +806,7 @@ app.get('/api/armazem/inventario', auth, requireRole('admin','gestor'), async (r
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.get('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req, res) => {
+app.get('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
@@ -823,7 +823,7 @@ app.get('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req,
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.post('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req, res) => {
+app.post('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   await ensureArmazemTables();
   const client = await pool.connect();
   try {
@@ -844,7 +844,7 @@ app.post('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req
   } finally { client.release(); }
 });
 
-app.get('/api/armazem/faturas', auth, requireRole('admin','gestor'), async (req, res) => {
+app.get('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '40', 10)));
@@ -855,7 +855,7 @@ app.get('/api/armazem/faturas', auth, requireRole('admin','gestor'), async (req,
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor'), async (req, res) => {
+app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
     const f = await query('SELECT * FROM armazem_faturas WHERE id=$1', [req.params.id]);
@@ -870,7 +870,7 @@ app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor'), async (
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.post('/api/armazem/faturas', auth, requireRole('admin','gestor'), async (req, res) => {
+app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   await ensureArmazemTables();
   const client = await pool.connect();
   try {

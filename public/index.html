@@ -282,6 +282,9 @@ function navigate(page, params) {
 
 function draw() {
   if (!S.token) { drawLogin(); return; }
+  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos'].includes(S.page)) {
+    S.page = 'dia';
+  }
   switch (S.page) {
     case 'dia':      drawDia(); break;
     case 'turno':    drawTurno(); break;
@@ -365,26 +368,30 @@ function doLogout() {
 // ── NAV ───────────────────────────────────────────────────────
 function navBar() {
   const isAdmin = S.user?.role === 'admin';
+  const showHistorico = S.user?.role !== 'compras';
+  const showArmazem = ['admin', 'gestor', 'compras'].includes(S.user?.role);
+  const showEscala = S.user?.role === 'admin' || S.user?.role === 'gestor';
   return `
     <div id="navbar">
       <button class="nav-btn ${S.page==='dia'?'active':''}" onclick="navigate('dia')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         Dia
       </button>
+      ${showHistorico ? `
       <button class="nav-btn ${S.page==='historico'?'active':''}" onclick="navigate('historico')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
         Histórico
-      </button>
+      </button>` : ''}
       <button class="nav-btn ${S.page==='produtos'?'active':''}" onclick="navigate('produtos')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
         Produtos
       </button>
-      ${(S.user?.role === 'admin' || S.user?.role === 'gestor') ? `
+      ${showArmazem ? `
       <button class="nav-btn ${S.page==='armazem'?'active':''}" onclick="navigate('armazem')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>
         Armazém
       </button>` : ''}
-      ${(S.user?.role === 'admin' || S.user?.role === 'gestor') ? `
+      ${showEscala ? `
       <button class="nav-btn ${S.page==='escala'?'active':''}" onclick="navigate('escala')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>
         Escala
@@ -2279,10 +2286,11 @@ async function submitFaturaArmazem() {
 
 // ── PRODUTOS ──────────────────────────────────────────────────
 async function drawProdutos() {
+  const podeCriarProd = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   render(`
     <div id="header">
       <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Produtos</div></div>
-      <button class="btn btn-primary btn-sm" onclick="showProdutoForm()">+ Novo</button>
+      ${podeCriarProd ? '<button class="btn btn-primary btn-sm" onclick="showProdutoForm()">+ Novo</button>' : ''}
     </div>
     <div id="content">
       <div id="prod-msg"></div>
@@ -2295,7 +2303,7 @@ async function drawProdutos() {
 
 async function loadProdutos() {
   try {
-    const isAdmin = ['admin','gestor'].includes(S.user?.role);
+    const isAdmin = ['admin', 'gestor', 'compras'].includes(S.user?.role);
     S.produtos = await api('GET', '/produtos' + (isAdmin ? '?todos=1' : ''));
     const menu   = S.produtos.filter(p => p.categoria==='menu');
     const comida = S.produtos.filter(p => p.categoria==='ingredientes');
@@ -2342,6 +2350,7 @@ function closeProdutoModal() {
 function showProdutoForm(id) {
   const p = (id != null) ? S.produtos.find(x => x.id == id) : null;
   const isEdit = !!p;
+  const canEditReceita = ['admin', 'gestor'].includes(S.user?.role);
   closeProdutoModal();
 
   const div = document.createElement('div');
@@ -2365,7 +2374,7 @@ function showProdutoForm(id) {
         '<button id="btn-modal-guardar" class="btn btn-success">Guardar</button>' +
         '<button id="btn-modal-cancelar" class="btn btn-ghost">Cancelar</button>' +
       '</div>' +
-      (isEdit ? '<div id="receita-section" style="display:none;margin-top:16px;border-top:1px solid #334155;padding-top:12px"><div class="card-title">🧾 Receita</div><div id="receita-list"></div><div style="display:flex;gap-6px;margin-top:8px"><select id="r-comp" style="flex:1"></select><input id="r-qty" type="number" min="0.001" step="0.001" value="1" style="width:70px"/><button class="btn btn-primary btn-sm" onclick="addReceita(\'' + p.id + '\')">+</button></div><div id="receita-msg" style="margin-top:4px"></div></div>' : '') +
+      (isEdit && canEditReceita ? '<div id="receita-section" style="display:none;margin-top:16px;border-top:1px solid #334155;padding-top:12px"><div class="card-title">🧾 Receita</div><div id="receita-list"></div><div style="display:flex;gap-6px;margin-top:8px"><select id="r-comp" style="flex:1"></select><input id="r-qty" type="number" min="0.001" step="0.001" value="1" style="width:70px"/><button class="btn btn-primary btn-sm" onclick="addReceita(\'' + p.id + '\')">+</button></div><div id="receita-msg" style="margin-top:4px"></div></div>' : '') +
     '</div>';
 
   document.getElementById('app').appendChild(div);
@@ -2393,9 +2402,9 @@ function showProdutoForm(id) {
       sec.style.display = 'none';
     }
   }
-  document.getElementById('p-cat').addEventListener('change', () => { toggleAvulso(); if (isEdit) toggleReceita(); });
+  document.getElementById('p-cat').addEventListener('change', () => { toggleAvulso(); if (isEdit && canEditReceita) toggleReceita(); });
   toggleAvulso();
-  if (isEdit) toggleReceita();
+  if (isEdit && canEditReceita) toggleReceita();
 
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
   document.getElementById('btn-modal-cancelar').addEventListener('click', closeProdutoModal);
@@ -2540,6 +2549,7 @@ function showUserForm(u) {
       <div class="field"><label>Role</label>
         <select id="u-role">
           <option value="operador" ${u?.role==='operador'?'selected':''}>Operador</option>
+          <option value="compras"  ${u?.role==='compras'?'selected':''}>Compras (dia, armazém, produtos)</option>
           <option value="gestor"   ${u?.role==='gestor'?'selected':''}>Gestor</option>
           <option value="admin"    ${u?.role==='admin'?'selected':''}>Admin</option>
         </select>

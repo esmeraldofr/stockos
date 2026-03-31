@@ -1019,13 +1019,23 @@ app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (re
   try {
     const { dia_semana, turno, utilizador_id, notas } = req.body;
     if (dia_semana === undefined || !turno) return res.status(400).json({ erro: 'dia_semana e turno são obrigatórios' });
-    const r = await query(
-      `INSERT INTO escala_template (dia_semana, turno, utilizador_id, notas) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (dia_semana, turno) DO UPDATE SET utilizador_id=EXCLUDED.utilizador_id, notas=EXCLUDED.notas
+    const u = utilizador_id || null;
+    const n = notas || '';
+    const up = await query(
+      `UPDATE escala_template
+       SET utilizador_id=$3, notas=$4
+       WHERE dia_semana=$1 AND turno=$2
        RETURNING *`,
-      [dia_semana, turno, utilizador_id || null, notas || '']
+      [dia_semana, turno, u, n]
     );
-    res.json(r.rows[0] || { sucesso: true });
+    if (up.rows.length) return res.json(up.rows[0]);
+    const ins = await query(
+      `INSERT INTO escala_template (dia_semana, turno, utilizador_id, notas)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [dia_semana, turno, u, n]
+    );
+    res.json(ins.rows[0] || { sucesso: true });
   } catch(e) {
     if (e.message.includes('does not exist')) {
       try { await ensureEscalaTemplate(); res.status(400).json({ erro: 'Tabela criada, tenta novamente' }); } catch(e2) { res.status(500).json({ erro: e2.message }); }

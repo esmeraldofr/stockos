@@ -70,6 +70,29 @@ CREATE TABLE IF NOT EXISTS turno_caixa (
 );
 
 -- ============================================================
+--  ARMAZÉM (inventário e compras)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS armazem_stock (
+  id            SERIAL          PRIMARY KEY,
+  produto_id    INTEGER         NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+  quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  custo_medio   NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  atualizado_em TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS armazem_compras (
+  id            SERIAL          PRIMARY KEY,
+  produto_id    INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+  quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  preco_unitario NUMERIC(15,2)  NOT NULL DEFAULT 0,
+  valor_total   NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  fornecedor    TEXT            NOT NULL DEFAULT '',
+  notas         TEXT            NOT NULL DEFAULT '',
+  criado_por    INTEGER         REFERENCES utilizadores(id) ON DELETE SET NULL,
+  criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
 --  MIGRATIONS — add missing columns to existing tables
 -- ============================================================
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
@@ -87,6 +110,24 @@ ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categoria VARCHAR(20) NOT NULL DEF
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade';
+CREATE TABLE IF NOT EXISTS armazem_stock (
+  id            SERIAL          PRIMARY KEY,
+  produto_id    INTEGER         NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+  quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  custo_medio   NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  atualizado_em TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS armazem_compras (
+  id            SERIAL          PRIMARY KEY,
+  produto_id    INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+  quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  preco_unitario NUMERIC(15,2)  NOT NULL DEFAULT 0,
+  valor_total   NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  fornecedor    TEXT            NOT NULL DEFAULT '',
+  notas         TEXT            NOT NULL DEFAULT '',
+  criado_por    INTEGER         REFERENCES utilizadores(id) ON DELETE SET NULL,
+  criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT '';
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ;

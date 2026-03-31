@@ -273,6 +273,7 @@ function draw() {
     case 'dia':      drawDia(); break;
     case 'turno':    drawTurno(); break;
     case 'historico':drawHistorico(); break;
+    case 'armazem':  drawArmazem(); break;
     case 'produtos': drawProdutos(); break;
     case 'escala':   drawEscala(); break;
     case 'admin':    drawAdmin(); break;
@@ -365,6 +366,11 @@ function navBar() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
         Produtos
       </button>
+      ${(S.user?.role === 'admin' || S.user?.role === 'gestor') ? `
+      <button class="nav-btn ${S.page==='armazem'?'active':''}" onclick="navigate('armazem')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>
+        Armazém
+      </button>` : ''}
       ${(S.user?.role === 'admin' || S.user?.role === 'gestor') ? `
       <button class="nav-btn ${S.page==='escala'?'active':''}" onclick="navigate('escala')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>
@@ -1753,6 +1759,154 @@ async function loadHistorico() {
       ${rowsHtml}
     `);
   } catch(e) { show('hist-content',`<div class="alert alert-error">${e.message}</div>`); }
+}
+
+// ── ARMAZÉM ────────────────────────────────────────────────────
+async function drawArmazem() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Armazém</div></div>
+    </div>
+    <div id="content">
+      <div id="armazem-msg"></div>
+      <div class="card">
+        <div class="card-title">🛒 Registar Compra</div>
+        <div id="armazem-form-msg"></div>
+        <div class="field">
+          <label>Produto</label>
+          <select id="a-produto"></select>
+        </div>
+        <div id="a-novo-wrap" style="display:none;border:1px solid #334155;border-radius:10px;padding:10px;margin-bottom:10px">
+          <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Novo produto</div>
+          <div class="field"><label>Nome</label><input id="a-nome" type="text" placeholder="Nome do produto"/></div>
+          <div class="field"><label>Categoria</label><select id="a-categoria"><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option><option value="menu">Menu</option></select></div>
+          <div class="field"><label>Medição</label><select id="a-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>
+          <div class="field"><label>Preço de venda (opcional)</label><input id="a-preco-venda" type="number" min="0" step="any" placeholder="0"/></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field"><label>Quantidade</label><input id="a-qty" type="number" min="0.001" step="any" placeholder="Qtd"/></div>
+          <div class="field"><label>Preço unitário (Kz)</label><input id="a-preco" type="number" min="0.01" step="any" placeholder="0"/></div>
+        </div>
+        <div class="field"><label>Fornecedor (opcional)</label><input id="a-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
+        <div class="field"><label>Notas</label><input id="a-notas" type="text" placeholder="Ex: compra semanal"/></div>
+        <button class="btn btn-success" onclick="submitCompraArmazem()">Registar compra</button>
+      </div>
+      <div class="card">
+        <div class="card-title">📦 Inventário do Armazém</div>
+        <div id="armazem-inventario"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">🧾 Últimas Compras</div>
+        <div id="armazem-compras"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+    </div>
+    ${navBar()}
+  `);
+  await loadArmazemData();
+}
+
+async function loadArmazemData() {
+  try {
+    const [inventario, compras, produtos] = await Promise.all([
+      api('GET', '/armazem/inventario'),
+      api('GET', '/armazem/compras?limit=50'),
+      api('GET', '/produtos?todos=1')
+    ]);
+    S.produtos = produtos;
+    const sel = document.getElementById('a-produto');
+    if (sel) {
+      sel.innerHTML = '<option value="">— Seleciona —</option><option value="__novo__">+ Novo produto</option>' +
+        produtos.filter(p => p.ativo).map(p => `<option value="${p.id}" data-medicao="${p.tipo_medicao || 'unidade'}">${p.nome} (${medicaoSigla(p.tipo_medicao)})</option>`).join('');
+      sel.addEventListener('change', toggleNovoProdutoArmazem);
+    }
+    toggleNovoProdutoArmazem();
+
+    if (!inventario.length) {
+      show('armazem-inventario', '<div style="color:#64748b">Sem produtos no inventário.</div>');
+    } else {
+      show('armazem-inventario', `<div class="table-wrap"><table>
+        <thead><tr><th>Produto</th><th style="text-align:right">Qtd</th><th style="text-align:right">Custo médio</th></tr></thead>
+        <tbody>${inventario.map(i => `<tr>
+          <td>${i.produto_nome} <span style="color:#64748b;font-size:11px">(${medicaoSigla(i.tipo_medicao)})</span></td>
+          <td style="text-align:right">${fmtNum(i.quantidade)} ${medicaoSigla(i.tipo_medicao)}</td>
+          <td style="text-align:right">${fmt(i.custo_medio)}</td>
+        </tr>`).join('')}</tbody></table></div>`);
+    }
+
+    if (!compras.length) {
+      show('armazem-compras', '<div style="color:#64748b">Nenhuma compra registada.</div>');
+    } else {
+      show('armazem-compras', `<div class="table-wrap"><table>
+        <thead><tr><th>Data</th><th>Produto</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${compras.map(c => `<tr>
+          <td style="font-size:12px;color:#94a3b8">${new Date(c.criado_em).toLocaleString('pt-PT')}</td>
+          <td>${c.produto_nome}</td>
+          <td style="text-align:right">${fmtNum(c.quantidade)} ${medicaoSigla(c.tipo_medicao)}</td>
+          <td style="text-align:right">${fmt(c.preco_unitario)}</td>
+          <td style="text-align:right;color:#fbbf24">${fmt(c.valor_total)}</td>
+        </tr>`).join('')}</tbody></table></div>`);
+    }
+  } catch(e) {
+    show('armazem-inventario', `<div class="alert alert-error">${e.message}</div>`);
+    show('armazem-compras', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+function toggleNovoProdutoArmazem() {
+  const sel = document.getElementById('a-produto');
+  const wrap = document.getElementById('a-novo-wrap');
+  const qty = document.getElementById('a-qty');
+  if (!sel || !wrap || !qty) return;
+  const isNovo = sel.value === '__novo__';
+  wrap.style.display = isNovo ? '' : 'none';
+  const med = isNovo
+    ? (document.getElementById('a-medicao')?.value || 'unidade')
+    : (sel.options[sel.selectedIndex]?.getAttribute('data-medicao') || 'unidade');
+  qty.placeholder = `Qtd (${medicaoSigla(med)})`;
+  const medSel = document.getElementById('a-medicao');
+  if (medSel && !medSel.dataset.binded) {
+    medSel.dataset.binded = '1';
+    medSel.addEventListener('change', toggleNovoProdutoArmazem);
+  }
+}
+
+async function submitCompraArmazem() {
+  const produtoSel = document.getElementById('a-produto');
+  const msg = document.getElementById('armazem-form-msg');
+  if (!produtoSel) return;
+  const payload = {
+    quantidade: parseFloat(val('a-qty')),
+    preco_unitario: parseFloat(val('a-preco')),
+    fornecedor: val('a-fornecedor'),
+    notas: val('a-notas')
+  };
+  if (produtoSel.value === '__novo__') {
+    payload.novo_produto = {
+      nome: val('a-nome'),
+      categoria: val('a-categoria'),
+      tipo_medicao: val('a-medicao'),
+      preco: parseFloat(val('a-preco-venda')) || 0
+    };
+  } else {
+    payload.produto_id = produtoSel.value;
+  }
+  try {
+    await api('POST', '/armazem/compras', payload);
+    if (msg) msg.innerHTML = '<div class="alert alert-success">Compra registada com sucesso.</div>';
+    document.getElementById('a-qty').value = '';
+    document.getElementById('a-preco').value = '';
+    document.getElementById('a-fornecedor').value = '';
+    document.getElementById('a-notas').value = '';
+    if (produtoSel.value === '__novo__') {
+      document.getElementById('a-nome').value = '';
+      document.getElementById('a-preco-venda').value = '';
+      produtoSel.value = '';
+      toggleNovoProdutoArmazem();
+    }
+    await loadArmazemData();
+  } catch(e) {
+    if (msg) msg.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  }
 }
 
 // ── PRODUTOS ──────────────────────────────────────────────────

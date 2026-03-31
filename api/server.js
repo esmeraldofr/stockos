@@ -163,6 +163,24 @@ async function initDB() {
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, [], 'turno_saidas');
+  await qry(`CREATE TABLE IF NOT EXISTS armazem_stock (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    custo_medio NUMERIC(15,2) NOT NULL DEFAULT 0,
+    atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'armazem_stock');
+  await qry(`CREATE TABLE IF NOT EXISTS armazem_compras (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
+    valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
+    fornecedor TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_por INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'armazem_compras');
   await qry(`CREATE TABLE IF NOT EXISTS escala (
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
@@ -306,6 +324,24 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0`, 'ordem');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE`, 'ativo');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade'`, 'tipo_medicao');
+  await run(`CREATE TABLE IF NOT EXISTS armazem_stock (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    custo_medio NUMERIC(15,2) NOT NULL DEFAULT 0,
+    atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, 'armazem_stock');
+  await run(`CREATE TABLE IF NOT EXISTS armazem_compras (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
+    valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
+    fornecedor TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_por INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, 'armazem_compras');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, 'notas');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, 'criado_em');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`, 'fechado_em');
@@ -507,6 +543,113 @@ app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => 
     await query('UPDATE produtos SET ativo=false WHERE id=$1', [req.params.id]);
     res.json({ sucesso: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── ARMAZÉM ────────────────────────────────────────────────────
+app.get('/api/armazem/inventario', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
+              COALESCE(a.quantidade, 0) as quantidade,
+              COALESCE(a.custo_medio, 0) as custo_medio,
+              a.atualizado_em
+       FROM produtos p
+       LEFT JOIN armazem_stock a ON a.produto_id = p.id
+       WHERE p.ativo=true
+       ORDER BY p.ordem, p.nome`
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
+    const r = await query(
+      `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome
+       FROM armazem_compras c
+       JOIN produtos p ON p.id = c.produto_id
+       LEFT JOIN utilizadores u ON u.id = c.criado_por
+       ORDER BY c.criado_em DESC
+       LIMIT ${limit}`
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/armazem/compras', auth, requireRole('admin','gestor'), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const {
+      produto_id,
+      quantidade,
+      preco_unitario,
+      fornecedor,
+      notas,
+      novo_produto
+    } = req.body || {};
+
+    const qty = parseFloat(quantidade);
+    const precoUnit = parseFloat(preco_unitario);
+    if (!qty || qty <= 0) throw new Error('Quantidade inválida');
+    if (!precoUnit || precoUnit <= 0) throw new Error('Preço unitário inválido');
+
+    let pid = produto_id;
+    if (!pid && novo_produto && novo_produto.nome) {
+      const nome = String(novo_produto.nome || '').trim();
+      if (!nome) throw new Error('Nome do novo produto é obrigatório');
+      const categoria = ['menu','ingredientes','bebida','outro'].includes(novo_produto.categoria) ? novo_produto.categoria : 'outro';
+      const tipoMedicao = novo_produto.tipo_medicao === 'peso' ? 'peso' : 'unidade';
+      const precoProduto = parseFloat(novo_produto.preco) || 0;
+      const maxOrdem = await client.query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
+      const up = await client.query(
+        `INSERT INTO produtos (nome, preco, categoria, ordem, tipo_medicao)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (nome) DO UPDATE SET ativo=true
+         RETURNING id`,
+        [nome, precoProduto, categoria, maxOrdem.rows[0].n, tipoMedicao]
+      );
+      pid = up.rows[0].id;
+    }
+    if (!pid) throw new Error('produto_id é obrigatório');
+
+    const total = qty * precoUnit;
+    const compra = await client.query(
+      `INSERT INTO armazem_compras
+       (produto_id, quantidade, preco_unitario, valor_total, fornecedor, notas, criado_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING *`,
+      [pid, qty, precoUnit, total, (fornecedor || '').trim(), (notas || '').trim(), req.user.id]
+    );
+
+    const prev = await client.query('SELECT quantidade, custo_medio FROM armazem_stock WHERE produto_id=$1', [pid]);
+    const oldQty = prev.rows.length ? parseFloat(prev.rows[0].quantidade) || 0 : 0;
+    const oldCusto = prev.rows.length ? parseFloat(prev.rows[0].custo_medio) || 0 : 0;
+    const newQty = oldQty + qty;
+    const newCusto = newQty > 0 ? (((oldQty * oldCusto) + total) / newQty) : precoUnit;
+
+    await client.query(
+      `INSERT INTO armazem_stock (produto_id, quantidade, custo_medio, atualizado_em)
+       VALUES ($1,$2,$3,NOW())
+       ON CONFLICT (produto_id) DO UPDATE
+       SET quantidade=$2, custo_medio=$3, atualizado_em=NOW()`,
+      [pid, newQty, newCusto]
+    );
+
+    await client.query('COMMIT');
+    const merged = await client.query(
+      `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
+       FROM armazem_compras c
+       JOIN produtos p ON p.id=c.produto_id
+       WHERE c.id=$1`,
+      [compra.rows[0].id]
+    );
+    res.json(merged.rows[0]);
+  } catch(e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ erro: e.message });
+  } finally { client.release(); }
 });
 
 // ── TURNOS ────────────────────────────────────────────────────

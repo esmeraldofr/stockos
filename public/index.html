@@ -246,7 +246,11 @@ function turnoLabel(nome) {
   return { manha: '🌅 Manhã', tarde: '🌤 Tarde', noite: '🌙 Noite' }[nome] || nome;
 }
 function dateLabel(d) {
-  const [y,m,dd] = d.split('-');
+  if (d == null || d === '') return '—';
+  const raw = String(d).trim();
+  const dayPart = raw.includes('T') ? raw.split('T')[0] : raw.slice(0, 10);
+  const [y, m, dd] = dayPart.split('-');
+  if (!y || !m || !dd) return raw;
   return `${dd}/${m}/${y}`;
 }
 function addDays(d, n) {

@@ -27,6 +27,22 @@ jobs:
         env:
           DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
 
+      # Integração Git → Vercel não vê secrets do GitHub: Preview herdava DATABASE_URL de Production.
+      - name: Sincronizar DATABASE_URL (Preview) na Vercel
+        run: |
+          set -euo pipefail
+          export VERCEL_TOKEN=$(echo "$_VT" | rev)
+          export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID_DEV:-$_VP}"
+          export VERCEL_TEAM_ID="$_VO"
+          export DATABASE_URL_DEV
+          python3 scripts/ci/vercel_sync_preview_database_url.py
+        env:
+          _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
+          _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
+          _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
+          VERCEL_PROJECT_ID_DEV: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
+          DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
+
       - name: Deploy to Vercel (Preview)
         run: |
           export VERCEL_TOKEN=$(echo "$_VT" | rev)
@@ -35,6 +51,7 @@ jobs:
           REF_DEV="${SUPABASE_PROJECT_REF_DEV:-lqpegdrohomjtmkypsbo}"
           npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
             --build-env NODE_ENV=development \
+            --build-env DATABASE_URL="$DATABASE_URL_DEV" \
             --env NODE_ENV=development \
             --env DATABASE_URL="$DATABASE_URL_DEV" \
             --env SUPABASE_PROJECT_REF="$REF_DEV"

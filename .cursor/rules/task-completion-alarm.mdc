@@ -1,0 +1,20 @@
+---
+description: Alerta sonoro contínuo até o utilizador focar o Cursor quando uma tarefa termina
+alwaysApply: true
+---
+
+# Alarme até focar o Cursor
+
+Quando concluíres uma **tarefa substancial** (vários passos, alterações em ficheiros, comandos longos, ou pedido explícito de implementação), no **final da resposta** corre em **background** a partir da raiz do repositório:
+
+```bash
+nohup bash scripts/cursor-alarm-until-focus.sh >>/tmp/cursor-alarm.log 2>&1 &
+```
+
+Não bloqueies a shell: usa `nohup` e `&` como acima.
+
+**Não** uses isto para respostas triviais (só texto, uma pergunta curta, sem ferramentas).
+
+O script **toca sempre um som** ao arrancar (para ouvires mesmo com o Cursor em foco); só depois repete se estiveres noutra app, até voltares ao Cursor.
+
+Se o utilizador disser que não ouviu, lembra: o comando tem de correr no **Mac dele** (não no servidor); confirma que correu `nohup` e que **Automatização** para Terminal/Cursor está permitida em Privacidade.

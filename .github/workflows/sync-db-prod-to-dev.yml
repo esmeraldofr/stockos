@@ -78,12 +78,7 @@ jobs:
             exit "$rc"
           fi
           echo "pg_restore terminou (código $rc; 1 = avisos aceitáveis em alguns casos)"
-
-      - name: Privilégios para stockos_app (se existir)
-        env:
-          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
-        run: |
-          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          echo "A conceder privilégios a stockos_app na mesma ligação (evita 2.º login no pooler Supabase)."
           psql -v ON_ERROR_STOP=1 <<'SQL'
           DO $$
           BEGIN
@@ -91,8 +86,8 @@ jobs:
               GRANT USAGE ON SCHEMA public TO stockos_app;
               GRANT ALL ON ALL TABLES IN SCHEMA public TO stockos_app;
               GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO stockos_app;
-              ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO stockos_app;
-              ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO stockos_app;
+              ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON TABLES TO stockos_app;
+              ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON SEQUENCES TO stockos_app;
             END IF;
           END
           $$;

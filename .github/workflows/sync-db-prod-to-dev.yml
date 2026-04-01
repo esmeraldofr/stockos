@@ -4,8 +4,10 @@
 #
 # Pré-requisitos (GitHub → Settings → Secrets → Actions):
 #   DATABASE_URL              — URI postgres de produção (já usada no deploy).
-#   DATABASE_URL_DEV_ADMIN    — URI com user postgres do projecto **dev** (Supabase:
-#                               Project Settings → Database → Connection string → URI).
+#   DATABASE_URL_DEV_ADMIN    — URI com user **postgres.<ref-dev>** do projecto dev (não só
+#                               "postgres") se o host for *.pooler.supabase.com — senão o pooler
+#                               responde "Tenant or user not found". Exemplo:
+#                               postgresql://postgres.lqpegdrohomjtmkypsbo:[SENHA]@aws-1-eu-west-1.pooler.supabase.com:5432/postgres
 #                               Não uses stockos_app aqui: o restore precisa de permissões de DDL.
 #
 # Depois do primeiro sync, o secret DATABASE_URL_DEV (stockos_app) continua válido se o
@@ -37,15 +39,32 @@ jobs:
       # GitHub Actions por vezes resolve db.*.supabase.co para IPv6 (rota inacessível).
       # PGHOSTADDR força IPv4; PGHOST mantém o hostname para verificação TLS.
       - name: Validar secrets
+        env:
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
         run: |
-          if [ -z "${{ secrets.DATABASE_URL }}" ]; then
+          if [ -z "${DATABASE_URL_PROD}" ]; then
             echo "::error::Secret DATABASE_URL em falta."
             exit 1
           fi
-          if [ -z "${{ secrets.DATABASE_URL_DEV_ADMIN }}" ]; then
-            echo "::error::Define DATABASE_URL_DEV_ADMIN (postgres@db.<ref-dev>.supabase.co:5432/postgres) — ver cabeçalho deste workflow."
+          if [ -z "${DATABASE_URL_DEV_ADMIN}" ]; then
+            echo "::error::Define DATABASE_URL_DEV_ADMIN — ver cabeçalho deste workflow (pooler: user postgres.<ref-dev>)."
             exit 1
           fi
+          python3 <<'PY'
+          import os, urllib.parse
+          for name, key in [
+              ("DATABASE_URL (prod)", "DATABASE_URL_PROD"),
+              ("DATABASE_URL_DEV_ADMIN", "DATABASE_URL_DEV_ADMIN"),
+          ]:
+              raw = os.environ[key]
+              u = urllib.parse.urlparse(raw)
+              host = (u.hostname or "").lower()
+              user = urllib.parse.unquote(u.username or "")
+              if "pooler.supabase.com" in host and not user.startswith("postgres."):
+                  print(f"::error::{name}: com host pooler Supabase o utilizador na URI deve ser postgres.<project_ref>, não só postgres.")
+                  raise SystemExit(1)
+          PY
 
       - name: Dump produção
         env:
@@ -70,14 +89,18 @@ jobs:
             --no-acl \
             --jobs=2 \
             --dbname="$PGDATABASE" \
-            prod.dump
-          rc=$?
+            prod.dump 2>&1 | tee pg_restore.log
+          rc=${PIPESTATUS[0]}
           set -e
+          if grep -q 'FATAL:' pg_restore.log; then
+            echo "::error::pg_restore ligou mas o servidor recusou (ex.: pooler — user postgres.<ref> na URI)."
+            exit 1
+          fi
           if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
             echo "::error::pg_restore falhou com código $rc"
             exit "$rc"
           fi
-          echo "pg_restore terminou (código $rc; 1 = avisos aceitáveis em alguns casos)"
+          echo "pg_restore terminou (código $rc; 1 = avisos aceitáveis se não houver FATAL acima)"
           echo "A conceder privilégios a stockos_app na mesma ligação (evita 2.º login no pooler Supabase)."
           psql -v ON_ERROR_STOP=1 <<'SQL'
           DO $$

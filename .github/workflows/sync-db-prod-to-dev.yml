@@ -23,8 +23,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Instalar cliente PostgreSQL
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - name: Instalar cliente PostgreSQL 17 (igual ao Supabase)
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          pg_dump --version
 
       # GitHub Actions por vezes resolve db.*.supabase.co para IPv6 (rota inacessível).
       # PGHOSTADDR força IPv4; PGHOST mantém o hostname para verificação TLS.

@@ -6,8 +6,8 @@
 #   DATABASE_URL              — URI postgres de produção (já usada no deploy).
 #   DATABASE_URL_DEV_ADMIN    — URI com user **postgres.<ref-dev>** do projecto dev (não só
 #                               "postgres") se o host for *.pooler.supabase.com — senão o pooler
-#                               responde "Tenant or user not found". Exemplo:
-#                               postgresql://postgres.lqpegdrohomjtmkypsbo:[SENHA]@aws-1-eu-west-1.pooler.supabase.com:5432/postgres
+#                               responde "Tenant or user not found". O subdomínio aws-0 vs aws-1 varia — copia a URI em
+#                               Connect → Session pooler (porta 5432). Ex.: aws-0-eu-west-1 para stockos-dev.
 #                               Não uses stockos_app aqui: o restore precisa de permissões de DDL.
 #
 # Depois do primeiro sync, o secret DATABASE_URL_DEV (stockos_app) continua válido se o

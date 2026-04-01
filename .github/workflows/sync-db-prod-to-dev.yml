@@ -21,9 +21,13 @@ jobs:
     name: pg_dump prod → pg_restore dev
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Instalar cliente PostgreSQL
         run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
 
+      # GitHub Actions por vezes resolve db.*.supabase.co para IPv6 (rota inacessível).
+      # PGHOSTADDR força IPv4; PGHOST mantém o hostname para verificação TLS.
       - name: Validar secrets
         run: |
           if [ -z "${{ secrets.DATABASE_URL }}" ]; then
@@ -39,25 +43,25 @@ jobs:
         env:
           DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
         run: |
-          pg_dump "$DATABASE_URL_PROD" \
-            --format=custom \
-            --no-owner \
-            --no-acl \
-            --file=prod.dump
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD")"
+          pg_dump --format=custom --no-owner --no-acl --file=prod.dump
           ls -la prod.dump
 
       - name: Restore em desenvolvimento
         env:
           DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
         run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
           set +e
           pg_restore \
-            --dbname="$DATABASE_URL_DEV_ADMIN" \
             --clean \
             --if-exists \
             --no-owner \
             --no-acl \
             --jobs=2 \
+            --dbname="$PGDATABASE" \
             prod.dump
           rc=$?
           set -e
@@ -71,7 +75,8 @@ jobs:
         env:
           DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
         run: |
-          psql "$DATABASE_URL_DEV_ADMIN" -v ON_ERROR_STOP=1 <<'SQL'
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          psql -v ON_ERROR_STOP=1 <<'SQL'
           DO $$
           BEGIN
             IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'stockos_app') THEN

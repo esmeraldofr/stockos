@@ -863,7 +863,6 @@ function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
 async function loadDia() {
   try {
     const isAdmin = S.user?.role === 'admin';
-    const podeDepositos = ['admin', 'gestor', 'compras'].includes(S.user?.role);
     const monEsc = mondayOfWeekIso(S.date);
     const domEsc = addDays(monEsc, 6);
     const qMon = encodeURIComponent(monEsc);
@@ -937,14 +936,9 @@ async function loadDia() {
           </div>
         </div>
       </div>` : '';
-    const linkDepositos = podeDepositos ? `
-      <div class="card" style="padding:12px 16px;margin-bottom:12px">
-        <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, () => navigate('depositos'))" style="width:100%;justify-content:center">🏦 Depósitos no banco</button>
-      </div>` : '';
     show('dia-content', `
       <div class="turno-cards">${cards}</div>
       ${htmlEscalaSemanaReadonly(escRowsWeek, escTpl, S.date)}
-      ${linkDepositos}
       ${resumoDia}
     `);
   } catch(e) {

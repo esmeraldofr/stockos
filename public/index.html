@@ -383,13 +383,13 @@ function navigate(page, params) {
 
 function draw() {
   if (!S.token) { drawLogin(); return; }
-  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos'].includes(S.page)) {
+  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'depositos'].includes(S.page)) {
     S.page = 'dia';
   }
   switch (S.page) {
     case 'dia':      drawDia(); break;
     case 'depositos':
-      if (!['admin', 'gestor'].includes(S.user?.role)) { navigate('dia'); return; }
+      if (!['admin', 'gestor', 'compras'].includes(S.user?.role)) { navigate('dia'); return; }
       drawDepositos();
       break;
     case 'turno':    drawTurno(); break;
@@ -450,7 +450,7 @@ function navBar() {
   const showHistorico = S.user?.role !== 'compras';
   const showArmazem = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   const showEscala = S.user?.role === 'admin' || S.user?.role === 'gestor';
-  const showDepositos = ['admin', 'gestor'].includes(S.user?.role);
+  const showDepositos = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   return `
     <div id="navbar">
       <button class="nav-btn ${S.page==='dia'?'active':''}" onclick="navigate('dia')">
@@ -796,7 +796,7 @@ function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
 async function loadDia() {
   try {
     const isAdmin = S.user?.role === 'admin';
-    const podeDepositos = ['admin', 'gestor'].includes(S.user?.role);
+    const podeDepositos = ['admin', 'gestor', 'compras'].includes(S.user?.role);
     const monEsc = mondayOfWeekIso(S.date);
     const domEsc = addDays(monEsc, 6);
     const qMon = encodeURIComponent(monEsc);

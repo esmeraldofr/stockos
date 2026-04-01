@@ -1730,7 +1730,7 @@ app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.get('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res) => {
+app.get('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
   try {
     await ensureDepositosBanco();
     const data = (req.query.data || '').trim();
@@ -1750,7 +1750,7 @@ app.get('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res)
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res) => {
+app.post('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
   try {
     await ensureDepositosBanco();
     const { turno_id, data_deposito, valor_tpa, referencia, notas } = req.body || {};
@@ -1810,7 +1810,7 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor'), async (req, res
   }
 });
 
-app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req, res) => {
+app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
   try {
     await ensureDepositosBanco();
     const { itens, valor_saidas_total, saidas_destino: saidasDestinoBody, bordero_foto_base64 } = req.body || {};
@@ -1924,7 +1924,7 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor'), async (req
   }
 });
 
-app.post('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor'), async (req, res) => {
+app.post('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
   try {
     await ensureDepositosBanco();
     const dataStr = (req.body?.data || '').trim().slice(0, 10);
@@ -1941,7 +1941,7 @@ app.post('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor'), asy
   }
 });
 
-app.delete('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor'), async (req, res) => {
+app.delete('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
   try {
     await ensureDepositosBanco();
     const dataStr = (req.query.data || '').trim().slice(0, 10);

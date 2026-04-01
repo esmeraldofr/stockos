@@ -9,44 +9,96 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'stockos-secret-2025';
 const PWD_SALT   = 'stockos-pwd-salt-2025';
 
-const _dbUrl = process.env.DATABASE_URL;
-if (!_dbUrl) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
-/** Pool partilhado: max=1 + fechar após cada query saturava ligações e tornava cada pedido muito lento. */
+const _dbUrlRaw = process.env.DATABASE_URL;
+if (!_dbUrlRaw) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
+
+/**
+ * Pooler Supabase :6543 sem ?pgbouncer=true usa Session mode (poucos clientes → MaxClientsInSessionMode).
+ * Transaction mode permite muito mais clientes e é o recomendado para serverless.
+ */
+function normalizeSupabasePoolerUrl(urlStr) {
+  if (!urlStr || typeof urlStr !== 'string') return urlStr;
+  try {
+    const u = new URL(urlStr);
+    const host = (u.hostname || '').toLowerCase();
+    if (!host.includes('pooler.supabase.com')) return urlStr;
+    if (String(u.port || '') !== '6543') return urlStr;
+    if (!u.searchParams.has('pgbouncer')) u.searchParams.set('pgbouncer', 'true');
+    return u.toString();
+  } catch (_) {
+    return urlStr;
+  }
+}
+
+const _dbUrl = normalizeSupabasePoolerUrl(_dbUrlRaw);
+
+/**
+ * Poucas ligações por instância (Vercel): cada uma abre slots no Postgres/pooler.
+ * max≥2 evita deadlock se houver reserve() + query() em paralelo no mesmo pedido.
+ * Sobrescrever com PG_POOL_MAX se necessário.
+ */
 const _sqlOpts = {
   ssl: 'require',
   prepare: false,
-  max: Math.min(15, Math.max(3, parseInt(process.env.PG_POOL_MAX || '10', 10) || 10)),
-  idle_timeout: 30,
-  max_lifetime: 60 * 55,
+  max: Math.min(5, Math.max(2, parseInt(process.env.PG_POOL_MAX || '2', 10) || 2)),
+  idle_timeout: 20,
+  max_lifetime: 60 * 30,
   connect_timeout: 15
 };
 let _activeDbUrl = _dbUrl;
 /** Instância única do cliente postgres (reutiliza ligações TCP/TLS). */
 let _pgSingleton = null;
 
+function withUrlUsername(urlStr, username) {
+  const u = new URL(urlStr);
+  u.username = username;
+  return u.toString();
+}
+
 function getDbCandidates() {
-  const out = [_activeDbUrl, _dbUrl];
+  const out = [];
+  const seen = new Set();
+  const push = (s) => {
+    if (!s || seen.has(s)) return;
+    seen.add(s);
+    out.push(s);
+  };
   try {
     const u = new URL(_dbUrl);
-    const m = u.hostname.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
-    if (m) {
-      const ref = m[1];
-      const baseUser = decodeURIComponent(u.username || 'postgres');
-      const users = new Set([
-        baseUser,
-        `${baseUser}.${ref}`,
-        `postgres.${ref}`
-      ]);
+    const host = (u.hostname || '').toLowerCase();
+    const baseUser = decodeURIComponent((u.username || 'postgres').replace(/\+/g, ' '));
+    const envRef = (process.env.SUPABASE_PROJECT_REF || '').replace(/[^a-z0-9]/gi, '');
+    let ref = null;
+    const mDb = host.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
+    if (mDb) ref = mDb[1];
+    if (!ref && envRef) ref = envRef;
+
+    // URI já aponta ao pooler partilhado mas user sem ".<ref>" → "Tenant or user not found"
+    if (host.includes('pooler.supabase.com') && ref && !baseUser.includes('.')) {
+      push(normalizeSupabasePoolerUrl(withUrlUsername(_dbUrl, `${baseUser}.${ref}`)));
+      if (baseUser !== 'postgres') {
+        push(normalizeSupabasePoolerUrl(withUrlUsername(_dbUrl, `postgres.${ref}`)));
+      }
+    }
+
+    if (mDb) {
+      const r = mDb[1];
+      const users = new Set([baseUser, `${baseUser}.${r}`, `postgres.${r}`]);
+      const poolerHost =
+        process.env.SUPABASE_POOLER_HOST || 'aws-0-eu-west-1.pooler.supabase.com';
       for (const usr of users) {
         const pooler = new URL(_dbUrl);
-        pooler.hostname = 'aws-0-eu-west-1.pooler.supabase.com';
+        pooler.hostname = poolerHost;
         pooler.port = '6543';
         pooler.username = usr;
-        out.push(pooler.toString());
+        push(normalizeSupabasePoolerUrl(pooler.toString()));
       }
     }
   } catch (_) {}
-  return [...new Set(out)];
+  /** Preferir pooler em modo transacção primeiro (evita Session mode). */
+  push(normalizeSupabasePoolerUrl(_dbUrl));
+  push(_dbUrl);
+  return out;
 }
 
 async function resetPgSingleton() {
@@ -90,7 +142,7 @@ const query = async (text, params) => {
       const msg = String(e && e.message ? e.message : e);
       const transient =
         attempt === 0 &&
-        (/ECONNRESET|ECONNREFUSED|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03/i.test(msg) ||
+        (/ECONNRESET|ECONNREFUSED|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03|MaxClientsInSessionMode|pool_size/i.test(msg) ||
           e.code === 'ECONNRESET');
       if (transient) {
         await resetPgSingleton();
@@ -1226,23 +1278,27 @@ app.get('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), a
 
 app.post('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   await ensureArmazemTables();
+  let rowId = null;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const row = await processArmazemCompraLine(client, req, req.body, {});
+    rowId = row.id;
     await client.query('COMMIT');
-    const merged = await client.query(
-      `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
-       FROM armazem_compras c
-       JOIN produtos p ON p.id=c.produto_id
-       WHERE c.id=$1`,
-      [row.id]
-    );
-    res.json(merged.rows[0]);
   } catch(e) {
-    await client.query('ROLLBACK');
-    res.status(400).json({ erro: e.message });
-  } finally { client.release(); }
+    await client.query('ROLLBACK').catch(() => {});
+    return res.status(400).json({ erro: e.message });
+  } finally {
+    await client.release();
+  }
+  const merged = await query(
+    `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
+     FROM armazem_compras c
+     JOIN produtos p ON p.id=c.produto_id
+     WHERE c.id=$1`,
+    [rowId]
+  );
+  res.json(merged.rows[0]);
 });
 
 app.get('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
@@ -1280,6 +1336,7 @@ app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor','compras'
 
 app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   await ensureArmazemTables();
+  let fid = null;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -1343,7 +1400,7 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
         tsid
       ]
     );
-    const fid = ins.rows[0].id;
+    fid = ins.rows[0].id;
     const forn = (fornecedor || '').trim();
     sumTotal = 0;
     for (const linha of linhas) {
@@ -1354,18 +1411,20 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
     const fotoRaw = String(foto_fatura_base64 || '').trim();
     if (fotoRaw) await applyFaturaFotoUrl(client, fid, fotoRaw);
     await client.query('COMMIT');
-    const fat = await query('SELECT * FROM armazem_faturas WHERE id=$1', [fid]);
-    const linhasOut = await query(
-      `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
-       FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id
-       WHERE c.fatura_id=$1 ORDER BY c.id`,
-      [fid]
-    );
-    res.json({ ...fat.rows[0], linhas: linhasOut.rows });
   } catch(e) {
-    await client.query('ROLLBACK');
-    res.status(400).json({ erro: e.message });
-  } finally { client.release(); }
+    await client.query('ROLLBACK').catch(() => {});
+    return res.status(400).json({ erro: e.message });
+  } finally {
+    await client.release();
+  }
+  const fat = await query('SELECT * FROM armazem_faturas WHERE id=$1', [fid]);
+  const linhasOut = await query(
+    `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
+     FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id
+     WHERE c.fatura_id=$1 ORDER BY c.id`,
+    [fid]
+  );
+  res.json({ ...fat.rows[0], linhas: linhasOut.rows });
 });
 
 // ── TURNOS ────────────────────────────────────────────────────
@@ -1907,10 +1966,10 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
     }
     dedup[0].valor_saidas = saidasTotal;
     dedup[0].saidas_destino = saidasTotal > 0 ? saidasDestino : '';
+    let out = [];
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const out = [];
       for (const row of dedup) {
         const r = await client.query(
           `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, saidas_destino, referencia, notas, criado_por)
@@ -1940,18 +1999,18 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
         out.push(r.rows[0]);
       }
       await client.query('COMMIT');
-      if (bordero_foto_base64 && String(bordero_foto_base64).trim()) {
-        const td = await query('SELECT data::text FROM turnos WHERE id=$1', [dedup[0].turno_id]);
-        const calendarDay = (td.rows[0]?.data || dedup[0].data_deposito || '').toString().slice(0, 10);
-        await applyBorderoFotoCanonicalDay(calendarDay, out[0].id, bordero_foto_base64);
-      }
-      res.json({ ok: true, registos: out.length, rows: out });
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {});
       throw e;
     } finally {
       await client.release();
     }
+    if (bordero_foto_base64 && String(bordero_foto_base64).trim() && out.length) {
+      const td = await query('SELECT data::text FROM turnos WHERE id=$1', [dedup[0].turno_id]);
+      const calendarDay = (td.rows[0]?.data || dedup[0].data_deposito || '').toString().slice(0, 10);
+      await applyBorderoFotoCanonicalDay(calendarDay, out[0].id, bordero_foto_base64);
+    }
+    res.json({ ok: true, registos: out.length, rows: out });
   } catch (e) {
     res.status(400).json({ erro: e.message });
   }

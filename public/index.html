@@ -33,6 +33,14 @@ input,select,button,textarea{font-family:inherit}
 /* Botões */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 18px;border-radius:8px;border:none;cursor:pointer;font-size:14px;font-weight:600;transition:.2s}
 .btn:disabled{opacity:.5;cursor:default}
+button.is-action-busy{cursor:wait!important}
+.date-nav button:disabled{opacity:.55;cursor:wait}
+.turno-card.is-action-busy,.js-busy-click.is-action-busy{cursor:wait;position:relative}
+.turno-card.is-action-busy::after,.js-busy-click.is-action-busy::after{
+  content:'A processar…';
+  position:absolute;inset:auto 8px 8px 8px;font-size:11px;font-weight:600;color:#94a3b8;
+  text-align:center;padding:4px 8px;background:rgba(15,23,42,.92);border-radius:6px;border:1px solid #334155
+}
 .btn-primary{background:#3b82f6;color:#fff}
 .btn-primary:hover:not(:disabled){background:#2563eb}
 .btn-success{background:#22c55e;color:#fff}
@@ -374,31 +382,87 @@ function fileToDataUrl(file) {
 function err(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-error">${msg}</div>`; }
 function suc(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-success">${msg}</div>`; }
 
-// ── ROUTER ────────────────────────────────────────────────────
-function navigate(page, params) {
-  S.page = page;
-  if (params) Object.assign(S, params);
-  draw();
+/**
+ * Evita duplo clique: desactiva o controlo e mostra «A processar…» até a Promise terminar.
+ * No onclick usar: runAction(event, () => minhaFuncAsync()).
+ */
+async function runAction(ev, work) {
+  if (typeof work !== 'function') return;
+  let ctrl = ev && ev.currentTarget;
+  if (ctrl && ctrl.closest) ctrl = ctrl.closest('button, .turno-card, .js-busy-click') || ctrl;
+  if (!ctrl || (ctrl.tagName !== 'BUTTON' && !ctrl.classList?.contains('turno-card') && !ctrl.classList?.contains('js-busy-click'))) {
+    await work(ev);
+    return;
+  }
+  if (ctrl.dataset.actionBusy === '1') return;
+  ctrl.dataset.actionBusy = '1';
+  let savedHtml = null;
+  let restore = () => {};
+  let wasDisabled = false;
+  try {
+    if (ctrl.tagName === 'BUTTON') {
+      wasDisabled = ctrl.disabled;
+      ctrl.disabled = true;
+      const isNav = ctrl.classList.contains('nav-btn');
+      const inDateNav = ctrl.closest && ctrl.closest('.date-nav');
+      if (isNav || inDateNav) {
+        ctrl.classList.add('is-action-busy');
+        const prevOp = ctrl.style.opacity;
+        ctrl.style.opacity = '0.55';
+        restore = () => {
+          ctrl.style.opacity = prevOp;
+          ctrl.classList.remove('is-action-busy');
+        };
+      } else {
+        savedHtml = ctrl.innerHTML;
+        ctrl.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;flex-shrink:0"></span><span>A processar…</span>';
+        restore = () => { if (savedHtml != null) ctrl.innerHTML = savedHtml; };
+      }
+    } else if (ctrl.classList.contains('turno-card') || ctrl.classList.contains('js-busy-click')) {
+      ctrl.classList.add('is-action-busy');
+      const pe = ctrl.style.pointerEvents;
+      const op = ctrl.style.opacity;
+      ctrl.style.pointerEvents = 'none';
+      ctrl.style.opacity = '0.72';
+      restore = () => {
+        ctrl.style.pointerEvents = pe;
+        ctrl.style.opacity = op;
+        ctrl.classList.remove('is-action-busy');
+      };
+    }
+    await work(ev);
+  } finally {
+    ctrl.dataset.actionBusy = '0';
+    if (ctrl.tagName === 'BUTTON') ctrl.disabled = wasDisabled;
+    restore();
+  }
 }
 
-function draw() {
+// ── ROUTER ────────────────────────────────────────────────────
+async function navigate(page, params) {
+  S.page = page;
+  if (params) Object.assign(S, params);
+  await draw();
+}
+
+async function draw() {
   if (!S.token) { drawLogin(); return; }
   if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'depositos'].includes(S.page)) {
     S.page = 'dia';
   }
   switch (S.page) {
-    case 'dia':      drawDia(); break;
+    case 'dia':      await drawDia(); break;
     case 'depositos':
-      if (!['admin', 'gestor', 'compras'].includes(S.user?.role)) { navigate('dia'); return; }
-      drawDepositos();
+      if (!['admin', 'gestor', 'compras'].includes(S.user?.role)) { await navigate('dia'); return; }
+      await drawDepositos();
       break;
-    case 'turno':    drawTurno(); break;
-    case 'historico':drawHistorico(); break;
-    case 'armazem':  drawArmazem(); break;
-    case 'produtos': drawProdutos(); break;
-    case 'escala':   drawEscala(); break;
-    case 'admin':    drawAdmin(); break;
-    default:         drawDia();
+    case 'turno':    await drawTurno(); break;
+    case 'historico':await drawHistorico(); break;
+    case 'armazem':  await drawArmazem(); break;
+    case 'produtos': await drawProdutos(); break;
+    case 'escala':   await drawEscala(); break;
+    case 'admin':    await drawAdmin(); break;
+    default:         await drawDia();
   }
 }
 
@@ -418,11 +482,14 @@ function drawLogin() {
           <label>Senha</label>
           <input id="l-pass" type="password" placeholder="••••••" autocomplete="current-password"/>
         </div>
-        <button class="btn btn-primary btn-full" onclick="doLogin()">Entrar</button>
+        <button class="btn btn-primary btn-full" onclick="runAction(event, doLogin)">Entrar</button>
       </div>
     </div>
   `);
-  const enterLogin = e => { if (e.key === 'Enter') doLogin(); };
+  const enterLogin = e => {
+    if (e.key === 'Enter')
+      runAction({ currentTarget: document.querySelector('#login-screen .btn-primary') }, doLogin);
+  };
   document.getElementById('l-login').addEventListener('keydown', enterLogin);
   document.getElementById('l-pass').addEventListener('keydown', enterLogin);
 }
@@ -434,7 +501,7 @@ async function doLogin() {
     S.token = data.token; S.user = data.user;
     localStorage.setItem('token', S.token);
     localStorage.setItem('user', JSON.stringify(S.user));
-    navigate('dia');
+    await navigate('dia');
   } catch(e) { err('login-msg', e.message); }
 }
 
@@ -453,36 +520,36 @@ function navBar() {
   const showDepositos = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   return `
     <div id="navbar">
-      <button class="nav-btn ${S.page==='dia'?'active':''}" onclick="navigate('dia')">
+      <button class="nav-btn ${S.page==='dia'?'active':''}" onclick="runAction(event, () => navigate('dia'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         Dia
       </button>
       ${showDepositos ? `
-      <button class="nav-btn ${S.page==='depositos'?'active':''}" onclick="navigate('depositos')">
+      <button class="nav-btn ${S.page==='depositos'?'active':''}" onclick="runAction(event, () => navigate('depositos'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h3l2-7h8l2 7h3"/><path d="M5 10v10a2 2 0 002 2h10a2 2 0 002-2V10"/><rect x="9" y="14" width="6" height="4" rx="1"/></svg>
         Banco
       </button>` : ''}
       ${showHistorico ? `
-      <button class="nav-btn ${S.page==='historico'?'active':''}" onclick="navigate('historico')">
+      <button class="nav-btn ${S.page==='historico'?'active':''}" onclick="runAction(event, () => navigate('historico'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
         Histórico
       </button>` : ''}
-      <button class="nav-btn ${S.page==='produtos'?'active':''}" onclick="navigate('produtos')">
+      <button class="nav-btn ${S.page==='produtos'?'active':''}" onclick="runAction(event, () => navigate('produtos'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
         Produtos
       </button>
       ${showArmazem ? `
-      <button class="nav-btn ${S.page==='armazem'?'active':''}" onclick="navigate('armazem')">
+      <button class="nav-btn ${S.page==='armazem'?'active':''}" onclick="runAction(event, () => navigate('armazem'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>
         Armazém
       </button>` : ''}
       ${showEscala ? `
-      <button class="nav-btn ${S.page==='escala'?'active':''}" onclick="navigate('escala')">
+      <button class="nav-btn ${S.page==='escala'?'active':''}" onclick="runAction(event, () => navigate('escala'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>
         Escala
       </button>` : ''}
       ${isAdmin ? `
-      <button class="nav-btn ${S.page==='admin'?'active':''}" onclick="navigate('admin')">
+      <button class="nav-btn ${S.page==='admin'?'active':''}" onclick="runAction(event, () => navigate('admin'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
         Admin
       </button>` : ''}
@@ -505,12 +572,12 @@ async function drawDia() {
     </div>
     <div id="content">
       <div class="date-nav">
-        <button onclick="changeDate(-1)">‹</button>
+        <button type="button" onclick="runAction(event, () => changeDate(-1))">‹</button>
         <span style="position:relative;cursor:pointer">
           <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
           <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
         </span>
-        <button onclick="changeDate(1)">›</button>
+        <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>
       </div>
       <div id="dia-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
     </div>
@@ -528,24 +595,24 @@ function syncDatePickersAcrossPages() {
   if (fx) fx.value = S.date;
 }
 
-function changeDate(n) {
+async function changeDate(n) {
   S.date = addDays(S.date, n);
   syncDatePickersAcrossPages();
-  if (S.page === 'depositos') loadDepositos();
+  if (S.page === 'depositos') await loadDepositos();
   else if (S.page === 'armazem') {
-    refreshArmazemFundos();
-    loadArmazemData();
-  } else loadDia();
+    await refreshArmazemFundos();
+    await loadArmazemData();
+  } else await loadDia();
 }
-function pickDate(val) {
+async function pickDate(val) {
   if (!val) return;
   S.date = val;
   syncDatePickersAcrossPages();
-  if (S.page === 'depositos') loadDepositos();
+  if (S.page === 'depositos') await loadDepositos();
   else if (S.page === 'armazem') {
-    refreshArmazemFundos();
-    loadArmazemData();
-  } else loadDia();
+    await refreshArmazemFundos();
+    await loadArmazemData();
+  } else await loadDia();
 }
 
 async function reloadDepositsView() {
@@ -678,14 +745,14 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
                 <img src="${attrUrl(borderoDiaUrl)}" alt="Borderô" style="max-height:160px;max-width:100%;border-radius:8px;border:1px solid #334155;vertical-align:top"/>
               </a>
               <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-                <button type="button" class="btn btn-ghost btn-sm" onclick="removeBorderoDia()">Remover foto</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="removeBorderoDia(event)">Remover foto</button>
               </div>
             </div>
           ` : ''}
           <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" id="dep-bordero-dia" ${!temTurnoFechado ? 'disabled' : ''} ${(depositos || []).length > 0 ? 'onchange="uploadBorderoDia(this)"' : ''}/>
           <div style="font-size:11px;color:#64748b;margin-top:4px">Uma imagem por operação; substitui a anterior ao escolher outro ficheiro (ou ao registar de novo com nova foto). JPEG, PNG ou WebP.</div>
         </div>
-        <button type="button" class="btn btn-success" onclick="submitDepositosDia()" ${!temTurnoFechado ? 'disabled' : ''}>Registar depósito</button>
+        <button type="button" class="btn btn-success" onclick="runAction(event, submitDepositosDia)" ${!temTurnoFechado ? 'disabled' : ''}>Registar depósito</button>
           `;
         })()}
       </div>`;
@@ -718,12 +785,12 @@ async function drawDepositos() {
     </div>
     <div id="content">
       <div class="date-nav">
-        <button onclick="changeDate(-1)">‹</button>
+        <button type="button" onclick="runAction(event, () => changeDate(-1))">‹</button>
         <span style="position:relative;cursor:pointer">
           <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
           <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
         </span>
-        <button onclick="changeDate(1)">›</button>
+        <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>
       </div>
       <div id="depositos-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
     </div>
@@ -815,7 +882,7 @@ async function loadDia() {
       const t = turnoMap[nome];
       if (!t) {
         return `
-          <div class="turno-card" onclick="abrirTurno('${nome}')">
+          <div class="turno-card" onclick="runAction(event, () => abrirTurno('${nome}'))">
             <div class="turno-card-nome">${turnoLabel(nome)}</div>
             <div class="badge badge-grey" style="margin-bottom:8px">Não iniciado</div>
             <div class="turno-card-abrir">
@@ -830,7 +897,7 @@ async function loadDia() {
         ? '<span class="badge badge-green">Aberto</span>'
         : '<span class="badge badge-grey">Fechado</span>';
       return `
-        <div class="turno-card ${cls}" onclick="navigate('turno',{turnoId:'${t.id}'})">
+        <div class="turno-card ${cls}" onclick="runAction(event, () => navigate('turno',{turnoId:'${t.id}'}))">
           <div class="turno-card-nome">${turnoLabel(nome)}</div>
           <div class="turno-card-status">${badge}</div>
           <div class="turno-card-value">${fmt(totalCaixa)}</div>
@@ -872,7 +939,7 @@ async function loadDia() {
       </div>` : '';
     const linkDepositos = podeDepositos ? `
       <div class="card" style="padding:12px 16px;margin-bottom:12px">
-        <button type="button" class="btn btn-primary btn-sm" onclick="navigate('depositos')" style="width:100%;justify-content:center">🏦 Depósitos no banco</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, () => navigate('depositos'))" style="width:100%;justify-content:center">🏦 Depósitos no banco</button>
       </div>` : '';
     show('dia-content', `
       <div class="turno-cards">${cards}</div>
@@ -984,6 +1051,7 @@ async function submitDepositosDia() {
 
 async function uploadBorderoDia(inputEl) {
   if (!inputEl || !inputEl.files || !inputEl.files[0]) return;
+  inputEl.disabled = true;
   try {
     const b64 = await fileToDataUrl(inputEl.files[0]);
     await api('POST', '/depositos/bordero-dia', { data: S.date, foto_base64: b64 });
@@ -991,17 +1059,21 @@ async function uploadBorderoDia(inputEl) {
     await reloadDepositsView();
   } catch (e) {
     alert(e.message || String(e));
+  } finally {
+    inputEl.disabled = false;
   }
 }
 
-async function removeBorderoDia() {
+async function removeBorderoDia(ev) {
   if (!confirm('Remover a foto do borderô deste registo?')) return;
-  try {
-    await api('DELETE', '/depositos/bordero-dia?data=' + encodeURIComponent(S.date));
-    await reloadDepositsView();
-  } catch (e) {
-    alert(e.message || String(e));
-  }
+  await runAction(ev, async () => {
+    try {
+      await api('DELETE', '/depositos/bordero-dia?data=' + encodeURIComponent(S.date));
+      await reloadDepositsView();
+    } catch (e) {
+      alert(e.message || String(e));
+    }
+  });
 }
 
 async function abrirTurno(nome) {
@@ -1016,11 +1088,11 @@ async function drawTurno() {
   render(`
     <div id="header">
       <div style="display:flex;flex-direction:column;gap:4px">
-        <button class="btn btn-ghost btn-sm" onclick="navigate('dia')" style="align-self:flex-start">‹ Voltar</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => navigate('dia'))" style="align-self:flex-start">‹ Voltar</button>
         <div style="display:flex;align-items:center;gap:6px">
-          <button class="btn btn-ghost btn-sm" id="btn-prev-turno" onclick="navTurno(-1)" style="padding:2px 8px;font-size:18px;line-height:1">‹</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-prev-turno" onclick="runAction(event, () => navTurno(-1))" style="padding:2px 8px;font-size:18px;line-height:1">‹</button>
           <div id="turno-title" style="font-size:15px;font-weight:700;color:#f1f5f9;white-space:nowrap">Turno</div>
-          <button class="btn btn-ghost btn-sm" id="btn-next-turno" onclick="navTurno(1)" style="padding:2px 8px;font-size:18px;line-height:1">›</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-next-turno" onclick="runAction(event, () => navTurno(1))" style="padding:2px 8px;font-size:18px;line-height:1">›</button>
         </div>
       </div>
       <div id="turno-header-actions"></div>
@@ -1130,7 +1202,7 @@ async function navTurno(dir) {
   if (!t) return;
   S.date = nextDate;
   S.turnoId = t.id;
-  loadTurno();
+  await loadTurno();
 }
 
 async function loadTurno() {
@@ -1164,7 +1236,7 @@ async function loadTurno() {
     S.turnoCanEdit = canEdit;
 
     show('turno-header-actions', isAberto
-      ? `<button class="btn btn-danger btn-sm" onclick="fecharTurno('${turno.id}')">Fechar</button>`
+      ? `<button type="button" class="btn btn-danger btn-sm" onclick="fecharTurno(event, '${turno.id}')">Fechar</button>`
       : '<span class="badge badge-grey">Fechado</span>'
     );
 
@@ -1220,11 +1292,11 @@ async function loadTurno() {
     show('turno-content', `
       <div class="turno-tabs-wrap">
         <div class="turno-tabs">
-          <button class="turno-tab active" onclick="switchTurnoTab('stock',this)">📊 Stock</button>
-          <button class="turno-tab" onclick="switchTurnoTab('registos',this)">📦 Registos</button>
-          <button class="turno-tab" onclick="switchTurnoTab('vendas',this)">🍽️ Vendas</button>
-          <button class="turno-tab" onclick="switchTurnoTab('escala',this)">👥 Escala</button>
-          <button class="turno-tab" onclick="switchTurnoTab('resumo',this)">📋 Resumo</button>
+          <button type="button" class="turno-tab active" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
+          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
+          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
+          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
+          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('resumo', ev.currentTarget); })">📋 Resumo</button>
         </div>
         <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
       </div>
@@ -1391,9 +1463,9 @@ async function loadVendasMenu(turnoId, canEdit) {
           ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:6px">
-          ${canEdit ? `<button onclick="deltaVenda('${turnoId}','${p.id}',-1)" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
+          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',-1))" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
           <span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${qty}</span>
-          ${canEdit ? `<button onclick="deltaVenda('${turnoId}','${p.id}',1)" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
+          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',1))" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -1534,7 +1606,7 @@ function calcCaixa() {
   autoSaveCaixaTimer = setTimeout(() => guardarCaixa(turnoId), 2000);
 }
 
-function switchTurnoTab(name, btn) {
+async function switchTurnoTab(name, btn) {
   const wrap = document.getElementById('turno-content');
   if (wrap?.classList.contains('scroll-mode')) return;
   document.querySelectorAll('.turno-tab-panel').forEach(p => p.classList.remove('active'));
@@ -1543,19 +1615,19 @@ function switchTurnoTab(name, btn) {
   btn.classList.add('active');
   if (name === 'resumo') {
     const tid = S.turnoData?.id;
-    if (tid) loadResumoTab(tid);
+    if (tid) await loadResumoTab(tid);
   }
   if (name === 'escala') {
-    loadEscalaTurno();
+    await loadEscalaTurno();
   }
   if (name === 'registos') {
     const tid = S.turnoData?.id;
     const stock = S.turnoData?.stock || [];
-    if (tid) loadRegistosMovimentosSection(tid, stock, !!S.turnoCanEdit);
+    if (tid) await loadRegistosMovimentosSection(tid, stock, !!S.turnoCanEdit);
   }
   if (name === 'vendas') {
     const tid = S.turnoData?.id;
-    if (tid) loadVendasMenu(tid, !!S.turnoCanEdit);
+    if (tid) await loadVendasMenu(tid, !!S.turnoCanEdit);
   }
 }
 
@@ -1587,15 +1659,16 @@ async function saveTurnoNotas(turnoId, notas) {
   } catch(e) { err('turno-msg', e.message); }
 }
 
-async function fecharTurno(id) {
+async function fecharTurno(ev, id) {
   if (!confirm('Fechar este turno? Não poderá ser editado depois.')) return;
-  try {
-    // Guardar stock e caixa primeiro
-    await guardarStock(id);
-    await guardarCaixa(id);
-    await api('POST', `/turnos/${id}/fechar`);
-    await loadTurno();
-  } catch(e) { err('turno-msg', e.message); }
+  await runAction(ev, async () => {
+    try {
+      await guardarStock(id);
+      await guardarCaixa(id);
+      await api('POST', `/turnos/${id}/fechar`);
+      await loadTurno();
+    } catch (e) { err('turno-msg', e.message); }
+  });
 }
 
 // ── REGISTOS: STOCK + SAÍDAS DE CAIXA (unificado) ──────────────
@@ -1652,7 +1725,7 @@ function renderEntradasSection(turnoId, stocks, canEdit, entradas) {
         <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd (un)" class="entradas-qty"/>
         <input id="e-preco" type="number" min="0" step="any" placeholder="Preço" class="entradas-qty" style="display:none"/>
         <input id="e-notas" type="text" placeholder="Nota obrigatória" class="entradas-notas"/>
-        <button class="btn btn-success btn-sm" onclick="submitEntrada(${turnoId})">Registar</button>
+        <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, () => submitEntrada(${turnoId}))">Registar</button>
       </div>
       <div id="entrada-form-msg" style="margin-bottom:8px"></div>` : '';
 
@@ -1780,7 +1853,7 @@ function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
         <input id="s-desc" type="text" placeholder="Descrição (ex: gasóleo, embalagens)" class="entradas-notas" style="flex:2"/>
         <input id="s-valor" type="number" min="0.01" step="any" placeholder="Valor" class="entradas-qty"/>
         <input id="s-notas" type="text" placeholder="Nota obrigatória" class="entradas-notas" style="flex:1.5"/>
-        <button class="btn btn-danger btn-sm" onclick="submitSaida(${turnoId})">Registar</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="runAction(event, () => submitSaida(${turnoId}))">Registar</button>
       </div>
       <div id="saida-form-msg" style="margin-bottom:8px"></div>` : '';
 
@@ -2075,7 +2148,7 @@ async function loadEscalaTurno() {
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           ${r.notas ? `<div style="font-size:12px;color:#94a3b8;max-width:240px;text-align:right">${r.notas}</div>` : '<div style="font-size:12px;color:#475569">—</div>'}
-          ${canEdit ? `<button class="btn btn-danger btn-sm" onclick="removeTurnoPresenca('${S.turnoData.id}','${encodeURIComponent(r.utilizador_id)}')">Remover</button>` : ''}
+          ${canEdit ? `<button type="button" class="btn btn-danger btn-sm" onclick="runAction(event, () => removeTurnoPresenca('${S.turnoData.id}','${encodeURIComponent(r.utilizador_id)}'))">Remover</button>` : ''}
         </div>
       </div>
     `).join('')
@@ -2088,7 +2161,7 @@ async function loadEscalaTurno() {
           const nome = f.utilizador_nome || 'Sem nome';
           return motivo
             ? `${nome} (${motivo})`
-            : `${nome}${canEdit ? ` <button class="btn btn-danger btn-sm" style="margin-left:6px" onclick="registarMotivoFalta('${S.turnoData.id}','${encodeURIComponent(f.utilizador_id)}','${(nome||'').replace(/'/g, "\\'")}')">Registar motivo</button>` : ''}`;
+            : `${nome}${canEdit ? ` <button type="button" class="btn btn-danger btn-sm" style="margin-left:6px" onclick="registarMotivoFalta(event, '${S.turnoData.id}','${encodeURIComponent(f.utilizador_id)}','${(nome||'').replace(/'/g, "\\'")}')">Registar motivo</button>` : ''}`;
         }).join(', ')}` : '✓ Sem faltas nos escalados'}</div>
         <div style="color:${coberturas.length ? '#60a5fa' : '#64748b'};margin-top:4px">${coberturas.length ? `↺ Coberturas: ${coberturas.map(c => c.utilizador_nome || 'Sem nome').join(', ')}` : 'Sem coberturas registadas'}</div>
       </div>`;
@@ -2112,7 +2185,7 @@ async function loadEscalaTurno() {
             Aplicar hora extra
           </label>
           <input id="tp-notas" class="entradas-notas" type="text" placeholder="Nota opcional (falta, cobertura, etc.)"/>
-          <button class="btn btn-success btn-sm" onclick="addTurnoPresenca('${S.turnoData.id}')">Registar</button>
+          <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, () => addTurnoPresenca('${S.turnoData.id}'))">Registar</button>
         </div>
       </div>` : '';
 
@@ -2178,16 +2251,18 @@ async function removeTurnoPresenca(turnoId, utilizadorIdEncoded) {
   } catch (e) { alert(e.message); }
 }
 
-async function registarMotivoFalta(turnoId, utilizadorIdEncoded, nome) {
+async function registarMotivoFalta(ev, turnoId, utilizadorIdEncoded, nome) {
   const motivo = prompt(`Motivo da falta de ${nome}:`);
   if (!motivo || !motivo.trim()) return;
-  try {
-    await api('POST', `/turnos/${turnoId}/faltas`, {
-      utilizador_id: decodeURIComponent(utilizadorIdEncoded),
-      motivo_falta: motivo.trim()
-    });
-    await loadEscalaTurno();
-  } catch (e) { alert(e.message); }
+  await runAction(ev, async () => {
+    try {
+      await api('POST', `/turnos/${turnoId}/faltas`, {
+        utilizador_id: decodeURIComponent(utilizadorIdEncoded),
+        motivo_falta: motivo.trim()
+      });
+      await loadEscalaTurno();
+    } catch (e) { alert(e.message); }
+  });
 }
 
 async function submitSaida(turnoId) {
@@ -2221,7 +2296,7 @@ async function drawHistorico() {
         <div style="display:flex;gap:10px;align-items:flex-end">
           <div class="field" style="flex:1;margin:0"><label>De</label><input type="date" id="h-inicio"/></div>
           <div class="field" style="flex:1;margin:0"><label>Até</label><input type="date" id="h-fim"/></div>
-          <button class="btn btn-primary" onclick="loadHistorico()">Ver</button>
+          <button type="button" class="btn btn-primary" onclick="runAction(event, loadHistorico)">Ver</button>
         </div>
       </div>
       <div id="hist-content"></div>
@@ -2247,7 +2322,7 @@ async function loadHistorico() {
     const rowsHtml = rows.map(r => {
       totalGeral += parseFloat(r.total_final)||0;
       return `
-        <div class="card" style="cursor:pointer" onclick="S.date='${r.data}';navigate('dia')">
+        <div class="card js-busy-click" style="cursor:pointer" onclick="runAction(event, async () => { S.date='${r.data}'; syncDatePickersAcrossPages(); await navigate('dia'); })">
           <div class="flex justify-between items-center">
             <div>
               <div style="font-weight:600">${dateLabel(r.data)}</div>
@@ -2284,12 +2359,12 @@ async function drawArmazem() {
     <div id="content">
       <div id="armazem-msg"></div>
       <div class="date-nav">
-        <button onclick="changeDate(-1)">‹</button>
+        <button type="button" onclick="runAction(event, () => changeDate(-1))">‹</button>
         <span style="position:relative;cursor:pointer">
           <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
           <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
         </span>
-        <button onclick="changeDate(1)">›</button>
+        <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>
       </div>
       <div class="card">
         <div class="card-title">💰 Fundos para compras (dia)</div>
@@ -2300,7 +2375,7 @@ async function drawArmazem() {
           <div class="field"><label>Valor (Kz)</label><input id="lib-valor" type="number" min="0.01" step="any" placeholder="0"/></div>
           <div class="field"><label>Notas</label><input id="lib-notas" type="text" placeholder="Ex.: manhã, gerência"/></div>
         </div>
-        <button type="button" class="btn btn-ghost btn-sm" onclick="submitLibertacaoArmazem()">+ Registar libertação</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, submitLibertacaoArmazem)">+ Registar libertação</button>
       </div>
       <div class="card">
         <div class="card-title">📄 Fatura de compra</div>
@@ -2326,7 +2401,7 @@ async function drawArmazem() {
         <div id="fatura-linhas-body"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
           <button type="button" class="btn btn-ghost btn-sm" onclick="addFaturaLinha()">+ Linha</button>
-          <button id="fx-btn-submit" class="btn btn-success btn-sm" onclick="submitFaturaArmazem()">Registar fatura</button>
+          <button type="button" id="fx-btn-submit" class="btn btn-success btn-sm" onclick="runAction(event, submitFaturaArmazem)">Registar fatura</button>
         </div>
       </div>
       <div class="card">
@@ -2466,7 +2541,7 @@ async function refreshArmazemFundos() {
           <tbody>${rows.map(l => `<tr>
             <td style="color:#fbbf24">${fmt(l.valor)}</td>
             <td>${l.notas || '—'}</td>
-            <td><button type="button" class="btn btn-ghost btn-sm" onclick="deleteLibertacaoArmazem(${l.id})">Remover</button></td>
+            <td><button type="button" class="btn btn-ghost btn-sm" onclick="deleteLibertacaoArmazem(event, ${l.id})">Remover</button></td>
           </tr>`).join('')}</tbody></table></div>`;
       }
     }
@@ -2505,15 +2580,17 @@ async function submitLibertacaoArmazem() {
   }
 }
 
-async function deleteLibertacaoArmazem(id) {
+async function deleteLibertacaoArmazem(ev, id) {
   if (!confirm('Remover esta libertação?')) return;
-  try {
-    await api('DELETE', '/armazem/libertacoes/' + id);
-    await refreshArmazemFundos();
-    await loadArmazemData();
-  } catch (e) {
-    show('armazem-msg', `<div class="alert alert-error">${e.message}</div>`);
-  }
+  await runAction(ev, async () => {
+    try {
+      await api('DELETE', '/armazem/libertacoes/' + id);
+      await refreshArmazemFundos();
+      await loadArmazemData();
+    } catch (e) {
+      show('armazem-msg', `<div class="alert alert-error">${e.message}</div>`);
+    }
+  });
 }
 
 function computeFaturaTotalEstimado() {
@@ -2718,13 +2795,8 @@ function addFaturaLinha() {
   initFaturaLinha(line);
 }
 
-let faturaArmazemSubmitting = false;
 async function submitFaturaArmazem() {
-  if (faturaArmazemSubmitting) return;
-  const btn = document.getElementById('fx-btn-submit');
   const msg = document.getElementById('fatura-form-msg');
-  faturaArmazemSubmitting = true;
-  if (btn) { btn.disabled = true; btn.textContent = 'A registar...'; }
   const linhas = [];
   try {
     document.querySelectorAll('#fatura-linhas-body .fatura-linha').forEach(line => {
@@ -2759,22 +2831,16 @@ async function submitFaturaArmazem() {
     });
     if (!linhas.length) {
       if (msg) msg.innerHTML = '<div class="alert alert-error">Adicione pelo menos uma linha com produto, quantidade e preço.</div>';
-      faturaArmazemSubmitting = false;
-      if (btn) { btn.disabled = false; btn.textContent = 'Registar fatura'; }
       return;
     }
   } catch (err) {
     if (msg) msg.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
-    faturaArmazemSubmitting = false;
-    if (btn) { btn.disabled = false; btn.textContent = 'Registar fatura'; }
     return;
   }
   try {
     const fotoInp = document.getElementById('fx-foto-fatura');
     if (!fotoInp || !fotoInp.files || !fotoInp.files[0]) {
       if (msg) msg.innerHTML = '<div class="alert alert-error">Anexa a foto da fatura (JPEG, PNG ou WebP).</div>';
-      faturaArmazemSubmitting = false;
-      if (btn) { btn.disabled = false; btn.textContent = 'Registar fatura'; }
       return;
     }
     const fotoB64 = await fileToDataUrl(fotoInp.files[0]);
@@ -2809,9 +2875,6 @@ async function submitFaturaArmazem() {
     await loadArmazemData();
   } catch(e) {
     if (msg) msg.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
-  } finally {
-    faturaArmazemSubmitting = false;
-    if (btn) { btn.disabled = false; btn.textContent = 'Registar fatura'; }
   }
 }
 
@@ -2905,7 +2968,7 @@ function showProdutoForm(id) {
         '<button id="btn-modal-guardar" class="btn btn-success">Guardar</button>' +
         '<button id="btn-modal-cancelar" class="btn btn-ghost">Cancelar</button>' +
       '</div>' +
-      (isEdit && canEditReceita ? '<div id="receita-section" style="display:none;margin-top:16px;border-top:1px solid #334155;padding-top:12px"><div class="card-title">🧾 Receita</div><div id="receita-list"></div><div style="display:flex;gap-6px;margin-top:8px"><select id="r-comp" style="flex:1"></select><input id="r-qty" type="number" min="0.001" step="0.001" value="1" style="width:70px"/><button class="btn btn-primary btn-sm" onclick="addReceita(\'' + p.id + '\')">+</button></div><div id="receita-msg" style="margin-top:4px"></div></div>' : '') +
+      (isEdit && canEditReceita ? '<div id="receita-section" style="display:none;margin-top:16px;border-top:1px solid #334155;padding-top:12px"><div class="card-title">🧾 Receita</div><div id="receita-list"></div><div style="display:flex;gap-6px;margin-top:8px"><select id="r-comp" style="flex:1"></select><input id="r-qty" type="number" min="0.001" step="0.001" value="1" style="width:70px"/><button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, () => addReceita(\'' + p.id + '\'))">+</button></div><div id="receita-msg" style="margin-top:4px"></div></div>' : '') +
     '</div>';
 
   document.getElementById('app').appendChild(div);
@@ -2939,8 +3002,10 @@ function showProdutoForm(id) {
 
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
   document.getElementById('btn-modal-cancelar').addEventListener('click', closeProdutoModal);
-  document.getElementById('btn-modal-guardar').addEventListener('click', function() {
-    if (isEdit) saveProduto(p.id); else createProduto();
+  document.getElementById('btn-modal-guardar').addEventListener('click', function(ev) {
+    runAction(ev, async () => {
+      if (isEdit) await saveProduto(p.id); else await createProduto();
+    });
   });
 
   document.getElementById('p-nome').focus();
@@ -2998,7 +3063,7 @@ async function loadReceita(produtoId) {
         <span style="font-size:13px">${r.componente_nome}</span>
         <span style="display:flex;align-items:center;gap:6px">
           <span style="font-size:13px;color:#94a3b8">×${fmtNum(r.quantidade)}</span>
-          <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="deleteReceita('${r.id}','${produtoId}')">✕</button>
+          <button type="button" class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="runAction(event, () => deleteReceita('${r.id}','${produtoId}'))">✕</button>
         </span>
       </div>`
     ).join('');
@@ -3032,7 +3097,7 @@ async function drawAdmin() {
   render(`
     <div id="header">
       <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Administração</div></div>
-      <button class="btn btn-primary btn-sm" onclick="showUserForm()">+ Utilizador</button>
+      <button type="button" class="btn btn-primary btn-sm" onclick="showUserForm()">+ Utilizador</button>
     </div>
     <div id="content">
       <div id="admin-msg"></div>
@@ -3043,7 +3108,7 @@ async function drawAdmin() {
         <div id="pass-msg"></div>
         <div class="field"><label>Password Actual</label><input type="password" id="pass-atual"/></div>
         <div class="field"><label>Nova Password</label><input type="password" id="pass-nova"/></div>
-        <button class="btn btn-primary" onclick="alterarPassword()">Alterar</button>
+        <button type="button" class="btn btn-primary" onclick="runAction(event, alterarPassword)">Alterar</button>
       </div>
     </div>
     ${navBar()}
@@ -3092,8 +3157,8 @@ function showUserForm(u) {
       </div>
       <div class="field"><label>Nova Password (opcional)</label><input type="password" id="u-pass"/></div>`:''}
       <div class="flex gap-8 mt-8">
-        <button class="btn btn-success" onclick="${isEdit?`saveUser('${u.id}')`:'createUser()'}">Guardar</button>
-        <button class="btn btn-ghost" onclick="show('admin-form','')">Cancelar</button>
+        <button type="button" class="btn btn-success" onclick="runAction(event, ${isEdit?`() => saveUser('${u.id}')`:'createUser'})">Guardar</button>
+        <button type="button" class="btn btn-ghost" onclick="show('admin-form','')">Cancelar</button>
       </div>
     </div>
   `);
@@ -3188,12 +3253,12 @@ async function loadEscalaTemplate() {
                 canEdit
                   ? `<div style="display:inline-flex;align-items:center;gap:2px;margin:2px">
                       <span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${(e.utilizador_nome || 'Sem').split(' ')[0]}</span>
-                      <button onclick="removeEscalaTemplate(${e.id})" style="background:none;border:none;color:#ef4444;cursor:pointer;padding:0 1px;font-size:13px;line-height:1">×</button>
+                      <button type="button" onclick="runAction(event, () => removeEscalaTemplate(${e.id}))" style="background:none;border:none;color:#ef4444;cursor:pointer;padding:0 1px;font-size:13px;line-height:1">×</button>
                     </div>`
                   : `<div style="display:inline-block;margin:2px"><span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${(e.utilizador_nome || 'Sem').split(' ')[0]}</span></div>`
               ).join('');
               const addBtn = canEdit
-                ? `<button onclick="showAddEscalaTemplate(${dia},'${turno}')" style="background:none;border:1px dashed #334155;border-radius:6px;color:#475569;cursor:pointer;font-size:16px;padding:1px 6px;margin:2px;line-height:1.4">+</button>`
+                ? `<button type="button" onclick="showAddEscalaTemplate(${dia},'${turno}')" style="background:none;border:1px dashed #334155;border-radius:6px;color:#475569;cursor:pointer;font-size:16px;padding:1px 6px;margin:2px;line-height:1.4">+</button>`
                 : '';
               return `<td style="padding:6px 4px;border-bottom:1px solid #1e293b;text-align:center;vertical-align:top">
                 <div style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:2px">${chips}${addBtn}</div>
@@ -3224,8 +3289,8 @@ function showAddEscalaTemplate(dia_semana, turno) {
         </select>
       </div>
       <div class="flex gap-8 mt-8">
-        <button class="btn btn-success" onclick="addEscalaTemplate(${dia_semana},'${turno}')">Adicionar</button>
-        <button class="btn btn-ghost" onclick="show('escala-add-form','')">Cancelar</button>
+        <button type="button" class="btn btn-success" onclick="runAction(event, () => addEscalaTemplate(${dia_semana},'${turno}'))">Adicionar</button>
+        <button type="button" class="btn btn-ghost" onclick="show('escala-add-form','')">Cancelar</button>
       </div>
     </div>
   `);
@@ -3250,7 +3315,7 @@ async function removeEscalaTemplate(id) {
 }
 
 // ── START ─────────────────────────────────────────────────────
-draw();
+draw().catch(e => console.error(e));
 </script>
 </body>
 </html>

@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS produtos (
   preco     NUMERIC(15,2) NOT NULL DEFAULT 0,
   categoria VARCHAR(20)   NOT NULL DEFAULT 'outro', -- ingredientes, bebida, outro
   ordem     INTEGER       NOT NULL DEFAULT 0,
-  ativo     BOOLEAN       NOT NULL DEFAULT TRUE
+  ativo     BOOLEAN       NOT NULL DEFAULT TRUE,
+  tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade' CHECK (tipo_medicao IN ('unidade','peso'))
 );
 
 -- ============================================================
@@ -69,12 +70,65 @@ CREATE TABLE IF NOT EXISTS turno_caixa (
 );
 
 -- ============================================================
+--  ARMAZÉM (inventário e compras)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS armazem_faturas (
+  id SERIAL PRIMARY KEY,
+  numero_fatura TEXT NOT NULL DEFAULT '',
+  fornecedor TEXT NOT NULL DEFAULT '',
+  data_emissao DATE NOT NULL DEFAULT CURRENT_DATE,
+  notas TEXT NOT NULL DEFAULT '',
+  total_valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+  criado_por TEXT NOT NULL DEFAULT '',
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS armazem_stock (
+  id            SERIAL          PRIMARY KEY,
+  produto_id    INTEGER         NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+  quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  custo_medio   NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  atualizado_em TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS armazem_compras (
+  id            SERIAL          PRIMARY KEY,
+  produto_id    INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+  fatura_id     INTEGER         REFERENCES armazem_faturas(id) ON DELETE SET NULL,
+  quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  caixas        NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  qtd_por_caixa NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  preco_unitario NUMERIC(15,2)  NOT NULL DEFAULT 0,
+  valor_total   NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  fornecedor    TEXT            NOT NULL DEFAULT '',
+  notas         TEXT            NOT NULL DEFAULT '',
+  criado_por    TEXT            NOT NULL DEFAULT '',
+  criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
 --  MIGRATIONS — add missing columns to existing tables
 -- ============================================================
+-- Supabase: coluna role pode ser ENUM role_utilizador (acrescentar valor «compras»).
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role_utilizador') THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_enum e
+      JOIN pg_type t ON t.oid = e.enumtypid
+      WHERE t.typname = 'role_utilizador' AND e.enumlabel = 'compras'
+    ) THEN
+      ALTER TYPE role_utilizador ADD VALUE 'compras';
+    END IF;
+  END IF;
+END $$;
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'operador';
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS senha_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50);
+UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = '';
+UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username));
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'produtos_nome_key') THEN
@@ -85,6 +139,40 @@ ALTER TABLE produtos ALTER COLUMN sku SET DEFAULT '';
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categoria VARCHAR(20) NOT NULL DEFAULT 'outro';
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade';
+CREATE TABLE IF NOT EXISTS armazem_stock (
+  id            SERIAL          PRIMARY KEY,
+  produto_id    INTEGER         NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+  quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  custo_medio   NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  atualizado_em TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS armazem_compras (
+  id            SERIAL          PRIMARY KEY,
+  produto_id    INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+  quantidade    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  caixas        NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  qtd_por_caixa NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  preco_unitario NUMERIC(15,2)  NOT NULL DEFAULT 0,
+  valor_total   NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  fornecedor    TEXT            NOT NULL DEFAULT '',
+  notas         TEXT            NOT NULL DEFAULT '',
+  criado_por    TEXT            NOT NULL DEFAULT '',
+  criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0;
+ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS armazem_faturas (
+  id SERIAL PRIMARY KEY,
+  numero_fatura TEXT NOT NULL DEFAULT '',
+  fornecedor TEXT NOT NULL DEFAULT '',
+  data_emissao DATE NOT NULL DEFAULT CURRENT_DATE,
+  notas TEXT NOT NULL DEFAULT '',
+  total_valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+  criado_por TEXT NOT NULL DEFAULT '',
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS fatura_id INTEGER REFERENCES armazem_faturas(id) ON DELETE SET NULL;
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT '';
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ;
@@ -97,18 +185,16 @@ CREATE TABLE IF NOT EXISTS escala (
   id            SERIAL      PRIMARY KEY,
   data          DATE        NOT NULL,
   turno         VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-  utilizador_id INTEGER     REFERENCES utilizadores(id) ON DELETE SET NULL,
+  utilizador_id TEXT,
   notas         TEXT        NOT NULL DEFAULT '',
   criado_em     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(data, turno)
+  UNIQUE(data, turno, utilizador_id)
 );
--- Add FK to existing escala tables created without it
+ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text;
+ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key;
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'escala_utilizador_id_fkey') THEN
-    -- Remove orphan rows first to avoid FK violation
-    UPDATE escala SET utilizador_id = NULL WHERE utilizador_id NOT IN (SELECT id FROM utilizadores);
-    ALTER TABLE escala ADD CONSTRAINT escala_utilizador_id_fkey
-      FOREIGN KEY (utilizador_id) REFERENCES utilizadores(id) ON DELETE SET NULL;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'escala_data_turno_utilizador_key') THEN
+    ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id);
   END IF;
 END $$;
 
@@ -119,17 +205,29 @@ CREATE TABLE IF NOT EXISTS escala_template (
   id            SERIAL      PRIMARY KEY,
   dia_semana    INTEGER     NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
   turno         VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-  utilizador_id INTEGER     NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+  utilizador_id TEXT,
+  notas         TEXT        NOT NULL DEFAULT '',
   UNIQUE(dia_semana, turno, utilizador_id)
 );
+ALTER TABLE escala_template ALTER COLUMN utilizador_id DROP NOT NULL;
+ALTER TABLE escala_template ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text;
+ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT '';
+ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'escala_template_dia_turno_utilizador_key') THEN
+    ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id);
+  END IF;
+END $$;
 
 -- ============================================================
 --  DADOS INICIAIS — UTILIZADORES
---  Password: usar /api/auth/setup com código STOCKOS2025
+--  Senhas: definidas pelo admin ou password inicial na criação do utilizador
 -- ============================================================
 INSERT INTO utilizadores (nome, email, senha_hash, role) VALUES
   ('Admin', 'admin@stockos.ao', '', 'admin')
   ON CONFLICT (email) DO NOTHING;
+UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = '';
+UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao';
 
 -- ============================================================
 --  DADOS INICIAIS — PRODUTOS (INGREDIENTES)
@@ -205,6 +303,64 @@ CREATE TABLE IF NOT EXISTS turno_saidas (
   valor       NUMERIC(15,2)   NOT NULL DEFAULT 0,
   notas       TEXT            NOT NULL DEFAULT '',
   criado_em   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS armazem_libertacoes (
+  id            SERIAL          PRIMARY KEY,
+  data          DATE            NOT NULL,
+  valor         NUMERIC(15,2)   NOT NULL,
+  notas         TEXT            NOT NULL DEFAULT '',
+  criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+  criado_por    TEXT            NOT NULL DEFAULT ''
+);
+ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS justificacao_excesso TEXT NOT NULL DEFAULT '';
+ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS turno_saida_id INTEGER REFERENCES turno_saidas(id) ON DELETE SET NULL;
+ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS foto_fatura_url TEXT NOT NULL DEFAULT '';
+
+-- ============================================================
+--  ESCALA_TEMPLATE (modelo semanal: dia da semana + turno)
+--  dia_semana: 0=Segunda … 6=Domingo
+-- ============================================================
+CREATE TABLE IF NOT EXISTS escala_template (
+  id              SERIAL        PRIMARY KEY,
+  dia_semana      SMALLINT      NOT NULL CHECK (dia_semana >= 0 AND dia_semana <= 6),
+  turno           VARCHAR(10)   NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+  utilizador_id   TEXT,
+  notas           TEXT          NOT NULL DEFAULT '',
+  criado_em       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  UNIQUE(dia_semana, turno, utilizador_id)
+);
+
+-- ============================================================
+--  ESCALAS (atribuições por data concreta: dia + turno)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS escalas (
+  id              SERIAL        PRIMARY KEY,
+  data            DATE          NOT NULL,
+  turno           VARCHAR(10)   NOT NULL CHECK (turno IN ('manha','tarde','noite')),
+  utilizador_id   TEXT,
+  notas           TEXT          NOT NULL DEFAULT '',
+  criado_em       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  UNIQUE(data, turno, utilizador_id)
+);
+
+-- ============================================================
+--  DEPÓSITOS BANCO: valor = bruto por turno; valor_saidas = saída no depósito
+--  (total do dia) num registo; saidas_destino = produto/destino dessa saída (no mesmo registo)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS depositos_banco (
+  id                SERIAL          PRIMARY KEY,
+  turno_id          INTEGER         NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
+  data_deposito     DATE            NOT NULL DEFAULT CURRENT_DATE,
+  valor             NUMERIC(15,2)   NOT NULL,
+  valor_saidas      NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  saidas_destino    TEXT            NOT NULL DEFAULT '',
+  bordero_foto_url  TEXT            NOT NULL DEFAULT '',
+  valor_tpa         NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  referencia        TEXT            NOT NULL DEFAULT '',
+  notas             TEXT            NOT NULL DEFAULT '',
+  criado_por        TEXT            NOT NULL DEFAULT '',
+  criado_em         TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================

@@ -11,19 +11,118 @@ const PWD_SALT   = 'stockos-pwd-salt-2025';
 
 const _dbUrl = process.env.DATABASE_URL;
 if (!_dbUrl) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
-const _sql = postgres(_dbUrl, { ssl: 'require', prepare: false, max: 1, idle_timeout: 10, max_lifetime: 60, connect_timeout: 10 });
-const query = async (text, params) => { const rows = await _sql.unsafe(text, params || []); return { rows: Array.from(rows) }; };
+/** Pool partilhado: max=1 + fechar após cada query saturava ligações e tornava cada pedido muito lento. */
+const _sqlOpts = {
+  ssl: 'require',
+  prepare: false,
+  max: Math.min(15, Math.max(3, parseInt(process.env.PG_POOL_MAX || '10', 10) || 10)),
+  idle_timeout: 30,
+  max_lifetime: 60 * 55,
+  connect_timeout: 15
+};
+let _activeDbUrl = _dbUrl;
+/** Instância única do cliente postgres (reutiliza ligações TCP/TLS). */
+let _pgSingleton = null;
+
+function getDbCandidates() {
+  const out = [_activeDbUrl, _dbUrl];
+  try {
+    const u = new URL(_dbUrl);
+    const m = u.hostname.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
+    if (m) {
+      const ref = m[1];
+      const baseUser = decodeURIComponent(u.username || 'postgres');
+      const users = new Set([
+        baseUser,
+        `${baseUser}.${ref}`,
+        `postgres.${ref}`
+      ]);
+      for (const usr of users) {
+        const pooler = new URL(_dbUrl);
+        pooler.hostname = 'aws-0-eu-west-1.pooler.supabase.com';
+        pooler.port = '6543';
+        pooler.username = usr;
+        out.push(pooler.toString());
+      }
+    }
+  } catch (_) {}
+  return [...new Set(out)];
+}
+
+async function resetPgSingleton() {
+  const s = _pgSingleton;
+  _pgSingleton = null;
+  if (s) await s.end({ timeout: 5 }).catch(() => {});
+}
+
+/** Garante uma ligação persistente; tenta URLs candidatas só até a primeira funcionar. */
+async function ensurePgSingleton() {
+  if (_pgSingleton) return _pgSingleton;
+  let lastErr = null;
+  for (let round = 0; round < 2; round++) {
+    for (const url of getDbCandidates()) {
+      let sqlConn = null;
+      try {
+        sqlConn = postgres(url, _sqlOpts);
+        await sqlConn`SELECT 1`;
+        _pgSingleton = sqlConn;
+        _activeDbUrl = url;
+        return _pgSingleton;
+      } catch (e) {
+        lastErr = e;
+        try { await sqlConn?.end({ timeout: 2 }).catch(() => {}); } catch (_) {}
+      }
+    }
+    if (round === 0) await new Promise((r) => setTimeout(r, 120));
+  }
+  throw lastErr;
+}
+
+const query = async (text, params) => {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const sql = await ensurePgSingleton();
+      const rows = await sql.unsafe(text, params || []);
+      return { rows: Array.from(rows) };
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e && e.message ? e.message : e);
+      const transient =
+        attempt === 0 &&
+        (/ECONNRESET|ECONNREFUSED|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03/i.test(msg) ||
+          e.code === 'ECONNRESET');
+      if (transient) {
+        await resetPgSingleton();
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+};
+
 const pool = {
   query,
   connect: async () => {
-    const reserved = await _sql.reserve();
+    const sql = await ensurePgSingleton();
+    const reserved = await sql.reserve();
     return {
-      query: async (text, params) => { const rows = await reserved.unsafe(text, params || []); return { rows: Array.from(rows) }; },
-      release: () => reserved.release()
+      query: async (text, params) => {
+        const rows = await reserved.unsafe(text, params || []);
+        return { rows: Array.from(rows) };
+      },
+      release: async () => {
+        await reserved.release().catch(() => {});
+      }
     };
   }
 };
 
+/** Evita correr a migração de depósitos em cada pedido (scan completo à BD). */
+let depositosSaidasMigrationDone = false;
+/** ALTER/enum de utilizadores só na primeira vez por processo. */
+let usernameColumnEnsured = false;
 
 async function qry(sql, params, label) {
   try { await query(sql, params); }
@@ -38,7 +137,8 @@ async function initDB() {
   )`, [], 'utilizadores');
   await qry(`CREATE TABLE IF NOT EXISTS produtos (
     id SERIAL PRIMARY KEY, nome VARCHAR(200) NOT NULL, preco NUMERIC(15,2) NOT NULL DEFAULT 0,
-    categoria VARCHAR(20) NOT NULL DEFAULT 'outro', ordem INTEGER NOT NULL DEFAULT 0, ativo BOOLEAN NOT NULL DEFAULT TRUE
+    categoria VARCHAR(20) NOT NULL DEFAULT 'outro', ordem INTEGER NOT NULL DEFAULT 0, ativo BOOLEAN NOT NULL DEFAULT TRUE,
+    tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade' CHECK (tipo_medicao IN ('unidade','peso'))
   )`, [], 'produtos');
   await qry(`CREATE TABLE IF NOT EXISTS turnos (
     id SERIAL PRIMARY KEY, data DATE NOT NULL DEFAULT CURRENT_DATE, nome VARCHAR(10) NOT NULL CHECK (nome IN ('manha','tarde','noite')),
@@ -59,6 +159,7 @@ async function initDB() {
     dinheiro NUMERIC(15,2) NOT NULL DEFAULT 0, saida NUMERIC(15,2) NOT NULL DEFAULT 0
   )`, [], 'turno_caixa');
   await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_avulso BOOLEAN NOT NULL DEFAULT FALSE`, [], 'alter-venda-avulso');
+  await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade'`, [], 'alter-tipo-medicao');
   await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-util');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
@@ -99,22 +200,88 @@ async function initDB() {
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, [], 'turno_saidas');
+  await qry(`CREATE TABLE IF NOT EXISTS armazem_stock (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    custo_medio NUMERIC(15,2) NOT NULL DEFAULT 0,
+    atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'armazem_stock');
+  await qry(`CREATE TABLE IF NOT EXISTS armazem_compras (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    caixas NUMERIC(12,3) NOT NULL DEFAULT 0,
+    qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0,
+    preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
+    valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
+    fornecedor TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_por TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'armazem_compras');
+  await qry(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0`, [], 'armazem_compras-caixas');
+  await qry(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0`, [], 'armazem_compras-qtd-caixa');
+  await qry(`CREATE TABLE IF NOT EXISTS armazem_faturas (
+    id SERIAL PRIMARY KEY,
+    numero_fatura TEXT NOT NULL DEFAULT '',
+    fornecedor TEXT NOT NULL DEFAULT '',
+    data_emissao DATE NOT NULL DEFAULT CURRENT_DATE,
+    notas TEXT NOT NULL DEFAULT '',
+    total_valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+    criado_por TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'armazem_faturas');
+  await qry(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS fatura_id INTEGER REFERENCES armazem_faturas(id) ON DELETE SET NULL`, [], 'armazem_compras-fatura');
   await qry(`CREATE TABLE IF NOT EXISTS escala (
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    utilizador_id TEXT,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(data, turno)
+    UNIQUE(data, turno, utilizador_id)
   )`, [], 'escala');
   await qry(`CREATE TABLE IF NOT EXISTS escala_template (
     id SERIAL PRIMARY KEY,
     dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+    utilizador_id TEXT,
+    notas TEXT NOT NULL DEFAULT '',
     UNIQUE(dia_semana, turno, utilizador_id)
   )`, [], 'escala_template');
+  await qry(`CREATE TABLE IF NOT EXISTS turno_equipa_real (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    utilizador_id TEXT NOT NULL,
+    cobrindo_utilizador_id TEXT,
+    hora_extra BOOLEAN NOT NULL DEFAULT FALSE,
+    motivo_falta TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(turno_id, utilizador_id)
+  )`, [], 'turno_equipa_real');
+  await qry(`CREATE TABLE IF NOT EXISTS turno_faltas (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    utilizador_id TEXT NOT NULL,
+    motivo_falta TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(turno_id, utilizador_id)
+  )`, [], 'turno_faltas');
+  await qry(`ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'escala-userid-text');
+  await qry(`ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key`, [], 'escala-drop-unique-old');
+  await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_data_turno_utilizador_key') THEN ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id); END IF; END $$`, [], 'escala-add-unique-new');
+  await qry(`ALTER TABLE escala_template ALTER COLUMN utilizador_id DROP NOT NULL`, [], 'escala_template-nullable-user');
+  await qry(`ALTER TABLE escala_template ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'escala_template-userid-text');
+  await qry(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'escala_template-notas');
+  await qry(`ALTER TABLE turno_equipa_real ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'turno_equipa_real-userid-text');
+  await qry(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT`, [], 'turno_equipa_real-cobrindo');
+  await qry(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE`, [], 'turno_equipa_real-hora-extra');
+  await qry(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT ''`, [], 'turno_equipa_real-motivo-falta');
+  await qry(`ALTER TABLE turno_faltas ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'turno_faltas-userid-text');
+  await qry(`ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key`, [], 'escala_template-drop-unique-old');
+  await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_template_dia_turno_utilizador_key') THEN ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id); END IF; END $$`, [], 'escala_template-add-unique-new');
   await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
@@ -139,7 +306,7 @@ async function initDB() {
 const dbReady = initDB();
 
 app.use(cors({ origin: '*' }));
-app.use(express.json());
+app.use(express.json({ limit: '6mb' }));
 app.use(express.static('public'));
 app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { res.status(500).json({ erro: 'DB não disponível' }); } });
 
@@ -186,6 +353,330 @@ function prevTurno(nome, data) {
   return { nome: 'tarde', data };
 }
 
+function normDataPostgres(d) {
+  if (d == null || d === '') return '';
+  if (typeof d === 'string') return d.slice(0, 10);
+  if (d instanceof Date) return d.toISOString().slice(0, 10);
+  return String(d).slice(0, 10);
+}
+
+function normalizeUsername(s) {
+  return String(s || '').trim().toLowerCase();
+}
+function isValidUsername(s) {
+  return /^[a-z0-9._-]{3,50}$/.test(s);
+}
+
+/** Supabase pode usar ENUM role_utilizador; o código usa o valor «compras». */
+async function ensureRoleEnumCompras() {
+  await query(`
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role_utilizador') THEN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_enum e
+          JOIN pg_type t ON t.oid = e.enumtypid
+          WHERE t.typname = 'role_utilizador' AND e.enumlabel = 'compras'
+        ) THEN
+          ALTER TYPE role_utilizador ADD VALUE 'compras';
+        END IF;
+      END IF;
+    END $$;
+  `).catch(() => {});
+}
+
+async function ensureUsernameColumn() {
+  if (usernameColumnEnsured) return;
+  await ensureRoleEnumCompras();
+  await query(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`);
+  const r = await query(`SELECT id, email FROM utilizadores WHERE username IS NULL OR TRIM(username) = ''`).catch(() => ({ rows: [] }));
+  for (const row of r.rows) {
+    await query(`UPDATE utilizadores SET username=$1 WHERE id=$2`, [`u${row.id}`, row.id]).catch(() => {});
+  }
+  await query(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`).catch(() => {});
+  try {
+    await query(`ALTER TABLE utilizadores ALTER COLUMN username SET NOT NULL`);
+  } catch (_) {}
+  try {
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`);
+  } catch (_) {}
+  usernameColumnEnsured = true;
+}
+
+function loginFromBody(req) {
+  const v = (req.body.login || req.body.email || '').trim();
+  return v;
+}
+
+async function ensureDepositosBanco() {
+  await query(`CREATE TABLE IF NOT EXISTS depositos_banco (
+    id SERIAL PRIMARY KEY,
+    data_referencia DATE,
+    data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
+    valor NUMERIC(15,2) NOT NULL,
+    referencia TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_por TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS turno_id INTEGER REFERENCES turnos(id) ON DELETE CASCADE`).catch(() => {});
+  await query(`DELETE FROM depositos_banco WHERE turno_id IS NULL`).catch(() => {});
+  await query(`ALTER TABLE depositos_banco DROP COLUMN IF EXISTS data_referencia`).catch(() => {});
+  try {
+    await query(`ALTER TABLE depositos_banco ALTER COLUMN turno_id SET NOT NULL`);
+  } catch (_) {}
+  try {
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS depositos_banco_turno_id_key ON depositos_banco(turno_id)`);
+  } catch (_) {}
+  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS bordero_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  if (!depositosSaidasMigrationDone) {
+    try {
+      await migrateDepositosSaidasAntigasAgrupadas();
+      depositosSaidasMigrationDone = true;
+    } catch (e) {
+      console.error('migrateDepositosSaidasAntigasAgrupadas', e);
+    }
+  }
+}
+
+function sanitizeSaidasDestino(s) {
+  return String(s ?? '')
+    .trim()
+    .slice(0, 2000);
+}
+
+const BORDERO_BUCKET = 'depositos-bordero';
+
+function detectSupabaseUrlFromDatabaseUrl() {
+  try {
+    const u = new URL(_dbUrl);
+    const m = u.hostname.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
+    if (m) return `https://${m[1]}.supabase.co`;
+  } catch (_) {}
+  return '';
+}
+
+function getSupabaseEnv() {
+  const url = (process.env.SUPABASE_URL || detectSupabaseUrlFromDatabaseUrl() || '').replace(/\/$/, '');
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  return { url, key };
+}
+
+function parseDataUrlFoto(dataUrl) {
+  const s = String(dataUrl || '').trim();
+  const m = /^data:(image\/(?:jpeg|png|webp));base64,([\s\S]+)$/i.exec(s);
+  if (!m) return null;
+  const buf = Buffer.from(m[2].replace(/\s/g, ''), 'base64');
+  if (buf.length < 80 || buf.length > 5 * 1024 * 1024) return null;
+  const ct = m[1].toLowerCase();
+  const ext = ct.includes('png') ? 'png' : ct.includes('webp') ? 'webp' : 'jpg';
+  return { contentType: ct, buffer: buf, ext };
+}
+
+async function uploadBorderoToSupabase(buffer, key, contentType) {
+  const { url: base, key: serviceKey } = getSupabaseEnv();
+  if (!base || !serviceKey) return null;
+  const uploadUrl = `${base}/storage/v1/object/${BORDERO_BUCKET}/${key}`;
+  const r = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceKey}`,
+      apikey: serviceKey,
+      'Content-Type': contentType,
+      'x-upsert': 'true'
+    },
+    body: buffer
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    const err = new Error(`Upload Storage falhou (${r.status}). Cria o bucket «${BORDERO_BUCKET}» (público) no Supabase. ${t}`);
+    err.code = 'STORAGE';
+    throw err;
+  }
+  return `${base}/storage/v1/object/public/${BORDERO_BUCKET}/${key}`;
+}
+
+async function deleteBorderoFromSupabaseStorage(publicUrl) {
+  const { url: base, key: serviceKey } = getSupabaseEnv();
+  if (!base || !serviceKey || !publicUrl || typeof publicUrl !== 'string') return;
+  const marker = `/storage/v1/object/public/${BORDERO_BUCKET}/`;
+  const i = publicUrl.indexOf(marker);
+  if (i < 0) return;
+  const path = publicUrl.slice(i + marker.length);
+  if (!path) return;
+  const delUrl = `${base}/storage/v1/object/${BORDERO_BUCKET}/${path}`;
+  await fetch(delUrl, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey }
+  }).catch(() => {});
+}
+
+/** Uma foto de borderô por dia de depósito: limpa todas as linhas desse dia e grava só no registo canónico (primeiro turno). */
+async function purgeBorderoUrlsForDayAndStorage(dataStr) {
+  const r = await query(
+    `SELECT d.id, d.bordero_foto_url FROM depositos_banco d
+     JOIN turnos t ON t.id = d.turno_id
+     WHERE t.data = $1::date`,
+    [dataStr]
+  );
+  for (const row of r.rows) {
+    const u = row.bordero_foto_url;
+    if (u && String(u).startsWith('http')) await deleteBorderoFromSupabaseStorage(String(u));
+  }
+  await query(
+    `UPDATE depositos_banco d SET bordero_foto_url = ''
+     FROM turnos t
+     WHERE d.turno_id = t.id AND t.data = $1::date`,
+    [dataStr]
+  );
+}
+
+async function getCanonicalDepositIdForDay(dataStr) {
+  const r = await query(
+    `SELECT d.id FROM depositos_banco d
+     JOIN turnos t ON t.id = d.turno_id
+     WHERE t.data = $1::date
+     ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 ELSE 3 END
+     LIMIT 1`,
+    [dataStr]
+  );
+  return r.rows[0]?.id ?? null;
+}
+
+async function applyBorderoFotoCanonicalDay(dataStr, canonicalId, fotoBase64) {
+  const parsed = parseDataUrlFoto(fotoBase64);
+  if (!parsed) {
+    const err = new Error('Envia uma imagem (JPEG, PNG ou WebP) em base64 (data URL).');
+    err.code = 'BORDERO';
+    throw err;
+  }
+  await purgeBorderoUrlsForDayAndStorage(dataStr);
+  const { url: sbUrl, key: sbKey } = getSupabaseEnv();
+  let finalUrl;
+  if (sbUrl && sbKey) {
+    const fileKey = `${dataStr}/${canonicalId}-${crypto.randomBytes(6).toString('hex')}.${parsed.ext}`;
+    finalUrl = await uploadBorderoToSupabase(parsed.buffer, fileKey, parsed.contentType);
+  } else {
+    const raw = String(fotoBase64 || '').trim();
+    if (raw.length > 4 * 1024 * 1024) {
+      throw new Error('Imagem demasiado grande. Define SUPABASE_SERVICE_ROLE_KEY no servidor para usar Storage.');
+    }
+    finalUrl = raw;
+  }
+  await query('UPDATE depositos_banco SET bordero_foto_url=$1 WHERE id=$2', [finalUrl, canonicalId]);
+}
+
+async function applyFaturaFotoUrl(client, faturaId, fotoBase64) {
+  const parsed = parseDataUrlFoto(fotoBase64);
+  if (!parsed) {
+    const err = new Error('Envia uma imagem (JPEG, PNG ou WebP) em base64 (data URL).');
+    err.code = 'FATURA_FOTO';
+    throw err;
+  }
+  const { url: sbUrl, key: sbKey } = getSupabaseEnv();
+  let finalUrl;
+  if (sbUrl && sbKey) {
+    const fileKey = `faturas-compra/${faturaId}-${crypto.randomBytes(6).toString('hex')}.${parsed.ext}`;
+    finalUrl = await uploadBorderoToSupabase(parsed.buffer, fileKey, parsed.contentType);
+  } else {
+    const raw = String(fotoBase64 || '').trim();
+    if (raw.length > 4 * 1024 * 1024) {
+      throw new Error('Imagem demasiado grande. Define SUPABASE_SERVICE_ROLE_KEY no servidor para usar Storage.');
+    }
+    finalUrl = raw;
+  }
+  await client.query('UPDATE armazem_faturas SET foto_fatura_url=$1 WHERE id=$2', [finalUrl, faturaId]);
+}
+
+/** valor = bruto por turno na coluna valor; saída no depósito só no total (valor_saidas num único registo do dia). Líquido total = Σ(valor) − Σ(valor_saidas). */
+function parseDepositoValores(body) {
+  const saidasRaw = parseFloat(body.valor_saidas);
+  const saidas = Number.isNaN(saidasRaw) ? 0 : Math.max(0, saidasRaw);
+  const bruto = parseFloat(body.valor_bruto);
+  if (!Number.isNaN(bruto) && bruto > 0) {
+    const liquido = bruto - saidas;
+    if (liquido <= 0) {
+      const err = new Error('O valor bruto deve ser maior que o montante para compras de armazém (saída no depósito).');
+      err.code = 'DEP';
+      throw err;
+    }
+    return { valor: bruto, valor_saidas: saidas };
+  }
+  const v = parseFloat(body.valor);
+  if (!Number.isNaN(v) && v > 0) {
+    const brutoLegacy = v + saidas;
+    return { valor: brutoLegacy, valor_saidas: saidas };
+  }
+  return null;
+}
+
+function ordemTurnoNome(nome) {
+  if (nome === 'manha') return 1;
+  if (nome === 'tarde') return 2;
+  if (nome === 'noite') return 3;
+  return 9;
+}
+
+/** Migra formato antigo (saídas repartidas por turno) para bruto por linha + saída total só no primeiro turno do dia. */
+async function migrateDepositosSaidasAntigasAgrupadas() {
+  const r = await query(`
+    SELECT d.id, d.valor, d.valor_saidas, t.data::text AS data, t.nome
+    FROM depositos_banco d
+    JOIN turnos t ON t.id = d.turno_id
+    ORDER BY t.data, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 ELSE 3 END
+  `);
+  const byData = new Map();
+  for (const row of r.rows) {
+    if (!byData.has(row.data)) byData.set(row.data, []);
+    byData.get(row.data).push(row);
+  }
+  for (const grp of byData.values()) {
+    const nComSaidas = grp.filter((x) => (parseFloat(x.valor_saidas) || 0) > 0).length;
+    if (nComSaidas <= 1) continue;
+    const totalSaidas = grp.reduce((s, x) => s + (parseFloat(x.valor_saidas) || 0), 0);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const row of grp) {
+        const v = parseFloat(row.valor) || 0;
+        const vs = parseFloat(row.valor_saidas) || 0;
+        await client.query(`UPDATE depositos_banco SET valor = $1, valor_saidas = 0 WHERE id = $2`, [v + vs, row.id]);
+      }
+      const sorted = [...grp].sort((a, b) => ordemTurnoNome(a.nome) - ordemTurnoNome(b.nome));
+      await client.query(`UPDATE depositos_banco SET valor_saidas = $1 WHERE id = $2`, [totalSaidas, sorted[0].id]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+async function assertTurnoFechado(turnoId) {
+  const n = parseInt(turnoId, 10);
+  if (!n) {
+    const err = new Error('Indica o turno válido.');
+    err.code = 'TURNOS';
+    throw err;
+  }
+  const r = await query(`SELECT id, estado, data FROM turnos WHERE id = $1`, [n]);
+  if (!r.rows.length) {
+    const err = new Error('Turno não encontrado.');
+    err.code = 'TURNOS';
+    throw err;
+  }
+  if (r.rows[0].estado !== 'fechado') {
+    const err = new Error('O turno deve estar fechado para registar o depósito.');
+    err.code = 'TURNOS';
+    throw err;
+  }
+  return r.rows[0];
+}
+
 // ── AUTH ──────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok', v: 3 }));
 
@@ -203,11 +694,72 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     try { await query(sql); results.push({ label, ok: true }); }
     catch(e) { results.push({ label, ok: false, erro: e.message }); }
   }
+  await run(
+    `DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role_utilizador') THEN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+          WHERE t.typname = 'role_utilizador' AND e.enumlabel = 'compras'
+        ) THEN
+          ALTER TYPE role_utilizador ADD VALUE 'compras';
+        END IF;
+      END IF;
+    END $$`,
+    'role_enum_compras'
+  );
+  await run(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`, 'utilizadores-username-col');
+  await run(
+    `UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = ''`,
+    'utilizadores-username-backfill'
+  );
+  await run(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`, 'utilizadores-username-admin');
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`, 'utilizadores-username-idx');
+  try {
+    await ensureDepositosBanco();
+    results.push({ label: 'depositos_banco', ok: true });
+  } catch (e) {
+    results.push({ label: 'depositos_banco', ok: false, erro: e.message });
+  }
   await run(`ALTER TABLE produtos ALTER COLUMN sku SET DEFAULT ''`, 'sku-default');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0`, 'preco');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categoria VARCHAR(20) NOT NULL DEFAULT 'outro'`, 'categoria');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0`, 'ordem');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE`, 'ativo');
+  await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade'`, 'tipo_medicao');
+  await run(`CREATE TABLE IF NOT EXISTS armazem_stock (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    custo_medio NUMERIC(15,2) NOT NULL DEFAULT 0,
+    atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, 'armazem_stock');
+  await run(`CREATE TABLE IF NOT EXISTS armazem_compras (
+    id SERIAL PRIMARY KEY,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    caixas NUMERIC(12,3) NOT NULL DEFAULT 0,
+    qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0,
+    preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
+    valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
+    fornecedor TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_por TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, 'armazem_compras');
+  await run(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0`, 'armazem_compras-caixas');
+  await run(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0`, 'armazem_compras-qtd-caixa');
+  await run(`CREATE TABLE IF NOT EXISTS armazem_faturas (
+    id SERIAL PRIMARY KEY,
+    numero_fatura TEXT NOT NULL DEFAULT '',
+    fornecedor TEXT NOT NULL DEFAULT '',
+    data_emissao DATE NOT NULL DEFAULT CURRENT_DATE,
+    notas TEXT NOT NULL DEFAULT '',
+    total_valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+    criado_por TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, 'armazem_faturas');
+  await run(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS fatura_id INTEGER REFERENCES armazem_faturas(id) ON DELETE SET NULL`, 'armazem_compras-fatura');
+  await run(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS foto_fatura_url TEXT NOT NULL DEFAULT ''`, 'armazem_faturas-foto');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, 'notas');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, 'criado_em');
   await run(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`, 'fechado_em');
@@ -269,12 +821,38 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER REFERENCES utilizadores(id) ON DELETE SET NULL,
+    utilizador_id TEXT,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(data, turno)
+    UNIQUE(data, turno, utilizador_id)
   )`, 'escala');
-  await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_utilizador_id_fkey') THEN ALTER TABLE escala ADD CONSTRAINT escala_utilizador_id_fkey FOREIGN KEY (utilizador_id) REFERENCES utilizadores(id) ON DELETE SET NULL; END IF; END $$`, 'escala-fk');
+  await run(`CREATE TABLE IF NOT EXISTS turno_equipa_real (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    utilizador_id TEXT NOT NULL,
+    cobrindo_utilizador_id TEXT,
+    hora_extra BOOLEAN NOT NULL DEFAULT FALSE,
+    motivo_falta TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(turno_id, utilizador_id)
+  )`, 'turno_equipa_real');
+  await run(`CREATE TABLE IF NOT EXISTS turno_faltas (
+    id SERIAL PRIMARY KEY,
+    turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+    utilizador_id TEXT NOT NULL,
+    motivo_falta TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(turno_id, utilizador_id)
+  )`, 'turno_faltas');
+  await run(`ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, 'escala-userid-text');
+  await run(`ALTER TABLE turno_equipa_real ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, 'turno_equipa_real-userid-text');
+  await run(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT`, 'turno_equipa_real-cobrindo');
+  await run(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE`, 'turno_equipa_real-hora-extra');
+  await run(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT ''`, 'turno_equipa_real-motivo-falta');
+  await run(`ALTER TABLE turno_faltas ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, 'turno_faltas-userid-text');
+  await run(`ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key`, 'escala-drop-unique-old');
+  await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_data_turno_utilizador_key') THEN ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id); END IF; END $$`, 'escala-add-unique-new');
   res.json({ results });
 });
 
@@ -303,31 +881,28 @@ app.post('/api/reseed-produtos', auth, requireRole('admin'), async (req, res) =>
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ erro: 'Email e password obrigatórios' });
-    const r = await query('SELECT * FROM utilizadores WHERE email=$1 AND ativo=true', [email]);
+    await ensureUsernameColumn();
+    const password = (req.body.password || '').trim();
+    const login = loginFromBody(req);
+    if (!login || !password) return res.status(400).json({ erro: 'Nome de utilizador e senha são obrigatórios' });
+    const r = await query(
+      `SELECT * FROM utilizadores WHERE ativo=true AND (LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1))`,
+      [login]
+    );
     if (!r.rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
     const user = r.rows[0];
     if (user.senha_hash !== hashPassword(password)) return res.status(401).json({ erro: 'Credenciais inválidas' });
-    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role });
-    res.json({ token, user: { id: user.id, email: user.email, nome: user.nome, role: user.role } });
+    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username });
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username }
+    });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.post('/api/auth/setup', async (req, res) => {
-  try {
-    const { email, codigo, password } = req.body;
-    if (codigo !== 'STOCKOS2025') return res.status(400).json({ erro: 'Código inválido' });
-    if (!password || password.length < 6) return res.status(400).json({ erro: 'Password deve ter pelo menos 6 caracteres' });
-    const r = await query('SELECT * FROM utilizadores WHERE email=$1', [email]);
-    if (!r.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
-    await query('UPDATE utilizadores SET senha_hash=$1 WHERE email=$2', [hashPassword(password), email]);
-    res.json({ sucesso: true });
-  } catch(e) { res.status(500).json({ erro: 'Erro interno' }); }
-});
-
 app.get('/api/auth/me', auth, async (req, res) => {
-  const r = await query('SELECT id,email,nome,role FROM utilizadores WHERE id=$1', [req.user.id]);
+  await ensureUsernameColumn().catch(() => {});
+  const r = await query('SELECT id,email,nome,role,username FROM utilizadores WHERE id=$1', [req.user.id]);
   res.json(r.rows[0]);
 });
 
@@ -353,24 +928,26 @@ app.get('/api/produtos', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.post('/api/produtos', auth, requireRole('admin','gestor'), async (req, res) => {
+app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    const { nome, preco, categoria, venda_avulso } = req.body;
+    const { nome, preco, categoria, venda_avulso, tipo_medicao } = req.body;
+    const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
     const r = await query(
-      'INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-      [nome, preco||0, categoria||'outro', maxOrdem.rows[0].n, !!venda_avulso]
+      'INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+      [nome, preco||0, categoria||'outro', maxOrdem.rows[0].n, !!venda_avulso, medicao]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-app.put('/api/produtos/:id', auth, requireRole('admin','gestor'), async (req, res) => {
+app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    const { nome, preco, categoria, ordem, ativo, venda_avulso } = req.body;
+    const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao } = req.body;
+    const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const r = await query(
-      'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6 WHERE id=$7 RETURNING *',
-      [nome, preco, categoria, ordem, ativo, !!venda_avulso, req.params.id]
+      'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7 WHERE id=$8 RETURNING *',
+      [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, req.params.id]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -381,6 +958,414 @@ app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => 
     await query('UPDATE produtos SET ativo=false WHERE id=$1', [req.params.id]);
     res.json({ sucesso: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── ARMAZÉM ────────────────────────────────────────────────────
+async function processArmazemCompraLine(client, req, body, opts) {
+  opts = opts || {};
+  const faturaId = opts.fatura_id != null ? opts.fatura_id : null;
+  const fornecedorHeader = opts.fornecedor_header || '';
+  const {
+    produto_id,
+    quantidade,
+    caixas,
+    qtd_por_caixa,
+    preco_unitario,
+    fornecedor,
+    notas,
+    novo_produto
+  } = body || {};
+  const caixasNum = parseFloat(caixas) || 0;
+  const qtdPorCaixaNum = parseFloat(qtd_por_caixa) || 0;
+  const qtyRaw = parseFloat(quantidade);
+  const qty = (caixasNum > 0 && qtdPorCaixaNum > 0) ? (caixasNum * qtdPorCaixaNum) : qtyRaw;
+  const precoUnit = parseFloat(preco_unitario);
+  if (!qty || qty <= 0) throw new Error('Quantidade inválida');
+  if (!precoUnit || precoUnit <= 0) throw new Error('Preço unitário inválido');
+
+  let pid = produto_id;
+  if (!pid && novo_produto && novo_produto.nome) {
+    const nome = String(novo_produto.nome || '').trim();
+    if (!nome) throw new Error('Nome do novo produto é obrigatório');
+    const categoria = ['menu','ingredientes','bebida','outro'].includes(novo_produto.categoria) ? novo_produto.categoria : 'outro';
+    const tipoMedicao = novo_produto.tipo_medicao === 'peso' ? 'peso' : 'unidade';
+    const precoProduto = parseFloat(novo_produto.preco) || 0;
+    const maxOrdem = await client.query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
+    const up = await client.query(
+      `INSERT INTO produtos (nome, preco, categoria, ordem, tipo_medicao)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (nome) DO UPDATE SET ativo=true
+       RETURNING id`,
+      [nome, precoProduto, categoria, maxOrdem.rows[0].n, tipoMedicao]
+    );
+    pid = up.rows[0].id;
+  }
+  if (!pid) throw new Error('produto_id é obrigatório');
+
+  const total = qty * precoUnit;
+  const forn = (fornecedor || '').trim() || fornecedorHeader;
+  const notaLine = (notas || '').trim();
+  const compra = await client.query(
+    `INSERT INTO armazem_compras
+     (produto_id, quantidade, caixas, qtd_por_caixa, preco_unitario, valor_total, fornecedor, notas, criado_por, fatura_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     RETURNING *`,
+    [pid, qty, caixasNum, qtdPorCaixaNum, precoUnit, total, forn, notaLine, String(req.user.id || ''), faturaId]
+  );
+
+  const prev = await client.query('SELECT quantidade, custo_medio FROM armazem_stock WHERE produto_id=$1', [pid]);
+  const oldQty = prev.rows.length ? parseFloat(prev.rows[0].quantidade) || 0 : 0;
+  const oldCusto = prev.rows.length ? parseFloat(prev.rows[0].custo_medio) || 0 : 0;
+  const newQty = oldQty + qty;
+  const newCusto = newQty > 0 ? (((oldQty * oldCusto) + total) / newQty) : precoUnit;
+
+  await client.query(
+    `INSERT INTO armazem_stock (produto_id, quantidade, custo_medio, atualizado_em)
+     VALUES ($1,$2,$3,NOW())
+     ON CONFLICT (produto_id) DO UPDATE
+     SET quantidade=$2, custo_medio=$3, atualizado_em=NOW()`,
+    [pid, newQty, newCusto]
+  );
+  return compra.rows[0];
+}
+
+async function ensureArmazemTables() {
+  const pidCheck = await query(
+    `SELECT data_type
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
+  ).catch(() => ({ rows: [] }));
+  const pidType = (pidCheck.rows[0] && pidCheck.rows[0].data_type) || 'integer';
+  const pidCol = pidType === 'uuid' ? 'UUID' : 'INTEGER';
+
+  const stockType = await query(
+    `SELECT data_type
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='armazem_stock' AND column_name='produto_id'`
+  ).catch(() => ({ rows: [] }));
+  const comprasType = await query(
+    `SELECT data_type
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='armazem_compras' AND column_name='produto_id'`
+  ).catch(() => ({ rows: [] }));
+
+  if (stockType.rows.length && stockType.rows[0].data_type !== pidType) {
+    await query(`DROP TABLE IF EXISTS armazem_stock CASCADE`);
+  }
+  if (comprasType.rows.length && comprasType.rows[0].data_type !== pidType) {
+    await query(`DROP TABLE IF EXISTS armazem_compras CASCADE`);
+  }
+
+  await query(`CREATE TABLE IF NOT EXISTS armazem_faturas (
+    id SERIAL PRIMARY KEY,
+    numero_fatura TEXT NOT NULL DEFAULT '',
+    fornecedor TEXT NOT NULL DEFAULT '',
+    data_emissao DATE NOT NULL DEFAULT CURRENT_DATE,
+    notas TEXT NOT NULL DEFAULT '',
+    total_valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+    criado_por TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+
+  await query(`CREATE TABLE IF NOT EXISTS armazem_stock (
+    id SERIAL PRIMARY KEY,
+    produto_id ${pidCol} NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    custo_medio NUMERIC(15,2) NOT NULL DEFAULT 0,
+    atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await query(`CREATE TABLE IF NOT EXISTS armazem_compras (
+    id SERIAL PRIMARY KEY,
+    produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+    fatura_id INTEGER REFERENCES armazem_faturas(id) ON DELETE SET NULL,
+    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+    caixas NUMERIC(12,3) NOT NULL DEFAULT 0,
+    qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0,
+    preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
+    valor_total NUMERIC(15,2) NOT NULL DEFAULT 0,
+    fornecedor TEXT NOT NULL DEFAULT '',
+    notas TEXT NOT NULL DEFAULT '',
+    criado_por TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await query(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0`).catch(()=>{});
+  await query(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0`).catch(()=>{});
+  await query(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS fatura_id INTEGER REFERENCES armazem_faturas(id) ON DELETE SET NULL`).catch(()=>{});
+  await ensureTurnoSaidas();
+  await query(`CREATE TABLE IF NOT EXISTS armazem_libertacoes (
+    id SERIAL PRIMARY KEY,
+    data DATE NOT NULL,
+    valor NUMERIC(15,2) NOT NULL,
+    notas TEXT NOT NULL DEFAULT '',
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    criado_por TEXT NOT NULL DEFAULT ''
+  )`).catch(() => {});
+  await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS justificacao_excesso TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS turno_saida_id INTEGER`).catch(() => {});
+  await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS foto_fatura_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_turno_saida_id_fkey') THEN
+      ALTER TABLE armazem_faturas ADD CONSTRAINT armazem_faturas_turno_saida_id_fkey
+      FOREIGN KEY (turno_saida_id) REFERENCES turno_saidas(id) ON DELETE SET NULL;
+    END IF;
+  END $$`).catch(() => {});
+}
+
+app.get('/api/armazem/saldo', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const data = req.query.data || new Date().toISOString().split('T')[0];
+    const lib = await query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [data]);
+    const fat = await query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [data]);
+    const lis = await query(
+      `SELECT l.*, u.nome as criado_por_nome FROM armazem_libertacoes l
+       LEFT JOIN utilizadores u ON u.id::text = l.criado_por::text
+       WHERE l.data=$1 ORDER BY l.criado_em DESC`,
+      [data]
+    );
+    const totalLib = parseFloat(lib.rows[0].t) || 0;
+    const totalFat = parseFloat(fat.rows[0].t) || 0;
+    res.json({
+      data,
+      total_libertacoes: totalLib,
+      total_faturas: totalFat,
+      saldo: totalLib - totalFat,
+      libertacoes: lis.rows
+    });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/armazem/saidas-dia', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureTurnoSaidas();
+    const data = req.query.data || new Date().toISOString().split('T')[0];
+    const r = await query(
+      `SELECT s.id, s.turno_id, s.descricao, s.valor, s.notas, s.criado_em, t.nome as turno_nome
+       FROM turno_saidas s
+       JOIN turnos t ON t.id = s.turno_id
+       WHERE t.data = $1
+       ORDER BY s.criado_em DESC`,
+      [data]
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/armazem/libertacoes', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const { data, valor, notas } = req.body || {};
+    const d = (data || new Date().toISOString().split('T')[0]).trim();
+    const v = parseFloat(valor);
+    if (!v || v <= 0) return res.status(400).json({ erro: 'Indique um valor positivo para a libertação.' });
+    const r = await query(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [d, v, String(notas || '').trim(), String(req.user.id || '')]
+    );
+    res.json(r.rows[0]);
+  } catch(e) { res.status(400).json({ erro: e.message }); }
+});
+
+app.delete('/api/armazem/libertacoes/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const r = await query('DELETE FROM armazem_libertacoes WHERE id=$1 RETURNING id', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Libertação não encontrada' });
+    res.json({ ok: true });
+  } catch(e) { res.status(400).json({ erro: e.message }); }
+});
+
+app.get('/api/armazem/inventario', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const r = await query(
+      `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
+              COALESCE(a.quantidade, 0) as quantidade,
+              COALESCE(a.custo_medio, 0) as custo_medio,
+              a.atualizado_em
+       FROM produtos p
+       LEFT JOIN armazem_stock a ON a.produto_id = p.id
+       WHERE p.ativo=true
+       ORDER BY p.ordem, p.nome`
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
+    const dataDia = (req.query.data || '').trim();
+    const filtroDia = /^\d{4}-\d{2}-\d{2}$/.test(dataDia);
+    const r = filtroDia
+      ? await query(
+          `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero
+           FROM armazem_compras c
+           JOIN produtos p ON p.id = c.produto_id
+           LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
+           LEFT JOIN armazem_faturas f ON f.id = c.fatura_id
+           WHERE (c.fatura_id IS NOT NULL AND f.data_emissao = $1::date)
+              OR (c.fatura_id IS NULL AND c.criado_em::date = $1::date)
+           ORDER BY c.criado_em DESC
+           LIMIT ${limit}`,
+          [dataDia]
+        )
+      : await query(
+          `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero
+           FROM armazem_compras c
+           JOIN produtos p ON p.id = c.produto_id
+           LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
+           LEFT JOIN armazem_faturas f ON f.id = c.fatura_id
+           ORDER BY c.criado_em DESC
+           LIMIT ${limit}`
+        );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  await ensureArmazemTables();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const row = await processArmazemCompraLine(client, req, req.body, {});
+    await client.query('COMMIT');
+    const merged = await client.query(
+      `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
+       FROM armazem_compras c
+       JOIN produtos p ON p.id=c.produto_id
+       WHERE c.id=$1`,
+      [row.id]
+    );
+    res.json(merged.rows[0]);
+  } catch(e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ erro: e.message });
+  } finally { client.release(); }
+});
+
+app.get('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '40', 10)));
+    const dataDia = (req.query.data || '').trim();
+    const filtroDia = /^\d{4}-\d{2}-\d{2}$/.test(dataDia);
+    const r = filtroDia
+      ? await query(
+          `SELECT * FROM armazem_faturas WHERE data_emissao = $1::date ORDER BY criado_em DESC LIMIT ${limit}`,
+          [dataDia]
+        )
+      : await query(
+          `SELECT * FROM armazem_faturas ORDER BY data_emissao DESC, criado_em DESC LIMIT ${limit}`
+        );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const f = await query('SELECT * FROM armazem_faturas WHERE id=$1', [req.params.id]);
+    if (!f.rows.length) return res.status(404).json({ erro: 'Fatura não encontrada' });
+    const linhas = await query(
+      `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
+       FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id
+       WHERE c.fatura_id=$1 ORDER BY c.id`,
+      [req.params.id]
+    );
+    res.json({ ...f.rows[0], linhas: linhas.rows });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  await ensureArmazemTables();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { numero_fatura, fornecedor, data_emissao, notas, linhas, justificacao_excesso, turno_saida_id, foto_fatura_base64 } = req.body || {};
+    if (!Array.isArray(linhas) || !linhas.length) throw new Error('Adicione pelo menos uma linha à fatura');
+    const dataFat = (data_emissao || new Date().toISOString().split('T')[0]).trim();
+    const libRow = await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);
+    const fatRow = await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [dataFat]);
+    const totalLib = parseFloat(libRow.rows[0].t) || 0;
+    const totalFatExistente = parseFloat(fatRow.rows[0].t) || 0;
+    const saldoDisponivel = totalLib - totalFatExistente;
+
+    let sumTotal = 0;
+    for (const linha of linhas) {
+      const qty = (() => {
+        const caixasNum = parseFloat(linha.caixas) || 0;
+        const qtdPor = parseFloat(linha.qtd_por_caixa) || 0;
+        const qtyRaw = parseFloat(linha.quantidade);
+        return (caixasNum > 0 && qtdPor > 0) ? (caixasNum * qtdPor) : qtyRaw;
+      })();
+      const pu = parseFloat(linha.preco_unitario);
+      if (!qty || qty <= 0 || !pu || pu <= 0) throw new Error('Cada linha válida precisa de quantidade e preço unitário.');
+      sumTotal += qty * pu;
+    }
+
+    let just = String(justificacao_excesso || '').trim();
+    let tsid = turno_saida_id != null && turno_saida_id !== '' ? parseInt(turno_saida_id, 10) : null;
+    if (Number.isNaN(tsid)) tsid = null;
+
+    if (sumTotal > saldoDisponivel + 0.005) {
+      if (just.length < 8) {
+        throw new Error(
+          'O total da fatura excede o saldo disponível para este dia (libertações − faturas já registadas). ' +
+          'Indica uma justificação da origem do dinheiro (ex.: saída de caixa, outro fundo).'
+        );
+      }
+      if (tsid != null) {
+        const chk = await client.query(
+          `SELECT s.id FROM turno_saidas s JOIN turnos t ON t.id = s.turno_id WHERE s.id = $1 AND t.data = $2`,
+          [tsid, dataFat]
+        );
+        if (!chk.rows.length) {
+          throw new Error('A saída de caixa seleccionada não pertence ao mesmo dia da fatura.');
+        }
+      }
+    } else {
+      just = '';
+      tsid = null;
+    }
+
+    const ins = await client.query(
+      `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [
+        (numero_fatura || '').trim(),
+        (fornecedor || '').trim(),
+        dataFat,
+        (notas || '').trim(),
+        String(req.user.id || ''),
+        just,
+        tsid
+      ]
+    );
+    const fid = ins.rows[0].id;
+    const forn = (fornecedor || '').trim();
+    sumTotal = 0;
+    for (const linha of linhas) {
+      const row = await processArmazemCompraLine(client, req, linha, { fatura_id: fid, fornecedor_header: forn });
+      sumTotal += parseFloat(row.valor_total) || 0;
+    }
+    await client.query('UPDATE armazem_faturas SET total_valor=$1 WHERE id=$2', [sumTotal, fid]);
+    const fotoRaw = String(foto_fatura_base64 || '').trim();
+    if (fotoRaw) await applyFaturaFotoUrl(client, fid, fotoRaw);
+    await client.query('COMMIT');
+    const fat = await query('SELECT * FROM armazem_faturas WHERE id=$1', [fid]);
+    const linhasOut = await query(
+      `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
+       FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id
+       WHERE c.fatura_id=$1 ORDER BY c.id`,
+      [fid]
+    );
+    res.json({ ...fat.rows[0], linhas: linhasOut.rows });
+  } catch(e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ erro: e.message });
+  } finally { client.release(); }
 });
 
 // ── TURNOS ────────────────────────────────────────────────────
@@ -395,38 +1380,74 @@ app.get('/api/dia', auth, async (req, res) => {
       [data]
     );
 
-    const result = [];
-    for (const turno of turnos.rows) {
-      // Stock com produto info
-      const stock = await query(
-        `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem
+    if (!turnos.rows.length) {
+      return res.json([]);
+    }
+
+    const ids = turnos.rows.map((t) => t.id);
+    const [stockAll, caixaAll] = await Promise.all([
+      query(
+        `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem, p.tipo_medicao
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
-         WHERE ts.turno_id=$1
-         ORDER BY p.ordem, p.nome`,
-        [turno.id]
-      );
+         WHERE ts.turno_id = ANY($1::int[])
+         ORDER BY ts.turno_id, p.ordem, p.nome`,
+        [ids]
+      ),
+      query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids])
+    ]);
 
-      // Caixa
-      const caixa = await query('SELECT * FROM turno_caixa WHERE turno_id=$1', [turno.id]);
+    const stockByTurno = {};
+    for (const row of stockAll.rows) {
+      if (!stockByTurno[row.turno_id]) stockByTurno[row.turno_id] = [];
+      stockByTurno[row.turno_id].push(row);
+    }
+    const caixaByTurno = {};
+    for (const row of caixaAll.rows) {
+      caixaByTurno[row.turno_id] = row;
+    }
 
-      // Comparação com turno anterior
-      const prev = prevTurno(turno.nome, data);
+    const prevKeys = new Set();
+    const prevPairs = [];
+    for (const turno of turnos.rows) {
+      const p = prevTurno(turno.nome, data);
+      const k = `${p.data}\t${p.nome}`;
+      if (!prevKeys.has(k)) {
+        prevKeys.add(k);
+        prevPairs.push([p.data, p.nome]);
+      }
+    }
+
+    const prevMapByDN = {};
+    if (prevPairs.length) {
+      const conds = prevPairs.map((_, i) => `(t.data = $${i * 2 + 1} AND t.nome = $${i * 2 + 2})`).join(' OR ');
+      const params = prevPairs.flat();
       const prevStock = await query(
-        `SELECT ts.produto_id, ts.deixado FROM turno_stock ts
+        `SELECT ts.produto_id, ts.deixado, t.data, t.nome
+         FROM turno_stock ts
          JOIN turnos t ON ts.turno_id=t.id
-         WHERE t.data=$1 AND t.nome=$2`,
-        [prev.data, prev.nome]
+         WHERE ${conds}`,
+        params
       );
-      const prevMap = {};
-      prevStock.rows.forEach(r => { prevMap[r.produto_id] = parseFloat(r.deixado); });
+      for (const r of prevStock.rows) {
+        const dk = `${normDataPostgres(r.data)}|${r.nome}`;
+        if (!prevMapByDN[dk]) prevMapByDN[dk] = {};
+        prevMapByDN[dk][r.produto_id] = parseFloat(r.deixado);
+      }
+    }
 
-      const stockFinal = stock.rows.map(s => {
-        const enc  = parseFloat(s.encontrado);
-        const ent  = parseFloat(s.entrada);
-        const dei  = parseFloat(s.deixado);
+    const result = [];
+    for (const turno of turnos.rows) {
+      const stock = stockByTurno[turno.id] || [];
+      const prev = prevTurno(turno.nome, data);
+      const prevMap = prevMapByDN[`${normDataPostgres(prev.data)}|${prev.nome}`] || {};
+
+      const stockFinal = stock.map((s) => {
+        const enc = parseFloat(s.encontrado);
+        const ent = parseFloat(s.entrada);
+        const dei = parseFloat(s.deixado);
         const vend = Math.max(0, enc + ent - dei);
-        const val  = vend * parseFloat(s.preco);
+        const val = vend * parseFloat(s.preco);
 
         let comparacao = null;
         if (prevMap[s.produto_id] !== undefined) {
@@ -439,9 +1460,9 @@ app.get('/api/dia', auth, async (req, res) => {
         return { ...s, vendido: vend, valor: val, comparacao, prev_deixado: prevDeixado };
       });
 
-      const c = caixa.rows[0] || { tpa:0, transferencia:0, dinheiro:0, saida:0 };
-      const totalGerado = parseFloat(c.tpa||0) + parseFloat(c.transferencia||0) + parseFloat(c.dinheiro||0);
-      const totalFinal  = totalGerado - parseFloat(c.saida||0);
+      const c = caixaByTurno[turno.id] || { tpa: 0, transferencia: 0, dinheiro: 0, saida: 0 };
+      const totalGerado = parseFloat(c.tpa || 0) + parseFloat(c.transferencia || 0) + parseFloat(c.dinheiro || 0);
+      const totalFinal = totalGerado - parseFloat(c.saida || 0);
       const totalVendas = stockFinal.reduce((sum, s) => sum + s.valor, 0);
 
       result.push({
@@ -452,7 +1473,9 @@ app.get('/api/dia', auth, async (req, res) => {
       });
     }
     res.json(result);
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 app.post('/api/turnos/abrir', auth, async (req, res) => {
@@ -526,7 +1549,7 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// ── ENTRADAS DE STOCK ──────────────────────────────────────────
+// ── TURNO: entradas de stock + saídas de caixa (caixa.saida = despesas + compras stock) ──
 async function ensureTurnoEntradas() {
   await query(`CREATE TABLE IF NOT EXISTS turno_entradas (
     id SERIAL PRIMARY KEY,
@@ -547,7 +1570,7 @@ async function ensureTurnoEntradas() {
 app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
   try {
     const r = await query(
-      `SELECT te.*, p.nome as produto_nome
+      `SELECT te.*, p.nome as produto_nome, p.tipo_medicao
        FROM turno_entradas te JOIN produtos p ON te.produto_id=p.id
        WHERE te.turno_id=$1 ORDER BY te.criado_em DESC`,
       [req.params.id]
@@ -644,7 +1667,6 @@ app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// ── SAÍDAS DE CAIXA ────────────────────────────────────────────
 async function ensureTurnoSaidas() {
   await query(`CREATE TABLE IF NOT EXISTS turno_saidas (
     id SERIAL PRIMARY KEY,
@@ -696,8 +1718,8 @@ app.post('/api/turnos/:id/saidas', auth, async (req, res) => {
   } finally { client.release(); }
 });
 
-// ── DASHBOARD ─────────────────────────────────────────────────
-app.get('/api/dashboard', auth, async (req, res) => {
+// ── DASHBOARD (agregado do dia — só admin) ────────────────────
+app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
   try {
     const data = req.query.data || new Date().toISOString().split('T')[0];
 
@@ -739,6 +1761,231 @@ app.get('/api/dashboard', auth, async (req, res) => {
       caixa: caixa.rows[0]
     });
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const data = (req.query.data || '').trim();
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
+    let sql = `SELECT d.*, u.nome AS criado_por_nome, t.nome AS turno_nome, t.data AS turno_data
+               FROM depositos_banco d
+               JOIN turnos t ON t.id = d.turno_id
+               LEFT JOIN utilizadores u ON u.id::text = d.criado_por::text`;
+    const params = [];
+    if (data) {
+      sql += ` WHERE t.data = $1`;
+      params.push(data);
+    }
+    sql += ` ORDER BY t.data DESC, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 ELSE 3 END, d.criado_em DESC LIMIT ${limit}`;
+    const r = await query(sql, params);
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const { turno_id, data_deposito, valor_tpa, referencia, notas } = req.body || {};
+    let pv;
+    try {
+      pv = parseDepositoValores(req.body || {});
+    } catch (e) {
+      return res.status(400).json({ erro: e.message });
+    }
+    if (!pv) return res.status(400).json({ erro: 'Indique o valor bruto (antes de saídas) ou o valor líquido depositado.' });
+    const v = pv.valor;
+    const vsaida = pv.valor_saidas;
+    const saidasDestino = sanitizeSaidasDestino(req.body?.saidas_destino);
+    if (vsaida > 0 && !saidasDestino) {
+      return res.status(400).json({ erro: 'Indica o que foi comprado para o armazém / stock (obrigatório quando há valor retirado do depósito).' });
+    }
+    const vtpa = parseFloat(valor_tpa);
+    if (Number.isNaN(vtpa) || vtpa < 0) return res.status(400).json({ erro: 'Indique o valor registado no TPA (≥ 0).' });
+    await assertTurnoFechado(turno_id);
+    const ddep = (data_deposito || new Date().toISOString().split('T')[0]).trim();
+    const r = await query(
+      `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, saidas_destino, referencia, notas, criado_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (turno_id) DO UPDATE SET
+         data_deposito = EXCLUDED.data_deposito,
+         valor = EXCLUDED.valor,
+         valor_tpa = EXCLUDED.valor_tpa,
+         valor_saidas = EXCLUDED.valor_saidas,
+         saidas_destino = EXCLUDED.saidas_destino,
+         referencia = EXCLUDED.referencia,
+         notas = EXCLUDED.notas,
+         criado_em = NOW()
+       RETURNING *`,
+      [
+        parseInt(turno_id, 10),
+        ddep,
+        v,
+        vtpa,
+        vsaida,
+        vsaida > 0 ? saidasDestino : '',
+        String(referencia || '').trim(),
+        String(notas || '').trim(),
+        String(req.user.id || '')
+      ]
+    );
+    const row = r.rows[0];
+    const u = await query('SELECT nome FROM utilizadores WHERE id=$1', [req.user.id]).catch(() => ({ rows: [] }));
+    const tn = await query(`SELECT nome, data FROM turnos WHERE id = $1`, [row.turno_id]).catch(() => ({ rows: [] }));
+    res.json({
+      ...row,
+      criado_por_nome: u.rows[0]?.nome || '',
+      turno_nome: tn.rows[0]?.nome || '',
+      turno_data: tn.rows[0]?.data || null
+    });
+  } catch(e) {
+    res.status(400).json({ erro: e.message });
+  }
+});
+
+app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const { itens, valor_saidas_total, saidas_destino: saidasDestinoBody, bordero_foto_base64 } = req.body || {};
+    const saidasTotalRaw = parseFloat(valor_saidas_total);
+    const saidasTotal = Number.isNaN(saidasTotalRaw) ? 0 : Math.max(0, saidasTotalRaw);
+    const saidasDestino = sanitizeSaidasDestino(saidasDestinoBody);
+    if (saidasTotal > 0 && !saidasDestino) {
+      return res.status(400).json({ erro: 'Indica o que foi comprado para o armazém / stock (obrigatório quando há valor retirado do depósito).' });
+    }
+    if (!Array.isArray(itens) || !itens.length) {
+      return res.status(400).json({ erro: 'Envia os depósitos por turno (lista itens).' });
+    }
+    const valid = [];
+    for (const raw of itens) {
+      const tid = parseInt(raw.turno_id, 10);
+      if (!tid) continue;
+      let pv;
+      try {
+        const rawSemSaidasPorTurno = { ...raw, valor_saidas: 0 };
+        pv = parseDepositoValores(rawSemSaidasPorTurno);
+      } catch (e) {
+        return res.status(400).json({ erro: e.message });
+      }
+      if (!pv) continue;
+      const v = pv.valor;
+      const vtpa = parseFloat(raw.valor_tpa);
+      if (Number.isNaN(vtpa) || vtpa < 0) {
+        return res.status(400).json({ erro: 'Indica o valor registado no TPA (≥ 0) em cada turno com depósito.' });
+      }
+      await assertTurnoFechado(tid);
+      valid.push({
+        turno_id: tid,
+        data_deposito: (raw.data_deposito || new Date().toISOString().split('T')[0]).trim(),
+        valor: v,
+        valor_saidas: 0,
+        saidas_destino: '',
+        valor_tpa: vtpa,
+        referencia: String(raw.referencia || '').trim(),
+        notas: String(raw.notas || '').trim()
+      });
+    }
+    if (!valid.length) {
+      return res.status(400).json({ erro: 'Indica pelo menos um turno fechado com dinheiro depositado (> 0).' });
+    }
+    const seen = new Set();
+    const dedup = valid.filter((row) => {
+      if (seen.has(row.turno_id)) return false;
+      seen.add(row.turno_id);
+      return true;
+    });
+    const ids = dedup.map((r) => r.turno_id);
+    const tr = await query(`SELECT id, nome FROM turnos WHERE id = ANY($1::int[])`, [ids]);
+    const nomeById = Object.fromEntries(tr.rows.map((x) => [x.id, x.nome]));
+    dedup.sort((a, b) => ordemTurnoNome(nomeById[a.turno_id]) - ordemTurnoNome(nomeById[b.turno_id]));
+    const sumBruto = dedup.reduce((s, r) => s + (parseFloat(r.valor) || 0), 0);
+    if (saidasTotal > sumBruto) {
+      return res.status(400).json({ erro: 'O valor para compras de armazém não pode ser maior que a soma dos valores brutos.' });
+    }
+    if (sumBruto - saidasTotal <= 0) {
+      return res.status(400).json({ erro: 'O líquido depositado (brutos menos compras de armazém) tem de ser positivo.' });
+    }
+    dedup[0].valor_saidas = saidasTotal;
+    dedup[0].saidas_destino = saidasTotal > 0 ? saidasDestino : '';
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const out = [];
+      for (const row of dedup) {
+        const r = await client.query(
+          `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, saidas_destino, referencia, notas, criado_por)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (turno_id) DO UPDATE SET
+             data_deposito = EXCLUDED.data_deposito,
+             valor = EXCLUDED.valor,
+             valor_tpa = EXCLUDED.valor_tpa,
+             valor_saidas = EXCLUDED.valor_saidas,
+             saidas_destino = EXCLUDED.saidas_destino,
+             referencia = EXCLUDED.referencia,
+             notas = EXCLUDED.notas,
+             criado_em = NOW()
+           RETURNING *`,
+          [
+            row.turno_id,
+            row.data_deposito,
+            row.valor,
+            row.valor_tpa,
+            row.valor_saidas,
+            row.saidas_destino || '',
+            row.referencia,
+            row.notas,
+            String(req.user.id || '')
+          ]
+        );
+        out.push(r.rows[0]);
+      }
+      await client.query('COMMIT');
+      if (bordero_foto_base64 && String(bordero_foto_base64).trim()) {
+        const td = await query('SELECT data::text FROM turnos WHERE id=$1', [dedup[0].turno_id]);
+        const calendarDay = (td.rows[0]?.data || dedup[0].data_deposito || '').toString().slice(0, 10);
+        await applyBorderoFotoCanonicalDay(calendarDay, out[0].id, bordero_foto_base64);
+      }
+      res.json({ ok: true, registos: out.length, rows: out });
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      await client.release();
+    }
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
+});
+
+app.post('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const dataStr = (req.body?.data || '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dataStr)) {
+      return res.status(400).json({ erro: 'Indica a data (YYYY-MM-DD).' });
+    }
+    const cid = await getCanonicalDepositIdForDay(dataStr);
+    if (!cid) return res.status(404).json({ erro: 'Não há depósitos registados neste dia.' });
+    await applyBorderoFotoCanonicalDay(dataStr, cid, req.body?.foto_base64);
+    const u = await query('SELECT bordero_foto_url FROM depositos_banco WHERE id=$1', [cid]);
+    res.json({ ok: true, bordero_foto_url: u.rows[0]?.bordero_foto_url || '' });
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
+});
+
+app.delete('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const dataStr = (req.query.data || '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dataStr)) {
+      return res.status(400).json({ erro: 'Indica ?data=YYYY-MM-DD.' });
+    }
+    await purgeBorderoUrlsForDayAndStorage(dataStr);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
 });
 
 // ── HISTÓRICO ─────────────────────────────────────────────────
@@ -894,17 +2141,29 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
 // ── UTILIZADORES ──────────────────────────────────────────────
 app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
-    const r = await query('SELECT id,email,nome,role,ativo FROM utilizadores ORDER BY nome');
+    await ensureUsernameColumn();
+    const r = await query('SELECT id,email,nome,username,role,ativo FROM utilizadores ORDER BY nome');
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { email, nome, role } = req.body;
+    await ensureUsernameColumn();
+    const { email, nome, role, username } = req.body;
+    const un = normalizeUsername(username);
+    if (!email || !String(email).trim()) return res.status(400).json({ erro: 'Email é obrigatório' });
+    if (!isValidUsername(un)) {
+      return res.status(400).json({ erro: 'Nome de utilizador: 3 a 50 caracteres (letras minúsculas, números, . _ -)' });
+    }
+    const dup = await query(
+      'SELECT id FROM utilizadores WHERE LOWER(username)=LOWER($1)',
+      [un]
+    );
+    if (dup.rows.length) return res.status(400).json({ erro: 'Nome de utilizador já em uso' });
     const r = await query(
-      'INSERT INTO utilizadores (email,nome,role,senha_hash) VALUES ($1,$2,$3,$4) RETURNING id,email,nome,role',
-      [email, nome, role||'operador', hashPassword('StockOS2025!')]
+      'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
+      [String(email).trim(), nome, un, role || 'operador', hashPassword('StockOS2025!')]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -912,14 +2171,31 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
 
 app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { nome, role, ativo, password } = req.body;
+    await ensureUsernameColumn();
+    const { nome, role, ativo, password, username } = req.body;
+    const un = normalizeUsername(username);
+    if (un && !isValidUsername(un)) {
+      return res.status(400).json({ erro: 'Nome de utilizador: 3 a 50 caracteres (letras minúsculas, números, . _ -)' });
+    }
+    if (un) {
+      const dup = await query(
+        'SELECT id FROM utilizadores WHERE LOWER(username)=LOWER($1) AND id <> $2',
+        [un, req.params.id]
+      );
+      if (dup.rows.length) return res.status(400).json({ erro: 'Nome de utilizador já em uso' });
+    }
     if (password) {
       await query('UPDATE utilizadores SET senha_hash=$1 WHERE id=$2', [hashPassword(password), req.params.id]);
     }
-    const r = await query(
-      'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3 WHERE id=$4 RETURNING id,email,nome,role,ativo',
-      [nome, role, ativo, req.params.id]
-    );
+    const r = un
+      ? await query(
+          'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,username=$4 WHERE id=$5 RETURNING id,email,nome,username,role,ativo',
+          [nome, role, ativo, un, req.params.id]
+        )
+      : await query(
+          'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3 WHERE id=$4 RETURNING id,email,nome,username,role,ativo',
+          [nome, role, ativo, req.params.id]
+        );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -930,11 +2206,14 @@ async function ensureEscala() {
     id SERIAL PRIMARY KEY,
     data DATE NOT NULL,
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER,
+    utilizador_id TEXT,
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(data, turno)
+    UNIQUE(data, turno, utilizador_id)
   )`);
+  await query(`ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`).catch(()=>{});
+  await query(`ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key`).catch(()=>{});
+  await query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_data_turno_utilizador_key') THEN ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id); END IF; END $$`).catch(()=>{});
 }
 
 app.get('/api/escala', auth, async (req, res) => {
@@ -945,7 +2224,7 @@ app.get('/api/escala', auth, async (req, res) => {
       `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id,
               u.nome as utilizador_nome, u.role as utilizador_role
        FROM escala e
-       LEFT JOIN utilizadores u ON e.utilizador_id = u.id
+       LEFT JOIN utilizadores u ON e.utilizador_id::text = u.id::text
        WHERE e.data >= $1 AND e.data <= $2
        ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
       [data_inicio, data_fim]
@@ -966,7 +2245,7 @@ app.put('/api/escala', auth, requireRole('admin', 'gestor'), async (req, res) =>
       const r = await query(
         `INSERT INTO escala (data, turno, utilizador_id, notas)
          VALUES ($1, $2, $3, $4)
-         ON CONFLICT (data, turno) DO UPDATE SET utilizador_id=$3, notas=$4
+         ON CONFLICT (data, turno, utilizador_id) DO UPDATE SET notas=$4
          RETURNING *`,
         [data, turno, utilizador_id, notas || '']
       );
@@ -988,9 +2267,15 @@ async function ensureEscalaTemplate() {
     id SERIAL PRIMARY KEY,
     dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
     turno VARCHAR(10) NOT NULL CHECK (turno IN ('manha','tarde','noite')),
-    utilizador_id INTEGER NOT NULL,
+    utilizador_id TEXT,
+    notas TEXT NOT NULL DEFAULT '',
     UNIQUE(dia_semana, turno, utilizador_id)
   )`);
+  await query(`ALTER TABLE escala_template ALTER COLUMN utilizador_id DROP NOT NULL`).catch(()=>{});
+  await query(`ALTER TABLE escala_template ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`).catch(()=>{});
+  await query(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`).catch(()=>{});
+  await query(`ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key`).catch(()=>{});
+  await query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_template_dia_turno_utilizador_key') THEN ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id); END IF; END $$`).catch(()=>{});
 }
 
 app.get('/api/escala/template', auth, async (req, res) => {
@@ -998,7 +2283,7 @@ app.get('/api/escala/template', auth, async (req, res) => {
     const r = await query(`
       SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, u.nome as utilizador_nome
       FROM escala_template et
-      JOIN utilizadores u ON et.utilizador_id = u.id
+      LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text
       ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
     `);
     res.json(r.rows);
@@ -1011,14 +2296,19 @@ app.get('/api/escala/template', auth, async (req, res) => {
 
 app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
-    const { dia_semana, turno, utilizador_id } = req.body;
-    if (dia_semana === undefined || !turno || !utilizador_id) return res.status(400).json({ erro: 'dia_semana, turno e utilizador_id são obrigatórios' });
-    const r = await query(
-      `INSERT INTO escala_template (dia_semana, turno, utilizador_id) VALUES ($1, $2, $3)
-       ON CONFLICT (dia_semana, turno, utilizador_id) DO NOTHING RETURNING *`,
-      [dia_semana, turno, utilizador_id]
+    const { dia_semana, turno, utilizador_id, notas } = req.body;
+    if (dia_semana === undefined || !turno) return res.status(400).json({ erro: 'dia_semana e turno são obrigatórios' });
+    const u = utilizador_id || null;
+    if (!u) return res.status(400).json({ erro: 'Seleciona um funcionário' });
+    const n = notas || '';
+    const ins = await query(
+      `INSERT INTO escala_template (dia_semana, turno, utilizador_id, notas)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (dia_semana, turno, utilizador_id) DO UPDATE SET notas=EXCLUDED.notas
+       RETURNING *`,
+      [dia_semana, turno, u, n]
     );
-    res.json(r.rows[0] || { sucesso: true });
+    res.json(ins.rows[0] || { sucesso: true });
   } catch(e) {
     if (e.message.includes('does not exist')) {
       try { await ensureEscalaTemplate(); res.status(400).json({ erro: 'Tabela criada, tenta novamente' }); } catch(e2) { res.status(500).json({ erro: e2.message }); }
@@ -1029,6 +2319,153 @@ app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (re
 app.delete('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     await query(`DELETE FROM escala_template WHERE id=$1`, [req.params.id]);
+    res.json({ sucesso: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/equipa/pessoas', auth, async (req, res) => {
+  try {
+    const r = await query('SELECT id,nome,role,ativo FROM utilizadores WHERE ativo=true ORDER BY nome');
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT er.*,
+              u.nome AS utilizador_nome, u.role AS utilizador_role,
+              uc.nome AS cobrindo_utilizador_nome
+       FROM turno_equipa_real er
+       LEFT JOIN utilizadores u ON er.utilizador_id::text = u.id::text
+       LEFT JOIN utilizadores uc ON er.cobrindo_utilizador_id::text = uc.id::text
+       WHERE er.turno_id=$1
+       ORDER BY er.criado_em ASC`,
+      [req.params.id]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    if (e.message.includes('does not exist')) {
+      try {
+        await query(`CREATE TABLE IF NOT EXISTS turno_equipa_real (
+          id SERIAL PRIMARY KEY,
+          turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+          utilizador_id TEXT NOT NULL,
+          cobrindo_utilizador_id TEXT,
+          hora_extra BOOLEAN NOT NULL DEFAULT FALSE,
+          motivo_falta TEXT NOT NULL DEFAULT '',
+          notas TEXT NOT NULL DEFAULT '',
+          criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE(turno_id, utilizador_id)
+        )`);
+        await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT`).catch(()=>{});
+        await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE`).catch(()=>{});
+        await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT ''`).catch(()=>{});
+        const r2 = await query(
+          `SELECT er.*,
+                  u.nome AS utilizador_nome, u.role AS utilizador_role,
+                  uc.nome AS cobrindo_utilizador_nome
+           FROM turno_equipa_real er
+           LEFT JOIN utilizadores u ON er.utilizador_id::text = u.id::text
+           LEFT JOIN utilizadores uc ON er.cobrindo_utilizador_id::text = uc.id::text
+           WHERE er.turno_id=$1
+           ORDER BY er.criado_em ASC`,
+          [req.params.id]
+        );
+        return res.json(r2.rows);
+      } catch (e2) { return res.status(500).json({ erro: e2.message }); }
+    }
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.post('/api/turnos/:id/equipa-real', auth, async (req, res) => {
+  try {
+    const { utilizador_id, cobrindo_utilizador_id, hora_extra, motivo_falta, notas } = req.body || {};
+    if (!utilizador_id) return res.status(400).json({ erro: 'utilizador_id é obrigatório' });
+    const cobre = cobrindo_utilizador_id ? String(cobrindo_utilizador_id) : null;
+    const he = !!hora_extra;
+    const motivo = (motivo_falta || '').trim();
+    if (cobre && !motivo) return res.status(400).json({ erro: 'motivo_falta é obrigatório quando há cobertura' });
+    const r = await query(
+      `INSERT INTO turno_equipa_real (turno_id, utilizador_id, cobrindo_utilizador_id, hora_extra, motivo_falta, notas)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (turno_id, utilizador_id) DO UPDATE
+       SET cobrindo_utilizador_id=EXCLUDED.cobrindo_utilizador_id,
+           hora_extra=EXCLUDED.hora_extra,
+           motivo_falta=EXCLUDED.motivo_falta,
+           notas=EXCLUDED.notas
+       RETURNING *`,
+      [req.params.id, String(utilizador_id), cobre, he, motivo, (notas || '').trim()]
+    );
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/turnos/:id/equipa-real/:utilizador_id', auth, async (req, res) => {
+  try {
+    await query('DELETE FROM turno_equipa_real WHERE turno_id=$1 AND utilizador_id=$2', [req.params.id, req.params.utilizador_id]);
+    res.json({ sucesso: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/turnos/:id/faltas', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT f.*, u.nome AS utilizador_nome, u.role AS utilizador_role
+       FROM turno_faltas f
+       LEFT JOIN utilizadores u ON f.utilizador_id::text = u.id::text
+       WHERE f.turno_id=$1
+       ORDER BY f.criado_em ASC`,
+      [req.params.id]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    if (e.message.includes('does not exist')) {
+      try {
+        await query(`CREATE TABLE IF NOT EXISTS turno_faltas (
+          id SERIAL PRIMARY KEY,
+          turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+          utilizador_id TEXT NOT NULL,
+          motivo_falta TEXT NOT NULL DEFAULT '',
+          criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE(turno_id, utilizador_id)
+        )`);
+        const r2 = await query(
+          `SELECT f.*, u.nome AS utilizador_nome, u.role AS utilizador_role
+           FROM turno_faltas f
+           LEFT JOIN utilizadores u ON f.utilizador_id::text = u.id::text
+           WHERE f.turno_id=$1
+           ORDER BY f.criado_em ASC`,
+          [req.params.id]
+        );
+        return res.json(r2.rows);
+      } catch (e2) { return res.status(500).json({ erro: e2.message }); }
+    }
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.post('/api/turnos/:id/faltas', auth, async (req, res) => {
+  try {
+    const { utilizador_id, motivo_falta } = req.body || {};
+    if (!utilizador_id) return res.status(400).json({ erro: 'utilizador_id é obrigatório' });
+    const motivo = (motivo_falta || '').trim();
+    if (!motivo) return res.status(400).json({ erro: 'motivo_falta é obrigatório' });
+    const r = await query(
+      `INSERT INTO turno_faltas (turno_id, utilizador_id, motivo_falta)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (turno_id, utilizador_id) DO UPDATE SET motivo_falta=EXCLUDED.motivo_falta
+       RETURNING *`,
+      [req.params.id, String(utilizador_id), motivo]
+    );
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/turnos/:id/faltas/:utilizador_id', auth, async (req, res) => {
+  try {
+    await query('DELETE FROM turno_faltas WHERE turno_id=$1 AND utilizador_id=$2', [req.params.id, req.params.utilizador_id]);
     res.json({ sucesso: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

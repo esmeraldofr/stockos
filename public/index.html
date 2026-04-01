@@ -33,6 +33,14 @@ input,select,button,textarea{font-family:inherit}
 /* Botões */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 18px;border-radius:8px;border:none;cursor:pointer;font-size:14px;font-weight:600;transition:.2s}
 .btn:disabled{opacity:.5;cursor:default}
+button.is-action-busy{cursor:wait!important}
+.date-nav button:disabled{opacity:.55;cursor:wait}
+.turno-card.is-action-busy,.js-busy-click.is-action-busy{cursor:wait;position:relative}
+.turno-card.is-action-busy::after,.js-busy-click.is-action-busy::after{
+  content:'A processar…';
+  position:absolute;inset:auto 8px 8px 8px;font-size:11px;font-weight:600;color:#94a3b8;
+  text-align:center;padding:4px 8px;background:rgba(15,23,42,.92);border-radius:6px;border:1px solid #334155
+}
 .btn-primary{background:#3b82f6;color:#fff}
 .btn-primary:hover:not(:disabled){background:#2563eb}
 .btn-success{background:#22c55e;color:#fff}
@@ -47,8 +55,9 @@ input,select,button,textarea{font-family:inherit}
 /* Inputs */
 .field{margin-bottom:14px}
 .field label{display:block;font-size:13px;color:#94a3b8;margin-bottom:5px}
-.field input,.field select{width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 12px;color:#f1f5f9;font-size:14px}
-.field input:focus,.field select:focus{outline:none;border-color:#3b82f6}
+.field input,.field select,.field textarea{width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 12px;color:#f1f5f9;font-size:14px}
+.field textarea{min-height:72px;resize:vertical;line-height:1.4}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:#3b82f6}
 
 /* Badges */
 .badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600}
@@ -139,7 +148,6 @@ tr:hover .td-name{background:#1e293b}
 .modal-close{background:none;border:none;color:#64748b;cursor:pointer;font-size:22px;line-height:1}
 
 /* Setup */
-.setup-banner{background:#172554;border:1px solid #1d4ed8;border-radius:10px;padding:14px;margin-bottom:16px;font-size:13px;color:#93c5fd}
 
 /* Produto list */
 .produto-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #334155}
@@ -180,6 +188,81 @@ tr:hover .td-name{background:#1e293b}
 .scroll-mode .turno-tab-panel{display:block!important}
 .scroll-mode .turno-tabs .turno-tab{opacity:.5;pointer-events:none}
 .scroll-mode .turno-view-toggle{color:#3b82f6;border-color:#3b82f6}
+
+/* Escala da semana (página Dia) — grelha turnos × dias */
+.dia-escala-intro{font-size:12px;color:#94a3b8;margin:0 0 14px;line-height:1.45}
+.dia-escala-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
+.dia-escala-grid{
+  display:grid;
+  grid-template-columns:minmax(76px,92px) repeat(7,minmax(88px,1fr));
+  grid-template-rows:auto repeat(3,minmax(72px,auto));
+  min-width:700px;
+  border:1px solid #334155;
+  border-radius:10px;
+  overflow:hidden;
+  background:#0a0f1a;
+}
+.dia-escala-corner{
+  background:#0f172a;
+  border-bottom:1px solid #334155;
+  border-right:1px solid #334155;
+}
+.dia-escala-colhead{
+  text-align:center;
+  padding:10px 4px 8px;
+  background:#0f172a;
+  border-bottom:1px solid #334155;
+  border-right:1px solid #334155;
+  color:#94a3b8;
+  font-weight:800;
+  font-size:11px;
+  letter-spacing:.06em;
+}
+.dia-escala-colhead:last-of-type{border-right:none}
+.dia-escala-colhead-date{display:block;font-weight:500;font-size:10px;color:#64748b;margin-top:4px;letter-spacing:0}
+.dia-escala-colhead--anchor{background:rgba(59,130,246,0.14);color:#bfdbfe}
+.dia-escala-colhead--anchor .dia-escala-colhead-date{color:#93c5fd}
+.dia-escala-rowhead{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  justify-content:center;
+  gap:3px;
+  padding:8px 10px 8px 6px;
+  font-weight:700;
+  font-size:13px;
+  border-bottom:1px solid #334155;
+  border-right:1px solid #334155;
+  background:#0c1222;
+}
+.dia-escala-rowhead-time{font-size:10px;font-weight:600;color:#64748b;white-space:nowrap;line-height:1.2}
+.dia-escala-shift--manha{color:#fb923c}
+.dia-escala-shift--tarde{color:#60a5fa}
+.dia-escala-shift--noite{color:#a78bfa}
+.dia-escala-cell{
+  border-bottom:1px solid #334155;
+  border-right:1px solid #334155;
+  padding:8px 6px;
+  background:rgba(15,23,42,0.9);
+  min-height:72px;
+}
+.dia-escala-cell:nth-child(8n){border-right:none}
+.dia-escala-cell--anchor{background:rgba(59,130,246,0.08)}
+.dia-escala-chips{display:flex;flex-wrap:wrap;gap:5px;align-content:flex-start;align-items:flex-start}
+.dia-escala-chip{
+  display:inline-block;
+  background:#1e3a5f;
+  color:#f8fafc;
+  padding:5px 10px;
+  border-radius:8px;
+  font-size:12px;
+  font-weight:500;
+  line-height:1.25;
+  border:1px solid #2d4a6f;
+  max-width:100%;
+  word-break:break-word;
+}
+.dia-escala-empty{color:#475569;font-size:12px;padding:6px 4px}
 </style>
 </head>
 <body>
@@ -207,8 +290,10 @@ const S = {
   date: new Date().toISOString().split('T')[0],
   turnoId: null,
   turnoData: null,
+  turnoCanEdit: false,
   produtos: [],
-  utilizadores: []
+  utilizadores: [],
+  turnosDia: []
 };
 
 // ── API ───────────────────────────────────────────────────────
@@ -221,7 +306,15 @@ async function api(method, path, body) {
   };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(API + path, opts);
-  const data = await r.json();
+  let data = {};
+  try {
+    data = await r.json();
+  } catch (_) {}
+  const msg = String(data.erro || '').trim();
+  if (r.status === 401 && msg === 'Não autenticado') {
+    doLogout();
+    throw new Error('Sessão expirou. Entra de novo.');
+  }
   if (!r.ok) throw new Error(data.erro || 'Erro');
   return data;
 }
@@ -235,44 +328,161 @@ function fmtNum(v) {
   const n = parseFloat(v) || 0;
   return n.toLocaleString('pt-AO', { maximumFractionDigits: 2 });
 }
+function medicaoSigla(tipo) {
+  return tipo === 'peso' ? 'kg' : 'un';
+}
 function parseRaw(v) {
   return parseFloat(String(v).replace(/\./g, '').replace(',', '.')) || 0;
 }
 function turnoLabel(nome) {
   return { manha: '🌅 Manhã', tarde: '🌤 Tarde', noite: '🌙 Noite' }[nome] || nome;
 }
+/** Horário oficial por turno (referência na escala). */
+const TURNO_HORARIO = {
+  manha: '07:00 – 16:00',
+  tarde: '15:00 – 00:00',
+  noite: '23:00 – 08:00'
+};
+function turnoHorarioLabel(nome) {
+  return TURNO_HORARIO[nome] || '';
+}
 function dateLabel(d) {
-  const [y,m,dd] = d.split('-');
+  if (d == null || d === '') return '—';
+  const raw = String(d).trim();
+  const dayPart = raw.includes('T') ? raw.split('T')[0] : raw.slice(0, 10);
+  const [y, m, dd] = dayPart.split('-');
+  if (!y || !m || !dd) return raw;
   return `${dd}/${m}/${y}`;
+}
+/** Data e hora local (DD/MM/AAAA HH:mm:ss) a partir de ISO ou timestamp. */
+function dateTimeLabel(d) {
+  if (d == null || d === '') return '—';
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return dateLabel(d);
+  const datePart = dt.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const timePart = dt.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  return `${datePart} ${timePart}`;
 }
 function addDays(d, n) {
   const dt = new Date(d + 'T12:00:00Z');
   dt.setDate(dt.getDate() + n);
   return dt.toISOString().split('T')[0];
 }
+/** Segunda-feira (ISO YYYY-MM-DD) da semana que contém dateStr. */
+function mondayOfWeekIso(dateStr) {
+  const dt = new Date(dateStr + 'T12:00:00Z');
+  const day = dt.getUTCDay();
+  const daysBack = day === 0 ? 6 : day - 1;
+  dt.setUTCDate(dt.getUTCDate() - daysBack);
+  return dt.toISOString().split('T')[0];
+}
 function render(html) { document.getElementById('app').innerHTML = html; }
 function show(id, html) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
 function val(id) { return document.getElementById(id)?.value || ''; }
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+function attrUrl(u) {
+  return String(u ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;');
+}
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
 function err(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-error">${msg}</div>`; }
 function suc(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-success">${msg}</div>`; }
 
-// ── ROUTER ────────────────────────────────────────────────────
-function navigate(page, params) {
-  S.page = page;
-  if (params) Object.assign(S, params);
-  draw();
+/**
+ * Evita duplo clique: desactiva o controlo e mostra «A processar…» até a Promise terminar.
+ * No onclick usar: runAction(event, () => minhaFuncAsync()).
+ */
+async function runAction(ev, work) {
+  if (typeof work !== 'function') return;
+  let ctrl = ev && ev.currentTarget;
+  if (ctrl && ctrl.closest) ctrl = ctrl.closest('button, .turno-card, .js-busy-click') || ctrl;
+  if (!ctrl || (ctrl.tagName !== 'BUTTON' && !ctrl.classList?.contains('turno-card') && !ctrl.classList?.contains('js-busy-click'))) {
+    await work(ev);
+    return;
+  }
+  if (ctrl.dataset.actionBusy === '1') return;
+  ctrl.dataset.actionBusy = '1';
+  let savedHtml = null;
+  let restore = () => {};
+  let wasDisabled = false;
+  try {
+    if (ctrl.tagName === 'BUTTON') {
+      wasDisabled = ctrl.disabled;
+      ctrl.disabled = true;
+      const isNav = ctrl.classList.contains('nav-btn');
+      const inDateNav = ctrl.closest && ctrl.closest('.date-nav');
+      if (isNav || inDateNav) {
+        ctrl.classList.add('is-action-busy');
+        const prevOp = ctrl.style.opacity;
+        ctrl.style.opacity = '0.55';
+        restore = () => {
+          ctrl.style.opacity = prevOp;
+          ctrl.classList.remove('is-action-busy');
+        };
+      } else {
+        savedHtml = ctrl.innerHTML;
+        ctrl.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;flex-shrink:0"></span><span>A processar…</span>';
+        restore = () => { if (savedHtml != null) ctrl.innerHTML = savedHtml; };
+      }
+    } else if (ctrl.classList.contains('turno-card') || ctrl.classList.contains('js-busy-click')) {
+      ctrl.classList.add('is-action-busy');
+      const pe = ctrl.style.pointerEvents;
+      const op = ctrl.style.opacity;
+      ctrl.style.pointerEvents = 'none';
+      ctrl.style.opacity = '0.72';
+      restore = () => {
+        ctrl.style.pointerEvents = pe;
+        ctrl.style.opacity = op;
+        ctrl.classList.remove('is-action-busy');
+      };
+    }
+    await work(ev);
+  } finally {
+    ctrl.dataset.actionBusy = '0';
+    if (ctrl.tagName === 'BUTTON') ctrl.disabled = wasDisabled;
+    restore();
+  }
 }
 
-function draw() {
+// ── ROUTER ────────────────────────────────────────────────────
+async function navigate(page, params) {
+  S.page = page;
+  if (params) Object.assign(S, params);
+  await draw();
+}
+
+async function draw() {
   if (!S.token) { drawLogin(); return; }
+  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'depositos'].includes(S.page)) {
+    S.page = 'dia';
+  }
   switch (S.page) {
-    case 'dia':      drawDia(); break;
-    case 'turno':    drawTurno(); break;
-    case 'historico':drawHistorico(); break;
-    case 'produtos': drawProdutos(); break;
-    case 'escala':   drawEscala(); break;
-    case 'admin':    drawAdmin(); break;
-    default:         drawDia();
+    case 'dia':      await drawDia(); break;
+    case 'depositos':
+      if (!['admin', 'gestor', 'compras'].includes(S.user?.role)) { await navigate('dia'); return; }
+      await drawDepositos();
+      break;
+    case 'turno':    await drawTurno(); break;
+    case 'historico':await drawHistorico(); break;
+    case 'armazem':  await drawArmazem(); break;
+    case 'produtos': await drawProdutos(); break;
+    case 'escala':   await drawEscala(); break;
+    case 'admin':    await drawAdmin(); break;
+    default:         await drawDia();
   }
 }
 
@@ -285,57 +495,34 @@ function drawLogin() {
         <div class="login-sub">Sistema de gestão de turnos</div>
         <div id="login-msg"></div>
         <div class="field">
-          <label>Email</label>
-          <input id="l-email" type="email" placeholder="admin@stockos.ao" autocomplete="email"/>
+          <label>Nome de utilizador</label>
+          <input id="l-login" type="text" placeholder="ex.: admin" autocomplete="username" autocapitalize="off"/>
         </div>
         <div class="field">
-          <label>Password</label>
+          <label>Senha</label>
           <input id="l-pass" type="password" placeholder="••••••" autocomplete="current-password"/>
         </div>
-        <button class="btn btn-primary btn-full" onclick="doLogin()">Entrar</button>
-        <div style="margin-top:20px;border-top:1px solid #334155;padding-top:16px">
-          <div style="font-size:12px;color:#64748b;margin-bottom:12px">Primeira vez? Configura a password:</div>
-          <button class="btn btn-ghost btn-sm btn-full" onclick="showSetup()">Configurar conta</button>
-        </div>
+        <button class="btn btn-primary btn-full" onclick="runAction(event, doLogin)">Entrar</button>
       </div>
     </div>
   `);
-  document.getElementById('l-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  const enterLogin = e => {
+    if (e.key === 'Enter')
+      runAction({ currentTarget: document.querySelector('#login-screen .btn-primary') }, doLogin);
+  };
+  document.getElementById('l-login').addEventListener('keydown', enterLogin);
+  document.getElementById('l-pass').addEventListener('keydown', enterLogin);
 }
 
 async function doLogin() {
-  const email = val('l-email'), password = val('l-pass');
+  const login = val('l-login'), password = val('l-pass');
   try {
-    const data = await api('POST', '/auth/login', { email, password });
+    const data = await api('POST', '/auth/login', { login, password });
     S.token = data.token; S.user = data.user;
     localStorage.setItem('token', S.token);
     localStorage.setItem('user', JSON.stringify(S.user));
-    navigate('dia');
+    await navigate('dia');
   } catch(e) { err('login-msg', e.message); }
-}
-
-function showSetup() {
-  document.getElementById('login-screen').innerHTML = `
-    <div class="login-box">
-      <div class="login-logo">StockOS</div>
-      <div class="login-sub">Configurar conta</div>
-      <div class="setup-banner">Usa o código <strong>STOCKOS2025</strong> para configurar a tua password.</div>
-      <div id="setup-msg"></div>
-      <div class="field"><label>Email</label><input id="s-email" type="email" placeholder="admin@stockos.ao"/></div>
-      <div class="field"><label>Código</label><input id="s-code" type="text" placeholder="STOCKOS2025"/></div>
-      <div class="field"><label>Nova Password</label><input id="s-pass" type="password" placeholder="Mínimo 6 caracteres"/></div>
-      <button class="btn btn-success btn-full" onclick="doSetup()">Guardar Password</button>
-      <button class="btn btn-ghost btn-full mt-8" onclick="drawLogin()">Voltar</button>
-    </div>
-  `;
-}
-
-async function doSetup() {
-  try {
-    await api('POST', '/auth/setup', { email: val('s-email'), codigo: val('s-code'), password: val('s-pass') });
-    suc('setup-msg', 'Password configurada! Já podes fazer login.');
-    setTimeout(drawLogin, 1500);
-  } catch(e) { err('setup-msg', e.message); }
 }
 
 function doLogout() {
@@ -347,27 +534,42 @@ function doLogout() {
 // ── NAV ───────────────────────────────────────────────────────
 function navBar() {
   const isAdmin = S.user?.role === 'admin';
+  const showHistorico = S.user?.role !== 'compras';
+  const showArmazem = ['admin', 'gestor', 'compras'].includes(S.user?.role);
+  const showEscala = S.user?.role === 'admin' || S.user?.role === 'gestor';
+  const showDepositos = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   return `
     <div id="navbar">
-      <button class="nav-btn ${S.page==='dia'?'active':''}" onclick="navigate('dia')">
+      <button class="nav-btn ${S.page==='dia'?'active':''}" onclick="runAction(event, () => navigate('dia'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         Dia
       </button>
-      <button class="nav-btn ${S.page==='historico'?'active':''}" onclick="navigate('historico')">
+      ${showDepositos ? `
+      <button class="nav-btn ${S.page==='depositos'?'active':''}" onclick="runAction(event, () => navigate('depositos'))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h3l2-7h8l2 7h3"/><path d="M5 10v10a2 2 0 002 2h10a2 2 0 002-2V10"/><rect x="9" y="14" width="6" height="4" rx="1"/></svg>
+        Banco
+      </button>` : ''}
+      ${showHistorico ? `
+      <button class="nav-btn ${S.page==='historico'?'active':''}" onclick="runAction(event, () => navigate('historico'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
         Histórico
-      </button>
-      <button class="nav-btn ${S.page==='produtos'?'active':''}" onclick="navigate('produtos')">
+      </button>` : ''}
+      <button class="nav-btn ${S.page==='produtos'?'active':''}" onclick="runAction(event, () => navigate('produtos'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
         Produtos
       </button>
-      ${(S.user?.role === 'admin' || S.user?.role === 'gestor') ? `
-      <button class="nav-btn ${S.page==='escala'?'active':''}" onclick="navigate('escala')">
+      ${showArmazem ? `
+      <button class="nav-btn ${S.page==='armazem'?'active':''}" onclick="runAction(event, () => navigate('armazem'))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>
+        Armazém
+      </button>` : ''}
+      ${showEscala ? `
+      <button class="nav-btn ${S.page==='escala'?'active':''}" onclick="runAction(event, () => navigate('escala'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>
         Escala
       </button>` : ''}
       ${isAdmin ? `
-      <button class="nav-btn ${S.page==='admin'?'active':''}" onclick="navigate('admin')">
+      <button class="nav-btn ${S.page==='admin'?'active':''}" onclick="runAction(event, () => navigate('admin'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
         Admin
       </button>` : ''}
@@ -385,17 +587,17 @@ async function drawDia() {
     <div id="header">
       <div>
         <div id="header-h1" style="font-size:18px;font-weight:700;color:#f1f5f9">StockOS</div>
-        <div class="header-sub">${S.user?.nome}</div>
+        <div class="header-sub">${S.user?.nome}${S.user?.username ? ` · @${S.user.username}` : ''}</div>
       </div>
     </div>
     <div id="content">
       <div class="date-nav">
-        <button onclick="changeDate(-1)">‹</button>
+        <button type="button" onclick="runAction(event, () => changeDate(-1))">‹</button>
         <span style="position:relative;cursor:pointer">
           <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
           <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
         </span>
-        <button onclick="changeDate(1)">›</button>
+        <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>
       </div>
       <div id="dia-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
     </div>
@@ -404,27 +606,294 @@ async function drawDia() {
   await loadDia();
 }
 
-function changeDate(n) {
-  S.date = addDays(S.date, n);
-  document.getElementById('date-label').textContent = dateLabel(S.date);
+function syncDatePickersAcrossPages() {
+  const dl = document.getElementById('date-label');
+  if (dl) dl.textContent = dateLabel(S.date);
   const dp = document.getElementById('date-picker');
   if (dp) dp.value = S.date;
-  loadDia();
+  const fx = document.getElementById('fx-data');
+  if (fx) fx.value = S.date;
 }
-function pickDate(val) {
+
+async function changeDate(n) {
+  S.date = addDays(S.date, n);
+  syncDatePickersAcrossPages();
+  if (S.page === 'depositos') await loadDepositos();
+  else if (S.page === 'armazem') {
+    await refreshArmazemFundos();
+    await loadArmazemData();
+  } else await loadDia();
+}
+async function pickDate(val) {
   if (!val) return;
   S.date = val;
-  document.getElementById('date-label').textContent = dateLabel(S.date);
-  loadDia();
+  syncDatePickersAcrossPages();
+  if (S.page === 'depositos') await loadDepositos();
+  else if (S.page === 'armazem') {
+    await refreshArmazemFundos();
+    await loadArmazemData();
+  } else await loadDia();
+}
+
+async function reloadDepositsView() {
+  if (S.page === 'depositos') await loadDepositos();
+  else await loadDia();
+}
+
+function renderDepositosSection(turnos, depositos, depositosErro) {
+  const depositosByTurno = {};
+  (depositos || []).forEach(d => {
+    if (d.turno_id != null) depositosByTurno[String(d.turno_id)] = d;
+  });
+  const sumValorBruto = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor) || 0), 0);
+  const totalSaidasNoDeposito = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor_saidas) || 0), 0);
+  const totalDepositos = Math.max(0, sumValorBruto - totalSaidasNoDeposito);
+  const totalTpaRegistado = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor_tpa) || 0), 0);
+  let destinoSaidasComum = '';
+  for (const d of depositos || []) {
+    if ((parseFloat(d.valor_saidas) || 0) > 0 && String(d.saidas_destino || '').trim()) {
+      destinoSaidasComum = String(d.saidas_destino || '').trim();
+      break;
+    }
+  }
+  let borderoDiaUrl = '';
+  for (const t of [...turnos].sort((a, b) => (({ manha: 1, tarde: 2, noite: 3 }[a.nome]) || 9) - (({ manha: 1, tarde: 2, noite: 3 }[b.nome]) || 9))) {
+    const d = depositosByTurno[String(t.id)];
+    if (d && String(d.bordero_foto_url || '').trim()) {
+      borderoDiaUrl = String(d.bordero_foto_url).trim();
+      break;
+    }
+  }
+  const ordemTurno = { manha: 1, tarde: 2, noite: 3 };
+  const turnosOrdenados = [...turnos].sort((a, b) => (ordemTurno[a.nome] || 9) - (ordemTurno[b.nome] || 9));
+  const hoje = new Date().toISOString().split('T')[0];
+  return `
+      <div class="card" id="sec-depositos">
+        <div class="card-title">🏦 Depósitos no banco</div>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>valor bruto</strong> e <strong>TPA</strong>. As <strong>saídas no depósito</strong> são valores retirados do depósito para <strong>compras de stock / armazém</strong> (não são outras despesas genéricas). Esse montante e a <strong>foto do borderô</strong> são <strong>únicos</strong> para todo o registo do dia. <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns.</p>
+        ${depositosErro ? `<div class="alert alert-error" style="margin-bottom:10px">Não foi possível carregar os depósitos: ${depositosErro}</div>` : ''}
+        ${!turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Não há turnos neste dia — abre turnos antes de registar depósitos.</div>` : ''}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total depositado no banco</div>
+            <div style="font-size:26px;font-weight:700;color:#4ade80;line-height:1.15">${fmt(totalDepositos)}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px">soma dos brutos − compras armazém (total)</div>
+          </div>
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Saídas p/ armazém</div>
+            <div style="font-size:22px;font-weight:700;color:#f87171;line-height:1.15">${fmt(totalSaidasNoDeposito)}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px">retirado do depósito p/ stock</div>
+            ${destinoSaidasComum ? `<div style="font-size:12px;color:#cbd5e1;margin-top:10px;line-height:1.35;text-align:left;max-width:280px;margin-left:auto;margin-right:auto"><span style="color:#94a3b8">Compra / stock:</span> ${escapeHtml(destinoSaidasComum)}</div>` : ''}
+          </div>
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total TPA registado</div>
+            <div style="font-size:20px;font-weight:700;color:#e2e8f0;line-height:1.15">${fmt(totalTpaRegistado)}</div>
+          </div>
+        </div>
+        <div style="margin-bottom:14px;padding:10px 14px;background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.22);border-radius:8px;font-size:13px;color:#cbd5e1">
+          Pré-visualização <strong>total depositado no banco</strong> (brutos − valor para compras de armazém): <span id="dep-total-preview" style="color:#4ade80;font-weight:700;font-size:17px">${fmt(0)}</span>
+        </div>
+        ${(() => {
+          let dataDepComum = hoje;
+          for (const t of turnosOrdenados) {
+            const d = depositosByTurno[String(t.id)];
+            if (d && d.data_deposito) {
+              dataDepComum = String(d.data_deposito).slice(0, 10);
+              break;
+            }
+          }
+          const temTurnoFechado = turnosOrdenados.some(t => t.estado === 'fechado');
+          let refComum = '';
+          let notasComum = '';
+          for (const t of turnosOrdenados) {
+            const d = depositosByTurno[String(t.id)];
+            if (!d) continue;
+            if (!refComum && String(d.referencia || '').trim()) refComum = String(d.referencia);
+            if (!notasComum && String(d.notas || '').trim()) notasComum = String(d.notas);
+          }
+          const saidasUnicaVal = totalSaidasNoDeposito > 0 ? String(totalSaidasNoDeposito) : '';
+          return `
+        ${turnosOrdenados.map(t => {
+          const dep = depositosByTurno[String(t.id)];
+          const pode = t.estado === 'fechado';
+          const bid = `dep-bruto-${t.id}`;
+          const tid = `dep-tpa-${t.id}`;
+          const caixaTpa = parseFloat(t.caixa?.tpa) || 0;
+          const brutoNum = dep ? (parseFloat(dep.valor) || 0) : 0;
+          const brutoVal = dep && brutoNum > 0 ? String(brutoNum) : '';
+          const tpaVal = dep && dep.valor_tpa != null && dep.valor_tpa !== ''
+            ? String(dep.valor_tpa)
+            : (dep ? '0' : String(caixaTpa));
+          return `
+          <div style="border:1px solid #334155;border-radius:8px;padding:12px;margin-bottom:12px;background:rgba(15,23,42,0.4)">
+            <div style="margin-bottom:8px">
+              <span style="font-weight:600;color:#e2e8f0">${turnoLabel(t.nome)}</span>
+            </div>
+            ${!pode ? `<div class="alert alert-error" style="margin-bottom:8px;padding:8px;font-size:12px">Fecha este turno para incluir no registo.</div>` : ''}
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div class="field"><label>Valor bruto (Kz)</label><input id="${bid}" type="number" min="0.01" step="any" placeholder="0" value="${brutoVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
+              <div class="field"><label>Valor registado no TPA (Kz)</label><input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
+            </div>
+          </div>`;
+        }).join('')}
+        <div class="field" style="margin-top:8px">
+          <label>Saída no depósito para armazém / stock (Kz) — única para o dia</label>
+          <input id="dep-saidas-dia" type="number" min="0" step="any" placeholder="0" value="${saidasUnicaVal.replace(/"/g, '&quot;')}" oninput="updateDepSaidasDestinoRequired();updateDepPreviewTotal()" ${!temTurnoFechado ? 'disabled' : ''}/>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">Valor retirado do depósito para compras de stock (armazém). Desconta no total depositado (cartão acima), não por turno.</div>
+        </div>
+        <div class="field">
+          <label id="dep-saidas-destino-label">O que se comprou para o armazém <span id="dep-saidas-destino-hint" style="font-weight:400;color:#64748b">(obrigatório se houver valor acima)</span></label>
+          <textarea id="dep-saidas-destino-dia" rows="2" placeholder="Ex.: compra de ingredientes X; fatura fornecedor Y; enchidos e bebidas para stock…" ${!temTurnoFechado ? 'disabled' : ''}>${escapeHtml(destinoSaidasComum)}</textarea>
+        </div>
+        <div class="field" style="margin-top:4px">
+          <label>Referência (opcional)</label>
+          <input id="dep-ref-dia" type="text" placeholder="Nº operação / guia" value="${String(refComum).replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
+        </div>
+        <div class="field">
+          <label>Notas</label>
+          <input id="dep-notas-dia" type="text" placeholder="Opcional" value="${String(notasComum).replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
+        </div>
+        <div class="field">
+          <label>Data do depósito (aplica a todos os turnos com valor)</label>
+          <input id="dep-data-dia" type="date" value="${dataDepComum.replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
+        </div>
+        <div class="field">
+          <label>Foto do borderô (opcional) — uma para todo o registo</label>
+          ${borderoDiaUrl ? `
+            <div style="margin-bottom:8px">
+              <a href="${attrUrl(borderoDiaUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block">
+                <img src="${attrUrl(borderoDiaUrl)}" alt="Borderô" style="max-height:160px;max-width:100%;border-radius:8px;border:1px solid #334155;vertical-align:top"/>
+              </a>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                <button type="button" class="btn btn-ghost btn-sm" onclick="removeBorderoDia(event)">Remover foto</button>
+              </div>
+            </div>
+          ` : ''}
+          <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" id="dep-bordero-dia" ${!temTurnoFechado ? 'disabled' : ''} ${(depositos || []).length > 0 ? 'onchange="uploadBorderoDia(this)"' : ''}/>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">Uma imagem por operação; substitui a anterior ao escolher outro ficheiro (ou ao registar de novo com nova foto). JPEG, PNG ou WebP.</div>
+        </div>
+        <button type="button" class="btn btn-success" onclick="runAction(event, submitDepositosDia)" ${!temTurnoFechado ? 'disabled' : ''}>Registar depósito</button>
+          `;
+        })()}
+      </div>`;
+}
+
+async function loadDepositos() {
+  try {
+    const depUrl = `/depositos?data=${encodeURIComponent(S.date)}`;
+    const depWrap = await api('GET', depUrl).then((d) => ({ ok: true, data: d })).catch((e) => ({ ok: false, err: e }));
+    let depositos = [];
+    let depositosErro = '';
+    if (depWrap.ok) depositos = depWrap.data || [];
+    else depositosErro = (depWrap.err && depWrap.err.message) ? depWrap.err.message : String(depWrap.err);
+    const turnos = await api('GET', `/dia?data=${S.date}`);
+    S.turnosDia = turnos;
+    show('depositos-content', renderDepositosSection(turnos, depositos, depositosErro));
+    queueMicrotask(() => { updateDepPreviewTotal(); updateDepSaidasDestinoRequired(); });
+  } catch (e) {
+    show('depositos-content', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+async function drawDepositos() {
+  render(`
+    <div id="header">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:#f1f5f9">Depósitos no banco</div>
+        <div class="header-sub">${S.user?.nome}${S.user?.username ? ` · @${S.user.username}` : ''}</div>
+      </div>
+    </div>
+    <div id="content">
+      <div class="date-nav">
+        <button type="button" onclick="runAction(event, () => changeDate(-1))">‹</button>
+        <span style="position:relative;cursor:pointer">
+          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
+          <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
+        </span>
+        <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>
+      </div>
+      <div id="depositos-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadDepositos();
+}
+
+const ESCALA_DIA_ABREV = ['SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB', 'DOM'];
+
+function escalaRowDataStr(r) {
+  if (!r || r.data == null) return '';
+  return String(r.data).slice(0, 10);
+}
+
+/** Escala da semana na página Dia: grelha dias × turnos (só leitura; chips como referência visual). */
+function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
+  const week = Array.isArray(rowsWeek) ? rowsWeek : [];
+  const tpl = Array.isArray(rowsTemplate) ? rowsTemplate : [];
+  const mon = mondayOfWeekIso(anchorDateStr);
+  const dom = addDays(mon, 6);
+  const turnos = [
+    { nome: 'manha', label: 'Manhã', horario: turnoHorarioLabel('manha'), cls: 'dia-escala-shift--manha' },
+    { nome: 'tarde', label: 'Tarde', horario: turnoHorarioLabel('tarde'), cls: 'dia-escala-shift--tarde' },
+    { nome: 'noite', label: 'Noite', horario: turnoHorarioLabel('noite'), cls: 'dia-escala-shift--noite' }
+  ];
+  function listaCell(dayIdx, turnoNome) {
+    const dateStr = addDays(mon, dayIdx);
+    const listaDia = week.filter(r => escalaRowDataStr(r) === dateStr && r.turno === turnoNome);
+    const listaTpl = tpl.filter(r => Number(r.dia_semana) === dayIdx && r.turno === turnoNome);
+    return listaDia.length ? listaDia : listaTpl;
+  }
+  function chipsHtml(lista) {
+    if (!lista.length) return '<span class="dia-escala-empty">—</span>';
+    return lista.map(r => {
+      const tipParts = [];
+      if (r.utilizador_role) tipParts.push(String(r.utilizador_role).toUpperCase());
+      if (r.notas) tipParts.push(String(r.notas));
+      const tip = tipParts.join(' · ');
+      return `<span class="dia-escala-chip" ${tip ? `title="${escapeHtml(tip)}"` : ''}>${escapeHtml(r.utilizador_nome || 'Sem nome')}</span>`;
+    }).join('');
+  }
+  const parts = ['<div class="dia-escala-corner"></div>'];
+  for (let i = 0; i < 7; i++) {
+    const dateStr = addDays(mon, i);
+    const anchor = dateStr === anchorDateStr;
+    parts.push(`<div class="dia-escala-colhead${anchor ? ' dia-escala-colhead--anchor' : ''}">${ESCALA_DIA_ABREV[i]}<span class="dia-escala-colhead-date">${dateLabel(dateStr)}</span></div>`);
+  }
+  for (const t of turnos) {
+    parts.push(`<div class="dia-escala-rowhead ${t.cls}"><span>${t.label}</span><span class="dia-escala-rowhead-time">${t.horario}</span></div>`);
+    for (let i = 0; i < 7; i++) {
+      const dateStr = addDays(mon, i);
+      const anchor = dateStr === anchorDateStr;
+      const lista = listaCell(i, t.nome);
+      parts.push(`<div class="dia-escala-cell${anchor ? ' dia-escala-cell--anchor' : ''}"><div class="dia-escala-chips">${chipsHtml(lista)}</div></div>`);
+    }
+  }
+  return `
+    <div class="card" id="dia-escala-readonly">
+      <div class="card-title">👥 Escala da semana</div>
+      <p class="dia-escala-intro">Semana de <strong style="color:#cbd5e1">${dateLabel(mon)}</strong> a <strong style="color:#cbd5e1">${dateLabel(dom)}</strong>. Apenas consulta. Onde não há escala para a data, usa-se o modelo semanal. Coluna realçada: dia seleccionado. <strong style="color:#94a3b8">Horários:</strong> Manhã ${turnoHorarioLabel('manha')} · Tarde ${turnoHorarioLabel('tarde')} · Noite ${turnoHorarioLabel('noite')}.</p>
+      <div class="dia-escala-scroll">
+        <div class="dia-escala-grid">
+          ${parts.join('')}
+        </div>
+      </div>
+    </div>`;
 }
 
 async function loadDia() {
   try {
-    const [turnos, dash] = await Promise.all([
+    const isAdmin = S.user?.role === 'admin';
+    const monEsc = mondayOfWeekIso(S.date);
+    const domEsc = addDays(monEsc, 6);
+    const qMon = encodeURIComponent(monEsc);
+    const qDom = encodeURIComponent(domEsc);
+    const [turnos, dash, escRowsWeek, escTpl] = await Promise.all([
       api('GET', `/dia?data=${S.date}`),
-      api('GET', `/dashboard?data=${S.date}`)
+      isAdmin ? api('GET', `/dashboard?data=${S.date}`).catch(() => null) : Promise.resolve(null),
+      api('GET', `/escala?data_inicio=${qMon}&data_fim=${qDom}`).catch(() => []),
+      api('GET', '/escala/template').catch(() => [])
     ]);
-
+    S.turnosDia = turnos;
     const turnoMap = {};
     turnos.forEach(t => { turnoMap[t.nome] = t; });
 
@@ -432,7 +901,7 @@ async function loadDia() {
       const t = turnoMap[nome];
       if (!t) {
         return `
-          <div class="turno-card" onclick="abrirTurno('${nome}')">
+          <div class="turno-card" onclick="runAction(event, () => abrirTurno('${nome}'))">
             <div class="turno-card-nome">${turnoLabel(nome)}</div>
             <div class="badge badge-grey" style="margin-bottom:8px">Não iniciado</div>
             <div class="turno-card-abrir">
@@ -447,7 +916,7 @@ async function loadDia() {
         ? '<span class="badge badge-green">Aberto</span>'
         : '<span class="badge badge-grey">Fechado</span>';
       return `
-        <div class="turno-card ${cls}" onclick="navigate('turno',{turnoId:'${t.id}'})">
+        <div class="turno-card ${cls}" onclick="runAction(event, () => navigate('turno',{turnoId:'${t.id}'}))">
           <div class="turno-card-nome">${turnoLabel(nome)}</div>
           <div class="turno-card-status">${badge}</div>
           <div class="turno-card-value">${fmt(totalCaixa)}</div>
@@ -456,9 +925,8 @@ async function loadDia() {
         </div>`;
     }).join('');
 
-    const c = dash.caixa;
-    show('dia-content', `
-      <div class="turno-cards">${cards}</div>
+    const c = dash?.caixa;
+    const resumoDia = isAdmin && dash ? `
       <div class="card">
         <div class="card-title">Resumo do dia</div>
         <div class="total-grid">
@@ -487,11 +955,139 @@ async function loadDia() {
             <div class="total-item-value" style="font-size:16px;color:#f87171">${fmt(c?.saida||0)}</div>
           </div>
         </div>
-      </div>
+      </div>` : '';
+    show('dia-content', `
+      <div class="turno-cards">${cards}</div>
+      ${htmlEscalaSemanaReadonly(escRowsWeek, escTpl, S.date)}
+      ${resumoDia}
     `);
   } catch(e) {
     show('dia-content', `<div class="alert alert-error">${e.message}</div>`);
   }
+}
+
+function updateDepSaidasDestinoRequired() {
+  const inp = document.getElementById('dep-saidas-dia');
+  const ta = document.getElementById('dep-saidas-destino-dia');
+  const hint = document.getElementById('dep-saidas-destino-hint');
+  if (!inp || !ta || !hint) return;
+  const s = parseRaw(inp.value);
+  const need = s > 0;
+  ta.required = need;
+  hint.style.display = need ? 'inline' : 'none';
+}
+
+function updateDepPreviewTotal() {
+  const el = document.getElementById('dep-total-preview');
+  if (!el) return;
+  let sumB = 0;
+  for (const t of (S.turnosDia || [])) {
+    if (t.estado !== 'fechado') continue;
+    const brutoEl = document.getElementById('dep-bruto-' + t.id);
+    if (!brutoEl || brutoEl.disabled) continue;
+    const b = parseRaw(brutoEl.value);
+    if (b > 0) sumB += b;
+  }
+  const saidasU = parseRaw(document.getElementById('dep-saidas-dia')?.value);
+  const liq = Math.max(0, sumB - saidasU);
+  el.textContent = fmt(liq);
+  updateDepSaidasDestinoRequired();
+}
+
+async function submitDepositosDia() {
+  try {
+    const dataDep = val('dep-data-dia');
+    const refDia = val('dep-ref-dia');
+    const notasDia = val('dep-notas-dia');
+    const saidasUnica = parseRaw(val('dep-saidas-dia'));
+    const destinoSaidas = val('dep-saidas-destino-dia').trim();
+    if (saidasUnica < 0) {
+      alert('O valor para compras de armazém (saída no depósito) não pode ser negativo.');
+      return;
+    }
+    if (saidasUnica > 0 && !destinoSaidas) {
+      alert('Indica o que foi comprado para o armazém / stock (descrição obrigatória quando há valor retirado do depósito).');
+      return;
+    }
+    const rows = [];
+    const turnos = S.turnosDia || [];
+    for (const t of turnos) {
+      if (t.estado !== 'fechado') continue;
+      const id = t.id;
+      const bruto = parseRaw(val('dep-bruto-' + id));
+      if (!bruto || bruto <= 0) continue;
+      const vtpa = parseRaw(val('dep-tpa-' + id));
+      if (Number.isNaN(vtpa) || vtpa < 0) {
+        alert('Indica o valor TPA (≥ 0) para ' + turnoLabel(t.nome) + '.');
+        return;
+      }
+      rows.push({ turno_id: id, bruto, valor_tpa: vtpa });
+    }
+    if (!rows.length) {
+      const temFechado = (S.turnosDia || []).some(t => t.estado === 'fechado');
+      alert(
+        temFechado
+          ? 'Indica valor bruto (> 0) em pelo menos um turno fechado.'
+          : 'Não há turnos fechados neste dia — fecha um turno antes de registar o depósito.'
+      );
+      return;
+    }
+    const sumB = rows.reduce((s, r) => s + r.bruto, 0);
+    if (saidasUnica > sumB) {
+      alert('O valor para armazém não pode ser maior que a soma dos valores brutos (' + fmt(sumB) + ').');
+      return;
+    }
+    if (sumB - saidasUnica <= 0) {
+      alert('O líquido depositado (brutos menos compras de armazém) tem de ser positivo.');
+      return;
+    }
+    const itens = rows.map((r) => ({
+      turno_id: r.turno_id,
+      data_deposito: dataDep,
+      valor_bruto: r.bruto,
+      valor_tpa: r.valor_tpa,
+      referencia: refDia,
+      notas: notasDia
+    }));
+    const borderoInp = document.getElementById('dep-bordero-dia');
+    let borderoB64 = '';
+    if (borderoInp && borderoInp.files && borderoInp.files[0]) {
+      borderoB64 = await fileToDataUrl(borderoInp.files[0]);
+    }
+    const payload = { itens, valor_saidas_total: saidasUnica, saidas_destino: destinoSaidas };
+    if (borderoB64) payload.bordero_foto_base64 = borderoB64;
+    await api('POST', '/depositos/lote', payload);
+    await reloadDepositsView();
+  } catch (e) {
+    alert(e.message || String(e));
+  }
+}
+
+async function uploadBorderoDia(inputEl) {
+  if (!inputEl || !inputEl.files || !inputEl.files[0]) return;
+  inputEl.disabled = true;
+  try {
+    const b64 = await fileToDataUrl(inputEl.files[0]);
+    await api('POST', '/depositos/bordero-dia', { data: S.date, foto_base64: b64 });
+    inputEl.value = '';
+    await reloadDepositsView();
+  } catch (e) {
+    alert(e.message || String(e));
+  } finally {
+    inputEl.disabled = false;
+  }
+}
+
+async function removeBorderoDia(ev) {
+  if (!confirm('Remover a foto do borderô deste registo?')) return;
+  await runAction(ev, async () => {
+    try {
+      await api('DELETE', '/depositos/bordero-dia?data=' + encodeURIComponent(S.date));
+      await reloadDepositsView();
+    } catch (e) {
+      alert(e.message || String(e));
+    }
+  });
 }
 
 async function abrirTurno(nome) {
@@ -506,11 +1102,11 @@ async function drawTurno() {
   render(`
     <div id="header">
       <div style="display:flex;flex-direction:column;gap:4px">
-        <button class="btn btn-ghost btn-sm" onclick="navigate('dia')" style="align-self:flex-start">‹ Voltar</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => navigate('dia'))" style="align-self:flex-start">‹ Voltar</button>
         <div style="display:flex;align-items:center;gap:6px">
-          <button class="btn btn-ghost btn-sm" id="btn-prev-turno" onclick="navTurno(-1)" style="padding:2px 8px;font-size:18px;line-height:1">‹</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-prev-turno" onclick="runAction(event, () => navTurno(-1))" style="padding:2px 8px;font-size:18px;line-height:1">‹</button>
           <div id="turno-title" style="font-size:15px;font-weight:700;color:#f1f5f9;white-space:nowrap">Turno</div>
-          <button class="btn btn-ghost btn-sm" id="btn-next-turno" onclick="navTurno(1)" style="padding:2px 8px;font-size:18px;line-height:1">›</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-next-turno" onclick="runAction(event, () => navTurno(1))" style="padding:2px 8px;font-size:18px;line-height:1">›</button>
         </div>
       </div>
       <div id="turno-header-actions"></div>
@@ -620,7 +1216,7 @@ async function navTurno(dir) {
   if (!t) return;
   S.date = nextDate;
   S.turnoId = t.id;
-  loadTurno();
+  await loadTurno();
 }
 
 async function loadTurno() {
@@ -651,9 +1247,10 @@ async function loadTurno() {
 
     const isAberto = turno.estado === 'aberto';
     const canEdit  = isAberto;
+    S.turnoCanEdit = canEdit;
 
     show('turno-header-actions', isAberto
-      ? `<button class="btn btn-danger btn-sm" onclick="fecharTurno('${turno.id}')">Fechar</button>`
+      ? `<button type="button" class="btn btn-danger btn-sm" onclick="fecharTurno(event, '${turno.id}')">Fechar</button>`
       : '<span class="badge badge-grey">Fechado</span>'
     );
 
@@ -676,7 +1273,7 @@ async function loadTurno() {
         const inputAttr = canEdit ? '' : 'disabled';
         return `
           <tr>
-            <td class="td-name">${s.produto_nome}${s.preco > 0 ? `<span style="color:#64748b;font-size:11px;margin-left:6px">${fmt(s.preco)}</span>` : ''}</td>
+            <td class="td-name">${s.produto_nome}<span style="color:#64748b;font-size:11px;margin-left:6px">${medicaoSigla(s.tipo_medicao)}</span>${s.preco > 0 ? `<span style="color:#64748b;font-size:11px;margin-left:6px">${fmt(s.preco)}</span>` : ''}</td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.encontrado)}"
@@ -689,7 +1286,7 @@ async function loadTurno() {
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.fechados||0)}"
               onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
               oninput="updateStock('${pid}','fechados',this.value)" ${inputAttr}/></td>
-            <td class="td-calc" id="vend-${pid}">${fmtNum(vend)}</td>
+            <td class="td-calc" id="vend-${pid}">${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}</td>
             <td class="td-valor" id="val-${pid}">${s.preco > 0 ? fmt(val) : '—'}</td>
           </tr>`;
       }).join('');
@@ -709,10 +1306,11 @@ async function loadTurno() {
     show('turno-content', `
       <div class="turno-tabs-wrap">
         <div class="turno-tabs">
-          <button class="turno-tab active" onclick="switchTurnoTab('stock',this)">📊 Stock</button>
-          <button class="turno-tab" onclick="switchTurnoTab('registos',this)">📦 Registos</button>
-          <button class="turno-tab" onclick="switchTurnoTab('vendas',this)">🍽️ Vendas</button>
-          <button class="turno-tab" onclick="switchTurnoTab('resumo',this)">📋 Resumo</button>
+          <button type="button" class="turno-tab active" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
+          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
+          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
+          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
+          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('resumo', ev.currentTarget); })">📋 Resumo</button>
         </div>
         <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
       </div>
@@ -750,13 +1348,15 @@ async function loadTurno() {
       </div>
 
       <div id="tab-registos" class="turno-tab-panel">
-        <div class="card" id="entradas-card">
-          <div class="card-title">📦 Entradas de Stock</div>
+        <div class="card" id="registos-movimentos-card">
+          <div class="card-title">📦💸 Entradas de stock e saídas de caixa</div>
+          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 18px">No mesmo sítio: <strong style="color:#cbd5e1">quantidades</strong> que entram ou saem do stock (armazém ou compra) e <strong style="color:#cbd5e1">valores</strong> que saem da caixa — despesas e compras de stock (aparecem na lista abaixo com as entradas por compra).</p>
+          <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Stock — quantidades</div>
           <div id="entradas-section"><span style="color:#64748b">A carregar...</span></div>
-        </div>
-        <div class="card mt-16" id="saidas-card">
-          <div class="card-title">💸 Saídas de Caixa</div>
-          <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
+          <div style="margin-top:22px;padding-top:18px;border-top:1px solid #334155">
+            <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Caixa — dinheiro que saiu</div>
+            <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
+          </div>
         </div>
         <div class="card mt-16">
           <div class="card-title">💰 Caixa</div>
@@ -803,6 +1403,14 @@ async function loadTurno() {
         </div>
       </div>
 
+      <div id="tab-escala" class="turno-tab-panel">
+        <div class="card">
+          <div class="card-title">👥 Escala do Turno</div>
+          <p style="font-size:12px;color:#64748b;margin:-4px 0 10px;line-height:1.4">Horário: <strong style="color:#cbd5e1">${turnoHorarioLabel(turno.nome)}</strong></p>
+          <div id="turno-escala-list"><span style="color:#64748b">A carregar...</span></div>
+        </div>
+      </div>
+
       <div id="tab-resumo" class="turno-tab-panel">
         <div style="color:#64748b;text-align:center;padding:32px"><div class="spinner"></div></div>
       </div>
@@ -820,10 +1428,7 @@ async function loadTurno() {
   if (tv) tv.textContent = fmtNum(initTotalVend);
   if (tva) tva.textContent = fmt(initTotalVal);
 
-    loadEntradasSection(turno.id, turno.stock, canEdit);
-    loadSaidasSection(turno.id, canEdit);
-    loadVendasMenu(turno.id, canEdit);
-    loadResumoTab(turno.id);
+    // Lazy load por aba para reduzir chamadas simultâneas e pressão no DB.
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -873,9 +1478,9 @@ async function loadVendasMenu(turnoId, canEdit) {
           ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:6px">
-          ${canEdit ? `<button onclick="deltaVenda('${turnoId}','${p.id}',-1)" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
+          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',-1))" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
           <span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${qty}</span>
-          ${canEdit ? `<button onclick="deltaVenda('${turnoId}','${p.id}',1)" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
+          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',1))" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -1016,7 +1621,7 @@ function calcCaixa() {
   autoSaveCaixaTimer = setTimeout(() => guardarCaixa(turnoId), 2000);
 }
 
-function switchTurnoTab(name, btn) {
+async function switchTurnoTab(name, btn) {
   const wrap = document.getElementById('turno-content');
   if (wrap?.classList.contains('scroll-mode')) return;
   document.querySelectorAll('.turno-tab-panel').forEach(p => p.classList.remove('active'));
@@ -1025,7 +1630,19 @@ function switchTurnoTab(name, btn) {
   btn.classList.add('active');
   if (name === 'resumo') {
     const tid = S.turnoData?.id;
-    if (tid) loadResumoTab(tid);
+    if (tid) await loadResumoTab(tid);
+  }
+  if (name === 'escala') {
+    await loadEscalaTurno();
+  }
+  if (name === 'registos') {
+    const tid = S.turnoData?.id;
+    const stock = S.turnoData?.stock || [];
+    if (tid) await loadRegistosMovimentosSection(tid, stock, !!S.turnoCanEdit);
+  }
+  if (name === 'vendas') {
+    const tid = S.turnoData?.id;
+    if (tid) await loadVendasMenu(tid, !!S.turnoCanEdit);
   }
 }
 
@@ -1057,23 +1674,45 @@ async function saveTurnoNotas(turnoId, notas) {
   } catch(e) { err('turno-msg', e.message); }
 }
 
-async function fecharTurno(id) {
+async function fecharTurno(ev, id) {
   if (!confirm('Fechar este turno? Não poderá ser editado depois.')) return;
-  try {
-    // Guardar stock e caixa primeiro
-    await guardarStock(id);
-    await guardarCaixa(id);
-    await api('POST', `/turnos/${id}/fechar`);
-    await loadTurno();
-  } catch(e) { err('turno-msg', e.message); }
+  await runAction(ev, async () => {
+    try {
+      await guardarStock(id);
+      await guardarCaixa(id);
+      await api('POST', `/turnos/${id}/fechar`);
+      await loadTurno();
+    } catch (e) { err('turno-msg', e.message); }
+  });
 }
 
-// ── ENTRADAS DE STOCK ─────────────────────────────────────────
-async function loadEntradasSection(turnoId, stocks, canEdit) {
+// ── REGISTOS: STOCK + SAÍDAS DE CAIXA (unificado) ──────────────
+async function loadRegistosMovimentosSection(turnoId, stocks, canEdit) {
+  const elE = document.getElementById('entradas-section');
+  const elS = document.getElementById('saidas-section');
+  if (!elE || !elS) return;
+  elE.innerHTML = '<span style="color:#64748b">A carregar...</span>';
+  elS.innerHTML = '<span style="color:#64748b">A carregar...</span>';
+  try {
+    const [entradas, saidas] = await Promise.all([
+      api('GET', `/turnos/${turnoId}/entradas`),
+      api('GET', `/turnos/${turnoId}/saidas`)
+    ]);
+    renderEntradasSection(turnoId, stocks, canEdit, entradas);
+    renderSaidasSection(turnoId, canEdit, saidas, entradas);
+  } catch (e) {
+    const msg = `<div class="alert alert-error">${e.message}</div>`;
+    elE.innerHTML = msg;
+    elS.innerHTML = msg;
+  }
+}
+
+function renderEntradasSection(turnoId, stocks, canEdit, entradas) {
   const el = document.getElementById('entradas-section');
   if (!el) return;
   try {
-    const entradas = await api('GET', `/turnos/${turnoId}/entradas`);
+    const stockById = {};
+    (stocks || []).forEach(s => { stockById[String(s.produto_id)] = s; });
 
     // Opções do select agrupadas por categoria
     const cats = ['ingredientes','bebida','outro'];
@@ -1083,7 +1722,7 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
       const items = stocks.filter(s => (s.categoria === cat || (!['ingredientes','bebida'].includes(s.categoria) && cat === 'outro')));
       if (!items.length) return;
       opts += `<optgroup label="${labels[cat] || cat}">`;
-      items.forEach(s => { opts += `<option value="${s.produto_id}">${s.produto_nome}</option>`; });
+      items.forEach(s => { opts += `<option value="${s.produto_id}" data-medicao="${s.tipo_medicao || 'unidade'}">${s.produto_nome} (${medicaoSigla(s.tipo_medicao)})</option>`; });
       opts += '</optgroup>';
     });
 
@@ -1098,10 +1737,10 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
           <button id="e-orig-compra" class="tipo-btn" onclick="setOrigem('compra')">Compra</button>
         </div>
         <select id="e-produto" class="entradas-select">${opts}</select>
-        <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd" class="entradas-qty"/>
+        <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd (un)" class="entradas-qty"/>
         <input id="e-preco" type="number" min="0" step="any" placeholder="Preço" class="entradas-qty" style="display:none"/>
         <input id="e-notas" type="text" placeholder="Nota obrigatória" class="entradas-notas"/>
-        <button class="btn btn-success btn-sm" onclick="submitEntrada(${turnoId})">Registar</button>
+        <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, () => submitEntrada(${turnoId}))">Registar</button>
       </div>
       <div id="entrada-form-msg" style="margin-bottom:8px"></div>` : '';
 
@@ -1133,7 +1772,7 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
               <td style="font-size:12px">${tipoLabel}</td>
               <td style="font-size:12px">${origemLabel}</td>
               <td style="font-size:13px">${e.produto_nome}</td>
-              <td style="text-align:right;font-weight:600;color:#e2e8f0">${fmtNum(e.quantidade)}</td>
+              <td style="text-align:right;font-weight:600;color:#e2e8f0">${fmtNum(e.quantidade)} ${medicaoSigla(e.tipo_medicao || stockById[String(e.produto_id)]?.tipo_medicao)}</td>
               <td style="text-align:right;font-size:12px">${precoLabel}</td>
               <td style="color:#94a3b8;font-size:12px">${e.notas}</td>
             </tr>`;
@@ -1141,6 +1780,16 @@ async function loadEntradasSection(turnoId, stocks, canEdit) {
         </table></div>`;
 
     el.innerHTML = formHtml + listaHtml;
+    const prodEl = document.getElementById('e-produto');
+    const qtyEl = document.getElementById('e-qty');
+    function syncEntradaQtyPlaceholder() {
+      if (!prodEl || !qtyEl) return;
+      const opt = prodEl.options[prodEl.selectedIndex];
+      const med = opt?.getAttribute('data-medicao') || 'unidade';
+      qtyEl.placeholder = `Qtd (${medicaoSigla(med)})`;
+    }
+    if (prodEl) prodEl.addEventListener('change', syncEntradaQtyPlaceholder);
+    syncEntradaQtyPlaceholder();
     window._entradaTipo   = 'entrada';
     window._entradaOrigem = 'armazem';
   } catch(e) {
@@ -1199,22 +1848,16 @@ async function submitEntrada(turnoId) {
     stockBuf[pid].entrada = soma;
     updateStock(pid, 'entrada', soma);
     const stocks = S.turnoData?.stock || [];
-    await loadEntradasSection(turnoId, stocks, true);
-    await loadSaidasSection(turnoId, true);
+    await loadRegistosMovimentosSection(turnoId, stocks, true);
   } catch(e) {
     if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
   }
 }
 
-// ── SAÍDAS DE CAIXA ───────────────────────────────────────────
-async function loadSaidasSection(turnoId, canEdit) {
+function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
   const el = document.getElementById('saidas-section');
   if (!el) return;
   try {
-    const [saidas, entradas] = await Promise.all([
-      api('GET', `/turnos/${turnoId}/saidas`),
-      api('GET', `/turnos/${turnoId}/entradas`)
-    ]);
     const totalDespesas = saidas.reduce((s, r) => s + parseFloat(r.valor), 0);
     const totalCompras  = entradas.filter(e => e.origem === 'compra' && e.tipo === 'entrada')
                                   .reduce((s, e) => s + parseFloat(e.preco), 0);
@@ -1225,7 +1868,7 @@ async function loadSaidasSection(turnoId, canEdit) {
         <input id="s-desc" type="text" placeholder="Descrição (ex: gasóleo, embalagens)" class="entradas-notas" style="flex:2"/>
         <input id="s-valor" type="number" min="0.01" step="any" placeholder="Valor" class="entradas-qty"/>
         <input id="s-notas" type="text" placeholder="Nota obrigatória" class="entradas-notas" style="flex:1.5"/>
-        <button class="btn btn-danger btn-sm" onclick="submitSaida(${turnoId})">Registar</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="runAction(event, () => submitSaida(${turnoId}))">Registar</button>
       </div>
       <div id="saida-form-msg" style="margin-bottom:8px"></div>` : '';
 
@@ -1458,6 +2101,186 @@ async function loadResumoTab(turnoId) {
   }
 }
 
+async function loadEscalaTurno() {
+  const el = document.getElementById('turno-escala-list');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#64748b">A carregar...</span>';
+  try {
+    const turnoNome = S.turnoData?.nome;
+    if (!turnoNome || !S.date) {
+      el.innerHTML = '<span style="color:#64748b">Turno não selecionado.</span>';
+      return;
+    }
+    const [rowsDia, rowsTemplate, equipaReal, pessoas, faltasReg] = await Promise.all([
+      api('GET', `/escala?data_inicio=${S.date}&data_fim=${S.date}`),
+      api('GET', '/escala/template'),
+      api('GET', `/turnos/${S.turnoData.id}/equipa-real`),
+      api('GET', '/equipa/pessoas'),
+      api('GET', `/turnos/${S.turnoData.id}/faltas`)
+    ]);
+    const listaDia = rowsDia.filter(r => r.turno === turnoNome);
+    const d = new Date(S.date + 'T12:00:00Z');
+    const day = d.getUTCDay();
+    const diaSemana = day === 0 ? 6 : day - 1; // 0=Seg ... 6=Dom
+    const listaTpl = rowsTemplate.filter(r => Number(r.dia_semana) === diaSemana && r.turno === turnoNome);
+    const lista = listaDia.length ? listaDia : listaTpl;
+    const origem = listaDia.length ? 'escala do dia' : 'escala template';
+    const canEdit = !!S.turnoCanEdit;
+    const escaladosIds = new Set(lista.map(r => String(r.utilizador_id || '')).filter(Boolean));
+    const reaisIds = new Set(equipaReal.map(r => String(r.utilizador_id || '')).filter(Boolean));
+    const faltas = lista.filter(r => r.utilizador_id && !reaisIds.has(String(r.utilizador_id)));
+    const coberturas = equipaReal.filter(r => r.utilizador_id && !escaladosIds.has(String(r.utilizador_id)));
+    const motivoPorFalta = {};
+    equipaReal.forEach(r => {
+      if (r.cobrindo_utilizador_id && r.motivo_falta) motivoPorFalta[String(r.cobrindo_utilizador_id)] = r.motivo_falta;
+    });
+    faltasReg.forEach(f => {
+      if (f.utilizador_id && f.motivo_falta) motivoPorFalta[String(f.utilizador_id)] = f.motivo_falta;
+    });
+
+    const info = `<div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">${origem}</div>
+      <div style="font-size:12px;color:#94a3b8;margin-bottom:12px">Horário: <strong style="color:#cbd5e1">${turnoHorarioLabel(turnoNome)}</strong></div>`;
+    const escaladosHtml = lista.length
+      ? lista.map((r, i) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;${i < lista.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
+        <div>
+          <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>
+          <div style="font-size:12px;color:#64748b">${(r.utilizador_role || 'operador').toUpperCase()}</div>
+        </div>
+        ${r.notas ? `<div style="font-size:12px;color:#94a3b8;text-align:right;max-width:55%">${r.notas}</div>` : '<div style="font-size:12px;color:#475569">—</div>'}
+      </div>
+    `).join('')
+      : '<span style="color:#64748b">Sem funcionários escalados para este turno.</span>';
+
+    const reaisHtml = equipaReal.length
+      ? equipaReal.map((r, i) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;${i < equipaReal.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
+        <div>
+          <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>
+          <div style="font-size:12px;color:#64748b">${(r.utilizador_role || 'operador').toUpperCase()}</div>
+          ${r.cobrindo_utilizador_nome ? `<div style="font-size:12px;color:#60a5fa;margin-top:2px">Cobrindo: ${r.cobrindo_utilizador_nome}</div>` : ''}
+          ${r.motivo_falta ? `<div style="font-size:12px;color:#fbbf24;margin-top:2px">Motivo da falta: ${r.motivo_falta}</div>` : ''}
+          ${r.hora_extra ? `<div style="font-size:12px;color:#fbbf24;margin-top:2px">Hora extra aplicada</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${r.notas ? `<div style="font-size:12px;color:#94a3b8;max-width:240px;text-align:right">${r.notas}</div>` : '<div style="font-size:12px;color:#475569">—</div>'}
+          ${canEdit ? `<button type="button" class="btn btn-danger btn-sm" onclick="runAction(event, () => removeTurnoPresenca('${S.turnoData.id}','${encodeURIComponent(r.utilizador_id)}'))">Remover</button>` : ''}
+        </div>
+      </div>
+    `).join('')
+      : '<span style="color:#64748b">Nenhum funcionário registado como presente.</span>';
+
+    const alertaHtml = `
+      <div style="margin-top:10px;font-size:12px">
+        <div style="color:${faltas.length ? '#fbbf24' : '#4ade80'}">${faltas.length ? `⚠ Faltas: ${faltas.map(f => {
+          const motivo = motivoPorFalta[String(f.utilizador_id)];
+          const nome = f.utilizador_nome || 'Sem nome';
+          return motivo
+            ? `${nome} (${motivo})`
+            : `${nome}${canEdit ? ` <button type="button" class="btn btn-danger btn-sm" style="margin-left:6px" onclick="registarMotivoFalta(event, '${S.turnoData.id}','${encodeURIComponent(f.utilizador_id)}','${(nome||'').replace(/'/g, "\\'")}')">Registar motivo</button>` : ''}`;
+        }).join(', ')}` : '✓ Sem faltas nos escalados'}</div>
+        <div style="color:${coberturas.length ? '#60a5fa' : '#64748b'};margin-top:4px">${coberturas.length ? `↺ Coberturas: ${coberturas.map(c => c.utilizador_nome || 'Sem nome').join(', ')}` : 'Sem coberturas registadas'}</div>
+      </div>`;
+
+    const addForm = canEdit ? `
+      <div class="card mt-16">
+        <div class="card-title">➕ Registar quem trabalhou</div>
+        <div id="turno-presenca-msg"></div>
+        <div class="entradas-form">
+          <select id="tp-user" class="entradas-select">
+            <option value="">— Funcionário —</option>
+            ${pessoas.map(p => `<option value="${p.id}">${p.nome} (${p.role})</option>`).join('')}
+          </select>
+          <select id="tp-cobrindo" class="entradas-select" style="display:none">
+            <option value="">— Está cobrindo quem? —</option>
+            ${lista.filter(r => r.utilizador_id).map(r => `<option value="${r.utilizador_id}">${r.utilizador_nome || r.utilizador_id}</option>`).join('')}
+          </select>
+          <input id="tp-motivo-falta" class="entradas-notas" type="text" placeholder="Motivo da falta" style="display:none"/>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#94a3b8">
+            <input id="tp-he" type="checkbox" style="width:14px;height:14px"/>
+            Aplicar hora extra
+          </label>
+          <input id="tp-notas" class="entradas-notas" type="text" placeholder="Nota opcional (falta, cobertura, etc.)"/>
+          <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, () => addTurnoPresenca('${S.turnoData.id}'))">Registar</button>
+        </div>
+      </div>` : '';
+
+    el.innerHTML = `
+      ${info}
+      <div class="card-title" style="margin-bottom:6px">📅 Escalados</div>
+      ${escaladosHtml}
+      <div class="card-title" style="margin:16px 0 6px">✅ Quem realmente trabalhou</div>
+      ${reaisHtml}
+      ${alertaHtml}
+      ${addForm}
+    `;
+    if (canEdit) {
+      const userSel = document.getElementById('tp-user');
+      const cobSel = document.getElementById('tp-cobrindo');
+      const motEl = document.getElementById('tp-motivo-falta');
+      const heEl = document.getElementById('tp-he');
+      const toggleExtra = () => {
+        if (!userSel || !cobSel || !heEl || !motEl) return;
+        const uid = userSel.value;
+        const naoEscalado = !!uid && !escaladosIds.has(String(uid));
+        cobSel.style.display = naoEscalado ? '' : 'none';
+        motEl.style.display = naoEscalado ? '' : 'none';
+        if (!naoEscalado) motEl.value = '';
+      };
+      if (userSel) userSel.onchange = toggleExtra;
+      toggleExtra();
+    }
+  } catch (e) {
+    el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
+async function addTurnoPresenca(turnoId) {
+  const utilizador_id = val('tp-user');
+  const cobrindo_utilizador_id = val('tp-cobrindo');
+  const hora_extra = !!document.getElementById('tp-he')?.checked;
+  const motivo_falta = val('tp-motivo-falta');
+  const notas = val('tp-notas');
+  if (!utilizador_id) return err('turno-presenca-msg', 'Seleciona um funcionário');
+  const turnoNome = S.turnoData?.nome;
+  const d = new Date(S.date + 'T12:00:00Z');
+  const day = d.getUTCDay();
+  const diaSemana = day === 0 ? 6 : day - 1;
+  const template = await api('GET', '/escala/template');
+  const escaladosIds = new Set(template.filter(r => Number(r.dia_semana) === diaSemana && r.turno === turnoNome).map(r => String(r.utilizador_id || '')).filter(Boolean));
+  const naoEscalado = !escaladosIds.has(String(utilizador_id));
+  if (naoEscalado && !cobrindo_utilizador_id) return err('turno-presenca-msg', 'Seleciona quem este funcionário está cobrindo');
+  if (naoEscalado && !motivo_falta.trim()) return err('turno-presenca-msg', 'Regista o motivo da falta');
+  if (naoEscalado && !hora_extra) return err('turno-presenca-msg', 'Confirma se deve aplicar pagamento de hora extra');
+  try {
+    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, cobrindo_utilizador_id: naoEscalado ? cobrindo_utilizador_id : null, hora_extra, motivo_falta: naoEscalado ? motivo_falta.trim() : '', notas });
+    show('turno-presenca-msg', '');
+    if (document.getElementById('tp-notas')) document.getElementById('tp-notas').value = '';
+    await loadEscalaTurno();
+  } catch (e) { err('turno-presenca-msg', e.message); }
+}
+
+async function removeTurnoPresenca(turnoId, utilizadorIdEncoded) {
+  try {
+    await api('DELETE', `/turnos/${turnoId}/equipa-real/${utilizadorIdEncoded}`);
+    await loadEscalaTurno();
+  } catch (e) { alert(e.message); }
+}
+
+async function registarMotivoFalta(ev, turnoId, utilizadorIdEncoded, nome) {
+  const motivo = prompt(`Motivo da falta de ${nome}:`);
+  if (!motivo || !motivo.trim()) return;
+  await runAction(ev, async () => {
+    try {
+      await api('POST', `/turnos/${turnoId}/faltas`, {
+        utilizador_id: decodeURIComponent(utilizadorIdEncoded),
+        motivo_falta: motivo.trim()
+      });
+      await loadEscalaTurno();
+    } catch (e) { alert(e.message); }
+  });
+}
+
 async function submitSaida(turnoId) {
   const desc  = document.getElementById('s-desc')?.value.trim() || '';
   const valor = parseFloat(document.getElementById('s-valor')?.value);
@@ -1471,7 +2294,7 @@ async function submitSaida(turnoId) {
     document.getElementById('s-desc').value  = '';
     document.getElementById('s-valor').value = '';
     document.getElementById('s-notas').value = '';
-    await loadSaidasSection(turnoId, true);
+    await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], true);
   } catch(e) {
     if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
   }
@@ -1489,7 +2312,7 @@ async function drawHistorico() {
         <div style="display:flex;gap:10px;align-items:flex-end">
           <div class="field" style="flex:1;margin:0"><label>De</label><input type="date" id="h-inicio"/></div>
           <div class="field" style="flex:1;margin:0"><label>Até</label><input type="date" id="h-fim"/></div>
-          <button class="btn btn-primary" onclick="loadHistorico()">Ver</button>
+          <button type="button" class="btn btn-primary" onclick="runAction(event, loadHistorico)">Ver</button>
         </div>
       </div>
       <div id="hist-content"></div>
@@ -1515,7 +2338,7 @@ async function loadHistorico() {
     const rowsHtml = rows.map(r => {
       totalGeral += parseFloat(r.total_final)||0;
       return `
-        <div class="card" style="cursor:pointer" onclick="S.date='${r.data}';navigate('dia')">
+        <div class="card js-busy-click" style="cursor:pointer" onclick="runAction(event, async () => { S.date='${r.data}'; syncDatePickersAcrossPages(); await navigate('dia'); })">
           <div class="flex justify-between items-center">
             <div>
               <div style="font-weight:600">${dateLabel(r.data)}</div>
@@ -1541,12 +2364,543 @@ async function loadHistorico() {
   } catch(e) { show('hist-content',`<div class="alert alert-error">${e.message}</div>`); }
 }
 
+// ── ARMAZÉM ────────────────────────────────────────────────────
+async function drawArmazem() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Armazém</div>
+        <div class="header-sub">Registo diário · ${dateLabel(S.date)}</div>
+      </div>
+    </div>
+    <div id="content">
+      <div id="armazem-msg"></div>
+      <div class="date-nav">
+        <button type="button" onclick="runAction(event, () => changeDate(-1))">‹</button>
+        <span style="position:relative;cursor:pointer">
+          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
+          <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
+        </span>
+        <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>
+      </div>
+      <div class="card">
+        <div class="card-title">💰 Fundos para compras (dia)</div>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Tudo nesta página refere-se ao <strong>dia seleccionado</strong> acima. Libertações e saldo são desse dia; a data da fatura de compra sincroniza com esse dia.</p>
+        <div id="armazem-fundos-banner"></div>
+        <div id="armazem-libertacoes-list" style="margin-bottom:12px"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field"><label>Valor (Kz)</label><input id="lib-valor" type="number" min="0.01" step="any" placeholder="0"/></div>
+          <div class="field"><label>Notas</label><input id="lib-notas" type="text" placeholder="Ex.: manhã, gerência"/></div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, submitLibertacaoArmazem)">+ Registar libertação</button>
+      </div>
+      <div class="card">
+        <div class="card-title">📄 Fatura de compra</div>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha. Anexa a <strong>foto da fatura</strong> (obrigatório). Se o total exceder o saldo do dia, deves justificar a origem do dinheiro (podes associar uma saída de caixa do mesmo dia).</p>
+        <div id="fatura-form-msg"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="Ex: FT 2025/012"/></div>
+          <div class="field"><label>Data</label><input id="fx-data" type="date"/></div>
+        </div>
+        <div class="field"><label>Fornecedor</label><input id="fx-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
+        <div class="field"><label>Notas</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
+        <div class="field">
+          <label>Foto da fatura</label>
+          <input type="file" id="fx-foto-fatura" accept="image/jpeg,image/png,image/webp" capture="environment"/>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">JPEG, PNG ou WebP. Obrigatório para registar.</div>
+        </div>
+        <div id="fx-excesso-wrap" style="display:none;border:1px solid #d97706;border-radius:10px;padding:12px;margin-bottom:10px;background:#1c1917">
+          <div style="font-size:12px;color:#fbbf24;margin-bottom:8px">O total desta fatura excede o saldo disponível para a data seleccionada. Indica a origem do dinheiro (obrigatório). Opcionalmente associa uma saída de caixa registada nesse dia.</div>
+          <div class="field"><label>Justificação da origem do dinheiro</label><textarea id="fx-justificacao" rows="2" placeholder="Ex.: pago com saída de caixa do turno da tarde, aprovado pela gerência."></textarea></div>
+          <div class="field"><label>Saída de caixa do dia (opcional)</label><select id="fx-turno-saida"><option value="">— Nenhuma / outra origem —</option></select></div>
+        </div>
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Linhas</div>
+        <div id="fatura-linhas-body"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="addFaturaLinha()">+ Linha</button>
+          <button type="button" id="fx-btn-submit" class="btn btn-success btn-sm" onclick="runAction(event, submitFaturaArmazem)">Registar fatura</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">📦 Inventário do Armazém</div>
+        <p style="font-size:12px;color:#64748b;margin:0 0 10px">Stock e custo médio <strong>acumulados</strong> (não filtrados por dia).</p>
+        <div id="armazem-inventario"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">📑 Faturas do dia</div>
+        <div id="armazem-faturas"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">🧾 Compras do dia</div>
+        <div id="armazem-compras"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+    </div>
+    ${navBar()}
+  `);
+  const fxData = document.getElementById('fx-data');
+  if (fxData) fxData.value = S.date;
+  document.getElementById('fatura-linhas-body').innerHTML = '';
+  addFaturaLinha();
+  const fxD = document.getElementById('fx-data');
+  if (fxD) {
+    fxD.addEventListener('change', () => {
+      S.date = fxD.value || S.date;
+      syncDatePickersAcrossPages();
+      refreshArmazemFundos();
+      loadArmazemData();
+    });
+  }
+  const flb = document.getElementById('fatura-linhas-body');
+  if (flb) {
+    flb.addEventListener('input', () => updateFaturaExcessoUI());
+    flb.addEventListener('change', () => updateFaturaExcessoUI());
+  }
+  await refreshArmazemFundos();
+  await loadArmazemData();
+}
+
+async function loadArmazemData() {
+  try {
+    const dataDia = S.date || new Date().toISOString().split('T')[0];
+    const q = encodeURIComponent(dataDia);
+    const [inventario, compras, produtos, faturas] = await Promise.all([
+      api('GET', '/armazem/inventario'),
+      api('GET', '/armazem/compras?limit=50&data=' + q),
+      api('GET', '/produtos?todos=1'),
+      api('GET', '/armazem/faturas?limit=40&data=' + q)
+    ]);
+    S.produtos = produtos;
+
+    if (!inventario.length) {
+      show('armazem-inventario', '<div style="color:#64748b">Sem produtos no inventário.</div>');
+    } else {
+      show('armazem-inventario', `<div class="table-wrap"><table>
+        <thead><tr><th>Produto</th><th style="text-align:right">Qtd</th></tr></thead>
+        <tbody>${inventario.map(i => `<tr>
+          <td>${i.produto_nome} <span style="color:#64748b;font-size:11px">(${medicaoSigla(i.tipo_medicao)})</span></td>
+          <td style="text-align:right">${fmtNum(i.quantidade)} ${medicaoSigla(i.tipo_medicao)}</td>
+        </tr>`).join('')}</tbody></table></div>`);
+    }
+
+    if (!faturas.length) {
+      show('armazem-faturas', `<div style="color:#64748b">Nenhuma fatura com data ${dateLabel(dataDia)}.</div>`);
+    } else {
+      show('armazem-faturas', `<div class="table-wrap"><table>
+        <thead><tr><th>Data / hora</th><th>Nº</th><th>Fornecedor</th><th>Foto</th><th style="text-align:right">Total</th><th>Fundos</th></tr></thead>
+        <tbody>${faturas.map(f => {
+          const exc = (f.justificacao_excesso || '').trim();
+          const tag = exc
+            ? `<span style="font-size:11px;color:#fbbf24">Acima do saldo</span>`
+            : '—';
+          const quando = f.criado_em ? dateTimeLabel(f.criado_em) : dateLabel(f.data_emissao);
+          const fotoUrl = (f.foto_fatura_url || '').trim();
+          const fotoCell = fotoUrl
+            ? `<a href="${attrUrl(fotoUrl)}" target="_blank" rel="noopener noreferrer" title="Ver foto"><img src="${attrUrl(fotoUrl)}" alt="" style="max-height:44px;max-width:72px;object-fit:cover;border-radius:6px;border:1px solid #334155;vertical-align:middle"/></a>`
+            : '<span style="color:#64748b;font-size:12px">—</span>';
+          return `<tr>
+          <td style="font-size:12px;color:#94a3b8">${quando}</td>
+          <td style="font-weight:600">${f.numero_fatura || '—'}</td>
+          <td>${f.fornecedor || '—'}</td>
+          <td style="vertical-align:middle">${fotoCell}</td>
+          <td style="text-align:right;color:#fbbf24">${fmt(f.total_valor)}</td>
+          <td style="font-size:12px">${tag}</td>
+        </tr>`;
+        }).join('')}</tbody></table></div>`);
+    }
+
+    if (!compras.length) {
+      show('armazem-compras', `<div style="color:#64748b">Nenhuma linha de compra para ${dateLabel(dataDia)}.</div>`);
+    } else {
+      show('armazem-compras', `<div class="table-wrap"><table>
+        <thead><tr><th>Data / hora</th><th>Fatura</th><th>Produto</th><th>Embalagem</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${compras.map(c => `<tr>
+          <td style="font-size:12px;color:#94a3b8">${dateTimeLabel(c.criado_em)}</td>
+          <td style="font-size:11px;color:#64748b">${c.fatura_numero ? c.fatura_numero : '—'}</td>
+          <td>${c.produto_nome}</td>
+          <td style="font-size:12px;color:#94a3b8">${(parseFloat(c.caixas)||0) > 0 && (parseFloat(c.qtd_por_caixa)||0) > 0 ? `${fmtNum(c.caixas)} cx x ${fmtNum(c.qtd_por_caixa)}` : '—'}</td>
+          <td style="text-align:right">${fmtNum(c.quantidade)} ${medicaoSigla(c.tipo_medicao)}</td>
+          <td style="text-align:right">${fmt(c.preco_unitario)}</td>
+          <td style="text-align:right;color:#fbbf24">${fmt(c.valor_total)}</td>
+        </tr>`).join('')}</tbody></table></div>`);
+    }
+  } catch(e) {
+    show('armazem-inventario', `<div class="alert alert-error">${e.message}</div>`);
+    show('armazem-faturas', `<div class="alert alert-error">${e.message}</div>`);
+    show('armazem-compras', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+async function refreshArmazemFundos() {
+  const banner = document.getElementById('armazem-fundos-banner');
+  const list = document.getElementById('armazem-libertacoes-list');
+  const fxData = document.getElementById('fx-data');
+  const data = (fxData && fxData.value) ? fxData.value : new Date().toISOString().split('T')[0];
+  try {
+    const [saldoInfo, saidas] = await Promise.all([
+      api('GET', '/armazem/saldo?data=' + encodeURIComponent(data)),
+      api('GET', '/armazem/saidas-dia?data=' + encodeURIComponent(data))
+    ]);
+    S.armazemSaldoDia = parseFloat(saldoInfo.saldo) || 0;
+    if (banner) {
+      banner.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:13px;margin-bottom:8px">
+        <span style="color:#94a3b8">Libertado: <strong style="color:#e2e8f0">${fmt(saldoInfo.total_libertacoes)}</strong></span>
+        <span style="color:#94a3b8">Faturas (dia): <strong style="color:#e2e8f0">${fmt(saldoInfo.total_faturas)}</strong></span>
+        <span style="color:#94a3b8">Saldo disponível: <strong style="color:${S.armazemSaldoDia >= 0 ? '#4ade80' : '#f87171'}">${fmt(saldoInfo.saldo)}</strong></span>
+      </div>`;
+    }
+    if (list) {
+      const rows = saldoInfo.libertacoes || [];
+      if (!rows.length) {
+        list.innerHTML = '<div style="font-size:12px;color:#64748b">Sem libertações neste dia.</div>';
+      } else {
+        list.innerHTML = `<div class="table-wrap"><table style="font-size:12px">
+          <thead><tr><th>Valor</th><th>Notas</th><th></th></tr></thead>
+          <tbody>${rows.map(l => `<tr>
+            <td style="color:#fbbf24">${fmt(l.valor)}</td>
+            <td>${l.notas || '—'}</td>
+            <td><button type="button" class="btn btn-ghost btn-sm" onclick="deleteLibertacaoArmazem(event, ${l.id})">Remover</button></td>
+          </tr>`).join('')}</tbody></table></div>`;
+      }
+    }
+    const sel = document.getElementById('fx-turno-saida');
+    if (sel) {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">— Nenhuma / outra origem —</option>' +
+        (saidas || []).map(s => `<option value="${s.id}">${fmt(s.valor)} — ${turnoLabel(s.turno_nome)} — ${(s.descricao || '').slice(0, 40)}</option>`).join('');
+      if (cur && sel.querySelector(`option[value="${cur}"]`)) sel.value = cur;
+    }
+    updateFaturaExcessoUI();
+  } catch (e) {
+    if (banner) banner.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+    S.armazemSaldoDia = 0;
+    updateFaturaExcessoUI();
+  }
+}
+
+async function submitLibertacaoArmazem() {
+  const data = val('fx-data') || new Date().toISOString().split('T')[0];
+  const valor = parseFloat(document.getElementById('lib-valor')?.value);
+  const notas = val('lib-notas');
+  if (!valor || valor <= 0) {
+    show('armazem-msg', '<div class="alert alert-error">Indica um valor positivo para a libertação.</div>');
+    return;
+  }
+  try {
+    await api('POST', '/armazem/libertacoes', { data, valor, notas });
+    document.getElementById('lib-valor').value = '';
+    document.getElementById('lib-notas').value = '';
+    show('armazem-msg', '');
+    await refreshArmazemFundos();
+    await loadArmazemData();
+  } catch (e) {
+    show('armazem-msg', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+async function deleteLibertacaoArmazem(ev, id) {
+  if (!confirm('Remover esta libertação?')) return;
+  await runAction(ev, async () => {
+    try {
+      await api('DELETE', '/armazem/libertacoes/' + id);
+      await refreshArmazemFundos();
+      await loadArmazemData();
+    } catch (e) {
+      show('armazem-msg', `<div class="alert alert-error">${e.message}</div>`);
+    }
+  });
+}
+
+function computeFaturaTotalEstimado() {
+  let sum = 0;
+  document.querySelectorAll('#fatura-linhas-body .fatura-linha').forEach(line => {
+    const sel = line.querySelector('.af-prod');
+    if (!sel || !sel.value) return;
+    const caixasNum = parseFloat(line.querySelector('.af-caixas')?.value) || 0;
+    const qtdPor = parseFloat(line.querySelector('.af-qtd-caixa')?.value) || 0;
+    const qtyRaw = parseFloat(line.querySelector('.af-qty')?.value);
+    const qty = (caixasNum > 0 && qtdPor > 0) ? (caixasNum * qtdPor) : qtyRaw;
+    const pu = parseFloat(line.querySelector('.af-preco')?.value);
+    if (qty > 0 && pu > 0) sum += qty * pu;
+  });
+  return sum;
+}
+
+function updateFaturaExcessoUI() {
+  const wrap = document.getElementById('fx-excesso-wrap');
+  if (!wrap) return;
+  const t = computeFaturaTotalEstimado();
+  const saldo = S.armazemSaldoDia != null ? S.armazemSaldoDia : 0;
+  if (t > saldo + 0.01) {
+    wrap.style.display = '';
+  } else {
+    wrap.style.display = 'none';
+    const j = document.getElementById('fx-justificacao');
+    const s = document.getElementById('fx-turno-saida');
+    if (j) j.value = '';
+    if (s) s.value = '';
+  }
+}
+
+function renderArmazemProdutoOptions(sel, selectedValue, term, includeNovo) {
+  const showNovo = includeNovo !== false;
+  const q = (term || '').trim().toLowerCase();
+  const filtrados = (S.produtos || []).filter(p => p.ativo && (!q || String(p.nome || '').toLowerCase().includes(q)));
+  sel.innerHTML = '<option value="">— Seleciona —</option>' + (showNovo ? '<option value="__novo__">+ Novo produto</option>' : '') +
+    filtrados.map(p => `<option value="${p.id}" data-medicao="${p.tipo_medicao || 'unidade'}">${p.nome} (${medicaoSigla(p.tipo_medicao)})</option>`).join('');
+  if (selectedValue && sel.querySelector(`option[value="${selectedValue}"]`)) sel.value = selectedValue;
+}
+
+function bindArmazemProdutoFilterOnLine(sel, indicatorEl) {
+  if (!sel || sel.dataset.filterBinded) return;
+  sel.dataset.filterBinded = '1';
+  const updateInd = () => {
+    if (!indicatorEl) return;
+    const q = sel._filterBuf || '';
+    indicatorEl.textContent = q ? `Filtro: ${q}` : 'Filtro vazio (digita para procurar, Esc limpa)';
+  };
+  sel._filterBuf = '';
+  updateInd();
+  sel.addEventListener('keydown', function(e) {
+    const key = e.key || '';
+    if (key === 'Escape') {
+      sel._filterBuf = '';
+      renderArmazemProdutoOptions(sel, sel.value || '', '', true);
+      toggleFaturaLinhaNovo(sel);
+      updateInd();
+      return;
+    }
+    if (key === 'Backspace') {
+      e.preventDefault();
+      sel._filterBuf = (sel._filterBuf || '').slice(0, -1);
+      renderArmazemProdutoOptions(sel, '', sel._filterBuf, true);
+      toggleFaturaLinhaNovo(sel);
+      updateInd();
+      return;
+    }
+    if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      sel._filterBuf = (sel._filterBuf || '') + key;
+      renderArmazemProdutoOptions(sel, '', sel._filterBuf, true);
+      if (sel.options.length > 0) sel.selectedIndex = 0;
+      toggleFaturaLinhaNovo(sel);
+      updateInd();
+    }
+  });
+  sel.addEventListener('blur', function() {
+    sel._filterBuf = '';
+    renderArmazemProdutoOptions(sel, sel.value || '', '', true);
+    toggleFaturaLinhaNovo(sel);
+    updateInd();
+  });
+}
+
+function toggleFaturaLinhaNovo(sel) {
+  const line = sel.closest('.fatura-linha');
+  if (!line) return;
+  const wrap = line.querySelector('.af-novo-wrap');
+  const qty = line.querySelector('.af-qty');
+  if (!wrap || !qty) return;
+  const isNovo = sel.value === '__novo__';
+  wrap.style.display = isNovo ? '' : 'none';
+  const med = isNovo
+    ? (line.querySelector('.af-medicao')?.value || 'unidade')
+    : (sel.options[sel.selectedIndex]?.getAttribute('data-medicao') || 'unidade');
+  qty.placeholder = `Qtd (${medicaoSigla(med)})`;
+  const medSel = line.querySelector('.af-medicao');
+  if (medSel && !medSel.dataset.binded) {
+    medSel.dataset.binded = '1';
+    medSel.addEventListener('change', () => toggleFaturaLinhaNovo(sel));
+  }
+}
+
+function toggleFaturaLinhaCaixa(chk) {
+  const line = chk.closest('.fatura-linha');
+  if (!line) return;
+  const fields = line.querySelector('.af-caixa-fields');
+  const precoCaixaWrap = line.querySelector('.af-caixa-preco-wrap');
+  const qty = line.querySelector('.af-qty');
+  const precoUnit = line.querySelector('.af-preco');
+  const on = !!chk.checked;
+  if (fields) fields.style.display = on ? 'grid' : 'none';
+  if (precoCaixaWrap) precoCaixaWrap.style.display = on ? '' : 'none';
+  if (qty) qty.disabled = on;
+  if (precoUnit) precoUnit.readOnly = on;
+  if (on && qty) qty.value = '';
+  if (!on && precoUnit) precoUnit.value = '';
+  syncFaturaLinhaPrecoUnit(line);
+}
+
+function syncFaturaLinhaPrecoUnit(line) {
+  const check = line.querySelector('.af-modo-caixa');
+  const precoUnit = line.querySelector('.af-preco');
+  if (!check || !precoUnit || !check.checked) return;
+  const precoCaixa = parseFloat(line.querySelector('.af-preco-caixa')?.value) || 0;
+  const qtdPorCaixa = parseFloat(line.querySelector('.af-qtd-caixa')?.value) || 0;
+  if (precoCaixa > 0 && qtdPorCaixa > 0) {
+    precoUnit.value = (precoCaixa / qtdPorCaixa).toFixed(2);
+  } else {
+    precoUnit.value = '';
+  }
+}
+
+function bindFaturaLinhaCaixaInputs(line) {
+  ['af-preco-caixa', 'af-qtd-caixa', 'af-caixas'].forEach(cls => {
+    const el = line.querySelector('.' + cls);
+    if (!el || el.dataset.binded) return;
+    el.dataset.binded = '1';
+    el.addEventListener('input', () => { syncFaturaLinhaPrecoUnit(line); updateFaturaExcessoUI(); });
+  });
+}
+
+function initFaturaLinha(line) {
+  const sel = line.querySelector('.af-prod');
+  const ind = line.querySelector('.af-prod-filter-indicator');
+  if (sel) {
+    renderArmazemProdutoOptions(sel, '', '', true);
+    bindArmazemProdutoFilterOnLine(sel, ind);
+    sel.addEventListener('change', () => { toggleFaturaLinhaNovo(sel); updateFaturaExcessoUI(); });
+    toggleFaturaLinhaNovo(sel);
+  }
+  bindFaturaLinhaCaixaInputs(line);
+  updateFaturaExcessoUI();
+}
+
+function removeFaturaLinha(btn) {
+  const line = btn.closest('.fatura-linha');
+  if (line) line.remove();
+}
+
+function addFaturaLinha() {
+  const wrap = document.getElementById('fatura-linhas-body');
+  if (!wrap) return;
+  const line = document.createElement('div');
+  line.className = 'fatura-linha';
+  line.style.cssText = 'border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:12px;background:#0f172a';
+  line.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<span style="font-size:12px;color:#64748b">Linha</span>' +
+      '<button type="button" class="btn btn-ghost btn-sm" onclick="removeFaturaLinha(this)">✕ Remover</button>' +
+    '</div>' +
+    '<div class="field"><label>Produto (digita para filtrar)</label>' +
+      '<select class="af-prod" style="width:100%"></select>' +
+      '<div class="af-prod-filter-indicator" style="margin-top:6px;font-size:12px;color:#94a3b8;min-height:16px"></div>' +
+    '</div>' +
+    '<div class="af-novo-wrap" style="display:none;border:1px solid #334155;border-radius:10px;padding:10px;margin-bottom:10px">' +
+      '<div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Novo produto</div>' +
+      '<div class="field"><label>Nome</label><input class="af-nome" type="text" placeholder="Nome do produto"/></div>' +
+      '<div class="field"><label>Categoria</label><select class="af-categoria"><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option><option value="menu">Menu</option></select></div>' +
+      '<div class="field"><label>Medição</label><select class="af-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>' +
+      '<div class="field"><label>Preço de venda (opcional)</label><input class="af-preco-venda" type="number" min="0" step="any" placeholder="0"/></div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+      '<div class="field"><label>Quantidade</label><input class="af-qty" type="number" min="0.001" step="any" placeholder="Qtd"/></div>' +
+      '<div class="field"><label>Preço unitário (Kz)</label><input class="af-preco" type="number" min="0.01" step="any" placeholder="0"/></div>' +
+    '</div>' +
+    '<div class="field">' +
+      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer">' +
+        '<input type="checkbox" class="af-modo-caixa" style="width:16px;height:16px" onchange="toggleFaturaLinhaCaixa(this)"/> Compra em caixa' +
+      '</label>' +
+    '</div>' +
+    '<div class="af-caixa-fields" style="display:none;grid-template-columns:1fr 1fr;gap:8px">' +
+      '<div class="field" style="margin:0"><label>Nº de caixas</label><input class="af-caixas" type="number" min="1" step="any" placeholder="Ex: 10"/></div>' +
+      '<div class="field" style="margin:0"><label>Qtd por caixa</label><input class="af-qtd-caixa" type="number" min="0.001" step="any" placeholder="Ex: 24"/></div>' +
+    '</div>' +
+    '<div class="af-caixa-preco-wrap" style="display:none">' +
+      '<div class="field"><label>Preço da caixa (Kz)</label><input class="af-preco-caixa" type="number" min="0.01" step="any" placeholder="Ex: 12000"/></div>' +
+    '</div>';
+  wrap.appendChild(line);
+  initFaturaLinha(line);
+}
+
+async function submitFaturaArmazem() {
+  const msg = document.getElementById('fatura-form-msg');
+  const linhas = [];
+  try {
+    document.querySelectorAll('#fatura-linhas-body .fatura-linha').forEach(line => {
+      const sel = line.querySelector('.af-prod');
+      if (!sel || !sel.value) return;
+      const payload = {
+        quantidade: parseFloat(line.querySelector('.af-qty')?.value),
+        caixas: parseFloat(line.querySelector('.af-caixas')?.value) || 0,
+        qtd_por_caixa: parseFloat(line.querySelector('.af-qtd-caixa')?.value) || 0,
+        preco_unitario: parseFloat(line.querySelector('.af-preco')?.value),
+        notas: ''
+      };
+      if (sel.value === '__novo__') {
+        payload.novo_produto = {
+          nome: (line.querySelector('.af-nome')?.value || '').trim(),
+          categoria: line.querySelector('.af-categoria')?.value || 'outro',
+          tipo_medicao: line.querySelector('.af-medicao')?.value || 'unidade',
+          preco: parseFloat(line.querySelector('.af-preco-venda')?.value) || 0
+        };
+        if (!payload.novo_produto.nome) throw new Error('Numa linha com «Novo produto», o nome é obrigatório.');
+      } else {
+        payload.produto_id = sel.value;
+      }
+      const caixasNum = payload.caixas;
+      const qtdPor = payload.qtd_por_caixa;
+      const qtyEff = (caixasNum > 0 && qtdPor > 0) ? (caixasNum * qtdPor) : payload.quantidade;
+      const pu = payload.preco_unitario;
+      if (!qtyEff || qtyEff <= 0 || !pu || pu <= 0) {
+        throw new Error('Em cada linha com produto seleccionado, indique quantidade (ou caixas) e preço unitário válidos.');
+      }
+      linhas.push(payload);
+    });
+    if (!linhas.length) {
+      if (msg) msg.innerHTML = '<div class="alert alert-error">Adicione pelo menos uma linha com produto, quantidade e preço.</div>';
+      return;
+    }
+  } catch (err) {
+    if (msg) msg.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+    return;
+  }
+  try {
+    const fotoInp = document.getElementById('fx-foto-fatura');
+    if (!fotoInp || !fotoInp.files || !fotoInp.files[0]) {
+      if (msg) msg.innerHTML = '<div class="alert alert-error">Anexa a foto da fatura (JPEG, PNG ou WebP).</div>';
+      return;
+    }
+    const fotoB64 = await fileToDataUrl(fotoInp.files[0]);
+    const totalEst = computeFaturaTotalEstimado();
+    const saldo = S.armazemSaldoDia != null ? S.armazemSaldoDia : 0;
+    const payload = {
+      numero_fatura: val('fx-numero'),
+      fornecedor: val('fx-fornecedor'),
+      data_emissao: val('fx-data'),
+      notas: val('fx-notas'),
+      linhas,
+      foto_fatura_base64: fotoB64
+    };
+    if (totalEst > saldo + 0.01) {
+      payload.justificacao_excesso = val('fx-justificacao');
+      const ts = val('fx-turno-saida');
+      if (ts) payload.turno_saida_id = parseInt(ts, 10);
+    }
+    await api('POST', '/armazem/faturas', payload);
+    if (msg) msg.innerHTML = '<div class="alert alert-success">Fatura registada com sucesso.</div>';
+    document.getElementById('fx-numero').value = '';
+    document.getElementById('fx-fornecedor').value = '';
+    document.getElementById('fx-notas').value = '';
+    const jf = document.getElementById('fx-justificacao');
+    if (jf) jf.value = '';
+    const ts = document.getElementById('fx-turno-saida');
+    if (ts) ts.value = '';
+    document.getElementById('fatura-linhas-body').innerHTML = '';
+    addFaturaLinha();
+    if (fotoInp) fotoInp.value = '';
+    await refreshArmazemFundos();
+    await loadArmazemData();
+  } catch(e) {
+    if (msg) msg.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
 // ── PRODUTOS ──────────────────────────────────────────────────
 async function drawProdutos() {
+  const podeCriarProd = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   render(`
     <div id="header">
       <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Produtos</div></div>
-      <button class="btn btn-primary btn-sm" onclick="showProdutoForm()">+ Novo</button>
+      ${podeCriarProd ? '<button class="btn btn-primary btn-sm" onclick="showProdutoForm()">+ Novo</button>' : ''}
     </div>
     <div id="content">
       <div id="prod-msg"></div>
@@ -1559,7 +2913,7 @@ async function drawProdutos() {
 
 async function loadProdutos() {
   try {
-    const isAdmin = ['admin','gestor'].includes(S.user?.role);
+    const isAdmin = ['admin', 'gestor', 'compras'].includes(S.user?.role);
     S.produtos = await api('GET', '/produtos' + (isAdmin ? '?todos=1' : ''));
     const menu   = S.produtos.filter(p => p.categoria==='menu');
     const comida = S.produtos.filter(p => p.categoria==='ingredientes');
@@ -1575,7 +2929,7 @@ async function loadProdutos() {
             <div class="produto-row">
               <div class="produto-info">
                 <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}</div>
-                <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · #${p.ordem}</div>
+                <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
               </div>
               ${isAdmin ? `
               <div class="produto-actions">
@@ -1606,6 +2960,7 @@ function closeProdutoModal() {
 function showProdutoForm(id) {
   const p = (id != null) ? S.produtos.find(x => x.id == id) : null;
   const isEdit = !!p;
+  const canEditReceita = ['admin', 'gestor'].includes(S.user?.role);
   closeProdutoModal();
 
   const div = document.createElement('div');
@@ -1620,6 +2975,7 @@ function showProdutoForm(id) {
       '<div id="prod-form-msg"></div>' +
       '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
       '<div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
+      '<div class="field"><label>Medição</label><select id="p-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
       '<div class="field" id="field-avulso"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso</label></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
@@ -1628,13 +2984,14 @@ function showProdutoForm(id) {
         '<button id="btn-modal-guardar" class="btn btn-success">Guardar</button>' +
         '<button id="btn-modal-cancelar" class="btn btn-ghost">Cancelar</button>' +
       '</div>' +
-      (isEdit ? '<div id="receita-section" style="display:none;margin-top:16px;border-top:1px solid #334155;padding-top:12px"><div class="card-title">🧾 Receita</div><div id="receita-list"></div><div style="display:flex;gap-6px;margin-top:8px"><select id="r-comp" style="flex:1"></select><input id="r-qty" type="number" min="0.001" step="0.001" value="1" style="width:70px"/><button class="btn btn-primary btn-sm" onclick="addReceita(\'' + p.id + '\')">+</button></div><div id="receita-msg" style="margin-top:4px"></div></div>' : '') +
+      (isEdit && canEditReceita ? '<div id="receita-section" style="display:none;margin-top:16px;border-top:1px solid #334155;padding-top:12px"><div class="card-title">🧾 Receita</div><div id="receita-list"></div><div style="display:flex;gap-6px;margin-top:8px"><select id="r-comp" style="flex:1"></select><input id="r-qty" type="number" min="0.001" step="0.001" value="1" style="width:70px"/><button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, () => addReceita(\'' + p.id + '\'))">+</button></div><div id="receita-msg" style="margin-top:4px"></div></div>' : '') +
     '</div>';
 
   document.getElementById('app').appendChild(div);
 
   document.getElementById('p-nome').value = p ? (p.nome || '') : '';
   document.getElementById('p-preco').value = p ? (p.preco || 0) : 0;
+  document.getElementById('p-medicao').value = p ? (p.tipo_medicao || 'unidade') : 'unidade';
   document.getElementById('p-cat').value = p ? (p.categoria || 'outro') : 'outro';
   document.getElementById('p-ordem').value = p ? (p.ordem || 0) : 0;
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
@@ -1655,14 +3012,16 @@ function showProdutoForm(id) {
       sec.style.display = 'none';
     }
   }
-  document.getElementById('p-cat').addEventListener('change', () => { toggleAvulso(); if (isEdit) toggleReceita(); });
+  document.getElementById('p-cat').addEventListener('change', () => { toggleAvulso(); if (isEdit && canEditReceita) toggleReceita(); });
   toggleAvulso();
-  if (isEdit) toggleReceita();
+  if (isEdit && canEditReceita) toggleReceita();
 
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
   document.getElementById('btn-modal-cancelar').addEventListener('click', closeProdutoModal);
-  document.getElementById('btn-modal-guardar').addEventListener('click', function() {
-    if (isEdit) saveProduto(p.id); else createProduto();
+  document.getElementById('btn-modal-guardar').addEventListener('click', function(ev) {
+    runAction(ev, async () => {
+      if (isEdit) await saveProduto(p.id); else await createProduto();
+    });
   });
 
   document.getElementById('p-nome').focus();
@@ -1670,7 +3029,7 @@ function showProdutoForm(id) {
 
 async function createProduto() {
   try {
-    await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,categoria:val('p-cat'),venda_avulso:document.getElementById('p-avulso')?.checked||false});
+    await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,tipo_medicao:val('p-medicao'),categoria:val('p-cat'),venda_avulso:document.getElementById('p-avulso')?.checked||false});
     closeProdutoModal();
     suc('prod-msg','Produto criado!');
     setTimeout(()=>show('prod-msg',''),2000);
@@ -1682,6 +3041,7 @@ async function saveProduto(id) {
   try {
     await api('PUT',`/produtos/${id}`,{
       nome: val('p-nome'), preco: parseFloat(val('p-preco'))||0,
+      tipo_medicao: val('p-medicao'),
       categoria: val('p-cat'), ordem: parseInt(val('p-ordem'))||0,
       ativo: val('p-ativo')==='true',
       venda_avulso: document.getElementById('p-avulso')?.checked||false
@@ -1719,7 +3079,7 @@ async function loadReceita(produtoId) {
         <span style="font-size:13px">${r.componente_nome}</span>
         <span style="display:flex;align-items:center;gap:6px">
           <span style="font-size:13px;color:#94a3b8">×${fmtNum(r.quantidade)}</span>
-          <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="deleteReceita('${r.id}','${produtoId}')">✕</button>
+          <button type="button" class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="runAction(event, () => deleteReceita('${r.id}','${produtoId}'))">✕</button>
         </span>
       </div>`
     ).join('');
@@ -1753,7 +3113,7 @@ async function drawAdmin() {
   render(`
     <div id="header">
       <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Administração</div></div>
-      <button class="btn btn-primary btn-sm" onclick="showUserForm()">+ Utilizador</button>
+      <button type="button" class="btn btn-primary btn-sm" onclick="showUserForm()">+ Utilizador</button>
     </div>
     <div id="content">
       <div id="admin-msg"></div>
@@ -1764,7 +3124,7 @@ async function drawAdmin() {
         <div id="pass-msg"></div>
         <div class="field"><label>Password Actual</label><input type="password" id="pass-atual"/></div>
         <div class="field"><label>Nova Password</label><input type="password" id="pass-nova"/></div>
-        <button class="btn btn-primary" onclick="alterarPassword()">Alterar</button>
+        <button type="button" class="btn btn-primary" onclick="runAction(event, alterarPassword)">Alterar</button>
       </div>
     </div>
     ${navBar()}
@@ -1782,7 +3142,7 @@ async function loadUtilizadores() {
           <div class="produto-row">
             <div class="produto-info">
               <div class="produto-nome">${u.nome}</div>
-              <div class="produto-meta">${u.email} · ${u.role} ${!u.ativo?'· Inactivo':''}</div>
+              <div class="produto-meta">${u.username || '—'} · ${u.email} · ${u.role} ${!u.ativo?'· Inactivo':''}</div>
             </div>
             <button class="btn btn-ghost btn-sm" onclick='showUserForm(${JSON.stringify(u)})'>Editar</button>
           </div>`).join('')}
@@ -1797,10 +3157,12 @@ function showUserForm(u) {
       <div class="card-title">${isEdit?'Editar':'Novo'} Utilizador</div>
       <div id="user-form-msg"></div>
       <div class="field"><label>Nome</label><input id="u-nome" value="${u?.nome||''}"/></div>
+      <div class="field"><label>Nome de utilizador</label><input id="u-username" type="text" value="${u?.username||''}" placeholder="apenas letras minúsculas, números, . _ -" autocapitalize="off"/></div>
       ${!isEdit?`<div class="field"><label>Email</label><input id="u-email" type="email" value=""/></div>`:''}
       <div class="field"><label>Role</label>
         <select id="u-role">
           <option value="operador" ${u?.role==='operador'?'selected':''}>Operador</option>
+          <option value="compras"  ${u?.role==='compras'?'selected':''}>Compras (dia, armazém, produtos)</option>
           <option value="gestor"   ${u?.role==='gestor'?'selected':''}>Gestor</option>
           <option value="admin"    ${u?.role==='admin'?'selected':''}>Admin</option>
         </select>
@@ -1811,8 +3173,8 @@ function showUserForm(u) {
       </div>
       <div class="field"><label>Nova Password (opcional)</label><input type="password" id="u-pass"/></div>`:''}
       <div class="flex gap-8 mt-8">
-        <button class="btn btn-success" onclick="${isEdit?`saveUser('${u.id}')`:'createUser()'}">Guardar</button>
-        <button class="btn btn-ghost" onclick="show('admin-form','')">Cancelar</button>
+        <button type="button" class="btn btn-success" onclick="runAction(event, ${isEdit?`() => saveUser('${u.id}')`:'createUser'})">Guardar</button>
+        <button type="button" class="btn btn-ghost" onclick="show('admin-form','')">Cancelar</button>
       </div>
     </div>
   `);
@@ -1820,7 +3182,7 @@ function showUserForm(u) {
 
 async function createUser() {
   try {
-    await api('POST','/utilizadores',{nome:val('u-nome'),email:val('u-email'),role:val('u-role')});
+    await api('POST','/utilizadores',{nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role')});
     show('admin-form','');
     suc('admin-msg','Utilizador criado! Password padrão: StockOS2025!');
     await loadUtilizadores();
@@ -1829,7 +3191,7 @@ async function createUser() {
 
 async function saveUser(id) {
   try {
-    const body = {nome:val('u-nome'),role:val('u-role'),ativo:val('u-ativo')==='true'};
+    const body = {nome:val('u-nome'),username:val('u-username'),role:val('u-role'),ativo:val('u-ativo')==='true'};
     const p = val('u-pass');
     if (p) body.password = p;
     await api('PUT',`/utilizadores/${id}`,body);
@@ -1861,7 +3223,10 @@ function getMondayOf(dateStr) {
 async function drawEscala() {
   render(`
     <div id="header">
-      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Escala</div></div>
+      <div>
+        <div style="font-size:18px;font-weight:700;color:#f1f5f9">Escala</div>
+        <div class="header-sub" style="margin-top:4px;line-height:1.45">Manhã ${turnoHorarioLabel('manha')} · Tarde ${turnoHorarioLabel('tarde')} · Noite ${turnoHorarioLabel('noite')}</div>
+      </div>
     </div>
     <div id="content">
       <div id="escala-body"><div style="padding:40px;text-align:center;color:#64748b"><div class="spinner"></div></div></div>
@@ -1894,25 +3259,28 @@ async function loadEscalaTemplate() {
 
     let html = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:420px">
       <thead><tr>
-        <th style="padding:8px 6px;background:#0f172a;color:#64748b;font-weight:600;text-align:left;width:60px"></th>
+        <th style="padding:8px 6px;background:#0f172a;color:#64748b;font-weight:600;text-align:left;width:88px">Turno</th>
         ${dayShort.map(d => `<th style="padding:8px 4px;background:#0f172a;color:#94a3b8;font-weight:600;text-align:center">${d}</th>`).join('')}
       </tr></thead>
       <tbody>
         ${turnos.map(turno => `
           <tr>
-            <td style="padding:8px 6px;border-bottom:1px solid #1e293b;font-weight:700;font-size:11px;color:${turnoColor[turno]};white-space:nowrap;vertical-align:top;padding-top:12px">${turnoLabel[turno]}</td>
+            <td style="padding:8px 6px;border-bottom:1px solid #1e293b;font-weight:700;font-size:11px;color:${turnoColor[turno]};vertical-align:top;padding-top:10px;line-height:1.35">
+              <div>${turnoLabel[turno]}</div>
+              <div style="font-size:10px;font-weight:600;color:#64748b;margin-top:4px">${turnoHorarioLabel(turno)}</div>
+            </td>
             ${[0,1,2,3,4,5,6].map(dia => {
               const entries = lookup[`${dia}_${turno}`] || [];
               const chips = entries.map(e =>
                 canEdit
                   ? `<div style="display:inline-flex;align-items:center;gap:2px;margin:2px">
-                      <span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${e.utilizador_nome.split(' ')[0]}</span>
-                      <button onclick="removeEscalaTemplate(${e.id})" style="background:none;border:none;color:#ef4444;cursor:pointer;padding:0 1px;font-size:13px;line-height:1">×</button>
+                      <span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${(e.utilizador_nome || 'Sem').split(' ')[0]}</span>
+                      <button type="button" onclick="runAction(event, () => removeEscalaTemplate(${e.id}))" style="background:none;border:none;color:#ef4444;cursor:pointer;padding:0 1px;font-size:13px;line-height:1">×</button>
                     </div>`
-                  : `<div style="display:inline-block;margin:2px"><span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${e.utilizador_nome.split(' ')[0]}</span></div>`
+                  : `<div style="display:inline-block;margin:2px"><span style="background:#172554;color:#93c5fd;padding:3px 6px;border-radius:6px;font-size:11px;font-weight:600">${(e.utilizador_nome || 'Sem').split(' ')[0]}</span></div>`
               ).join('');
               const addBtn = canEdit
-                ? `<button onclick="showAddEscalaTemplate(${dia},'${turno}')" style="background:none;border:1px dashed #334155;border-radius:6px;color:#475569;cursor:pointer;font-size:16px;padding:1px 6px;margin:2px;line-height:1.4">+</button>`
+                ? `<button type="button" onclick="showAddEscalaTemplate(${dia},'${turno}')" style="background:none;border:1px dashed #334155;border-radius:6px;color:#475569;cursor:pointer;font-size:16px;padding:1px 6px;margin:2px;line-height:1.4">+</button>`
                 : '';
               return `<td style="padding:6px 4px;border-bottom:1px solid #1e293b;text-align:center;vertical-align:top">
                 <div style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:2px">${chips}${addBtn}</div>
@@ -1928,12 +3296,12 @@ async function loadEscalaTemplate() {
 }
 
 function showAddEscalaTemplate(dia_semana, turno) {
-  const turnoLabel = {manha:'Manhã', tarde:'Tarde', noite:'Noite'};
+  const turnoNome = {manha:'Manhã', tarde:'Tarde', noite:'Noite'};
   const dayShort = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'];
   const utilizadores = (S.utilizadores || []).filter(u => u.ativo);
   show('escala-add-form', `
     <div class="card">
-      <div class="card-title">Adicionar — ${dayShort[dia_semana]}, ${turnoLabel[turno]}</div>
+      <div class="card-title">Adicionar — ${dayShort[dia_semana]}, ${turnoNome[turno]} · ${turnoHorarioLabel(turno)}</div>
       <div id="escala-add-msg"></div>
       <div class="field">
         <label>Funcionário</label>
@@ -1943,8 +3311,8 @@ function showAddEscalaTemplate(dia_semana, turno) {
         </select>
       </div>
       <div class="flex gap-8 mt-8">
-        <button class="btn btn-success" onclick="addEscalaTemplate(${dia_semana},'${turno}')">Adicionar</button>
-        <button class="btn btn-ghost" onclick="show('escala-add-form','')">Cancelar</button>
+        <button type="button" class="btn btn-success" onclick="runAction(event, () => addEscalaTemplate(${dia_semana},'${turno}'))">Adicionar</button>
+        <button type="button" class="btn btn-ghost" onclick="show('escala-add-form','')">Cancelar</button>
       </div>
     </div>
   `);
@@ -1955,7 +3323,7 @@ async function addEscalaTemplate(dia_semana, turno) {
   try {
     const utilizador_id = val('ea-user');
     if (!utilizador_id) return err('escala-add-msg', 'Seleciona um funcionário');
-    await api('POST', '/escala/template', { dia_semana, turno, utilizador_id: parseInt(utilizador_id) });
+    await api('POST', '/escala/template', { dia_semana, turno, utilizador_id });
     show('escala-add-form', '');
     await loadEscalaTemplate();
   } catch(e) { err('escala-add-msg', e.message); }
@@ -1969,7 +3337,7 @@ async function removeEscalaTemplate(id) {
 }
 
 // ── START ─────────────────────────────────────────────────────
-draw();
+draw().catch(e => console.error(e));
 </script>
 </body>
 </html>

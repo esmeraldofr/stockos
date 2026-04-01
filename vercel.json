@@ -1,6 +1,14 @@
 {
   "version": 2,
   "name": "stockos",
+  "headers": [
+    {
+      "source": "/",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    }
+  ],
   "builds": [
     {
       "src": "api/server.js",

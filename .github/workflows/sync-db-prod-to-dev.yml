@@ -1,6 +1,6 @@
 # Replica a base de dados de PRODUÇÃO no projecto Supabase de DESENVOLVIMENTO.
-# Os schemas são diferentes (prod evoluiu com UUID, armazens, etc.); por isso usa-se
-# pg_dump + pg_restore completo, não cópia linha-a-linha.
+# Só o schema **public** (tabelas da app). Incluir auth/storage no dump falha no restore em Supabase
+# (must be owner of …). Os schemas evoluem com migrações; usa-se pg_dump + pg_restore, não cópia linha-a-linha.
 #
 # Pré-requisitos (GitHub → Settings → Secrets → Actions):
 #   DATABASE_URL              — URI postgres de produção (já usada no deploy).
@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD")"
-          pg_dump --format=custom --no-owner --no-acl --file=prod.dump
+          pg_dump --format=custom --no-owner --no-acl --schema=public --file=prod.dump
           ls -la prod.dump
 
       - name: Restore em desenvolvimento
@@ -87,6 +87,7 @@ jobs:
             --if-exists \
             --no-owner \
             --no-acl \
+            --schema=public \
             --jobs=2 \
             --dbname="$PGDATABASE" \
             prod.dump 2>&1 | tee pg_restore.log

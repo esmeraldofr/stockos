@@ -93,5 +93,5 @@ jobs:
             echo ""
             echo "**Link:** [Settings → Secrets → Actions](https://github.com/esmeraldofr/stockos/settings/secrets/actions)"
             echo ""
-            echo "> Qualidade usa a mesma BD de produção (\`DATABASE_URL\`)."
+            echo "> Qualidade: correr \`supabase/readonly_qualidade_role.sql\` em produção e secret \`DATABASE_URL_QUALIDADE\` (só leitura)."
           } >> $GITHUB_STEP_SUMMARY

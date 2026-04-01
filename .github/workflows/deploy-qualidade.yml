@@ -1,5 +1,7 @@
-# Código = branch develop. Base de dados = produção (secret DATABASE_URL).
-# O branch git «qualidade» pode continuar a ser actualizado pelo workflow promote-to-qualidade.yml para referência.
+# Código = branch develop.
+# BD = mesma instância Postgres de produção, mas utilizador só de leitura (secret DATABASE_URL_QUALIDADE).
+# Criar o role com supabase/readonly_qualidade_role.sql no SQL Editor de produção.
+# O branch git «qualidade» pode ser actualizado pelo promote-to-qualidade.yml só para referência.
 
 name: Deploy — Qualidade
 
@@ -10,7 +12,7 @@ on:
 
 jobs:
   deploy:
-    name: Deploy develop → Qualidade (Vercel, BD produção)
+    name: Deploy develop → Qualidade (Vercel, BD produção read-only)
     runs-on: ubuntu-latest
 
     steps:
@@ -20,6 +22,15 @@ jobs:
           ref: develop
           fetch-depth: 0
 
+      - name: Exigir DATABASE_URL_QUALIDADE (utilizador só leitura)
+        run: |
+          if [ -z "${DATABASE_URL_QUALIDADE}" ]; then
+            echo "::error::Define o secret DATABASE_URL_QUALIDADE com a connection string do user stockos_qualidade_readonly (ver supabase/readonly_qualidade_role.sql). Não uses a URL admin de produção."
+            exit 1
+          fi
+        env:
+          DATABASE_URL_QUALIDADE: ${{ secrets.DATABASE_URL_QUALIDADE }}
+
       - name: Deploy to Vercel (Preview)
         run: |
           export VERCEL_TOKEN=$(echo "$_VT" | rev)
@@ -28,9 +39,9 @@ jobs:
           npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
             --build-env NODE_ENV=staging \
             --env NODE_ENV=staging \
-            --env DATABASE_URL="$DATABASE_URL_PROD"
+            --env DATABASE_URL="$DATABASE_URL_QUALIDADE"
         env:
           _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
           _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
           _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
-          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL_QUALIDADE: ${{ secrets.DATABASE_URL_QUALIDADE }}

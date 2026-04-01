@@ -224,15 +224,18 @@ tr:hover .td-name{background:#1e293b}
 .dia-escala-colhead--anchor .dia-escala-colhead-date{color:#93c5fd}
 .dia-escala-rowhead{
   display:flex;
-  align-items:center;
-  justify-content:flex-end;
-  padding:10px 10px 10px 6px;
+  flex-direction:column;
+  align-items:flex-end;
+  justify-content:center;
+  gap:3px;
+  padding:8px 10px 8px 6px;
   font-weight:700;
   font-size:13px;
   border-bottom:1px solid #334155;
   border-right:1px solid #334155;
   background:#0c1222;
 }
+.dia-escala-rowhead-time{font-size:10px;font-weight:600;color:#64748b;white-space:nowrap;line-height:1.2}
 .dia-escala-shift--manha{color:#fb923c}
 .dia-escala-shift--tarde{color:#60a5fa}
 .dia-escala-shift--noite{color:#a78bfa}
@@ -325,6 +328,15 @@ function parseRaw(v) {
 }
 function turnoLabel(nome) {
   return { manha: '🌅 Manhã', tarde: '🌤 Tarde', noite: '🌙 Noite' }[nome] || nome;
+}
+/** Horário oficial por turno (referência na escala). */
+const TURNO_HORARIO = {
+  manha: '07:00 – 16:00',
+  tarde: '15:00 – 00:00',
+  noite: '23:00 – 08:00'
+};
+function turnoHorarioLabel(nome) {
+  return TURNO_HORARIO[nome] || '';
 }
 function dateLabel(d) {
   if (d == null || d === '') return '—';
@@ -813,9 +825,9 @@ function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
   const mon = mondayOfWeekIso(anchorDateStr);
   const dom = addDays(mon, 6);
   const turnos = [
-    { nome: 'manha', label: 'Manhã', cls: 'dia-escala-shift--manha' },
-    { nome: 'tarde', label: 'Tarde', cls: 'dia-escala-shift--tarde' },
-    { nome: 'noite', label: 'Noite', cls: 'dia-escala-shift--noite' }
+    { nome: 'manha', label: 'Manhã', horario: turnoHorarioLabel('manha'), cls: 'dia-escala-shift--manha' },
+    { nome: 'tarde', label: 'Tarde', horario: turnoHorarioLabel('tarde'), cls: 'dia-escala-shift--tarde' },
+    { nome: 'noite', label: 'Noite', horario: turnoHorarioLabel('noite'), cls: 'dia-escala-shift--noite' }
   ];
   function listaCell(dayIdx, turnoNome) {
     const dateStr = addDays(mon, dayIdx);
@@ -840,7 +852,7 @@ function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
     parts.push(`<div class="dia-escala-colhead${anchor ? ' dia-escala-colhead--anchor' : ''}">${ESCALA_DIA_ABREV[i]}<span class="dia-escala-colhead-date">${dateLabel(dateStr)}</span></div>`);
   }
   for (const t of turnos) {
-    parts.push(`<div class="dia-escala-rowhead ${t.cls}">${t.label}</div>`);
+    parts.push(`<div class="dia-escala-rowhead ${t.cls}"><span>${t.label}</span><span class="dia-escala-rowhead-time">${t.horario}</span></div>`);
     for (let i = 0; i < 7; i++) {
       const dateStr = addDays(mon, i);
       const anchor = dateStr === anchorDateStr;
@@ -851,7 +863,7 @@ function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
   return `
     <div class="card" id="dia-escala-readonly">
       <div class="card-title">👥 Escala da semana</div>
-      <p class="dia-escala-intro">Semana de <strong style="color:#cbd5e1">${dateLabel(mon)}</strong> a <strong style="color:#cbd5e1">${dateLabel(dom)}</strong>. Apenas consulta. Onde não há escala para a data, usa-se o modelo semanal. Coluna realçada: dia seleccionado.</p>
+      <p class="dia-escala-intro">Semana de <strong style="color:#cbd5e1">${dateLabel(mon)}</strong> a <strong style="color:#cbd5e1">${dateLabel(dom)}</strong>. Apenas consulta. Onde não há escala para a data, usa-se o modelo semanal. Coluna realçada: dia seleccionado. <strong style="color:#94a3b8">Horários:</strong> Manhã ${turnoHorarioLabel('manha')} · Tarde ${turnoHorarioLabel('tarde')} · Noite ${turnoHorarioLabel('noite')}.</p>
       <div class="dia-escala-scroll">
         <div class="dia-escala-grid">
           ${parts.join('')}
@@ -1386,6 +1398,7 @@ async function loadTurno() {
       <div id="tab-escala" class="turno-tab-panel">
         <div class="card">
           <div class="card-title">👥 Escala do Turno</div>
+          <p style="font-size:12px;color:#64748b;margin:-4px 0 10px;line-height:1.4">Horário: <strong style="color:#cbd5e1">${turnoHorarioLabel(turno.nome)}</strong></p>
           <div id="turno-escala-list"><span style="color:#64748b">A carregar...</span></div>
         </div>
       </div>
@@ -2117,7 +2130,8 @@ async function loadEscalaTurno() {
       if (f.utilizador_id && f.motivo_falta) motivoPorFalta[String(f.utilizador_id)] = f.motivo_falta;
     });
 
-    const info = `<div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">${origem}</div>`;
+    const info = `<div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">${origem}</div>
+      <div style="font-size:12px;color:#94a3b8;margin-bottom:12px">Horário: <strong style="color:#cbd5e1">${turnoHorarioLabel(turnoNome)}</strong></div>`;
     const escaladosHtml = lista.length
       ? lista.map((r, i) => `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;${i < lista.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
@@ -3201,7 +3215,10 @@ function getMondayOf(dateStr) {
 async function drawEscala() {
   render(`
     <div id="header">
-      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Escala</div></div>
+      <div>
+        <div style="font-size:18px;font-weight:700;color:#f1f5f9">Escala</div>
+        <div class="header-sub" style="margin-top:4px;line-height:1.45">Manhã ${turnoHorarioLabel('manha')} · Tarde ${turnoHorarioLabel('tarde')} · Noite ${turnoHorarioLabel('noite')}</div>
+      </div>
     </div>
     <div id="content">
       <div id="escala-body"><div style="padding:40px;text-align:center;color:#64748b"><div class="spinner"></div></div></div>
@@ -3234,13 +3251,16 @@ async function loadEscalaTemplate() {
 
     let html = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:420px">
       <thead><tr>
-        <th style="padding:8px 6px;background:#0f172a;color:#64748b;font-weight:600;text-align:left;width:60px"></th>
+        <th style="padding:8px 6px;background:#0f172a;color:#64748b;font-weight:600;text-align:left;width:88px">Turno</th>
         ${dayShort.map(d => `<th style="padding:8px 4px;background:#0f172a;color:#94a3b8;font-weight:600;text-align:center">${d}</th>`).join('')}
       </tr></thead>
       <tbody>
         ${turnos.map(turno => `
           <tr>
-            <td style="padding:8px 6px;border-bottom:1px solid #1e293b;font-weight:700;font-size:11px;color:${turnoColor[turno]};white-space:nowrap;vertical-align:top;padding-top:12px">${turnoLabel[turno]}</td>
+            <td style="padding:8px 6px;border-bottom:1px solid #1e293b;font-weight:700;font-size:11px;color:${turnoColor[turno]};vertical-align:top;padding-top:10px;line-height:1.35">
+              <div>${turnoLabel[turno]}</div>
+              <div style="font-size:10px;font-weight:600;color:#64748b;margin-top:4px">${turnoHorarioLabel(turno)}</div>
+            </td>
             ${[0,1,2,3,4,5,6].map(dia => {
               const entries = lookup[`${dia}_${turno}`] || [];
               const chips = entries.map(e =>
@@ -3268,12 +3288,12 @@ async function loadEscalaTemplate() {
 }
 
 function showAddEscalaTemplate(dia_semana, turno) {
-  const turnoLabel = {manha:'Manhã', tarde:'Tarde', noite:'Noite'};
+  const turnoNome = {manha:'Manhã', tarde:'Tarde', noite:'Noite'};
   const dayShort = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'];
   const utilizadores = (S.utilizadores || []).filter(u => u.ativo);
   show('escala-add-form', `
     <div class="card">
-      <div class="card-title">Adicionar — ${dayShort[dia_semana]}, ${turnoLabel[turno]}</div>
+      <div class="card-title">Adicionar — ${dayShort[dia_semana]}, ${turnoNome[turno]} · ${turnoHorarioLabel(turno)}</div>
       <div id="escala-add-msg"></div>
       <div class="field">
         <label>Funcionário</label>

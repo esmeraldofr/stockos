@@ -11,8 +11,19 @@ const PWD_SALT   = 'stockos-pwd-salt-2025';
 
 const _dbUrl = process.env.DATABASE_URL;
 if (!_dbUrl) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
-const _sqlOpts = { ssl: 'require', prepare: false, max: 1, idle_timeout: 1, max_lifetime: 5, connect_timeout: 10 };
+/** Pool partilhado: max=1 + fechar após cada query saturava ligações e tornava cada pedido muito lento. */
+const _sqlOpts = {
+  ssl: 'require',
+  prepare: false,
+  max: Math.min(15, Math.max(3, parseInt(process.env.PG_POOL_MAX || '10', 10) || 10)),
+  idle_timeout: 30,
+  max_lifetime: 60 * 55,
+  connect_timeout: 15
+};
 let _activeDbUrl = _dbUrl;
+/** Instância única do cliente postgres (reutiliza ligações TCP/TLS). */
+let _pgSingleton = null;
+
 function getDbCandidates() {
   const out = [_activeDbUrl, _dbUrl];
   try {
@@ -37,52 +48,74 @@ function getDbCandidates() {
   } catch (_) {}
   return [...new Set(out)];
 }
-function createSql(url) { return postgres(url || _activeDbUrl, _sqlOpts); }
-const query = async (text, params) => {
+
+async function resetPgSingleton() {
+  const s = _pgSingleton;
+  _pgSingleton = null;
+  if (s) await s.end({ timeout: 5 }).catch(() => {});
+}
+
+/** Garante uma ligação persistente; tenta URLs candidatas só até a primeira funcionar. */
+async function ensurePgSingleton() {
+  if (_pgSingleton) return _pgSingleton;
   let lastErr = null;
   for (let round = 0; round < 2; round++) {
     for (const url of getDbCandidates()) {
-      const sql = createSql(url);
+      let sqlConn = null;
       try {
-        const rows = await sql.unsafe(text, params || []);
+        sqlConn = postgres(url, _sqlOpts);
+        await sqlConn`SELECT 1`;
+        _pgSingleton = sqlConn;
         _activeDbUrl = url;
-        return { rows: Array.from(rows) };
+        return _pgSingleton;
       } catch (e) {
         lastErr = e;
-      } finally {
-        // Em serverless, fechar cedo reduz saturação do pool em Session mode.
-        await sql.end({ timeout: 1 }).catch(() => {});
+        try { await sqlConn?.end({ timeout: 2 }).catch(() => {}); } catch (_) {}
       }
     }
-    if (round === 0) await new Promise(r => setTimeout(r, 120));
+    if (round === 0) await new Promise((r) => setTimeout(r, 120));
+  }
+  throw lastErr;
+}
+
+const query = async (text, params) => {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const sql = await ensurePgSingleton();
+      const rows = await sql.unsafe(text, params || []);
+      return { rows: Array.from(rows) };
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e && e.message ? e.message : e);
+      const transient =
+        attempt === 0 &&
+        (/ECONNRESET|ECONNREFUSED|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03/i.test(msg) ||
+          e.code === 'ECONNRESET');
+      if (transient) {
+        await resetPgSingleton();
+        continue;
+      }
+      throw e;
+    }
   }
   throw lastErr;
 };
+
 const pool = {
   query,
   connect: async () => {
-    let lastErr = null;
-    for (let round = 0; round < 2; round++) {
-      for (const url of getDbCandidates()) {
-        const sql = createSql(url);
-        try {
-          const reserved = await sql.reserve();
-          _activeDbUrl = url;
-          return {
-            query: async (text, params) => { const rows = await reserved.unsafe(text, params || []); return { rows: Array.from(rows) }; },
-            release: async () => {
-              await reserved.release().catch(() => {});
-              await sql.end({ timeout: 1 }).catch(() => {});
-            }
-          };
-        } catch (e) {
-          lastErr = e;
-          await sql.end({ timeout: 1 }).catch(() => {});
-        }
+    const sql = await ensurePgSingleton();
+    const reserved = await sql.reserve();
+    return {
+      query: async (text, params) => {
+        const rows = await reserved.unsafe(text, params || []);
+        return { rows: Array.from(rows) };
+      },
+      release: async () => {
+        await reserved.release().catch(() => {});
       }
-      if (round === 0) await new Promise(r => setTimeout(r, 120));
-    }
-    throw lastErr;
+    };
   }
 };
 

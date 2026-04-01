@@ -1,20 +1,23 @@
+# Código = branch develop. Base de dados = produção (secret DATABASE_URL).
+# O branch git «qualidade» pode continuar a ser actualizado pelo workflow promote-to-qualidade.yml para referência.
+
 name: Deploy — Qualidade
 
 on:
   push:
     branches:
-      - qualidade
+      - develop
 
 jobs:
   deploy:
-    name: Deploy to Qualidade (Vercel Preview)
+    name: Deploy develop → Qualidade (Vercel, BD produção)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: qualidade
+          ref: develop
           fetch-depth: 0
 
       - name: Deploy to Vercel (Preview)

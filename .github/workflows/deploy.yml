@@ -31,5 +31,5 @@ jobs:
           _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
           _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
           _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
-          DATABASE_URL_PROD: "postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:5432/postgres"
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
           GITHUB_REF: refs/heads/main

@@ -1,0 +1,86 @@
+# Replica a base de dados de PRODUÇÃO no projecto Supabase de DESENVOLVIMENTO.
+# Os schemas são diferentes (prod evoluiu com UUID, armazens, etc.); por isso usa-se
+# pg_dump + pg_restore completo, não cópia linha-a-linha.
+#
+# Pré-requisitos (GitHub → Settings → Secrets → Actions):
+#   DATABASE_URL              — URI postgres de produção (já usada no deploy).
+#   DATABASE_URL_DEV_ADMIN    — URI com user postgres do projecto **dev** (Supabase:
+#                               Project Settings → Database → Connection string → URI).
+#                               Não uses stockos_app aqui: o restore precisa de permissões de DDL.
+#
+# Depois do primeiro sync, o secret DATABASE_URL_DEV (stockos_app) continua válido se o
+# workflow voltar a conceder privilégios a stockos_app.
+
+name: Sync DB produção → desenvolvimento
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: pg_dump prod → pg_restore dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar cliente PostgreSQL
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      - name: Validar secrets
+        run: |
+          if [ -z "${{ secrets.DATABASE_URL }}" ]; then
+            echo "::error::Secret DATABASE_URL em falta."
+            exit 1
+          fi
+          if [ -z "${{ secrets.DATABASE_URL_DEV_ADMIN }}" ]; then
+            echo "::error::Define DATABASE_URL_DEV_ADMIN (postgres@db.<ref-dev>.supabase.co:5432/postgres) — ver cabeçalho deste workflow."
+            exit 1
+          fi
+
+      - name: Dump produção
+        env:
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+        run: |
+          pg_dump "$DATABASE_URL_PROD" \
+            --format=custom \
+            --no-owner \
+            --no-acl \
+            --file=prod.dump
+          ls -la prod.dump
+
+      - name: Restore em desenvolvimento
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set +e
+          pg_restore \
+            --dbname="$DATABASE_URL_DEV_ADMIN" \
+            --clean \
+            --if-exists \
+            --no-owner \
+            --no-acl \
+            --jobs=2 \
+            prod.dump
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+            echo "::error::pg_restore falhou com código $rc"
+            exit "$rc"
+          fi
+          echo "pg_restore terminou (código $rc; 1 = avisos aceitáveis em alguns casos)"
+
+      - name: Privilégios para stockos_app (se existir)
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          psql "$DATABASE_URL_DEV_ADMIN" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'stockos_app') THEN
+              GRANT USAGE ON SCHEMA public TO stockos_app;
+              GRANT ALL ON ALL TABLES IN SCHEMA public TO stockos_app;
+              GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO stockos_app;
+              ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO stockos_app;
+              ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO stockos_app;
+            END IF;
+          END
+          $$;
+          SQL

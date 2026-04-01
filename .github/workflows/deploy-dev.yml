@@ -17,6 +17,16 @@ jobs:
           ref: develop
           fetch-depth: 0
 
+      # Desenvolvimento nunca usa DATABASE_URL de produção — só BD dedicada (secret DATABASE_URL_DEV).
+      - name: Exigir DATABASE_URL_DEV
+        run: |
+          if [ -z "${DATABASE_URL_DEV}" ]; then
+            echo "::error::Define o secret DATABASE_URL_DEV (Supabase ou Postgres só de dev). Ambiente de desenvolvimento não pode ligar à BD de produção."
+            exit 1
+          fi
+        env:
+          DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
+
       - name: Deploy to Vercel (Preview)
         run: |
           export VERCEL_TOKEN=$(echo "$_VT" | rev)
@@ -25,11 +35,10 @@ jobs:
           npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
             --build-env NODE_ENV=development \
             --env NODE_ENV=development \
-            --env DATABASE_URL="${DATABASE_URL_DEV:-$DATABASE_URL_PROD}"
+            --env DATABASE_URL="$DATABASE_URL_DEV"
         env:
           _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
           _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
           _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
           VERCEL_PROJECT_ID_DEV: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
           DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
-          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}

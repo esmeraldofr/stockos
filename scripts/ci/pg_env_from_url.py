@@ -2,9 +2,21 @@
 """Emite linhas export PG*=... para forçar IPv4 (PGHOSTADDR) e evitar falha IPv6 nos runners."""
 import os
 import shlex
-import subprocess
+import socket
 import sys
 import urllib.parse
+
+
+def ipv4_for_host(host: str, port: int) -> str:
+    try:
+        infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        print(f"DNS IPv4 falhou para {host}: {e}", file=sys.stderr)
+        sys.exit(1)
+    if not infos:
+        print(f"Sem registo A para {host}", file=sys.stderr)
+        sys.exit(1)
+    return infos[0][4][0]
 
 
 def main() -> None:
@@ -17,15 +29,10 @@ def main() -> None:
     if not host:
         print("URI sem hostname", file=sys.stderr)
         sys.exit(1)
-    out = subprocess.check_output(["getent", "ahostsv4", host], text=True)
-    lines = [ln.split()[0] for ln in out.strip().splitlines() if ln.strip()]
-    if not lines:
-        print(f"Sem IPv4 (ahostsv4) para {host}", file=sys.stderr)
-        sys.exit(1)
-    ipv4 = lines[0]
+    port = u.port or 5432
+    ipv4 = ipv4_for_host(host, port)
     user = urllib.parse.unquote(u.username) if u.username else "postgres"
     pwd = urllib.parse.unquote(u.password or "")
-    port = u.port or 5432
     db = (u.path or "/postgres").lstrip("/") or "postgres"
     for k, v in [
         ("PGHOST", host),

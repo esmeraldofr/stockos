@@ -393,12 +393,13 @@ async function initDB() {
     ('Sumol Manga',700,'bebida',34),('Cuca Lata',700,'bebida',35),('Nocal Lata',700,'bebida',36),('Dopel',700,'bebida',37)
     ON CONFLICT (nome) DO NOTHING`, [], 'produtos-seed');
   await qry(`UPDATE produtos SET venda_avulso=true, preco=1000 WHERE nome='Batata Pré-frita'`, [], 'batata-avulso');
+  await ensureRoleEnumCompras();
   console.log('DB ready');
 }
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31e-no-ddl-utilizadores';
+const STOCKOS_API_BUILD = '2026-03-31f-login-two-step-select';
 
 app.use(cors({ origin: '*' }));
 app.use((req, res, next) => {
@@ -509,22 +510,25 @@ function pgErrText(e) {
 }
 
 /**
- * Login só com SELECT. Com `@` nunca toca na coluna username.
- * Sem `@`: tenta email OU username; em qualquer falha da 1.ª query, tenta só email (evita must be owner / coluna em falha / driver estranho).
+ * Login só com SELECT, em duas queries separadas (nunca «OR email OR username» na mesma frase).
+ * 1) Sempre tenta casar por email (inclui quando o utilizador escreve só «admin» — não encontra).
+ * 2) Só se não houver «@» e a 1.ª não devolveu linhas, tenta só coluna username.
  */
 async function queryUtilizadorPorLogin(login) {
   const L = String(login || '').trim();
-  const porEmail = () =>
-    query(`SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`, [L]);
-  if (L.includes('@')) return await porEmail();
+  const byEmail = await query(
+    `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
+    [L]
+  );
+  if (byEmail.rows.length > 0 || L.includes('@')) return byEmail;
   try {
     return await query(
-      `SELECT * FROM utilizadores WHERE ativo=true AND (LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1))`,
+      `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(username)=LOWER($1)`,
       [L]
     );
   } catch (e) {
-    console.warn('[auth/login] query com username falhou, só email:', pgErrText(e));
-    return await porEmail();
+    console.warn('[auth/login] lookup por username ignorado:', pgErrText(e));
+    return byEmail;
   }
 }
 
@@ -534,8 +538,6 @@ async function queryUtilizadorPorLogin(login) {
  */
 async function ensureUsernameColumn() {
   if (usernameColumnEnsured) return;
-  await ensureRoleEnumCompras();
-
   const hasUsername = await utilizadoresHasUsernameColumn().catch(() => false);
   if (hasUsername) {
     const r = await query(`SELECT id, email FROM utilizadores WHERE username IS NULL OR TRIM(username) = ''`).catch(() => ({ rows: [] }));
@@ -1054,15 +1056,19 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 app.get('/api/auth/me', auth, async (req, res) => {
-  await ensureUsernameColumn().catch(() => {});
-  const hasU = await utilizadoresHasUsernameColumn().catch(() => false);
-  const r = await query(
-    hasU
-      ? 'SELECT id,email,nome,role,username FROM utilizadores WHERE id=$1'
-      : 'SELECT id,email,nome,role FROM utilizadores WHERE id=$1',
-    [req.user.id]
-  );
-  res.json(r.rows[0]);
+  try {
+    const r = await query(
+      'SELECT id,email,nome,role,username FROM utilizadores WHERE id=$1',
+      [req.user.id]
+    );
+    return res.json(r.rows[0]);
+  } catch (_) {
+    const r = await query(
+      'SELECT id,email,nome,role FROM utilizadores WHERE id=$1',
+      [req.user.id]
+    );
+    return res.json(r.rows[0]);
+  }
 });
 
 app.post('/api/auth/alterar-password', auth, async (req, res) => {

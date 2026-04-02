@@ -21,9 +21,18 @@ $$;
 -- Definir palavra-passe (altera aqui antes de correr, ou corre ALTER ROLE depois)
 ALTER ROLE stockos_qualidade_readonly WITH PASSWORD 'SUBSTITUIR_PALAVRA_PASSE_SEGURA';
 
+-- Não herdar permissões de outros roles (evita INSERT se for membro de stockos_app, etc.)
+-- Se já era membro de um grupo com escrita: NOBYPASSRLS e sem INHERIT ou revoga membros manualmente.
+ALTER ROLE stockos_qualidade_readonly NOINHERIT;
+
 GRANT CONNECT ON DATABASE postgres TO stockos_qualidade_readonly;
 GRANT USAGE ON SCHEMA public TO stockos_qualidade_readonly;
+
+-- Limpar qualquer privilégio antigo e ficar só com SELECT
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM stockos_qualidade_readonly;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM stockos_qualidade_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO stockos_qualidade_readonly;
+-- Sequências: só SELECT (sem USAGE = não pode usar nextval em INSERT — correcto para leitura)
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO stockos_qualidade_readonly;
 
 -- Tabelas novas criadas no futuro (pelo role que as criar — normalmente postgres)

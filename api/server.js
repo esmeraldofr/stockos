@@ -399,16 +399,46 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31h-db-check-routes';
+const STOCKOS_API_BUILD = '2026-03-31i-qualidade-readonly';
+
+/**
+ * Ambiente «qualidade»: API só aceita leitura (GET/HEAD) + login POST.
+ * Activar com STOCKOS_READ_ONLY=1 ou preview Vercel do branch `qualidade`.
+ */
+function isStockosApiReadOnly() {
+  const ro = String(process.env.STOCKOS_READ_ONLY || '').trim().toLowerCase();
+  if (ro === '1' || ro === 'true' || ro === 'yes') return true;
+  if (process.env.VERCEL_ENV === 'preview') {
+    const br = String(
+      process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || ''
+    ).toLowerCase();
+    if (br === 'qualidade') return true;
+  }
+  return false;
+}
 
 app.use(cors({ origin: '*' }));
 app.use((req, res, next) => {
   res.setHeader('X-StockOS-Api-Build', STOCKOS_API_BUILD);
+  if (isStockosApiReadOnly()) res.setHeader('X-StockOS-Read-Only', '1');
   next();
 });
 app.use(express.json({ limit: '6mb' }));
 app.use(express.static('public'));
 app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { res.status(500).json({ erro: 'DB não disponível' }); } });
+
+app.use((req, res, next) => {
+  if (!isStockosApiReadOnly()) return next();
+  const m = req.method.toUpperCase();
+  if (m === 'OPTIONS' || m === 'GET' || m === 'HEAD') return next();
+  let p = req.path || '';
+  if (!p && req.url) p = String(req.url).split('?')[0] || '';
+  if (m === 'POST' && p === '/api/auth/login') return next();
+  return res.status(403).json({
+    erro: 'Ambiente de qualidade em modo só leitura. Não é possível criar, alterar nem apagar dados.',
+    codigo: 'READ_ONLY'
+  });
+});
 
 // ── HELPERS AUTH ──────────────────────────────────────────────
 function base64url(str) {
@@ -863,6 +893,7 @@ async function handleDbCheck(req, res) {
     res.json({
       ok: true,
       build: STOCKOS_API_BUILD,
+      api_read_only: isStockosApiReadOnly(),
       ping: one.rows[0].ok === 1,
       tables_public: tabs.rows[0].n,
       utilizadores_ok,
@@ -873,6 +904,7 @@ async function handleDbCheck(req, res) {
     res.status(500).json({
       ok: false,
       build: STOCKOS_API_BUILD,
+      api_read_only: isStockosApiReadOnly(),
       erro: String((e && e.message) || e),
       code: e && e.code
     });

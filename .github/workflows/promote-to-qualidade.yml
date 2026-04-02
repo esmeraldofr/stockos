@@ -31,4 +31,4 @@ jobs:
           git merge --no-ff origin/develop -m "chore: promote develop to qualidade"
           git push origin qualidade
 
-          echo "Promoted develop to qualidade. Vercel will auto-deploy via GitHub integration."
+          echo "Promoted develop to qualidade. O workflow deploy-qualidade corre no push ao branch qualidade."

@@ -18,6 +18,30 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Exigir DATABASE_URL (produção)
+        run: |
+          if [ -z "${DATABASE_URL_PROD}" ]; then
+            echo "::error::Secret DATABASE_URL em falta para deploy de produção."
+            exit 1
+          fi
+        env:
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+
+      - name: Sincronizar DATABASE_URL (Production) na Vercel
+        run: |
+          set -euo pipefail
+          export VERCEL_TOKEN=$(echo "$_VT" | rev)
+          export VERCEL_PROJECT_ID="$_VP"
+          export VERCEL_TEAM_ID="$_VO"
+          export DATABASE_URL_SYNC_VALUE="$DATABASE_URL_PROD"
+          export VERCEL_SYNC_TARGET=production
+          python3 scripts/ci/vercel_sync_database_url.py
+        env:
+          _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
+          _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
+          _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+
       - name: Deploy to Vercel
         run: |
           export VERCEL_TOKEN=$(echo "$_VT" | rev)
@@ -25,6 +49,7 @@ jobs:
           export VERCEL_PROJECT_ID="$_VP"
           npx vercel@latest --prod --yes --no-clipboard --token "$VERCEL_TOKEN" \
             --build-env NODE_ENV=production \
+            --build-env DATABASE_URL="$DATABASE_URL_PROD" \
             --env NODE_ENV=production \
             --env DATABASE_URL="$DATABASE_URL_PROD"
         env:

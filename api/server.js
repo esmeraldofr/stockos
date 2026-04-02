@@ -476,21 +476,39 @@ async function ensureRoleEnumCompras() {
   `).catch(() => {});
 }
 
+async function ddlIgnorarSeNaoOwner(sql, label) {
+  try {
+    await query(sql);
+  } catch (e) {
+    const msg = String(e && e.message ? e.message : e);
+    if (/must be owner|permission denied|42501/i.test(msg)) {
+      console.warn(`[schema:${label}] ignorado (role da app não é owner da tabela — normal com stockos_app no Supabase):`, msg.slice(0, 100));
+      return;
+    }
+    throw e;
+  }
+}
+
 async function ensureUsernameColumn() {
   if (usernameColumnEnsured) return;
   await ensureRoleEnumCompras();
-  await query(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`);
+  await ddlIgnorarSeNaoOwner(
+    `ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`,
+    'utilizadores-username-col'
+  );
   const r = await query(`SELECT id, email FROM utilizadores WHERE username IS NULL OR TRIM(username) = ''`).catch(() => ({ rows: [] }));
   for (const row of r.rows) {
     await query(`UPDATE utilizadores SET username=$1 WHERE id=$2`, [`u${row.id}`, row.id]).catch(() => {});
   }
   await query(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`).catch(() => {});
-  try {
-    await query(`ALTER TABLE utilizadores ALTER COLUMN username SET NOT NULL`);
-  } catch (_) {}
-  try {
-    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`);
-  } catch (_) {}
+  await ddlIgnorarSeNaoOwner(
+    `ALTER TABLE utilizadores ALTER COLUMN username SET NOT NULL`,
+    'utilizadores-username-notnull'
+  );
+  await ddlIgnorarSeNaoOwner(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`,
+    'utilizadores-username-idx'
+  );
   usernameColumnEnsured = true;
 }
 

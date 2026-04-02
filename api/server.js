@@ -476,39 +476,70 @@ async function ensureRoleEnumCompras() {
   `).catch(() => {});
 }
 
+/** Erros de DDL/privilégio (owner, GRANT insuficiente) — mensagem varia com locale/driver. */
+function pgSchemaPrivilegeError(e) {
+  const c = e && e.code;
+  if (c === '42501' || c === '42503') return true;
+  const msg = [e && e.message, e && e.detail, e && e.hint, String(e)].filter(Boolean).join(' ');
+  return /must be owner|only owner|permission denied|privilege|insufficient|not permitted|42501|42503/i.test(msg);
+}
+
 async function ddlIgnorarSeNaoOwner(sql, label) {
   try {
     await query(sql);
   } catch (e) {
-    const msg = String(e && e.message ? e.message : e);
-    if (/must be owner|permission denied|42501/i.test(msg)) {
-      console.warn(`[schema:${label}] ignorado (role da app não é owner da tabela — normal com stockos_app no Supabase):`, msg.slice(0, 100));
+    if (pgSchemaPrivilegeError(e)) {
+      const msg = String((e && e.message) || e);
+      console.warn(`[schema:${label}] ignorado (sem permissão de owner/DDL):`, msg.slice(0, 120));
       return;
     }
     throw e;
   }
 }
 
+async function utilizadoresHasUsernameColumn() {
+  const r = await query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'utilizadores' AND column_name = 'username'
+     LIMIT 1`
+  ).catch(() => ({ rows: [] }));
+  return r.rows.length > 0;
+}
+
 async function ensureUsernameColumn() {
   if (usernameColumnEnsured) return;
   await ensureRoleEnumCompras();
-  await ddlIgnorarSeNaoOwner(
-    `ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`,
-    'utilizadores-username-col'
-  );
-  const r = await query(`SELECT id, email FROM utilizadores WHERE username IS NULL OR TRIM(username) = ''`).catch(() => ({ rows: [] }));
-  for (const row of r.rows) {
-    await query(`UPDATE utilizadores SET username=$1 WHERE id=$2`, [`u${row.id}`, row.id]).catch(() => {});
+
+  const hadUsernameAtStart = await utilizadoresHasUsernameColumn().catch(() => false);
+  let hasUsername = hadUsernameAtStart;
+
+  if (!hasUsername) {
+    await ddlIgnorarSeNaoOwner(
+      `ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`,
+      'utilizadores-username-col'
+    );
+    hasUsername = await utilizadoresHasUsernameColumn().catch(() => false);
   }
-  await query(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`).catch(() => {});
-  await ddlIgnorarSeNaoOwner(
-    `ALTER TABLE utilizadores ALTER COLUMN username SET NOT NULL`,
-    'utilizadores-username-notnull'
-  );
-  await ddlIgnorarSeNaoOwner(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`,
-    'utilizadores-username-idx'
-  );
+
+  if (hasUsername) {
+    const r = await query(`SELECT id, email FROM utilizadores WHERE username IS NULL OR TRIM(username) = ''`).catch(() => ({ rows: [] }));
+    for (const row of r.rows) {
+      await query(`UPDATE utilizadores SET username=$1 WHERE id=$2`, [`u${row.id}`, row.id]).catch(() => {});
+    }
+    await query(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`).catch(() => {});
+    /** Só NOT NULL + índice se a coluna foi criada nesta migração; restore/Supabase já têm esquema e ALTER exige owner. */
+    if (!hadUsernameAtStart) {
+      await ddlIgnorarSeNaoOwner(
+        `ALTER TABLE utilizadores ALTER COLUMN username SET NOT NULL`,
+        'utilizadores-username-notnull'
+      );
+      await ddlIgnorarSeNaoOwner(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`,
+        'utilizadores-username-idx'
+      );
+    }
+  }
+
   usernameColumnEnsured = true;
 }
 
@@ -991,12 +1022,17 @@ app.post('/api/reseed-produtos', auth, requireRole('admin'), async (req, res) =>
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    await ensureUsernameColumn();
+    await ensureUsernameColumn().catch((e) => {
+      console.warn('[auth/login] ensureUsernameColumn:', (e && e.message) || e);
+    });
     const password = (req.body.password || '').trim();
     const login = loginFromBody(req);
     if (!login || !password) return res.status(400).json({ erro: 'Nome de utilizador e senha são obrigatórios' });
+    const hasUsernameCol = await utilizadoresHasUsernameColumn().catch(() => false);
     const r = await query(
-      `SELECT * FROM utilizadores WHERE ativo=true AND (LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1))`,
+      hasUsernameCol
+        ? `SELECT * FROM utilizadores WHERE ativo=true AND (LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1))`
+        : `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
       [login]
     );
     if (!r.rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
@@ -1012,7 +1048,13 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.get('/api/auth/me', auth, async (req, res) => {
   await ensureUsernameColumn().catch(() => {});
-  const r = await query('SELECT id,email,nome,role,username FROM utilizadores WHERE id=$1', [req.user.id]);
+  const hasU = await utilizadoresHasUsernameColumn().catch(() => false);
+  const r = await query(
+    hasU
+      ? 'SELECT id,email,nome,role,username FROM utilizadores WHERE id=$1'
+      : 'SELECT id,email,nome,role FROM utilizadores WHERE id=$1',
+    [req.user.id]
+  );
   res.json(r.rows[0]);
 });
 

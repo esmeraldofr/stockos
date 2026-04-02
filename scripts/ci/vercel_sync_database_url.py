@@ -9,6 +9,7 @@ Env opcionais:
   VERCEL_TEAM_ID
   VERCEL_SYNC_TARGET   — \"preview\" (default) ou \"production\"
   VERCEL_GIT_BRANCH    — só para preview: ex. develop | qualidade (evita misturar BDs entre previews)
+  VERCEL_SYNC_EXTRA_KEY / VERCEL_SYNC_EXTRA_VALUE — segunda variável no mesmo alvo (ex.: STOCKOS_READ_ONLY=1)
 
 Remoção: apaga entradas DATABASE_URL do mesmo alvo sem misturar branches (ex.: ao sinc develop
 não remove a variável específica do branch qualidade).
@@ -119,6 +120,35 @@ def main() -> None:
 
     extra = f" branch={sync_branch!r}" if sync_branch else ""
     print(f"DATABASE_URL ({target}) actualizado na Vercel.{extra}")
+
+    extra_key = (os.environ.get("VERCEL_SYNC_EXTRA_KEY") or "").strip()
+    extra_val = (os.environ.get("VERCEL_SYNC_EXTRA_VALUE") or "").strip()
+    if extra_key and extra_val:
+        listed2 = req("GET", list_url)
+        envs2 = listed2.get("envs") or []
+        for e in envs2:
+            if e.get("key") != extra_key:
+                continue
+            if target == "preview" and not should_delete_preview(e):
+                continue
+            if target == "production" and not should_delete_production(e):
+                continue
+            eid = e.get("id")
+            if not eid:
+                continue
+            del_url = f"{env_root}/{eid}{q}"
+            req("DELETE", del_url)
+            print(f"Removido {extra_key} ({target}) id={eid} gitBranch={e.get('gitBranch')!r}")
+        ex_payload: dict = {
+            "key": extra_key,
+            "value": extra_val,
+            "type": "encrypted",
+            "target": [target],
+        }
+        if sync_branch:
+            ex_payload["gitBranch"] = sync_branch
+        req("POST", f"{env_root}{q}", json.dumps(ex_payload).encode())
+        print(f"{extra_key} ({target}) actualizado na Vercel.{extra}")
 
 
 if __name__ == "__main__":

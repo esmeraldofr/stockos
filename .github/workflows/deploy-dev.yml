@@ -31,36 +31,30 @@ jobs:
       - name: Sincronizar DATABASE_URL (Preview, branch develop) na Vercel
         run: |
           set -euo pipefail
-          export VERCEL_TOKEN=$(echo "$_VT" | rev)
-          export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID_DEV:-$_VP}"
-          export VERCEL_TEAM_ID="$_VO"
+          export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID_DEV}"
+          export VERCEL_TEAM_ID="${VERCEL_ORG_ID}"
           export DATABASE_URL_SYNC_VALUE="$DATABASE_URL_DEV"
           export VERCEL_SYNC_TARGET=preview
           export VERCEL_GIT_BRANCH=develop
           python3 scripts/ci/vercel_sync_database_url.py
         env:
-          _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
-          _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
-          _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID_DEV: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
           DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
 
       - name: Deploy to Vercel (Preview)
         run: |
-          export VERCEL_TOKEN=$(echo "$_VT" | rev)
-          export VERCEL_ORG_ID="$_VO"
-          export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID_DEV:-$_VP}"
-          REF_DEV="${SUPABASE_PROJECT_REF_DEV:-lqpegdrohomjtmkypsbo}"
+          REF_DEV="${SUPABASE_PROJECT_REF_DEV:-}"
           npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
             --build-env NODE_ENV=development \
             --build-env DATABASE_URL="$DATABASE_URL_DEV" \
             --env NODE_ENV=development \
             --env DATABASE_URL="$DATABASE_URL_DEV" \
-            --env SUPABASE_PROJECT_REF="$REF_DEV"
+            ${REF_DEV:+--env SUPABASE_PROJECT_REF="$REF_DEV"}
         env:
-          _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
-          _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
-          _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
-          VERCEL_PROJECT_ID_DEV: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
           DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
           SUPABASE_PROJECT_REF_DEV: ${{ secrets.SUPABASE_PROJECT_REF_DEV }}

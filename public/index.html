@@ -298,6 +298,22 @@ const S = {
 
 // ── API ───────────────────────────────────────────────────────
 const API = '/api';
+
+/** Mensagens cruas do Postgres na UI de login (API antiga ou cache de HTML sem sanitizeLoginErr). */
+function sanitizeAuthLoginResponseErro(raw) {
+  const m = String(raw || '').toLowerCase();
+  if (
+    m.includes('must be owner') ||
+    m.includes('owner of table') ||
+    m.includes('42501') ||
+    (m.includes('utilizadores') && (m.includes('owner') || m.includes('permission'))) ||
+    m.includes('postgresql')
+  ) {
+    return 'Não foi possível autenticar. Usa o email completo (ex.: admin@stockos.ao). Confirma o deploy na Vercel e GRANT em public.utilizadores para o user da DATABASE_URL.';
+  }
+  return raw;
+}
+
 async function api(method, path, body) {
   const opts = {
     method,
@@ -315,7 +331,11 @@ async function api(method, path, body) {
     doLogout();
     throw new Error('Sessão expirou. Entra de novo.');
   }
-  if (!r.ok) throw new Error(data.erro || 'Erro');
+  if (!r.ok) {
+    const raw = data.erro || 'Erro';
+    const out = path.includes('/auth/login') ? sanitizeAuthLoginResponseErro(raw) : raw;
+    throw new Error(typeof out === 'string' ? out : 'Erro');
+  }
   return data;
 }
 
@@ -515,10 +535,7 @@ function drawLogin() {
 }
 
 function sanitizeLoginErr(msg) {
-  const m = String(msg || '');
-  if (/must be owner|owner of table|42501|permission denied for table utilizadores/i.test(m))
-    return 'Não foi possível autenticar. Usa o email completo (ex.: admin@stockos.ao). Confirma no GitHub/Vercel que o último deploy está activo; o user da DATABASE_URL precisa de GRANT em public.utilizadores.';
-  return m;
+  return sanitizeAuthLoginResponseErro(msg);
 }
 
 async function doLogin() {
@@ -529,7 +546,7 @@ async function doLogin() {
     localStorage.setItem('token', S.token);
     localStorage.setItem('user', JSON.stringify(S.user));
     await navigate('dia');
-  } catch (e) { err('login-msg', sanitizeLoginErr(e.message)); }
+  } catch (e) { err('login-msg', sanitizeLoginErr(e && e.message != null ? e.message : String(e))); }
 }
 
 function doLogout() {

@@ -252,7 +252,7 @@ async function initDB() {
   )`, [], 'turno_caixa');
   await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_avulso BOOLEAN NOT NULL DEFAULT FALSE`, [], 'alter-venda-avulso');
   await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade'`, [], 'alter-tipo-medicao');
-  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-util');
+  /** Sem ALTER em utilizadores aqui: em BD restaurada o role da app não é owner → must be owner. criado_em já está no CREATE TABLE acima. */
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ`, [], 'alter-fechado');
@@ -398,7 +398,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31d';
+const STOCKOS_API_BUILD = '2026-03-31e-no-ddl-utilizadores';
 
 app.use(cors({ origin: '*' }));
 app.use((req, res, next) => {
@@ -483,33 +483,6 @@ async function ensureRoleEnumCompras() {
   `).catch(() => {});
 }
 
-/** Erros de DDL/privilégio (owner, GRANT insuficiente) — mensagem varia com locale/driver. */
-function pgSchemaPrivilegeError(e) {
-  const c = e && e.code;
-  if (c === '42501' || c === '42503' || String(c) === '42501' || String(c) === '42503') return true;
-  const msg = [e && e.message, e && e.detail, e && e.hint, e && e.cause && e.cause.message, String(e)]
-    .filter(Boolean)
-    .join(' ');
-  if (/must be owner|only owner|owner of table|permission denied|privilege|insufficient|not permitted|42501|42503/i.test(msg))
-    return true;
-  if (/utilizadores/i.test(msg) && /owner|propriet[aá]rio|dono|permiss[aã]o negada|insufficient privilege/i.test(msg))
-    return true;
-  return false;
-}
-
-async function ddlIgnorarSeNaoOwner(sql, label) {
-  try {
-    await query(sql);
-  } catch (e) {
-    if (pgSchemaPrivilegeError(e)) {
-      const msg = String((e && e.message) || e);
-      console.warn(`[schema:${label}] ignorado (sem permissão de owner/DDL):`, msg.slice(0, 120));
-      return;
-    }
-    throw e;
-  }
-}
-
 /**
  * Descobre se existe coluna username (login não deve depender só de information_schema —
  * em alguns hosts a metadata fica vazia e a app tentava ALTER TABLE → must be owner).
@@ -555,38 +528,23 @@ async function queryUtilizadorPorLogin(login) {
   }
 }
 
+/**
+ * Nunca corre DDL em utilizadores (ALTER/INDEX) — com stockos_app após pg_restore isso gera «must be owner».
+ * Só backfill com UPDATE se a coluna username já existir. Esquema novo: POST /api/migrate (admin) ou SQL no Supabase como postgres.
+ */
 async function ensureUsernameColumn() {
   if (usernameColumnEnsured) return;
   await ensureRoleEnumCompras();
 
-  const hadUsernameAtStart = await utilizadoresHasUsernameColumn().catch(() => false);
-  let hasUsername = hadUsernameAtStart;
-
-  if (!hasUsername) {
-    await ddlIgnorarSeNaoOwner(
-      `ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50)`,
-      'utilizadores-username-col'
-    );
-    hasUsername = await utilizadoresHasUsernameColumn().catch(() => false);
-  }
-
+  const hasUsername = await utilizadoresHasUsernameColumn().catch(() => false);
   if (hasUsername) {
     const r = await query(`SELECT id, email FROM utilizadores WHERE username IS NULL OR TRIM(username) = ''`).catch(() => ({ rows: [] }));
     for (const row of r.rows) {
       await query(`UPDATE utilizadores SET username=$1 WHERE id=$2`, [`u${row.id}`, row.id]).catch(() => {});
     }
     await query(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`).catch(() => {});
-    /** Só NOT NULL + índice se a coluna foi criada nesta migração; restore/Supabase já têm esquema e ALTER exige owner. */
-    if (!hadUsernameAtStart) {
-      await ddlIgnorarSeNaoOwner(
-        `ALTER TABLE utilizadores ALTER COLUMN username SET NOT NULL`,
-        'utilizadores-username-notnull'
-      );
-      await ddlIgnorarSeNaoOwner(
-        `CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`,
-        'utilizadores-username-idx'
-      );
-    }
+  } else {
+    console.warn('[ensureUsernameColumn] Coluna username ausente — aplica supabase/grant_stockos_app.sql e migrações como postgres, ou POST /api/migrate.');
   }
 
   usernameColumnEnsured = true;
@@ -868,7 +826,9 @@ async function assertTurnoFechado(turnoId) {
 }
 
 // ── AUTH ──────────────────────────────────────────────────────
-app.get('/api/health', (req, res) => res.json({ status: 'ok', v: 3 }));
+app.get('/api/health', (req, res) =>
+  res.json({ status: 'ok', v: 4, build: STOCKOS_API_BUILD })
+);
 
 
 app.get('/api/status', async (req, res) => {

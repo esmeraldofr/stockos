@@ -12,6 +12,12 @@ const PWD_SALT   = 'stockos-pwd-salt-2025';
 const _dbUrlRaw = process.env.DATABASE_URL;
 if (!_dbUrlRaw) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
 
+if (process.env.VERCEL_ENV === 'preview' && /dakleqewbwbryuchlrzm/i.test(_dbUrlRaw)) {
+  console.error(
+    '[WARN] Preview com ref de produção na DATABASE_URL. Define DATABASE_URL (Preview) na Vercel = secret DATABASE_URL_DEV no GitHub, ou corre o workflow deploy-develop.'
+  );
+}
+
 /**
  * Pooler Supabase :6543 sem ?pgbouncer=true usa Session mode (poucos clientes → MaxClientsInSessionMode).
  * Transaction mode permite muito mais clientes e é o recomendado para serverless.
@@ -84,14 +90,25 @@ function getDbCandidates() {
     if (mDb) {
       const r = mDb[1];
       const users = new Set([baseUser, `${baseUser}.${r}`, `postgres.${r}`]);
-      const poolerHost =
-        process.env.SUPABASE_POOLER_HOST || 'aws-0-eu-west-1.pooler.supabase.com';
-      for (const usr of users) {
-        const pooler = new URL(_dbUrl);
-        pooler.hostname = poolerHost;
-        pooler.port = '6543';
-        pooler.username = usr;
-        push(normalizeSupabasePoolerUrl(pooler.toString()));
+      const fromEnv = (process.env.SUPABASE_POOLER_HOST || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const poolerHosts =
+        fromEnv.length > 0
+          ? fromEnv
+          : [
+              'aws-0-eu-west-1.pooler.supabase.com',
+              'aws-1-eu-west-1.pooler.supabase.com',
+            ];
+      for (const poolerHost of poolerHosts) {
+        for (const usr of users) {
+          const pooler = new URL(_dbUrl);
+          pooler.hostname = poolerHost;
+          pooler.port = '6543';
+          pooler.username = usr;
+          push(normalizeSupabasePoolerUrl(pooler.toString()));
+        }
       }
     }
   } catch (_) {}

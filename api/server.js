@@ -399,7 +399,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31g-db-check';
+const STOCKOS_API_BUILD = '2026-03-31h-db-check-routes';
 
 app.use(cors({ origin: '*' }));
 app.use((req, res, next) => {
@@ -842,10 +842,9 @@ app.get('/api/status', async (req, res) => {
 
 /**
  * Diagnóstico preview/dev: confirma ligação TCP + permissões de leitura (sem auth).
- * - utilizadores_ok: SELECT em public.utilizadores funcionou
- * - utilizadores_ativos: contagens (sem expor emails)
+ * Registado em /api/db-check e /db-check (alguns proxies Vercel entregam o path sem prefixo /api).
  */
-app.get('/api/db-check', async (req, res) => {
+async function handleDbCheck(req, res) {
   try {
     const one = await query(`SELECT 1 AS ok`);
     const tabs = await query(
@@ -878,7 +877,9 @@ app.get('/api/db-check', async (req, res) => {
       code: e && e.code
     });
   }
-});
+}
+app.get('/api/db-check', handleDbCheck);
+app.get('/db-check', handleDbCheck);
 
 app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   const results = [];

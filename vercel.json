@@ -25,6 +25,10 @@
       "dest": "api/server.js"
     },
     {
+      "src": "/db-check",
+      "dest": "api/server.js"
+    },
+    {
       "src": "/",
       "dest": "public/index.html"
     },

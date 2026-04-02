@@ -398,7 +398,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31c';
+const STOCKOS_API_BUILD = '2026-03-31d';
 
 app.use(cors({ origin: '*' }));
 app.use((req, res, next) => {

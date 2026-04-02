@@ -397,7 +397,14 @@ async function initDB() {
 }
 const dbReady = initDB();
 
+/** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
+const STOCKOS_API_BUILD = '2026-03-31c';
+
 app.use(cors({ origin: '*' }));
+app.use((req, res, next) => {
+  res.setHeader('X-StockOS-Api-Build', STOCKOS_API_BUILD);
+  next();
+});
 app.use(express.json({ limit: '6mb' }));
 app.use(express.static('public'));
 app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { res.status(500).json({ erro: 'DB não disponível' }); } });

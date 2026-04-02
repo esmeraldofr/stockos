@@ -514,6 +514,13 @@ function drawLogin() {
   document.getElementById('l-pass').addEventListener('keydown', enterLogin);
 }
 
+function sanitizeLoginErr(msg) {
+  const m = String(msg || '');
+  if (/must be owner|owner of table|42501|permission denied for table utilizadores/i.test(m))
+    return 'Não foi possível autenticar. Usa o email completo (ex.: admin@stockos.ao). Confirma no GitHub/Vercel que o último deploy está activo; o user da DATABASE_URL precisa de GRANT em public.utilizadores.';
+  return m;
+}
+
 async function doLogin() {
   const login = val('l-login'), password = val('l-pass');
   try {
@@ -522,7 +529,7 @@ async function doLogin() {
     localStorage.setItem('token', S.token);
     localStorage.setItem('user', JSON.stringify(S.user));
     await navigate('dia');
-  } catch(e) { err('login-msg', e.message); }
+  } catch (e) { err('login-msg', sanitizeLoginErr(e.message)); }
 }
 
 function doLogout() {

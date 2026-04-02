@@ -524,6 +524,33 @@ async function utilizadoresHasUsernameColumn() {
   }
 }
 
+/** Login: uma query com username; se o servidor/role falhar (owner, coluna, etc.), só email — sem information_schema no pedido. */
+function loginUtilizadorQueryDeveUsarSoEmail(e) {
+  if (pgSchemaPrivilegeError(e)) return true;
+  const m = String((e && e.message) || e);
+  if (/must be owner|owner of table utilizadores/i.test(m)) return true;
+  const code = e && e.code;
+  if (String(code) === '42703' && /username/i.test(m)) return true;
+  if (/column.*\busername\b|undefined_column/i.test(m)) return true;
+  return false;
+}
+
+async function queryUtilizadorPorLogin(login) {
+  try {
+    return await query(
+      `SELECT * FROM utilizadores WHERE ativo=true AND (LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1))`,
+      [login]
+    );
+  } catch (e) {
+    if (!loginUtilizadorQueryDeveUsarSoEmail(e)) throw e;
+    console.warn('[auth/login] fallback login só por email:', String((e && e.message) || e).slice(0, 140));
+    return await query(
+      `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
+      [login]
+    );
+  }
+}
+
 async function ensureUsernameColumn() {
   if (usernameColumnEnsured) return;
   await ensureRoleEnumCompras();
@@ -1040,28 +1067,11 @@ app.post('/api/reseed-produtos', auth, requireRole('admin'), async (req, res) =>
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    /** Sem DDL no login — apenas SELECT; migrações em /api/migrate ou arranque com owner. */
+    /** Sem DDL nem information_schema — só SELECT; migrações em /api/migrate. */
     const password = (req.body.password || '').trim();
     const login = loginFromBody(req);
     if (!login || !password) return res.status(400).json({ erro: 'Nome de utilizador e senha são obrigatórios' });
-    const hasUsernameCol = await utilizadoresHasUsernameColumn().catch(() => false);
-    let r;
-    try {
-      r = await query(
-        hasUsernameCol
-          ? `SELECT * FROM utilizadores WHERE ativo=true AND (LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1))`
-          : `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
-        [login]
-      );
-    } catch (e) {
-      const em = String((e && e.message) || e);
-      if (hasUsernameCol && /username|42703|undefined_column/i.test(em)) {
-        r = await query(
-          `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
-          [login]
-        );
-      } else throw e;
-    }
+    const r = await queryUtilizadorPorLogin(login);
     if (!r.rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
     const user = r.rows[0];
     if (user.senha_hash !== hashPassword(password)) return res.status(401).json({ erro: 'Credenciais inválidas' });
@@ -1070,7 +1080,15 @@ app.post('/api/auth/login', async (req, res) => {
       token,
       user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username }
     });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch (e) {
+    const m = String((e && e.message) || e);
+    if (/must be owner|owner of table utilizadores/i.test(m)) {
+      return res.status(500).json({
+        erro: 'A conta da base de dados não tem permissão para aceder a utilizadores. Verifica o role (ex.: stockos_app com GRANT SELECT).'
+      });
+    }
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 app.get('/api/auth/me', auth, async (req, res) => {

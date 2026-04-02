@@ -271,13 +271,43 @@ tr:hover .td-name{background:#1e293b}
 <script>
 (function(){
   var h = location.hostname;
-  var env = null;
-  if(h.includes('localhost') || h.includes('develop')) env = 'develop';
-  else if(h.includes('qualidade')) env = 'qualidade';
-  if(!env) return;
-  document.body.classList.add('env-' + env);
-  document.getElementById('env-banner').textContent =
-    env === 'develop' ? '⚠ Ambiente de Desenvolvimento' : '🔵 Ambiente de Qualidade';
+  var banner = document.getElementById('env-banner');
+  function setEnvBanner(env, detail) {
+    document.body.classList.remove('env-develop','env-qualidade');
+    if (!env) {
+      banner.textContent = '';
+      banner.removeAttribute('title');
+      return;
+    }
+    document.body.classList.add('env-' + env);
+    if (env === 'develop') {
+      banner.textContent = '⚠ Ambiente de Desenvolvimento' + (detail ? ' · ' + detail : '');
+    } else {
+      banner.textContent = '🔵 Ambiente de Qualidade' + (detail ? ' · ' + detail : '');
+    }
+  }
+  if (h.includes('localhost')) setEnvBanner('develop', 'local');
+  else if (h.includes('develop')) setEnvBanner('develop');
+  else if (h.includes('qualidade')) setEnvBanner('qualidade');
+
+  fetch('/api/health', { cache: 'no-store' })
+    .then(function (r) { return r.json().catch(function () { return {}; }); })
+    .then(function (d) {
+      if (!d || typeof d !== 'object') return;
+      if (d.develop_only) {
+        setEnvBanner('develop', d.build || '');
+        if (d.build) banner.setAttribute('title', 'Build API: ' + d.build + ' · /api/dev/info');
+        return;
+      }
+      if (d.tier === 'qualidade' || (d.read_only && d.tier !== 'production')) {
+        setEnvBanner('qualidade');
+        return;
+      }
+      if (!h.includes('localhost') && !h.includes('develop') && !h.includes('qualidade')) {
+        setEnvBanner(null);
+      }
+    })
+    .catch(function () {});
 })();
 </script>
 
@@ -2952,7 +2982,7 @@ async function loadProdutos() {
           ${items.map(p => `
             <div class="produto-row">
               <div class="produto-info">
-                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}</div>
+                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">só armazém</span>' : ''}</div>
                 <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
               </div>
               ${isAdmin ? `
@@ -3002,6 +3032,7 @@ function showProdutoForm(id) {
       '<div class="field"><label>Medição</label><select id="p-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
       '<div class="field" id="field-avulso"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso</label></div>' +
+      '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Folha de stock do turno</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Se desmarcares, o produto não entra na contagem ao abrir turno (útil para consumíveis só de armazém).</div></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
       (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +
@@ -3020,6 +3051,8 @@ function showProdutoForm(id) {
   document.getElementById('p-ordem').value = p ? (p.ordem || 0) : 0;
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
   if (p) document.getElementById('p-avulso').checked = !!p.venda_avulso;
+  const st = document.getElementById('p-stock-turno');
+  if (st) st.checked = p ? p.em_stock_turno !== false : true;
 
   function toggleAvulso() {
     const cat = document.getElementById('p-cat').value;
@@ -3053,7 +3086,7 @@ function showProdutoForm(id) {
 
 async function createProduto() {
   try {
-    await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,tipo_medicao:val('p-medicao'),categoria:val('p-cat'),venda_avulso:document.getElementById('p-avulso')?.checked||false});
+    await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,tipo_medicao:val('p-medicao'),categoria:val('p-cat'),venda_avulso:document.getElementById('p-avulso')?.checked||false,em_stock_turno:!!document.getElementById('p-stock-turno')?.checked});
     closeProdutoModal();
     suc('prod-msg','Produto criado!');
     setTimeout(()=>show('prod-msg',''),2000);
@@ -3068,7 +3101,8 @@ async function saveProduto(id) {
       tipo_medicao: val('p-medicao'),
       categoria: val('p-cat'), ordem: parseInt(val('p-ordem'))||0,
       ativo: val('p-ativo')==='true',
-      venda_avulso: document.getElementById('p-avulso')?.checked||false
+      venda_avulso: document.getElementById('p-avulso')?.checked||false,
+      em_stock_turno: !!document.getElementById('p-stock-turno')?.checked
     });
     closeProdutoModal();
     suc('prod-msg','Produto actualizado!');

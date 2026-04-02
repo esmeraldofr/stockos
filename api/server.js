@@ -252,6 +252,11 @@ async function initDB() {
   )`, [], 'turno_caixa');
   await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_avulso BOOLEAN NOT NULL DEFAULT FALSE`, [], 'alter-venda-avulso');
   await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade'`, [], 'alter-tipo-medicao');
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS em_stock_turno BOOLEAN NOT NULL DEFAULT TRUE`,
+    [],
+    'produtos-em-stock-turno'
+  );
   /** Sem ALTER em utilizadores aqui: em BD restaurada o role da app não é owner → must be owner. criado_em já está no CREATE TABLE acima. */
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
@@ -399,7 +404,37 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31i-qualidade-readonly';
+const STOCKOS_API_BUILD = '2026-04-01-develop-ux';
+
+/**
+ * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
+ * Opcional: STOCKOS_DEPLOY_TIER=develop|qualidade|production|preview|local (sobrepõe a detecção Vercel).
+ */
+function stockosDeploymentTier() {
+  const explicit = String(process.env.STOCKOS_DEPLOY_TIER || '').trim().toLowerCase();
+  if (['production', 'qualidade', 'develop', 'preview', 'local'].includes(explicit)) return explicit;
+  if (process.env.VERCEL_ENV === 'production') return 'production';
+  if (process.env.VERCEL_ENV === 'preview') {
+    const br = String(
+      process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || ''
+    ).toLowerCase();
+    if (br === 'qualidade') return 'qualidade';
+    if (br === 'develop') return 'develop';
+    return 'preview';
+  }
+  return 'local';
+}
+
+/** Use no código para funcionalidades experimentais: só true no preview do branch develop. */
+function isStockosDevelopOnly() {
+  return stockosDeploymentTier() === 'develop';
+}
+
+/** Diagnósticos extra (ex. GET /api/dev/info): develop na Vercel ou execução local. */
+function allowStockosDevDiagnostics() {
+  const t = stockosDeploymentTier();
+  return t === 'develop' || t === 'local';
+}
 
 /**
  * Ambiente «qualidade»: API só aceita leitura (GET/HEAD) + login POST.
@@ -420,6 +455,7 @@ function isStockosApiReadOnly() {
 app.use(cors({ origin: '*' }));
 app.use((req, res, next) => {
   res.setHeader('X-StockOS-Api-Build', STOCKOS_API_BUILD);
+  res.setHeader('X-StockOS-Tier', stockosDeploymentTier());
   if (isStockosApiReadOnly()) res.setHeader('X-StockOS-Read-Only', '1');
   next();
 });
@@ -859,8 +895,33 @@ async function assertTurnoFechado(turnoId) {
 
 // ── AUTH ──────────────────────────────────────────────────────
 app.get('/api/health', (req, res) =>
-  res.json({ status: 'ok', v: 4, build: STOCKOS_API_BUILD })
+  res.json({
+    status: 'ok',
+    v: 4,
+    build: STOCKOS_API_BUILD,
+    tier: stockosDeploymentTier(),
+    develop_only: isStockosDevelopOnly(),
+    read_only: isStockosApiReadOnly()
+  })
 );
+
+/** Informação de runtime útil em develop (e em local); 404 noutros tiers. */
+app.get('/api/dev/info', (req, res) => {
+  if (!allowStockosDevDiagnostics()) {
+    return res.status(404).json({ erro: 'Não encontrado' });
+  }
+  res.json({
+    build: STOCKOS_API_BUILD,
+    tier: stockosDeploymentTier(),
+    node: process.version,
+    uptime_s: Math.floor(process.uptime()),
+    vercel_url: process.env.VERCEL_URL || null,
+    git_ref: process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || null,
+    git_sha: process.env.VERCEL_GIT_COMMIT_SHA
+      ? String(process.env.VERCEL_GIT_COMMIT_SHA).slice(0, 7)
+      : null
+  });
+});
 
 
 app.get('/api/status', async (req, res) => {
@@ -893,6 +954,8 @@ async function handleDbCheck(req, res) {
     res.json({
       ok: true,
       build: STOCKOS_API_BUILD,
+      tier: stockosDeploymentTier(),
+      develop_only: isStockosDevelopOnly(),
       api_read_only: isStockosApiReadOnly(),
       ping: one.rows[0].ok === 1,
       tables_public: tabs.rows[0].n,
@@ -904,6 +967,8 @@ async function handleDbCheck(req, res) {
     res.status(500).json({
       ok: false,
       build: STOCKOS_API_BUILD,
+      tier: stockosDeploymentTier(),
+      develop_only: isStockosDevelopOnly(),
       api_read_only: isStockosApiReadOnly(),
       erro: String((e && e.message) || e),
       code: e && e.code
@@ -951,6 +1016,10 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0`, 'ordem');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE`, 'ativo');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade'`, 'tipo_medicao');
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS em_stock_turno BOOLEAN NOT NULL DEFAULT TRUE`,
+    'produtos-em-stock-turno'
+  );
   await run(`CREATE TABLE IF NOT EXISTS armazem_stock (
     id SERIAL PRIMARY KEY,
     produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
@@ -1168,12 +1237,13 @@ app.get('/api/produtos', auth, async (req, res) => {
 
 app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    const { nome, preco, categoria, venda_avulso, tipo_medicao } = req.body;
+    const { nome, preco, categoria, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
+    const noTurno = em_stock_turno === undefined || em_stock_turno === null ? true : !!em_stock_turno;
     const r = await query(
-      'INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
-      [nome, preco||0, categoria||'outro', maxOrdem.rows[0].n, !!venda_avulso, medicao]
+      'INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+      [nome, preco||0, categoria||'outro', maxOrdem.rows[0].n, !!venda_avulso, medicao, noTurno]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -1181,12 +1251,19 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
 
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao } = req.body;
+    const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
-    const r = await query(
-      'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7 WHERE id=$8 RETURNING *',
-      [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, req.params.id]
-    );
+    const noTurno =
+      em_stock_turno === undefined || em_stock_turno === null ? undefined : !!em_stock_turno;
+    const r = noTurno === undefined
+      ? await query(
+          'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7 WHERE id=$8 RETURNING *',
+          [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, req.params.id]
+        )
+      : await query(
+          'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8 WHERE id=$9 RETURNING *',
+          [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, noTurno, req.params.id]
+        );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -1635,7 +1712,7 @@ app.get('/api/dia', auth, async (req, res) => {
         `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem, p.tipo_medicao
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
-         WHERE ts.turno_id = ANY($1::int[])
+         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE
          ORDER BY ts.turno_id, p.ordem, p.nome`,
         [ids]
       ),
@@ -1671,6 +1748,7 @@ app.get('/api/dia', auth, async (req, res) => {
         `SELECT ts.produto_id, ts.deixado, t.data, t.nome
          FROM turno_stock ts
          JOIN turnos t ON ts.turno_id=t.id
+         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE
          WHERE ${conds}`,
         params
       );
@@ -1739,8 +1817,10 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
     );
     const turnoId = turno.rows[0].id;
 
-    // Criar entradas de stock para todos os produtos activos
-    const produtos = await client.query('SELECT id FROM produtos WHERE ativo=true ORDER BY ordem');
+    // Stock do turno: só produtos activos marcados para a folha de stock
+    const produtos = await client.query(
+      'SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE ORDER BY ordem'
+    );
     for (const p of produtos.rows) {
       // Pré-preencher "encontrado" com o "deixado" do turno anterior
       const prev = prevTurno(nome, data);
@@ -1782,6 +1862,15 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
 app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   try {
     const { produto_id, encontrado, deixado, fechados } = req.body;
+    const chk = await query(
+      'SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE',
+      [produto_id]
+    );
+    if (!chk.rows.length) {
+      return res.status(400).json({
+        erro: 'Este produto não está incluído na folha de stock do turno. Activa «Stock no turno» em Produtos.'
+      });
+    }
     const r = await query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados)
        VALUES ($1,$2,$3,$4,$5)
@@ -1841,6 +1930,16 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
     const tipoVal   = tipo   === 'tirar'  ? 'tirar'  : 'entrada';
     const origemVal = origem === 'compra' ? 'compra' : 'armazem';
     const precoVal  = origemVal === 'compra' ? (parseFloat(preco) || 0) : 0;
+
+    const emStock = await client.query(
+      'SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE',
+      [produto_id]
+    );
+    if (!emStock.rows.length) {
+      throw new Error(
+        'Este produto não está na folha de stock do turno. Activa «Stock no turno» em Produtos ou regista no armazém.'
+      );
+    }
 
     const registo = await client.query(
       'INSERT INTO turno_entradas (turno_id, produto_id, tipo, origem, preco, quantidade, notas) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
@@ -1995,7 +2094,7 @@ app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
        FROM turno_stock ts
        JOIN turnos t ON ts.turno_id=t.id
        JOIN produtos p ON ts.produto_id=p.id
-       WHERE t.data=$1`,
+       WHERE t.data=$1 AND p.em_stock_turno IS TRUE`,
       [data]
     );
 

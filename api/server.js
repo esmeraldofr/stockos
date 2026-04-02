@@ -479,9 +479,15 @@ async function ensureRoleEnumCompras() {
 /** Erros de DDL/privilégio (owner, GRANT insuficiente) — mensagem varia com locale/driver. */
 function pgSchemaPrivilegeError(e) {
   const c = e && e.code;
-  if (c === '42501' || c === '42503') return true;
-  const msg = [e && e.message, e && e.detail, e && e.hint, String(e)].filter(Boolean).join(' ');
-  return /must be owner|only owner|permission denied|privilege|insufficient|not permitted|42501|42503/i.test(msg);
+  if (c === '42501' || c === '42503' || String(c) === '42501' || String(c) === '42503') return true;
+  const msg = [e && e.message, e && e.detail, e && e.hint, e && e.cause && e.cause.message, String(e)]
+    .filter(Boolean)
+    .join(' ');
+  if (/must be owner|only owner|owner of table|permission denied|privilege|insufficient|not permitted|42501|42503/i.test(msg))
+    return true;
+  if (/utilizadores/i.test(msg) && /owner|propriet[aá]rio|dono|permiss[aã]o negada|insufficient privilege/i.test(msg))
+    return true;
+  return false;
 }
 
 async function ddlIgnorarSeNaoOwner(sql, label) {
@@ -497,13 +503,25 @@ async function ddlIgnorarSeNaoOwner(sql, label) {
   }
 }
 
+/**
+ * Descobre se existe coluna username (login não deve depender só de information_schema —
+ * em alguns hosts a metadata fica vazia e a app tentava ALTER TABLE → must be owner).
+ */
 async function utilizadoresHasUsernameColumn() {
-  const r = await query(
-    `SELECT 1 FROM information_schema.columns
-     WHERE table_schema = 'public' AND table_name = 'utilizadores' AND column_name = 'username'
-     LIMIT 1`
-  ).catch(() => ({ rows: [] }));
-  return r.rows.length > 0;
+  try {
+    const r = await query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'utilizadores' AND column_name = 'username'
+       LIMIT 1`
+    );
+    if (r.rows.length > 0) return true;
+  } catch (_) {}
+  try {
+    await query(`SELECT username FROM utilizadores WHERE false`);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 async function ensureUsernameColumn() {
@@ -1022,19 +1040,28 @@ app.post('/api/reseed-produtos', auth, requireRole('admin'), async (req, res) =>
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    await ensureUsernameColumn().catch((e) => {
-      console.warn('[auth/login] ensureUsernameColumn:', (e && e.message) || e);
-    });
+    /** Sem DDL no login — apenas SELECT; migrações em /api/migrate ou arranque com owner. */
     const password = (req.body.password || '').trim();
     const login = loginFromBody(req);
     if (!login || !password) return res.status(400).json({ erro: 'Nome de utilizador e senha são obrigatórios' });
     const hasUsernameCol = await utilizadoresHasUsernameColumn().catch(() => false);
-    const r = await query(
-      hasUsernameCol
-        ? `SELECT * FROM utilizadores WHERE ativo=true AND (LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1))`
-        : `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
-      [login]
-    );
+    let r;
+    try {
+      r = await query(
+        hasUsernameCol
+          ? `SELECT * FROM utilizadores WHERE ativo=true AND (LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1))`
+          : `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
+        [login]
+      );
+    } catch (e) {
+      const em = String((e && e.message) || e);
+      if (hasUsernameCol && /username|42703|undefined_column/i.test(em)) {
+        r = await query(
+          `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
+          [login]
+        );
+      } else throw e;
+    }
     if (!r.rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
     const user = r.rows[0];
     if (user.senha_hash !== hashPassword(password)) return res.status(401).json({ erro: 'Credenciais inválidas' });

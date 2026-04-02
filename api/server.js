@@ -399,7 +399,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31f-login-two-step-select';
+const STOCKOS_API_BUILD = '2026-03-31g-db-check';
 
 app.use(cors({ origin: '*' }));
 app.use((req, res, next) => {
@@ -838,6 +838,46 @@ app.get('/api/status', async (req, res) => {
     const r = await query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name`);
     res.json({ tables: r.rows.map(x => x.table_name) });
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/**
+ * Diagnóstico preview/dev: confirma ligação TCP + permissões de leitura (sem auth).
+ * - utilizadores_ok: SELECT em public.utilizadores funcionou
+ * - utilizadores_ativos: contagens (sem expor emails)
+ */
+app.get('/api/db-check', async (req, res) => {
+  try {
+    const one = await query(`SELECT 1 AS ok`);
+    const tabs = await query(
+      `SELECT COUNT(*)::int AS n FROM information_schema.tables WHERE table_schema = 'public'`
+    );
+    let utilizadores_ok = false;
+    let utilizadores_ativos = null;
+    let utilizadores_erro = null;
+    try {
+      const u = await query(`SELECT COUNT(*)::int AS n FROM utilizadores WHERE ativo = true`);
+      utilizadores_ok = true;
+      utilizadores_ativos = u.rows[0].n;
+    } catch (e) {
+      utilizadores_erro = String((e && e.message) || e);
+    }
+    res.json({
+      ok: true,
+      build: STOCKOS_API_BUILD,
+      ping: one.rows[0].ok === 1,
+      tables_public: tabs.rows[0].n,
+      utilizadores_ok,
+      utilizadores_ativos,
+      utilizadores_erro
+    });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      build: STOCKOS_API_BUILD,
+      erro: String((e && e.message) || e),
+      code: e && e.code
+    });
+  }
 });
 
 app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {

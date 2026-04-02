@@ -524,30 +524,27 @@ async function utilizadoresHasUsernameColumn() {
   }
 }
 
-/** Login: uma query com username; se o servidor/role falhar (owner, coluna, etc.), só email — sem information_schema no pedido. */
-function loginUtilizadorQueryDeveUsarSoEmail(e) {
-  if (pgSchemaPrivilegeError(e)) return true;
-  const m = String((e && e.message) || e);
-  if (/must be owner|owner of table utilizadores/i.test(m)) return true;
-  const code = e && e.code;
-  if (String(code) === '42703' && /username/i.test(m)) return true;
-  if (/column.*\busername\b|undefined_column/i.test(m)) return true;
-  return false;
+function pgErrText(e) {
+  return [e && e.message, e && e.detail, e && e.hint, e && e.code].filter(Boolean).join(' | ');
 }
 
+/**
+ * Login só com SELECT. Com `@` nunca toca na coluna username.
+ * Sem `@`: tenta email OU username; em qualquer falha da 1.ª query, tenta só email (evita must be owner / coluna em falha / driver estranho).
+ */
 async function queryUtilizadorPorLogin(login) {
+  const L = String(login || '').trim();
+  const porEmail = () =>
+    query(`SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`, [L]);
+  if (L.includes('@')) return await porEmail();
   try {
     return await query(
       `SELECT * FROM utilizadores WHERE ativo=true AND (LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1))`,
-      [login]
+      [L]
     );
   } catch (e) {
-    if (!loginUtilizadorQueryDeveUsarSoEmail(e)) throw e;
-    console.warn('[auth/login] fallback login só por email:', String((e && e.message) || e).slice(0, 140));
-    return await query(
-      `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
-      [login]
-    );
+    console.warn('[auth/login] query com username falhou, só email:', pgErrText(e));
+    return await porEmail();
   }
 }
 
@@ -1081,13 +1078,11 @@ app.post('/api/auth/login', async (req, res) => {
       user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username }
     });
   } catch (e) {
-    const m = String((e && e.message) || e);
-    if (/must be owner|owner of table utilizadores/i.test(m)) {
-      return res.status(500).json({
-        erro: 'A conta da base de dados não tem permissão para aceder a utilizadores. Verifica o role (ex.: stockos_app com GRANT SELECT).'
-      });
-    }
-    res.status(500).json({ erro: e.message });
+    console.error('[auth/login]', pgErrText(e));
+    res.status(500).json({
+      erro:
+        'Não foi possível autenticar. Usa o email completo (ex.: admin@stockos.ao). Se persistir, o user da DATABASE_URL precisa de GRANT SELECT (e UPDATE nas colunas usadas) em public.utilizadores.'
+    });
   }
 });
 

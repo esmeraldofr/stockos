@@ -18,6 +18,29 @@ if (process.env.VERCEL_ENV === 'preview' && /dakleqewbwbryuchlrzm/i.test(_dbUrlR
   );
 }
 
+/** Log de arranque: host, user e ref (sem password) — confirma em Vercel Logs qual BD está ligada. */
+function logStockosDbTarget() {
+  try {
+    const u = new URL(_dbUrlRaw);
+    const host = u.hostname || '';
+    const port = u.port || '';
+    const user = decodeURIComponent((u.username || '').replace(/\+/g, ' '));
+    const m = host.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
+    console.log('[StockOS DB target]', {
+      VERCEL_ENV: process.env.VERCEL_ENV,
+      NODE_ENV: process.env.NODE_ENV,
+      host,
+      port: port || 'default',
+      user,
+      directDbRef: m ? m[1] : undefined,
+      SUPABASE_PROJECT_REF: process.env.SUPABASE_PROJECT_REF || undefined,
+    });
+  } catch (e) {
+    console.warn('[StockOS DB target] URI inválida:', (e && e.message) || e);
+  }
+}
+logStockosDbTarget();
+
 /**
  * Pooler Supabase :6543 sem ?pgbouncer=true usa Session mode (poucos clientes → MaxClientsInSessionMode).
  * Transaction mode permite muito mais clientes e é o recomendado para serverless.

@@ -1,25 +1,25 @@
-# Código = branch develop.
-# BD = mesma instância Postgres de produção, mas utilizador só de leitura (secret DATABASE_URL_QUALIDADE).
-# Criar o role com supabase/readonly_qualidade_role.sql no SQL Editor de produção.
-# O branch git «qualidade» pode ser actualizado pelo promote-to-qualidade.yml só para referência.
+# Código = branch qualidade (actualizado por promote-to-qualidade.yml a partir de develop).
+# BD = instância Postgres de produção com utilizador só de leitura (DATABASE_URL_QUALIDADE).
+# Não dispara em push a develop — evita sobrescrever o Preview de desenvolvimento no mesmo projecto Vercel.
 
 name: Deploy — Qualidade
 
 on:
   push:
     branches:
-      - develop
+      - qualidade
+  workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy develop → Qualidade (Vercel, BD produção read-only)
+    name: Deploy branch qualidade (Vercel Preview, BD produção read-only)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: develop
+          ref: qualidade
           fetch-depth: 0
 
       - name: Exigir DATABASE_URL_QUALIDADE (utilizador só leitura)
@@ -31,6 +31,23 @@ jobs:
         env:
           DATABASE_URL_QUALIDADE: ${{ secrets.DATABASE_URL_QUALIDADE }}
 
+      - name: Sincronizar DATABASE_URL (Preview, branch qualidade) na Vercel
+        run: |
+          set -euo pipefail
+          export VERCEL_TOKEN=$(echo "$_VT" | rev)
+          export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID_QUALIDADE:-$_VP}"
+          export VERCEL_TEAM_ID="$_VO"
+          export DATABASE_URL_SYNC_VALUE="$DATABASE_URL_QUALIDADE"
+          export VERCEL_SYNC_TARGET=preview
+          export VERCEL_GIT_BRANCH=qualidade
+          python3 scripts/ci/vercel_sync_database_url.py
+        env:
+          _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
+          _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
+          _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
+          VERCEL_PROJECT_ID_QUALIDADE: ${{ secrets.VERCEL_PROJECT_ID_QUALIDADE }}
+          DATABASE_URL_QUALIDADE: ${{ secrets.DATABASE_URL_QUALIDADE }}
+
       - name: Deploy to Vercel (Preview)
         run: |
           export VERCEL_TOKEN=$(echo "$_VT" | rev)
@@ -38,10 +55,12 @@ jobs:
           export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID_QUALIDADE:-$_VP}"
           npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
             --build-env NODE_ENV=staging \
+            --build-env DATABASE_URL="$DATABASE_URL_QUALIDADE" \
             --env NODE_ENV=staging \
             --env DATABASE_URL="$DATABASE_URL_QUALIDADE"
         env:
           _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
           _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"
           _VP: "prj_QztgE5mOVGbSMfD4wlzQfEbgRaeD"
+          VERCEL_PROJECT_ID_QUALIDADE: ${{ secrets.VERCEL_PROJECT_ID_QUALIDADE }}
           DATABASE_URL_QUALIDADE: ${{ secrets.DATABASE_URL_QUALIDADE }}

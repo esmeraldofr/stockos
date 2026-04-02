@@ -28,14 +28,16 @@ jobs:
           DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
 
       # Integração Git → Vercel não vê secrets do GitHub: Preview herdava DATABASE_URL de Production.
-      - name: Sincronizar DATABASE_URL (Preview) na Vercel
+      - name: Sincronizar DATABASE_URL (Preview, branch develop) na Vercel
         run: |
           set -euo pipefail
           export VERCEL_TOKEN=$(echo "$_VT" | rev)
           export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID_DEV:-$_VP}"
           export VERCEL_TEAM_ID="$_VO"
-          export DATABASE_URL_DEV
-          python3 scripts/ci/vercel_sync_preview_database_url.py
+          export DATABASE_URL_SYNC_VALUE="$DATABASE_URL_DEV"
+          export VERCEL_SYNC_TARGET=preview
+          export VERCEL_GIT_BRANCH=develop
+          python3 scripts/ci/vercel_sync_database_url.py
         env:
           _VT: "SC0900lh8hO11sk4fNDeDVIBUkR0Eo2aq7l94mLWWpGLWU9ESCkaAE84_pcv"
           _VO: "team_xe35fGtDIeZZ0wltRdswGzOh"

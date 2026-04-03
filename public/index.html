@@ -174,6 +174,22 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 @media(max-width:540px){
   .vendas-menu-2col{grid-template-columns:1fr}
 }
+.venda-qty-input{
+  width:56px;
+  text-align:center;
+  padding:6px 4px;
+  border-radius:6px;
+  border:1px solid #334155;
+  background:#0f172a;
+  color:#e2e8f0;
+  font-size:14px;
+  font-weight:600;
+  -moz-appearance:textfield;
+}
+.venda-qty-input::-webkit-outer-spin-button,.venda-qty-input::-webkit-inner-spin-button{
+  -webkit-appearance:none;
+  margin:0;
+}
 
 /* Alert */
 .alert{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:12px}
@@ -1333,7 +1349,7 @@ let caixaBuf = {};
 let receitasBuf = {}; // { produto_id: [{componente_id, quantidade}] }
 let menuProdIds   = []; // ids dos produtos de menu (inserção manual)
 let bebidaProdIds = []; // ids das bebidas (só unidade / stock) em Vendas
-let bebidaCopoProdIds = []; // bebidas vendidas por copo (+/−)
+let bebidaCopoProdIds = []; // bebidas vendidas por copo (input qty)
 let bebidaCopoCfg = {}; // { id: { kgPorCopo, preco, qtdPacote, precoPacote } }
 let bebidaProdPrecos = {}; // { produto_id: preco } para calcular total
 let avulsoProdIds = []; // ids dos ingredientes com venda_avulso=true
@@ -1365,11 +1381,17 @@ function calcStandaloneQty(prodId) {
 function refreshMenuQtys() {
   for (const prodId of menuProdIds) {
     const el = document.getElementById(`venda-qty-${prodId}`);
-    if (el) el.textContent = vendasBuf[prodId] || 0;
+    if (!el || document.activeElement === el) continue;
+    const v = Math.max(0, Math.round((vendasBuf[prodId] || 0) * 1000) / 1000);
+    if (el.tagName === 'INPUT') el.value = String(v);
+    else el.textContent = String(v);
   }
   for (const prodId of bebidaCopoProdIds) {
     const el = document.getElementById(`venda-qty-${prodId}`);
-    if (el) el.textContent = String(vendasBuf[prodId] || 0);
+    if (!el || document.activeElement === el) continue;
+    const v = Math.max(0, Math.floor(vendasBuf[prodId] || 0));
+    if (el.tagName === 'INPUT') el.value = String(v);
+    else el.textContent = String(v);
   }
   for (const prodId of bebidaProdIds) {
     const el = document.getElementById(`venda-qty-${prodId}`);
@@ -1699,18 +1721,16 @@ async function loadVendasMenu(turnoId, canEdit) {
     });
 
     menuProdIds = menuProds.map(p => p.id);
-    const btnStyle = 'width:28px;height:28px;border-radius:6px;border:none;font-size:1.1rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;';
     const menuRows = menuProds.map(p => {
       const qty = vendasBuf[p.id] || 0;
+      const qtyCtrl = canEdit
+        ? `<input type="number" min="0" step="1" inputmode="numeric" autocomplete="off" class="venda-qty-input" id="venda-qty-${p.id}" data-venda-pid="${p.id}" data-venda-turno="${turnoId}" value="${qty}" onblur="vendaQtyInputBlur(this)"/>`
+        : `<span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${qty}</span>`;
       return `<div class="produto-row">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
           ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
         </div>
-        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">
-          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',-1))" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
-          <span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${qty}</span>
-          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',1))" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
-        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">${qtyCtrl}</div>
       </div>`;
     }).join('');
 
@@ -1737,16 +1757,15 @@ async function loadVendasMenu(turnoId, canEdit) {
         cfg.qtdPacote >= 2 && cfg.precoPacote > 0
           ? `${fmt(cfg.preco)}/copo · ${cfg.qtdPacote} copos ${fmt(cfg.precoPacote)}`
           : `${fmt(cfg.preco)}/copo`;
+      const qtyCopo = canEdit
+        ? `<input type="number" min="0" step="1" inputmode="numeric" autocomplete="off" class="venda-qty-input" id="venda-qty-${p.id}" data-venda-pid="${p.id}" data-venda-turno="${turnoId}" value="${copos}" onblur="vendaQtyInputBlur(this)"/>`
+        : `<span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${copos}</span>`;
       return `<div class="produto-row">
         <div class="produto-info">
           <div class="produto-nome">${p.nome} <span style="font-size:10px;color:#64748b;font-weight:600">(copos)</span></div>
           <div class="produto-meta" style="line-height:1.35">${precoLinha} · ${fmtNum(cfg.kgPorCopo)} kg/copo · stock ~${fmtNum(kgStock)} kg</div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">
-          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',-1))" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
-          <span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${copos}</span>
-          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',1))" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
-        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">${qtyCopo}</div>
       </div>`;
     }).join('');
     const bebidaRows = bebidaOutras.map((p) => {
@@ -1791,23 +1810,34 @@ async function loadVendasMenu(turnoId, canEdit) {
   }
 }
 
-async function deltaVenda(turnoId, prodId, delta) {
-  vendasBuf[prodId] = Math.max(0, (vendasBuf[prodId] || 0) + delta);
-  const el = document.getElementById(`venda-qty-${prodId}`);
-  if (el) el.textContent = String(vendasBuf[prodId] ?? 0);
+/** Grava quantidade de venda (menu ou bebida por copo) ao sair do input. */
+async function vendaQtyInputBlur(el) {
+  if (!el || el.disabled) return;
+  const prodId = el.getAttribute('data-venda-pid');
+  const turnoId = el.getAttribute('data-venda-turno');
+  if (!prodId || !turnoId) return;
+  const isCopo = bebidaCopoCfg[prodId]?.kgPorCopo > 0;
+  let q = parseFloat(String(el.value).trim());
+  if (!Number.isFinite(q)) q = 0;
+  if (isCopo) q = Math.max(0, Math.floor(q));
+  else q = Math.max(0, Math.round(q * 1000) / 1000);
+  el.value = String(q);
+  const prev = vendasBuf[prodId] || 0;
+  if (q === prev) return;
+  vendasBuf[prodId] = q;
   refreshVendasTotal();
   try {
-    await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: vendasBuf[prodId] });
+    await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: q });
     const cfg = bebidaCopoCfg[prodId];
     if (cfg && cfg.kgPorCopo > 0) {
+      const delta = q - prev;
       if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
-      const kgAdj = -delta * cfg.kgPorCopo;
-      stockBuf[prodId].deixado = Math.max(0, (parseFloat(stockBuf[prodId].deixado) || 0) + kgAdj);
+      stockBuf[prodId].deixado = Math.max(0, (parseFloat(stockBuf[prodId].deixado) || 0) - delta * cfg.kgPorCopo);
       updateStock(prodId, 'deixado', fmtStockNumberAttr(stockBuf[prodId].deixado));
     }
   } catch(e) {
-    vendasBuf[prodId] = Math.max(0, vendasBuf[prodId] - delta);
-    if (el) el.textContent = String(vendasBuf[prodId] ?? 0);
+    vendasBuf[prodId] = prev;
+    el.value = String(prev);
     refreshVendasTotal();
     alert('Erro ao registar venda: ' + e.message);
   }

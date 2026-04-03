@@ -87,8 +87,11 @@ th{background:#0f172a;color:#64748b;font-weight:600;font-size:11px;text-transfor
 th:first-child{left:0;z-index:2}
 td{padding:6px 10px;border-bottom:1px solid #1e293b}
 tr:hover td{background:#1e293b}
-.td-name{font-weight:500;white-space:nowrap;position:sticky;left:0;background:#0f172a;z-index:1}
+.td-name{position:sticky;left:0;background:#0f172a;z-index:1;vertical-align:middle;padding-top:8px;padding-bottom:8px}
+.td-name .stock-prod-nome{font-weight:500;line-height:1.25;white-space:nowrap;color:#f1f5f9}
+.td-name .stock-prod-meta{font-size:11px;color:#64748b;font-weight:400;line-height:1.2;margin-top:3px;white-space:nowrap}
 tr:hover .td-name{background:#1e293b}
+tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .section-header{position:sticky;left:0}
 .td-cat{font-size:10px;color:#64748b}
 .td-input{width:90px;text-align:right}
@@ -1329,9 +1332,13 @@ async function loadTurno() {
         else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
 
         const inputAttr = canEdit ? '' : 'disabled';
+        const metaLinha =
+          parseFloat(s.preco) > 0
+            ? `${medicaoSigla(s.tipo_medicao)} · ${fmt(s.preco)}`
+            : medicaoSigla(s.tipo_medicao);
         return `
           <tr>
-            <td class="td-name">${s.produto_nome}<span style="color:#64748b;font-size:11px;margin-left:6px">${medicaoSigla(s.tipo_medicao)}</span>${s.preco > 0 ? `<span style="color:#64748b;font-size:11px;margin-left:6px">${fmt(s.preco)}</span>` : ''}</td>
+            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div></td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.encontrado)}"

@@ -87,8 +87,11 @@ th{background:#0f172a;color:#64748b;font-weight:600;font-size:11px;text-transfor
 th:first-child{left:0;z-index:2}
 td{padding:6px 10px;border-bottom:1px solid #1e293b}
 tr:hover td{background:#1e293b}
-.td-name{font-weight:500;white-space:nowrap;position:sticky;left:0;background:#0f172a;z-index:1}
+.td-name{position:sticky;left:0;background:#0f172a;z-index:1;vertical-align:middle;padding-top:8px;padding-bottom:8px}
+.td-name .stock-prod-nome{font-weight:500;line-height:1.25;white-space:nowrap;color:#f1f5f9}
+.td-name .stock-prod-meta{font-size:11px;color:#64748b;font-weight:400;line-height:1.2;margin-top:3px;white-space:nowrap}
 tr:hover .td-name{background:#1e293b}
+tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .section-header{position:sticky;left:0}
 .td-cat{font-size:10px;color:#64748b}
 .td-input{width:90px;text-align:right}
@@ -181,6 +184,7 @@ tr:hover .td-name{background:#1e293b}
 .turno-tab:hover{color:#cbd5e1;background:#1e293b}
 .turno-tab.active{color:#f1f5f9;background:#1e293b;border-bottom:2px solid #3b82f6;margin-bottom:-2px}
 .turno-tab-panel{display:none}.turno-tab-panel.active{display:block}
+input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-color:#f87171!important;box-shadow:0 0 0 1px rgba(248,113,113,.5)}
 .turno-view-toggle{margin-left:auto;flex-shrink:0;padding:5px 10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;align-self:center;transition:color .15s,border-color .15s}
 .turno-view-toggle:hover{color:#f1f5f9;border-color:#64748b}
 .turno-tabs-wrap{display:flex;align-items:flex-end;border-bottom:2px solid #1e293b;margin-bottom:16px}
@@ -271,13 +275,43 @@ tr:hover .td-name{background:#1e293b}
 <script>
 (function(){
   var h = location.hostname;
-  var env = null;
-  if(h.includes('localhost') || h.includes('develop')) env = 'develop';
-  else if(h.includes('qualidade')) env = 'qualidade';
-  if(!env) return;
-  document.body.classList.add('env-' + env);
-  document.getElementById('env-banner').textContent =
-    env === 'develop' ? '⚠ Ambiente de Desenvolvimento' : '🔵 Ambiente de Qualidade';
+  var banner = document.getElementById('env-banner');
+  function setEnvBanner(env, detail) {
+    document.body.classList.remove('env-develop','env-qualidade');
+    if (!env) {
+      banner.textContent = '';
+      banner.removeAttribute('title');
+      return;
+    }
+    document.body.classList.add('env-' + env);
+    if (env === 'develop') {
+      banner.textContent = '⚠ Ambiente de Desenvolvimento' + (detail ? ' · ' + detail : '');
+    } else {
+      banner.textContent = '🔵 Ambiente de Qualidade' + (detail ? ' · ' + detail : '');
+    }
+  }
+  if (h.includes('localhost')) setEnvBanner('develop', 'local');
+  else if (h.includes('develop')) setEnvBanner('develop');
+  else if (h.includes('qualidade')) setEnvBanner('qualidade');
+
+  fetch('/api/health', { cache: 'no-store' })
+    .then(function (r) { return r.json().catch(function () { return {}; }); })
+    .then(function (d) {
+      if (!d || typeof d !== 'object') return;
+      if (d.develop_only) {
+        setEnvBanner('develop', d.build || '');
+        if (d.build) banner.setAttribute('title', 'Build API: ' + d.build + ' · /api/dev/info');
+        return;
+      }
+      if (d.tier === 'qualidade' || (d.read_only && d.tier !== 'production')) {
+        setEnvBanner('qualidade');
+        return;
+      }
+      if (!h.includes('localhost') && !h.includes('develop') && !h.includes('qualidade')) {
+        setEnvBanner(null);
+      }
+    })
+    .catch(function () {});
 })();
 </script>
 
@@ -347,6 +381,37 @@ function fmt(v) {
 function fmtNum(v) {
   const n = parseFloat(v) || 0;
   return n.toLocaleString('pt-AO', { maximumFractionDigits: 2 });
+}
+/** Quantidade: célula ou input vazio quando é zero (não preenchido). */
+function isQtyZero(v) {
+  if (v === '' || v == null) return true;
+  const n = parseFloat(String(v).replace(/\./g, '').replace(',', '.'));
+  return !Number.isFinite(n) || Math.abs(n) < 1e-9;
+}
+function fmtQtyInput(v) {
+  return isQtyZero(v) ? '' : fmtNum(v);
+}
+/** Valor em Kz para totais da caixa: vazio quando zero. */
+function fmtKzOrEmpty(v) {
+  const n = parseFloat(v) || 0;
+  return n === 0 ? '' : fmt(n);
+}
+function fmtCaixaAttr(v) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) && n !== 0 ? String(v).trim() : '';
+}
+/** Preço total em copos: pacotes (ex. 3×1000) + resto ao preço unitário (ex. 400/copo). */
+function precoVendaCopos(copos, precoUnit, qtdPacote, precoPacote) {
+  const c = Math.max(0, Math.floor(parseFloat(copos) || 0));
+  const u = parseFloat(precoUnit) || 0;
+  const n = parseInt(qtdPacote, 10) || 0;
+  const p = parseFloat(precoPacote) || 0;
+  if (n >= 2 && p > 0) return Math.floor(c / n) * p + (c % n) * u;
+  return c * u;
+}
+function stockInputBlurQty(el) {
+  const n = parseRaw(el.value);
+  el.value = n === 0 ? '' : fmtNum(n);
 }
 function medicaoSigla(tipo) {
   return tipo === 'peso' ? 'kg' : 'un';
@@ -1149,8 +1214,10 @@ let stockBuf = {};
 let caixaBuf = {};
 let receitasBuf = {}; // { produto_id: [{componente_id, quantidade}] }
 let menuProdIds   = []; // ids dos produtos de menu (inserção manual)
-let bebidaProdIds = []; // ids das bebidas registadas em Vendas
+let bebidaProdIds = []; // bebidas “lata” (stock em unidades no resumo de vendas)
 let bebidaProdPrecos = {}; // { produto_id: preco } para calcular total
+let bebidaCopoProdIds = []; // bebidas vendidas por copo (stock em kg)
+let bebidaCopoCfg = {}; // id -> { kgPorCopo, preco, qtdPacote, precoPacote }
 let avulsoProdIds = []; // ids dos ingredientes com venda_avulso=true
 let vendasProdPrecos = {}; // { produto_id: preco } para todos os produtos de vendas
 
@@ -1182,6 +1249,10 @@ function refreshMenuQtys() {
     const el = document.getElementById(`venda-qty-${prodId}`);
     if (el) el.textContent = vendasBuf[prodId] || 0;
   }
+  for (const prodId of bebidaCopoProdIds) {
+    const el = document.getElementById(`venda-qty-${prodId}`);
+    if (el) el.textContent = String(vendasBuf[prodId] || 0);
+  }
   for (const prodId of bebidaProdIds) {
     const el = document.getElementById(`venda-qty-${prodId}`);
     const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
@@ -1207,7 +1278,12 @@ function refreshVendasTotal() {
   for (const prodId of avulsoProdIds) {
     total += calcStandaloneQty(prodId) * (vendasProdPrecos[prodId] || 0);
   }
-  // Bebidas (baseado no vendido do stock)
+  for (const prodId of bebidaCopoProdIds) {
+    const cfg = bebidaCopoCfg[prodId];
+    if (!cfg) continue;
+    const copos = vendasBuf[prodId] || 0;
+    total += precoVendaCopos(copos, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
+  }
   for (const prodId of bebidaProdIds) {
     const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
     total += Math.max(0, b.encontrado + b.entrada - b.deixado) * (vendasProdPrecos[prodId] || 0);
@@ -1273,9 +1349,13 @@ async function loadTurno() {
     const canEdit  = isAberto;
     S.turnoCanEdit = canEdit;
 
+    const isAdminUser = S.user?.role === 'admin';
+    const reabrirBtn = !isAberto && isAdminUser
+      ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="reabrirTurno(event, '${turno.id}')">Reabrir</button>`
+      : '';
     show('turno-header-actions', isAberto
       ? `<button type="button" class="btn btn-danger btn-sm" onclick="fecharTurno(event, '${turno.id}')">Fechar</button>`
-      : '<span class="badge badge-grey">Fechado</span>'
+      : `<span class="badge badge-grey">Fechado</span>${reabrirBtn}`
     );
 
     // Separar comida e bebida
@@ -1289,29 +1369,35 @@ async function loadTurno() {
         const pid = s.produto_id;
         const vend = Math.max(0, (stockBuf[pid]?.encontrado||0) + (stockBuf[pid]?.entrada||0) - (stockBuf[pid]?.deixado||0));
         const val  = vend * parseFloat(s.preco);
+        const vendTxt = vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}` : '';
+        const valTxt = parseFloat(s.preco) > 0 && vend > 0 ? fmt(val) : (parseFloat(s.preco) > 0 ? '' : '—');
         let compHtml = '<span class="comp-null">—</span>';
         if (s.comparacao === 'igual') compHtml = '<span class="comp-igual">✓</span>';
         else if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
         else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
 
         const inputAttr = canEdit ? '' : 'disabled';
+        const metaLinha =
+          parseFloat(s.preco) > 0
+            ? `${medicaoSigla(s.tipo_medicao)} · ${fmt(s.preco)}`
+            : medicaoSigla(s.tipo_medicao);
         return `
           <tr>
-            <td class="td-name">${s.produto_nome}<span style="color:#64748b;font-size:11px;margin-left:6px">${medicaoSigla(s.tipo_medicao)}</span>${s.preco > 0 ? `<span style="color:#64748b;font-size:11px;margin-left:6px">${fmt(s.preco)}</span>` : ''}</td>
+            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div></td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
-            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.encontrado)}"
-              onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
-              oninput="updateStock('${pid}','encontrado',this.value)" ${inputAttr}/></td>
-            <td class="td-calc" id="entrada-${pid}">${fmtNum(s.entrada)}</td>
-            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.deixado)}"
-              onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
-              oninput="updateStock('${pid}','deixado',this.value)" ${inputAttr}/></td>
-            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.fechados||0)}"
-              onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
-              oninput="updateStock('${pid}','fechados',this.value)" ${inputAttr}/></td>
-            <td class="td-calc" id="vend-${pid}">${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}</td>
-            <td class="td-valor" id="val-${pid}">${s.preco > 0 ? fmt(val) : '—'}</td>
+            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.encontrado)}"
+              onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" title="Obrigatório" ${inputAttr}/></td>
+            <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
+            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.deixado)}"
+              onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" title="Obrigatório" ${inputAttr}/></td>
+            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.fechados)}"
+              onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','fechados',this.value)" data-stock-req="1" title="Obrigatório" ${inputAttr}/></td>
+            <td class="td-calc" id="vend-${pid}">${vendTxt}</td>
+            <td class="td-valor" id="val-${pid}">${valTxt}</td>
           </tr>`;
       }).join('');
     }
@@ -1330,11 +1416,11 @@ async function loadTurno() {
     show('turno-content', `
       <div class="turno-tabs-wrap">
         <div class="turno-tabs">
-          <button type="button" class="turno-tab active" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
-          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
-          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
-          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
-          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('resumo', ev.currentTarget); })">📋 Resumo</button>
+          <button type="button" class="turno-tab active" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
+          <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
+          <button type="button" class="turno-tab" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
+          <button type="button" class="turno-tab" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
+          <button type="button" class="turno-tab" data-turno-tab="resumo" onclick="runAction(event, async (ev) => { await switchTurnoTab('resumo', ev.currentTarget); })">📋 Resumo</button>
         </div>
         <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
       </div>
@@ -1348,10 +1434,10 @@ async function loadTurno() {
                   <th>Produto</th>
                   <th style="text-align:right">T. Anterior</th>
                   <th>Comparação</th>
-                  <th style="text-align:right">Encontrado</th>
+                  <th style="text-align:right">Encontrado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Entrada</th>
-                  <th style="text-align:right">Deixado</th>
-                  <th style="text-align:right">Fechados</th>
+                  <th style="text-align:right">Deixado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
+                  <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Vendido</th>
                   <th style="text-align:right">Valor</th>
                 </tr>
@@ -1362,8 +1448,8 @@ async function loadTurno() {
                 ${tableFor(outro,'📦 Outros')}
                 <tr id="stock-total-row" style="font-weight:700;border-top:2px solid #334155;background:#1e293b">
                   <td colspan="7" style="padding:8px 10px;color:#94a3b8">Total</td>
-                  <td class="td-calc" id="total-vend">—</td>
-                  <td class="td-valor" id="total-val">—</td>
+                  <td class="td-calc" id="total-vend"></td>
+                  <td class="td-valor" id="total-val"></td>
                 </tr>
               </tbody>
             </table>
@@ -1386,29 +1472,29 @@ async function loadTurno() {
           <div class="card-title">💰 Caixa</div>
           <div class="caixa-grid">
             <div class="caixa-item">
-              <label>TPA / Máquina</label>
-              <input type="number" min="0" id="c-tpa" value="${caixa.tpa||0}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+              <label>TPA / Máquina <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
+              <input type="number" min="0" step="any" id="c-tpa" value="${fmtCaixaAttr(caixa.tpa)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
-              <label>Transferência</label>
-              <input type="number" min="0" id="c-transf" value="${caixa.transferencia||0}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+              <label>Transferência <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
+              <input type="number" min="0" step="any" id="c-transf" value="${fmtCaixaAttr(caixa.transferencia)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
-              <label>Dinheiro</label>
-              <input type="number" min="0" id="c-din" value="${caixa.dinheiro||0}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+              <label>Dinheiro <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
+              <input type="number" min="0" step="any" id="c-din" value="${fmtCaixaAttr(caixa.dinheiro)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
               <label>Saída</label>
-              <input type="number" id="c-saida" value="${caixa.saida||0}" disabled style="opacity:.6"/>
+              <input type="number" step="any" id="c-saida" value="${fmtCaixaAttr(caixa.saida)}" disabled style="opacity:.6"/>
             </div>
           </div>
           <div class="caixa-total">
             <span class="caixa-total-label">Total Gerado</span>
-            <span class="caixa-total-value" id="c-total-gerado">${fmt(tg)}</span>
+            <span class="caixa-total-value" id="c-total-gerado">${fmtKzOrEmpty(tg)}</span>
           </div>
           <div class="caixa-total">
             <span class="caixa-total-label">Total Final</span>
-            <span class="caixa-total-value" id="c-total-final">${fmt(tf)}</span>
+            <span class="caixa-total-value" id="c-total-final">${fmtKzOrEmpty(tf)}</span>
           </div>
           <div style="margin-top:14px">
             <div class="card-title" style="margin-bottom:6px">📝 Observações</div>
@@ -1449,8 +1535,8 @@ async function loadTurno() {
   });
   const tv = document.getElementById('total-vend');
   const tva = document.getElementById('total-val');
-  if (tv) tv.textContent = fmtNum(initTotalVend);
-  if (tva) tva.textContent = fmt(initTotalVal);
+  if (tv) tv.textContent = initTotalVend > 0 ? fmtNum(initTotalVend) : '';
+  if (tva) tva.textContent = initTotalVal > 0 ? fmt(initTotalVal) : '';
 
     // Lazy load por aba para reduzir chamadas simultâneas e pressão no DB.
   } catch(e) {
@@ -1493,6 +1579,24 @@ async function loadVendasMenu(turnoId, canEdit) {
       vendasProdPrecos[p.id] = parseFloat(p.preco) || 0;
     });
 
+    bebidaCopoCfg = {};
+    const bebidaCopoProds = bebidaProds.filter(
+      (p) => p.venda_por_copo && parseFloat(p.kg_por_copo) > 0
+    );
+    const bebidaOutras = bebidaProds.filter(
+      (p) => !(p.venda_por_copo && parseFloat(p.kg_por_copo) > 0)
+    );
+    bebidaCopoProdIds = bebidaCopoProds.map((p) => p.id);
+    bebidaProdIds = bebidaOutras.map((p) => p.id);
+    bebidaCopoProds.forEach((p) => {
+      bebidaCopoCfg[p.id] = {
+        kgPorCopo: parseFloat(p.kg_por_copo) || 0,
+        preco: parseFloat(p.preco) || 0,
+        qtdPacote: parseInt(p.qtd_copos_pacote, 10) || 0,
+        precoPacote: parseFloat(p.preco_copos_pacote) || 0
+      };
+    });
+
     menuProdIds = menuProds.map(p => p.id);
     const btnStyle = 'width:28px;height:28px;border-radius:6px;border:none;font-size:1.1rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;';
     const menuRows = menuProds.map(p => {
@@ -1509,15 +1613,40 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     }).join('');
 
-    bebidaProdIds = bebidaProds.map(p => p.id);
     bebidaProdPrecos = {};
-    const bebidaRows = bebidaProds.map(p => {
+    bebidaOutras.forEach((p) => {
+      bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
+    });
+    const bebidaCopoRows = bebidaCopoProds.map((p) => {
+      const cfg = bebidaCopoCfg[p.id];
+      const copos = vendasBuf[p.id] || 0;
+      const kgStock = (() => {
+        const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
+        return Math.max(0, b.encontrado + b.entrada - b.deixado);
+      })();
+      const precoLinha =
+        cfg.qtdPacote >= 2 && cfg.precoPacote > 0
+          ? `${fmt(cfg.preco)}/copo · ${cfg.qtdPacote} copos ${fmt(cfg.precoPacote)}`
+          : `${fmt(cfg.preco)}/copo`;
+      return `<div class="produto-row" style="align-items:center">
+        <div class="produto-info">
+          <div class="produto-nome">${p.nome} <span style="font-size:10px;color:#64748b;font-weight:600">(copos)</span></div>
+          <div class="produto-meta">${precoLinha} · ${fmtNum(cfg.kgPorCopo)} kg/copo · stock ~${fmtNum(kgStock)} kg</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',-1))" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
+          <span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${copos}</span>
+          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',1))" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+    const bebidaRows = bebidaOutras.map((p) => {
       bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
       const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
       const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
       return `<div class="produto-row" style="align-items:center">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
-          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
+          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)} · stock ${fmtNum(qty)} un</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${fmtNum(qty)}</span>
@@ -1543,7 +1672,8 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     const html = (menuProds.length ? groupHeader('🍽️ Menu') + toGrid(menuRows) : '')
                + (avulsoProds.length ? groupHeader('🛒 Avulso') + toGrid(avulsoRows) : '')
-               + (bebidaProds.length ? groupHeader('🥤 Bebidas') + toGrid(bebidaRows) : '')
+               + (bebidaCopoProds.length ? groupHeader('🥤 Bebidas (por copo)') + toGrid(bebidaCopoRows) : '')
+               + (bebidaOutras.length ? groupHeader('🥤 Bebidas (unidade)') + toGrid(bebidaRows) : '')
                + totalRow;
     show('vendas-menu-list', html);
     refreshVendasTotal();
@@ -1553,15 +1683,22 @@ async function loadVendasMenu(turnoId, canEdit) {
 }
 
 async function deltaVenda(turnoId, prodId, delta) {
-  vendasBuf[prodId] = Math.max(0, (vendasBuf[prodId] || 0) + delta);
+  const prev = vendasBuf[prodId] || 0;
+  vendasBuf[prodId] = Math.max(0, prev + delta);
   const el = document.getElementById(`venda-qty-${prodId}`);
   if (el) el.textContent = vendasBuf[prodId];
   refreshVendasTotal();
   try {
     await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: vendasBuf[prodId] });
+    const cfg = bebidaCopoCfg[prodId];
+    if (cfg && cfg.kgPorCopo > 0) {
+      if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
+      const kgAdj = -delta * cfg.kgPorCopo;
+      stockBuf[prodId].deixado = Math.max(0, (parseFloat(stockBuf[prodId].deixado) || 0) + kgAdj);
+      updateStock(prodId, 'deixado', fmtNum(stockBuf[prodId].deixado));
+    }
   } catch(e) {
-    // reverter no erro
-    vendasBuf[prodId] = Math.max(0, vendasBuf[prodId] - delta);
+    vendasBuf[prodId] = prev;
     if (el) el.textContent = vendasBuf[prodId];
     refreshVendasTotal();
     alert('Erro ao registar venda: ' + e.message);
@@ -1578,8 +1715,12 @@ function updateStock(pid, field, value) {
   const val = vend * preco;
   const ve = document.getElementById(`vend-${pid}`);
   const va = document.getElementById(`val-${pid}`);
-  if (ve) ve.textContent = fmtNum(vend);
-  if (va) va.textContent = preco > 0 ? fmt(val) : '—';
+  const tipoM = prod?.tipo_medicao || 'unidade';
+  if (ve) ve.textContent = vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(tipoM)}` : '';
+  if (va) {
+    va.textContent =
+      preco > 0 && vend > 0 ? fmt(val) : preco > 0 ? '' : '—';
+  }
   // Recalcular total
   let totalVend = 0, totalVal = 0;
   (S.turnoData?.stock || []).forEach(s => {
@@ -1590,8 +1731,8 @@ function updateStock(pid, field, value) {
   });
   const tv = document.getElementById('total-vend');
   const tva = document.getElementById('total-val');
-  if (tv) tv.textContent = fmtNum(totalVend);
-  if (tva) tva.textContent = fmt(totalVal);
+  if (tv) tv.textContent = totalVend > 0 ? fmtNum(totalVend) : '';
+  if (tva) tva.textContent = totalVal > 0 ? fmt(totalVal) : '';
   refreshMenuQtys();
   // Auto-save
   autoSaveSchedule();
@@ -1634,8 +1775,8 @@ function calcCaixa() {
   const tf = tg - saida;
   const elTG = document.getElementById('c-total-gerado');
   const elTF = document.getElementById('c-total-final');
-  if (elTG) elTG.textContent = fmt(tg);
-  if (elTF) elTF.textContent = fmt(tf);
+  if (elTG) elTG.textContent = fmtKzOrEmpty(tg);
+  if (elTF) elTF.textContent = fmtKzOrEmpty(tf);
   // Auto-save
   const turnoId = S.turnoData?.id;
   if (!turnoId) return;
@@ -1677,6 +1818,47 @@ function toggleTurnoView() {
   if (btn) btn.textContent = isScroll ? '▣ Abas' : '☰ Tudo';
 }
 
+function clearStockCaixaValidationHighlight() {
+  document.querySelectorAll('.stock-caixa-required-missing').forEach((el) =>
+    el.classList.remove('stock-caixa-required-missing')
+  );
+}
+
+function collectMissingStockCaixaObrigatorio() {
+  const missing = [];
+  document.querySelectorAll('input[data-stock-req="1"]').forEach((el) => {
+    if (el.disabled) return;
+    if (String(el.value).trim() === '') missing.push(el);
+  });
+  document.querySelectorAll('input[data-caixa-req="1"]').forEach((el) => {
+    if (el.disabled) return;
+    if (String(el.value).trim() === '') missing.push(el);
+  });
+  return missing;
+}
+
+async function focusTurnoFieldParaValidacao(el) {
+  if (!el) return;
+  const wrap = document.getElementById('turno-content');
+  const scrollMode = wrap?.classList.contains('scroll-mode');
+  if (!scrollMode) {
+    const panel = el.closest('.turno-tab-panel');
+    const tabId = panel && panel.id;
+    const name =
+      tabId === 'tab-stock' ? 'stock' : tabId === 'tab-registos' ? 'registos' : null;
+    if (name) {
+      const btn = document.querySelector('.turno-tab[data-turno-tab="' + name + '"]');
+      if (btn) await switchTurnoTab(name, btn);
+    }
+  }
+  requestAnimationFrame(() => {
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    try {
+      el.focus();
+    } catch (_) {}
+  });
+}
+
 async function guardarCaixa(turnoId) {
   try {
     show('turno-msg','');
@@ -1699,14 +1881,42 @@ async function saveTurnoNotas(turnoId, notas) {
 }
 
 async function fecharTurno(ev, id) {
+  clearStockCaixaValidationHighlight();
+  const missing = collectMissingStockCaixaObrigatorio();
+  if (missing.length) {
+    missing.forEach((el) => el.classList.add('stock-caixa-required-missing'));
+    err(
+      'turno-msg',
+      'Preenche todos os campos obrigatórios: em Stock (Encontrado, Deixado e Fechados de cada produto) e em Caixa (TPA, Transferência e Dinheiro). Podes usar 0 quando for o caso.'
+    );
+    await focusTurnoFieldParaValidacao(missing[0]);
+    return;
+  }
   if (!confirm('Fechar este turno? Não poderá ser editado depois.')) return;
   await runAction(ev, async () => {
     try {
       await guardarStock(id);
       await guardarCaixa(id);
       await api('POST', `/turnos/${id}/fechar`);
+      clearStockCaixaValidationHighlight();
       await loadTurno();
-    } catch (e) { err('turno-msg', e.message); }
+    } catch (e) {
+      err('turno-msg', e.message);
+    }
+  });
+}
+
+async function reabrirTurno(ev, id) {
+  if (!confirm('Reabrir este turno? Voltará a poder editar stock, caixa e registos. Usar só para corrigir erros.')) return;
+  await runAction(ev, async () => {
+    try {
+      await api('POST', `/turnos/${id}/reabrir`);
+      suc('turno-msg', 'Turno reaberto.');
+      setTimeout(() => show('turno-msg', ''), 2500);
+      await loadTurno();
+    } catch (e) {
+      err('turno-msg', e.message);
+    }
   });
 }
 
@@ -1867,7 +2077,7 @@ async function submitEntrada(turnoId) {
     const soma = novaEntrada.filter(e => String(e.produto_id) === String(pid))
                             .reduce((s, e) => s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1), 0);
     const cell = document.getElementById(`entrada-${pid}`);
-    if (cell) cell.textContent = fmtNum(soma);
+    if (cell) cell.textContent = fmtQtyInput(soma);
     if (!stockBuf[pid]) stockBuf[pid] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
     stockBuf[pid].entrada = soma;
     updateStock(pid, 'entrada', soma);
@@ -1940,7 +2150,7 @@ function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
     el.innerHTML = formHtml + listaHtml;
     // Actualizar campo saída na caixa
     const cSaida = document.getElementById('c-saida');
-    if (cSaida) cSaida.value = total.toFixed(2);
+    if (cSaida) cSaida.value = total === 0 ? '' : total.toFixed(2);
     const elTG = document.getElementById('c-total-gerado');
     const elTF = document.getElementById('c-total-final');
     if (elTG && elTF) {
@@ -1948,8 +2158,9 @@ function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
       const transf= parseFloat(document.getElementById('c-transf')?.value)||0;
       const din   = parseFloat(document.getElementById('c-din')?.value)||0;
       const tg    = tpa + transf + din;
-      elTG.textContent = fmt(tg);
-      elTF.textContent = fmt(tg - total);
+      const tf    = tg - total;
+      elTG.textContent = fmtKzOrEmpty(tg);
+      elTF.textContent = fmtKzOrEmpty(tf);
     }
   } catch(e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
@@ -2002,6 +2213,22 @@ async function loadResumoTab(turnoId) {
         const si  = stocks.find(s => String(s.produto_id) === String(pid));
         vendasLines.push({ nome: si?.produto_nome || `Produto ${pid}`, qty, preco, total: val });
       }
+    });
+    bebidaCopoProdIds.forEach((pid) => {
+      const copos = vendasBuf[pid] || 0;
+      if (copos <= 0) return;
+      const cfg = bebidaCopoCfg[pid];
+      if (!cfg) return;
+      const val = precoVendaCopos(copos, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
+      totalVendasVal += val;
+      const si = stocks.find((s) => String(s.produto_id) === String(pid));
+      vendasLines.push({
+        nome: si?.produto_nome || `Produto ${pid}`,
+        qty: copos,
+        preco: cfg.preco,
+        total: val,
+        copo: true
+      });
     });
 
     // — Irregularidades —
@@ -2092,17 +2319,17 @@ async function loadResumoTab(turnoId) {
 
     const vendasCard = vendasLines.length > 0 ? `
       <div class="card mt-16">
-        <div class="card-title">🍽️ Resumo de Vendas (Menu)</div>
+        <div class="card-title">🍽️ Resumo de Vendas</div>
         ${vendasLines.map(v => `
           <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1e293b">
             <span style="font-size:13px;color:#cbd5e1">${v.nome}</span>
             <span style="display:flex;gap:14px;align-items:center">
-              <span style="color:#64748b;font-size:12px">${v.qty} × ${fmt(v.preco)}</span>
+              <span style="color:#64748b;font-size:12px">${v.copo ? v.qty + ' copos' : v.qty + ' × ' + fmt(v.preco)}</span>
               <span style="font-weight:600;color:#e2e8f0;min-width:72px;text-align:right">${fmt(v.total)}</span>
             </span>
           </div>`).join('')}
         <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:2px solid #334155">
-          <span style="font-weight:600;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.05em">Total Vendas Menu</span>
+          <span style="font-weight:600;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.05em">Total Vendas</span>
           <span style="font-weight:700;color:#4ade80">${fmt(totalVendasVal)}</span>
         </div>
       </div>` : '';
@@ -2952,7 +3179,7 @@ async function loadProdutos() {
           ${items.map(p => `
             <div class="produto-row">
               <div class="produto-info">
-                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}</div>
+                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.venda_por_copo && parseFloat(p.kg_por_copo) > 0 ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">só armazém</span>' : ''}</div>
                 <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
               </div>
               ${isAdmin ? `
@@ -2998,10 +3225,19 @@ function showProdutoForm(id) {
       '</div>' +
       '<div id="prod-form-msg"></div>' +
       '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
-      '<div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
+      '<div class="field"><label id="p-preco-label">Preço (Kz)</label><input id="p-preco" type="number" min="0" step="any" value="0"/></div>' +
       '<div class="field"><label>Medição</label><select id="p-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
       '<div class="field" id="field-avulso"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso</label></div>' +
+      '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Folha de stock do turno</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Se desmarcares, o produto não entra na contagem ao abrir turno (útil para consumíveis só de armazém).</div></div>' +
+      '<div class="field" id="field-copo-bebida" style="display:none">' +
+      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-venda-copo" style="width:16px;height:16px"/> Venda por copo (stock em kg, registo em copos)</label>' +
+      '<div id="field-copo-detalhe" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #334155">' +
+      '<div class="field"><label>Kg por copo servido</label><input id="p-kg-copo" type="number" min="0.001" step="0.001" value="0.27"/></div>' +
+      '<div class="field"><label>Preço do pacote (Kz) — ex. 1000 por 3 copos</label><input id="p-preco-pacote" type="number" min="0" step="1" value="0"/></div>' +
+      '<div class="field"><label>Número de copos no pacote — ex. 3</label><input id="p-qtd-pacote" type="number" min="0" step="1" value="0"/></div>' +
+      '<p style="font-size:11px;color:#64748b;margin:0;line-height:1.4">O campo «Preço» acima é o valor de <strong>1 copo</strong> (ex. 400 Kz). Se preencheres pacote (ex. 3 copos / 1000 Kz), o total usa pacotes completos + resto ao preço unitário.</p>' +
+      '</div></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
       (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +
@@ -3020,6 +3256,27 @@ function showProdutoForm(id) {
   document.getElementById('p-ordem').value = p ? (p.ordem || 0) : 0;
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
   if (p) document.getElementById('p-avulso').checked = !!p.venda_avulso;
+  const st = document.getElementById('p-stock-turno');
+  if (st) st.checked = p ? p.em_stock_turno !== false : true;
+  const pvc = document.getElementById('p-venda-copo');
+  if (pvc) pvc.checked = !!(p && p.venda_por_copo && parseFloat(p.kg_por_copo) > 0);
+  const pkg = document.getElementById('p-kg-copo');
+  if (pkg) pkg.value = p && parseFloat(p.kg_por_copo) > 0 ? p.kg_por_copo : 0.27;
+  const ppp = document.getElementById('p-preco-pacote');
+  if (ppp) ppp.value = p ? (p.preco_copos_pacote || 0) : 0;
+  const pqp = document.getElementById('p-qtd-pacote');
+  if (pqp) pqp.value = p ? (p.qtd_copos_pacote || 0) : 0;
+
+  function toggleCopoBebida() {
+    const cat = document.getElementById('p-cat').value;
+    const fb = document.getElementById('field-copo-bebida');
+    const fd = document.getElementById('field-copo-detalhe');
+    const pl = document.getElementById('p-preco-label');
+    if (fb) fb.style.display = cat === 'bebida' ? '' : 'none';
+    if (cat !== 'bebida' && document.getElementById('p-venda-copo')) document.getElementById('p-venda-copo').checked = false;
+    if (fd) fd.style.display = document.getElementById('p-venda-copo')?.checked && cat === 'bebida' ? '' : 'none';
+    if (pl) pl.textContent = cat === 'bebida' && document.getElementById('p-venda-copo')?.checked ? 'Preço 1 copo (Kz)' : 'Preço (Kz)';
+  }
 
   function toggleAvulso() {
     const cat = document.getElementById('p-cat').value;
@@ -3036,8 +3293,15 @@ function showProdutoForm(id) {
       sec.style.display = 'none';
     }
   }
-  document.getElementById('p-cat').addEventListener('change', () => { toggleAvulso(); if (isEdit && canEditReceita) toggleReceita(); });
+  document.getElementById('p-cat').addEventListener('change', () => {
+    toggleAvulso();
+    toggleCopoBebida();
+    if (isEdit && canEditReceita) toggleReceita();
+  });
+  const pvcEl = document.getElementById('p-venda-copo');
+  if (pvcEl) pvcEl.addEventListener('change', toggleCopoBebida);
   toggleAvulso();
+  toggleCopoBebida();
   if (isEdit && canEditReceita) toggleReceita();
 
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
@@ -3051,9 +3315,28 @@ function showProdutoForm(id) {
   document.getElementById('p-nome').focus();
 }
 
+function payloadProdutoCopo() {
+  const cat = val('p-cat');
+  const copo = cat === 'bebida' && document.getElementById('p-venda-copo')?.checked;
+  return {
+    venda_por_copo: !!copo,
+    kg_por_copo: copo ? parseFloat(val('p-kg-copo')) || 0 : 0,
+    preco_copos_pacote: copo ? parseFloat(val('p-preco-pacote')) || 0 : 0,
+    qtd_copos_pacote: copo ? parseInt(val('p-qtd-pacote'), 10) || 0 : 0
+  };
+}
+
 async function createProduto() {
   try {
-    await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,tipo_medicao:val('p-medicao'),categoria:val('p-cat'),venda_avulso:document.getElementById('p-avulso')?.checked||false});
+    await api('POST','/produtos',{
+      nome:val('p-nome'),
+      preco:parseFloat(val('p-preco'))||0,
+      tipo_medicao:val('p-medicao'),
+      categoria:val('p-cat'),
+      venda_avulso:document.getElementById('p-avulso')?.checked||false,
+      em_stock_turno:!!document.getElementById('p-stock-turno')?.checked,
+      ...payloadProdutoCopo()
+    });
     closeProdutoModal();
     suc('prod-msg','Produto criado!');
     setTimeout(()=>show('prod-msg',''),2000);
@@ -3068,7 +3351,9 @@ async function saveProduto(id) {
       tipo_medicao: val('p-medicao'),
       categoria: val('p-cat'), ordem: parseInt(val('p-ordem'))||0,
       ativo: val('p-ativo')==='true',
-      venda_avulso: document.getElementById('p-avulso')?.checked||false
+      venda_avulso: document.getElementById('p-avulso')?.checked||false,
+      em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
+      ...payloadProdutoCopo()
     });
     closeProdutoModal();
     suc('prod-msg','Produto actualizado!');

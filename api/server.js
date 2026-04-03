@@ -252,6 +252,37 @@ async function initDB() {
   )`, [], 'turno_caixa');
   await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_avulso BOOLEAN NOT NULL DEFAULT FALSE`, [], 'alter-venda-avulso');
   await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade'`, [], 'alter-tipo-medicao');
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS em_stock_turno BOOLEAN NOT NULL DEFAULT TRUE`,
+    [],
+    'produtos-em-stock-turno'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_copo BOOLEAN NOT NULL DEFAULT FALSE`,
+    [],
+    'produtos-venda-por-copo'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS kg_por_copo NUMERIC(10,4) NOT NULL DEFAULT 0`,
+    [],
+    'produtos-kg-por-copo'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0`,
+    [],
+    'produtos-preco-copos-pacote'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote SMALLINT NOT NULL DEFAULT 0`,
+    [],
+    'produtos-qtd-copos-pacote'
+  );
+  await qry(
+    `UPDATE produtos SET venda_por_copo = true, kg_por_copo = 0.27, preco = 400, preco_copos_pacote = 1000, qtd_copos_pacote = 3, tipo_medicao = 'peso'
+     WHERE lower(trim(nome)) = 'fino' AND categoria = 'bebida' AND COALESCE(kg_por_copo, 0) = 0`,
+    [],
+    'produtos-fino-copo-default'
+  );
   /** Sem ALTER em utilizadores aqui: em BD restaurada o role da app não é owner → must be owner. criado_em já está no CREATE TABLE acima. */
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
@@ -399,7 +430,37 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31i-qualidade-readonly';
+const STOCKOS_API_BUILD = '2026-03-31-venda-copo-fino';
+
+/**
+ * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
+ * Opcional: STOCKOS_DEPLOY_TIER=develop|qualidade|production|preview|local (sobrepõe a detecção Vercel).
+ */
+function stockosDeploymentTier() {
+  const explicit = String(process.env.STOCKOS_DEPLOY_TIER || '').trim().toLowerCase();
+  if (['production', 'qualidade', 'develop', 'preview', 'local'].includes(explicit)) return explicit;
+  if (process.env.VERCEL_ENV === 'production') return 'production';
+  if (process.env.VERCEL_ENV === 'preview') {
+    const br = String(
+      process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || ''
+    ).toLowerCase();
+    if (br === 'qualidade') return 'qualidade';
+    if (br === 'develop') return 'develop';
+    return 'preview';
+  }
+  return 'local';
+}
+
+/** Use no código para funcionalidades experimentais: só true no preview do branch develop. */
+function isStockosDevelopOnly() {
+  return stockosDeploymentTier() === 'develop';
+}
+
+/** Diagnósticos extra (ex. GET /api/dev/info): develop na Vercel ou execução local. */
+function allowStockosDevDiagnostics() {
+  const t = stockosDeploymentTier();
+  return t === 'develop' || t === 'local';
+}
 
 /**
  * Ambiente «qualidade»: API só aceita leitura (GET/HEAD) + login POST.
@@ -420,6 +481,7 @@ function isStockosApiReadOnly() {
 app.use(cors({ origin: '*' }));
 app.use((req, res, next) => {
   res.setHeader('X-StockOS-Api-Build', STOCKOS_API_BUILD);
+  res.setHeader('X-StockOS-Tier', stockosDeploymentTier());
   if (isStockosApiReadOnly()) res.setHeader('X-StockOS-Read-Only', '1');
   next();
 });
@@ -859,8 +921,33 @@ async function assertTurnoFechado(turnoId) {
 
 // ── AUTH ──────────────────────────────────────────────────────
 app.get('/api/health', (req, res) =>
-  res.json({ status: 'ok', v: 4, build: STOCKOS_API_BUILD })
+  res.json({
+    status: 'ok',
+    v: 4,
+    build: STOCKOS_API_BUILD,
+    tier: stockosDeploymentTier(),
+    develop_only: isStockosDevelopOnly(),
+    read_only: isStockosApiReadOnly()
+  })
 );
+
+/** Informação de runtime útil em develop (e em local); 404 noutros tiers. */
+app.get('/api/dev/info', (req, res) => {
+  if (!allowStockosDevDiagnostics()) {
+    return res.status(404).json({ erro: 'Não encontrado' });
+  }
+  res.json({
+    build: STOCKOS_API_BUILD,
+    tier: stockosDeploymentTier(),
+    node: process.version,
+    uptime_s: Math.floor(process.uptime()),
+    vercel_url: process.env.VERCEL_URL || null,
+    git_ref: process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || null,
+    git_sha: process.env.VERCEL_GIT_COMMIT_SHA
+      ? String(process.env.VERCEL_GIT_COMMIT_SHA).slice(0, 7)
+      : null
+  });
+});
 
 
 app.get('/api/status', async (req, res) => {
@@ -893,6 +980,8 @@ async function handleDbCheck(req, res) {
     res.json({
       ok: true,
       build: STOCKOS_API_BUILD,
+      tier: stockosDeploymentTier(),
+      develop_only: isStockosDevelopOnly(),
       api_read_only: isStockosApiReadOnly(),
       ping: one.rows[0].ok === 1,
       tables_public: tabs.rows[0].n,
@@ -904,6 +993,8 @@ async function handleDbCheck(req, res) {
     res.status(500).json({
       ok: false,
       build: STOCKOS_API_BUILD,
+      tier: stockosDeploymentTier(),
+      develop_only: isStockosDevelopOnly(),
       api_read_only: isStockosApiReadOnly(),
       erro: String((e && e.message) || e),
       code: e && e.code
@@ -951,6 +1042,26 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0`, 'ordem');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE`, 'ativo');
   await run(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade'`, 'tipo_medicao');
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS em_stock_turno BOOLEAN NOT NULL DEFAULT TRUE`,
+    'produtos-em-stock-turno'
+  );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_copo BOOLEAN NOT NULL DEFAULT FALSE`,
+    'produtos-venda-por-copo'
+  );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS kg_por_copo NUMERIC(10,4) NOT NULL DEFAULT 0`,
+    'produtos-kg-por-copo'
+  );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0`,
+    'produtos-preco-copos-pacote'
+  );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote SMALLINT NOT NULL DEFAULT 0`,
+    'produtos-qtd-copos-pacote'
+  );
   await run(`CREATE TABLE IF NOT EXISTS armazem_stock (
     id SERIAL PRIMARY KEY,
     produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
@@ -1168,12 +1279,36 @@ app.get('/api/produtos', auth, async (req, res) => {
 
 app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    const { nome, preco, categoria, venda_avulso, tipo_medicao } = req.body;
+    const { nome, preco, categoria, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
+    const {
+      venda_por_copo,
+      kg_por_copo,
+      preco_copos_pacote,
+      qtd_copos_pacote
+    } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
+    const noTurno = em_stock_turno === undefined || em_stock_turno === null ? true : !!em_stock_turno;
+    const vpc = !!venda_por_copo;
+    const kgc = parseFloat(kg_por_copo) || 0;
+    const pcp = parseFloat(preco_copos_pacote) || 0;
+    const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
     const r = await query(
-      'INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
-      [nome, preco||0, categoria||'outro', maxOrdem.rows[0].n, !!venda_avulso, medicao]
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [
+        nome,
+        preco || 0,
+        categoria || 'outro',
+        maxOrdem.rows[0].n,
+        !!venda_avulso,
+        medicao,
+        noTurno,
+        vpc,
+        kgc,
+        pcp,
+        qcp
+      ]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -1181,12 +1316,59 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
 
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao } = req.body;
+    const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
+    const {
+      venda_por_copo,
+      kg_por_copo,
+      preco_copos_pacote,
+      qtd_copos_pacote
+    } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
-    const r = await query(
-      'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7 WHERE id=$8 RETURNING *',
-      [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, req.params.id]
-    );
+    const noTurno =
+      em_stock_turno === undefined || em_stock_turno === null ? undefined : !!em_stock_turno;
+    const vpc = !!venda_por_copo;
+    const kgc = parseFloat(kg_por_copo) || 0;
+    const pcp = parseFloat(preco_copos_pacote) || 0;
+    const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
+    const r =
+      noTurno === undefined
+        ? await query(
+            `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
+             venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11 WHERE id=$12 RETURNING *`,
+            [
+              nome,
+              preco,
+              categoria,
+              ordem,
+              ativo,
+              !!venda_avulso,
+              medicao,
+              vpc,
+              kgc,
+              pcp,
+              qcp,
+              req.params.id
+            ]
+          )
+        : await query(
+            `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
+             venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12 WHERE id=$13 RETURNING *`,
+            [
+              nome,
+              preco,
+              categoria,
+              ordem,
+              ativo,
+              !!venda_avulso,
+              medicao,
+              noTurno,
+              vpc,
+              kgc,
+              pcp,
+              qcp,
+              req.params.id
+            ]
+          );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -1635,7 +1817,7 @@ app.get('/api/dia', auth, async (req, res) => {
         `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem, p.tipo_medicao
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
-         WHERE ts.turno_id = ANY($1::int[])
+         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE
          ORDER BY ts.turno_id, p.ordem, p.nome`,
         [ids]
       ),
@@ -1671,6 +1853,7 @@ app.get('/api/dia', auth, async (req, res) => {
         `SELECT ts.produto_id, ts.deixado, t.data, t.nome
          FROM turno_stock ts
          JOIN turnos t ON ts.turno_id=t.id
+         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE
          WHERE ${conds}`,
         params
       );
@@ -1739,8 +1922,10 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
     );
     const turnoId = turno.rows[0].id;
 
-    // Criar entradas de stock para todos os produtos activos
-    const produtos = await client.query('SELECT id FROM produtos WHERE ativo=true ORDER BY ordem');
+    // Stock do turno: só produtos activos marcados para a folha de stock
+    const produtos = await client.query(
+      'SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE ORDER BY ordem'
+    );
     for (const p of produtos.rows) {
       // Pré-preencher "encontrado" com o "deixado" do turno anterior
       const prev = prevTurno(nome, data);
@@ -1779,9 +1964,34 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+/** Só admin: voltar a permitir edição após fecho (correcção de erros). */
+app.post('/api/turnos/:id/reabrir', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const r = await query(
+      "UPDATE turnos SET estado='aberto', fechado_em=NULL WHERE id=$1 AND estado='fechado' RETURNING *",
+      [req.params.id]
+    );
+    if (!r.rows.length) {
+      return res.status(400).json({ erro: 'Turno não encontrado ou já está aberto' });
+    }
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   try {
     const { produto_id, encontrado, deixado, fechados } = req.body;
+    const chk = await query(
+      'SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE',
+      [produto_id]
+    );
+    if (!chk.rows.length) {
+      return res.status(400).json({
+        erro: 'Este produto não está incluído na folha de stock do turno. Activa «Stock no turno» em Produtos.'
+      });
+    }
     const r = await query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados)
        VALUES ($1,$2,$3,$4,$5)
@@ -1841,6 +2051,16 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
     const tipoVal   = tipo   === 'tirar'  ? 'tirar'  : 'entrada';
     const origemVal = origem === 'compra' ? 'compra' : 'armazem';
     const precoVal  = origemVal === 'compra' ? (parseFloat(preco) || 0) : 0;
+
+    const emStock = await client.query(
+      'SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE',
+      [produto_id]
+    );
+    if (!emStock.rows.length) {
+      throw new Error(
+        'Este produto não está na folha de stock do turno. Activa «Stock no turno» em Produtos ou regista no armazém.'
+      );
+    }
 
     const registo = await client.query(
       'INSERT INTO turno_entradas (turno_id, produto_id, tipo, origem, preco, quantidade, notas) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
@@ -1995,7 +2215,7 @@ app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
        FROM turno_stock ts
        JOIN turnos t ON ts.turno_id=t.id
        JOIN produtos p ON ts.produto_id=p.id
-       WHERE t.data=$1`,
+       WHERE t.data=$1 AND p.em_stock_turno IS TRUE`,
       [data]
     );
 
@@ -2312,7 +2532,7 @@ app.delete('/api/receitas/:id', auth, requireRole('admin','gestor'), async (req,
 app.get('/api/turnos/:id/vendas', auth, async (req, res) => {
   try {
     const r = await query(
-      `SELECT tv.*, p.nome as produto_nome, p.preco
+      `SELECT tv.*, p.nome as produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo, p.preco_copos_pacote, p.qtd_copos_pacote
        FROM turno_vendas tv JOIN produtos p ON tv.produto_id=p.id
        WHERE tv.turno_id=$1 ORDER BY p.nome`,
       [req.params.id]
@@ -2328,50 +2548,70 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
     const turnoId = req.params.id;
     const { produto_id, quantidade } = req.body;
 
+    const prodRow = await client.query(
+      `SELECT venda_por_copo, kg_por_copo FROM produtos WHERE id=$1`,
+      [produto_id]
+    );
+    if (!prodRow.rows.length) throw new Error('Produto não encontrado');
+    const vendeCopo =
+      prodRow.rows[0].venda_por_copo === true && parseFloat(prodRow.rows[0].kg_por_copo) > 0;
+    const kgPorCopo = parseFloat(prodRow.rows[0].kg_por_copo) || 0;
+
+    const qtyCopos = vendeCopo
+      ? Math.max(0, Math.floor(parseFloat(quantidade) || 0))
+      : parseFloat(quantidade) || 0;
+
     const old = await client.query(
       'SELECT quantidade FROM turno_vendas WHERE turno_id=$1 AND produto_id=$2',
       [turnoId, produto_id]
     );
     const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
-    const delta = parseFloat(quantidade) - oldQty;
+    const delta = qtyCopos - oldQty;
 
     await client.query(
       `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
        ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
-      [turnoId, produto_id, quantidade]
+      [turnoId, produto_id, qtyCopos]
     );
 
     if (delta !== 0) {
-      // Expand recipe recursively: if a component itself has a recipe, use its ingredients instead
-      async function expandIngredientes(prodId, fator) {
-        const r = await client.query(
-          'SELECT componente_id, quantidade FROM receitas WHERE produto_id=$1',
-          [prodId]
-        );
-        if (r.rows.length === 0) {
-          // Leaf ingredient — subtract from stock directly
-          return [{ componente_id: prodId, quantidade: fator }];
-        }
-        const ingredientes = [];
-        for (const comp of r.rows) {
-          const sub = await expandIngredientes(comp.componente_id, fator * parseFloat(comp.quantidade));
-          ingredientes.push(...sub);
-        }
-        return ingredientes;
-      }
-
-      const ingredientes = await expandIngredientes(produto_id, delta);
-      // Aggregate in case the same ingredient appears multiple times
-      const totais = {};
-      for (const ing of ingredientes) {
-        totais[ing.componente_id] = (totais[ing.componente_id] || 0) + ing.quantidade;
-      }
-      for (const [compId, qtd] of Object.entries(totais)) {
+      if (vendeCopo) {
+        const kgDelta = delta * kgPorCopo;
         await client.query(
           `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
            WHERE turno_id=$2 AND produto_id=$3`,
-          [qtd, turnoId, compId]
+          [kgDelta, turnoId, produto_id]
         );
+      } else {
+        // Expand recipe recursively: if a component itself has a recipe, use its ingredients instead
+        async function expandIngredientes(prodId, fator) {
+          const r = await client.query(
+            'SELECT componente_id, quantidade FROM receitas WHERE produto_id=$1',
+            [prodId]
+          );
+          if (r.rows.length === 0) {
+            return [{ componente_id: prodId, quantidade: fator }];
+          }
+          const ingredientes = [];
+          for (const comp of r.rows) {
+            const sub = await expandIngredientes(comp.componente_id, fator * parseFloat(comp.quantidade));
+            ingredientes.push(...sub);
+          }
+          return ingredientes;
+        }
+
+        const ingredientes = await expandIngredientes(produto_id, delta);
+        const totais = {};
+        for (const ing of ingredientes) {
+          totais[ing.componente_id] = (totais[ing.componente_id] || 0) + ing.quantidade;
+        }
+        for (const [compId, qtd] of Object.entries(totais)) {
+          await client.query(
+            `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
+             WHERE turno_id=$2 AND produto_id=$3`,
+            [qtd, turnoId, compId]
+          );
+        }
       }
     }
 

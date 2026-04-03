@@ -165,6 +165,27 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .alert-error{background:#450a0a;color:#fca5a5;border:1px solid #7f1d1d}
 .alert-success{background:#14532d;color:#86efac;border:1px solid #166534}
 
+/* Estado de gravação no turno: altura estável, sem saltar o layout */
+.turno-msg{
+  min-height:1.35em;
+  margin-bottom:10px;
+  font-size:11px;
+  line-height:1.35;
+  color:#64748b;
+}
+.turno-msg-pending{color:#64748b;opacity:.72}
+.turno-msg-ok{color:#5eead4;opacity:.88}
+.turno-msg-errbox{
+  color:#fecaca;
+  font-size:11px;
+  line-height:1.4;
+  padding:6px 10px;
+  background:rgba(69,10,10,.4);
+  border-radius:6px;
+  border:1px solid rgba(127,29,29,.45);
+}
+.turno-msg-spacer{display:inline-block;min-height:1.35em;vertical-align:top}
+
 /* Utils */
 .text-center{text-align:center}
 .text-right{text-align:right}
@@ -543,6 +564,31 @@ function fileToDataUrl(file) {
 }
 function err(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-error">${msg}</div>`; }
 function suc(id, msg) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="alert alert-success">${msg}</div>`; }
+
+function turnoMsgIdle() {
+  const el = document.getElementById('turno-msg');
+  if (!el) return;
+  el.className = 'turno-msg';
+  el.innerHTML = '<span class="turno-msg-spacer">&nbsp;</span>';
+}
+function turnoMsgPending(t) {
+  const el = document.getElementById('turno-msg');
+  if (!el) return;
+  el.className = 'turno-msg turno-msg-pending';
+  el.textContent = t || 'A guardar…';
+}
+function turnoMsgOk(t) {
+  const el = document.getElementById('turno-msg');
+  if (!el) return;
+  el.className = 'turno-msg turno-msg-ok';
+  el.textContent = t || 'Guardado';
+}
+function turnoMsgErr(msg) {
+  const el = document.getElementById('turno-msg');
+  if (!el) return;
+  el.className = 'turno-msg turno-msg-errbox';
+  el.textContent = String(msg || 'Erro');
+}
 
 /**
  * Evita duplo clique: desactiva o controlo e mostra «A processar…» até a Promise terminar.
@@ -1258,7 +1304,7 @@ async function drawTurno() {
       <div id="turno-header-actions"></div>
     </div>
     <div id="content">
-      <div id="turno-msg"></div>
+      <div id="turno-msg" class="turno-msg" aria-live="polite"><span class="turno-msg-spacer">&nbsp;</span></div>
       <div id="turno-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
     </div>
     ${navBar()}
@@ -1794,15 +1840,14 @@ let autoSaveTimer = null;
 function autoSaveSchedule() {
   const turnoId = S.turnoData?.id;
   if (!turnoId) return;
-  const el = document.getElementById('turno-msg');
-  if (el) { el.className='alert'; el.textContent='A guardar...'; el.style.opacity='.5'; }
+  turnoMsgPending('A guardar…');
   clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(() => guardarStock(turnoId), 2000);
 }
 
 async function guardarStock(turnoId) {
   try {
-    show('turno-msg','');
+    turnoMsgPending('A guardar…');
     const proms = Object.entries(stockBuf).map(([pid, v]) =>
       api('PUT', `/turnos/${turnoId}/stock`, {
         produto_id: pid,
@@ -1812,9 +1857,9 @@ async function guardarStock(turnoId) {
       })
     );
     await Promise.all(proms);
-    suc('turno-msg', '✓ Guardado');
-    setTimeout(() => show('turno-msg',''), 2000);
-  } catch(e) { err('turno-msg', e.message); }
+    turnoMsgOk('Guardado');
+    setTimeout(() => turnoMsgIdle(), 1600);
+  } catch(e) { turnoMsgErr(e.message); }
 }
 
 let autoSaveCaixaTimer = null;
@@ -1832,8 +1877,7 @@ function calcCaixa() {
   // Auto-save
   const turnoId = S.turnoData?.id;
   if (!turnoId) return;
-  const el = document.getElementById('turno-msg');
-  if (el) { el.className='alert'; el.textContent='A guardar...'; el.style.opacity='.5'; }
+  turnoMsgPending('A guardar…');
   clearTimeout(autoSaveCaixaTimer);
   autoSaveCaixaTimer = setTimeout(() => guardarCaixa(turnoId), 2000);
 }
@@ -1913,23 +1957,23 @@ async function focusTurnoFieldParaValidacao(el) {
 
 async function guardarCaixa(turnoId) {
   try {
-    show('turno-msg','');
+    turnoMsgPending('A guardar…');
     await api('PUT', `/turnos/${turnoId}/caixa`, {
       tpa:          parseFloat(document.getElementById('c-tpa')?.value)||0,
       transferencia:parseFloat(document.getElementById('c-transf')?.value)||0,
       dinheiro:     parseFloat(document.getElementById('c-din')?.value)||0
     });
-    suc('turno-msg', '✓ Guardado');
-    setTimeout(() => show('turno-msg',''), 2000);
-  } catch(e) { err('turno-msg', e.message); }
+    turnoMsgOk('Guardado');
+    setTimeout(() => turnoMsgIdle(), 1600);
+  } catch(e) { turnoMsgErr(e.message); }
 }
 
 async function saveTurnoNotas(turnoId, notas) {
   try {
     await api('PUT', `/turnos/${turnoId}/notas`, { notas });
-    suc('turno-msg', '✓ Observações guardadas');
-    setTimeout(() => show('turno-msg',''), 2000);
-  } catch(e) { err('turno-msg', e.message); }
+    turnoMsgOk('Observações guardadas');
+    setTimeout(() => turnoMsgIdle(), 2000);
+  } catch(e) { turnoMsgErr(e.message); }
 }
 
 async function fecharTurno(ev, id) {
@@ -1940,8 +1984,7 @@ async function fecharTurno(ev, id) {
   const missing = collectMissingStockCaixaObrigatorio();
   if (missing.length) {
     missing.forEach((el) => el.classList.add('stock-caixa-required-missing'));
-    err(
-      'turno-msg',
+    turnoMsgErr(
       'Preenche todos os campos obrigatórios: em Stock (Encontrado, Deixado e Fechados de cada produto) e em Caixa (TPA, Transferência e Dinheiro). Podes usar 0 quando for o caso.'
     );
     await focusTurnoFieldParaValidacao(missing[0]);
@@ -1956,7 +1999,7 @@ async function fecharTurno(ev, id) {
       clearStockCaixaValidationHighlight();
       await loadTurno();
     } catch (e) {
-      err('turno-msg', e.message);
+      turnoMsgErr(e.message);
     }
   });
 }
@@ -1966,11 +2009,11 @@ async function reabrirTurno(ev, id) {
   await runAction(ev, async () => {
     try {
       await api('POST', `/turnos/${id}/reabrir`);
-      suc('turno-msg', 'Turno reaberto.');
-      setTimeout(() => show('turno-msg', ''), 2500);
+      turnoMsgOk('Turno reaberto.');
+      setTimeout(() => turnoMsgIdle(), 2200);
       await loadTurno();
     } catch (e) {
-      err('turno-msg', e.message);
+      turnoMsgErr(e.message);
     }
   });
 }

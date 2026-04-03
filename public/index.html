@@ -399,6 +399,15 @@ function fmtCaixaAttr(v) {
   const n = parseFloat(v);
   return Number.isFinite(n) ? String(n) : '';
 }
+/** Preço total em copos: pacotes (ex. 3×1000) + resto ao preço unitário (ex. 400/copo). */
+function precoVendaCopos(copos, precoUnit, qtdPacote, precoPacote) {
+  const c = Math.max(0, Math.floor(parseFloat(copos) || 0));
+  const u = parseFloat(precoUnit) || 0;
+  const n = parseInt(qtdPacote, 10) || 0;
+  const p = parseFloat(precoPacote) || 0;
+  if (n >= 2 && p > 0) return Math.floor(c / n) * p + (c % n) * u;
+  return c * u;
+}
 /** Valor inicial para inputs numéricos de stock (Encontrado / Deixado / Fechados). */
 function fmtStockNumberAttr(v) {
   if (v === '' || v === null || v === undefined) return '0';
@@ -482,6 +491,21 @@ function mondayOfWeekIso(dateStr) {
 function render(html) { document.getElementById('app').innerHTML = html; }
 function show(id, html) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
 function val(id) { return document.getElementById(id)?.value || ''; }
+
+function readProdutoCopoFields() {
+  const cat = val('p-cat');
+  const copo = cat === 'bebida' && document.getElementById('p-copo')?.checked;
+  const kg = copo ? (parseFloat(val('p-kg-copo')) || 0) : 0;
+  const precoPac = copo && kg > 0 ? (parseFloat(val('p-preco-pacote')) || 0) : 0;
+  let qtdPac = copo && kg > 0 ? (parseInt(val('p-qtd-pacote'), 10) || 0) : 0;
+  if (copo && kg > 0 && qtdPac < 1) qtdPac = 3;
+  return {
+    venda_por_copo: !!(copo && kg > 0),
+    kg_por_copo: copo ? kg : 0,
+    preco_copos_pacote: precoPac,
+    qtd_copos_pacote: qtdPac
+  };
+}
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -1232,7 +1256,9 @@ let stockBuf = {};
 let caixaBuf = {};
 let receitasBuf = {}; // { produto_id: [{componente_id, quantidade}] }
 let menuProdIds   = []; // ids dos produtos de menu (inserção manual)
-let bebidaProdIds = []; // ids das bebidas registadas em Vendas
+let bebidaProdIds = []; // ids das bebidas (só unidade / stock) em Vendas
+let bebidaCopoProdIds = []; // bebidas vendidas por copo (+/−)
+let bebidaCopoCfg = {}; // { id: { kgPorCopo, preco, qtdPacote, precoPacote } }
 let bebidaProdPrecos = {}; // { produto_id: preco } para calcular total
 let avulsoProdIds = []; // ids dos ingredientes com venda_avulso=true
 let vendasProdPrecos = {}; // { produto_id: preco } para todos os produtos de vendas
@@ -1265,6 +1291,10 @@ function refreshMenuQtys() {
     const el = document.getElementById(`venda-qty-${prodId}`);
     if (el) el.textContent = vendasBuf[prodId] || 0;
   }
+  for (const prodId of bebidaCopoProdIds) {
+    const el = document.getElementById(`venda-qty-${prodId}`);
+    if (el) el.textContent = String(vendasBuf[prodId] || 0);
+  }
   for (const prodId of bebidaProdIds) {
     const el = document.getElementById(`venda-qty-${prodId}`);
     const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
@@ -1289,6 +1319,12 @@ function refreshVendasTotal() {
   // Avulso
   for (const prodId of avulsoProdIds) {
     total += calcStandaloneQty(prodId) * (vendasProdPrecos[prodId] || 0);
+  }
+  for (const prodId of bebidaCopoProdIds) {
+    const cfg = bebidaCopoCfg[prodId];
+    if (!cfg) continue;
+    const copos = vendasBuf[prodId] || 0;
+    total += precoVendaCopos(copos, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
   }
   // Bebidas (baseado no vendido do stock)
   for (const prodId of bebidaProdIds) {
@@ -1602,15 +1638,48 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     }).join('');
 
-    bebidaProdIds = bebidaProds.map(p => p.id);
+    const bebidaCopoProds = bebidaProds.filter((p) => p.venda_por_copo && parseFloat(p.kg_por_copo) > 0);
+    const bebidaOutras = bebidaProds.filter((p) => !p.venda_por_copo || !(parseFloat(p.kg_por_copo) > 0));
+    bebidaCopoProdIds = bebidaCopoProds.map((p) => p.id);
+    bebidaCopoCfg = {};
+    bebidaCopoProds.forEach((p) => {
+      bebidaCopoCfg[p.id] = {
+        kgPorCopo: parseFloat(p.kg_por_copo) || 0,
+        preco: parseFloat(p.preco) || 0,
+        qtdPacote: parseInt(p.qtd_copos_pacote, 10) || 0,
+        precoPacote: parseFloat(p.preco_copos_pacote) || 0
+      };
+    });
+    bebidaProdIds = bebidaOutras.map((p) => p.id);
     bebidaProdPrecos = {};
-    const bebidaRows = bebidaProds.map(p => {
+    const bebidaCopoRows = bebidaCopoProds.map((p) => {
+      const cfg = bebidaCopoCfg[p.id];
+      const copos = vendasBuf[p.id] || 0;
+      const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
+      const kgStock = Math.max(0, b.encontrado + b.entrada - b.deixado);
+      const precoLinha =
+        cfg.qtdPacote >= 2 && cfg.precoPacote > 0
+          ? `${fmt(cfg.preco)}/copo · ${cfg.qtdPacote} copos ${fmt(cfg.precoPacote)}`
+          : `${fmt(cfg.preco)}/copo`;
+      return `<div class="produto-row" style="align-items:center">
+        <div class="produto-info">
+          <div class="produto-nome">${p.nome} <span style="font-size:10px;color:#64748b;font-weight:600">(copos)</span></div>
+          <div class="produto-meta">${precoLinha} · ${fmtNum(cfg.kgPorCopo)} kg/copo · stock ~${fmtNum(kgStock)} kg</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',-1))" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
+          <span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${copos}</span>
+          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',1))" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+    const bebidaRows = bebidaOutras.map((p) => {
       bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
       const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
       const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
       return `<div class="produto-row" style="align-items:center">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
-          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
+          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)} · stock ${fmtNum(qty)} un</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${fmtNum(qty)}</span>
@@ -1636,7 +1705,8 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     const html = (menuProds.length ? groupHeader('🍽️ Menu') + toGrid(menuRows) : '')
                + (avulsoProds.length ? groupHeader('🛒 Avulso') + toGrid(avulsoRows) : '')
-               + (bebidaProds.length ? groupHeader('🥤 Bebidas') + toGrid(bebidaRows) : '')
+               + (bebidaCopoProds.length ? groupHeader('🥤 Bebidas (por copo)') + toGrid(bebidaCopoRows) : '')
+               + (bebidaOutras.length ? groupHeader('🥤 Bebidas (unidade)') + toGrid(bebidaRows) : '')
                + totalRow;
     show('vendas-menu-list', html);
     refreshVendasTotal();
@@ -1648,14 +1718,20 @@ async function loadVendasMenu(turnoId, canEdit) {
 async function deltaVenda(turnoId, prodId, delta) {
   vendasBuf[prodId] = Math.max(0, (vendasBuf[prodId] || 0) + delta);
   const el = document.getElementById(`venda-qty-${prodId}`);
-  if (el) el.textContent = vendasBuf[prodId];
+  if (el) el.textContent = String(vendasBuf[prodId] ?? 0);
   refreshVendasTotal();
   try {
     await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: vendasBuf[prodId] });
+    const cfg = bebidaCopoCfg[prodId];
+    if (cfg && cfg.kgPorCopo > 0) {
+      if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
+      const kgAdj = -delta * cfg.kgPorCopo;
+      stockBuf[prodId].deixado = Math.max(0, (parseFloat(stockBuf[prodId].deixado) || 0) + kgAdj);
+      updateStock(prodId, 'deixado', fmtStockNumberAttr(stockBuf[prodId].deixado));
+    }
   } catch(e) {
-    // reverter no erro
     vendasBuf[prodId] = Math.max(0, vendasBuf[prodId] - delta);
-    if (el) el.textContent = vendasBuf[prodId];
+    if (el) el.textContent = String(vendasBuf[prodId] ?? 0);
     refreshVendasTotal();
     alert('Erro ao registar venda: ' + e.message);
   }
@@ -2175,8 +2251,24 @@ async function loadResumoTab(turnoId) {
         const val = qty * preco;
         totalVendasVal += val;
         const si  = stocks.find(s => String(s.produto_id) === String(pid));
-        vendasLines.push({ nome: si?.produto_nome || `Produto ${pid}`, qty, preco, total: val });
+        vendasLines.push({ nome: si?.produto_nome || `Produto ${pid}`, qty, preco, total: val, copo: false });
       }
+    });
+    bebidaCopoProdIds.forEach((pid) => {
+      const qty = vendasBuf[pid] || 0;
+      if (qty <= 0) return;
+      const cfg = bebidaCopoCfg[pid];
+      if (!cfg) return;
+      const val = precoVendaCopos(qty, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
+      totalVendasVal += val;
+      const si = stocks.find((s) => String(s.produto_id) === String(pid));
+      vendasLines.push({
+        nome: `${si?.produto_nome || `Produto ${pid}`} (copos)`,
+        qty,
+        preco: cfg.preco,
+        total: val,
+        copo: true
+      });
     });
 
     // — Irregularidades —
@@ -2267,17 +2359,17 @@ async function loadResumoTab(turnoId) {
 
     const vendasCard = vendasLines.length > 0 ? `
       <div class="card mt-16">
-        <div class="card-title">🍽️ Resumo de Vendas (Menu)</div>
+        <div class="card-title">🍽️ Resumo de Vendas</div>
         ${vendasLines.map(v => `
           <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1e293b">
             <span style="font-size:13px;color:#cbd5e1">${v.nome}</span>
             <span style="display:flex;gap:14px;align-items:center">
-              <span style="color:#64748b;font-size:12px">${v.qty} × ${fmt(v.preco)}</span>
+              <span style="color:#64748b;font-size:12px">${v.copo ? `${v.qty} copos` : `${v.qty} × ${fmt(v.preco)}`}</span>
               <span style="font-weight:600;color:#e2e8f0;min-width:72px;text-align:right">${fmt(v.total)}</span>
             </span>
           </div>`).join('')}
         <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:2px solid #334155">
-          <span style="font-weight:600;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.05em">Total Vendas Menu</span>
+          <span style="font-weight:600;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.05em">Total Vendas</span>
           <span style="font-weight:700;color:#4ade80">${fmt(totalVendasVal)}</span>
         </div>
       </div>` : '';
@@ -3127,7 +3219,7 @@ async function loadProdutos() {
           ${items.map(p => `
             <div class="produto-row">
               <div class="produto-info">
-                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">só armazém</span>' : ''}</div>
+                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.venda_por_copo && parseFloat(p.kg_por_copo) > 0 ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">só armazém</span>' : ''}</div>
                 <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
               </div>
               ${isAdmin ? `
@@ -3173,11 +3265,18 @@ function showProdutoForm(id) {
       '</div>' +
       '<div id="prod-form-msg"></div>' +
       '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
-      '<div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
+      '<div class="field"><label id="p-preco-label">Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
       '<div class="field"><label>Medição</label><select id="p-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
       '<div class="field" id="field-avulso"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso</label></div>' +
       '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Folha de stock do turno</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Se desmarcares, o produto não entra na contagem ao abrir turno (útil para consumíveis só de armazém).</div></div>' +
+      '<div id="field-copo-bebida" style="display:none;margin-top:6px;border-left:2px solid #334155;padding-left:10px">' +
+        '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-copo" style="width:16px;height:16px"> Venda por copo</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Stock em kg no turno; registo de vendas em copos. O preço acima é por copo avulso.</div></div>' +
+        '<div id="field-copo-detalhes" style="display:none">' +
+          '<div class="field"><label>kg por copo</label><input id="p-kg-copo" type="number" step="0.001" min="0" value="0.27"/></div>' +
+          '<div class="field"><label>Preço do pacote (Kz)</label><input id="p-preco-pacote" type="number" min="0" step="1" value="0"/></div>' +
+          '<div class="field"><label>Nº copos no pacote</label><input id="p-qtd-pacote" type="number" min="1" step="1" value="3"/></div>' +
+        '</div></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
       (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +
@@ -3198,6 +3297,40 @@ function showProdutoForm(id) {
   if (p) document.getElementById('p-avulso').checked = !!p.venda_avulso;
   const st = document.getElementById('p-stock-turno');
   if (st) st.checked = p ? p.em_stock_turno !== false : true;
+  const pcopo = document.getElementById('p-copo');
+  const pkg = document.getElementById('p-kg-copo');
+  const ppac = document.getElementById('p-preco-pacote');
+  const qpac = document.getElementById('p-qtd-pacote');
+  if (p && pcopo && pkg) {
+    const k = parseFloat(p.kg_por_copo) || 0;
+    pcopo.checked = !!(p.venda_por_copo && k > 0);
+    pkg.value = k > 0 ? k : 0.27;
+    if (ppac) ppac.value = p.preco_copos_pacote != null ? p.preco_copos_pacote : 0;
+    if (qpac) qpac.value = p.qtd_copos_pacote != null && parseInt(p.qtd_copos_pacote, 10) > 0 ? p.qtd_copos_pacote : 3;
+  } else if (pcopo) {
+    pcopo.checked = false;
+    if (pkg) pkg.value = 0.27;
+    if (ppac) ppac.value = 0;
+    if (qpac) qpac.value = 3;
+  }
+
+  function syncPrecoLabelCopo() {
+    const lbl = document.getElementById('p-preco-label');
+    if (!lbl) return;
+    const cat = document.getElementById('p-cat')?.value;
+    const c = document.getElementById('p-copo')?.checked;
+    lbl.textContent = (cat === 'bebida' && c) ? 'Preço por copo (Kz)' : 'Preço (Kz)';
+  }
+  function toggleCopoBebida() {
+    const fb = document.getElementById('field-copo-bebida');
+    if (fb) fb.style.display = document.getElementById('p-cat')?.value === 'bebida' ? '' : 'none';
+    syncPrecoLabelCopo();
+  }
+  function toggleCopoDetalhes() {
+    const d = document.getElementById('field-copo-detalhes');
+    if (d) d.style.display = document.getElementById('p-copo')?.checked ? '' : 'none';
+    syncPrecoLabelCopo();
+  }
 
   function toggleAvulso() {
     const cat = document.getElementById('p-cat').value;
@@ -3214,8 +3347,16 @@ function showProdutoForm(id) {
       sec.style.display = 'none';
     }
   }
-  document.getElementById('p-cat').addEventListener('change', () => { toggleAvulso(); if (isEdit && canEditReceita) toggleReceita(); });
+  document.getElementById('p-cat').addEventListener('change', () => {
+    toggleAvulso();
+    toggleCopoBebida();
+    toggleCopoDetalhes();
+    if (isEdit && canEditReceita) toggleReceita();
+  });
+  document.getElementById('p-copo')?.addEventListener('change', toggleCopoDetalhes);
   toggleAvulso();
+  toggleCopoBebida();
+  toggleCopoDetalhes();
   if (isEdit && canEditReceita) toggleReceita();
 
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
@@ -3231,7 +3372,17 @@ function showProdutoForm(id) {
 
 async function createProduto() {
   try {
-    await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,tipo_medicao:val('p-medicao'),categoria:val('p-cat'),venda_avulso:document.getElementById('p-avulso')?.checked||false,em_stock_turno:!!document.getElementById('p-stock-turno')?.checked});
+    const copo = readProdutoCopoFields();
+    const med = copo.venda_por_copo && copo.kg_por_copo > 0 ? 'peso' : val('p-medicao');
+    await api('POST','/produtos',{
+      nome: val('p-nome'),
+      preco: parseFloat(val('p-preco')) || 0,
+      tipo_medicao: med,
+      categoria: val('p-cat'),
+      venda_avulso: document.getElementById('p-avulso')?.checked || false,
+      em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
+      ...copo
+    });
     closeProdutoModal();
     suc('prod-msg','Produto criado!');
     setTimeout(()=>show('prod-msg',''),2000);
@@ -3241,13 +3392,16 @@ async function createProduto() {
 
 async function saveProduto(id) {
   try {
+    const copo = readProdutoCopoFields();
+    const med = copo.venda_por_copo && copo.kg_por_copo > 0 ? 'peso' : val('p-medicao');
     await api('PUT',`/produtos/${id}`,{
       nome: val('p-nome'), preco: parseFloat(val('p-preco'))||0,
-      tipo_medicao: val('p-medicao'),
+      tipo_medicao: med,
       categoria: val('p-cat'), ordem: parseInt(val('p-ordem'))||0,
       ativo: val('p-ativo')==='true',
       venda_avulso: document.getElementById('p-avulso')?.checked||false,
-      em_stock_turno: !!document.getElementById('p-stock-turno')?.checked
+      em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
+      ...copo
     });
     closeProdutoModal();
     suc('prod-msg','Produto actualizado!');

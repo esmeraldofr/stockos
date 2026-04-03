@@ -257,6 +257,32 @@ async function initDB() {
     [],
     'produtos-em-stock-turno'
   );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_copo BOOLEAN NOT NULL DEFAULT FALSE`,
+    [],
+    'produtos-venda-copo'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS kg_por_copo NUMERIC(10,4) NOT NULL DEFAULT 0`,
+    [],
+    'produtos-kg-copo'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0`,
+    [],
+    'produtos-preco-pacote-copo'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote INTEGER NOT NULL DEFAULT 0`,
+    [],
+    'produtos-qtd-pacote-copo'
+  );
+  await qry(
+    `UPDATE produtos SET venda_por_copo=true, kg_por_copo=0.27, preco=400, preco_copos_pacote=1000, qtd_copos_pacote=3, tipo_medicao='peso'
+     WHERE LOWER(TRIM(nome))='fino' AND categoria='bebida' AND COALESCE(kg_por_copo,0)=0`,
+    [],
+    'produtos-seed-fino-copo'
+  );
   /** Sem ALTER em utilizadores aqui: em BD restaurada o role da app não é owner → must be owner. criado_em já está no CREATE TABLE acima. */
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
@@ -404,7 +430,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-reabrir-turno-admin';
+const STOCKOS_API_BUILD = '2026-03-31-venda-copo-stock-num';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -1020,6 +1046,27 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS em_stock_turno BOOLEAN NOT NULL DEFAULT TRUE`,
     'produtos-em-stock-turno'
   );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_copo BOOLEAN NOT NULL DEFAULT FALSE`,
+    'produtos-venda-copo'
+  );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS kg_por_copo NUMERIC(10,4) NOT NULL DEFAULT 0`,
+    'produtos-kg-copo'
+  );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0`,
+    'produtos-preco-pacote-copo'
+  );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote INTEGER NOT NULL DEFAULT 0`,
+    'produtos-qtd-pacote-copo'
+  );
+  await run(
+    `UPDATE produtos SET venda_por_copo=true, kg_por_copo=0.27, preco=400, preco_copos_pacote=1000, qtd_copos_pacote=3, tipo_medicao='peso'
+     WHERE LOWER(TRIM(nome))='fino' AND categoria='bebida' AND COALESCE(kg_por_copo,0)=0`,
+    'produtos-seed-fino-copo'
+  );
   await run(`CREATE TABLE IF NOT EXISTS armazem_stock (
     id SERIAL PRIMARY KEY,
     produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
@@ -1237,13 +1284,42 @@ app.get('/api/produtos', auth, async (req, res) => {
 
 app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    const { nome, preco, categoria, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
+    const {
+      nome,
+      preco,
+      categoria,
+      venda_avulso,
+      tipo_medicao,
+      em_stock_turno,
+      venda_por_copo,
+      kg_por_copo,
+      preco_copos_pacote,
+      qtd_copos_pacote
+    } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
     const noTurno = em_stock_turno === undefined || em_stock_turno === null ? true : !!em_stock_turno;
+    const vpc = !!venda_por_copo && (categoria || 'outro') === 'bebida';
+    const kgc = vpc ? parseFloat(kg_por_copo) || 0 : 0;
+    const kgcF = kgc > 0 ? kgc : 0;
+    const pcp = kgcF > 0 ? parseFloat(preco_copos_pacote) || 0 : 0;
+    const qcp = kgcF > 0 ? parseInt(qtd_copos_pacote, 10) || 0 : 0;
     const r = await query(
-      'INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
-      [nome, preco||0, categoria||'outro', maxOrdem.rows[0].n, !!venda_avulso, medicao, noTurno]
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [
+        nome,
+        preco || 0,
+        categoria || 'outro',
+        maxOrdem.rows[0].n,
+        !!venda_avulso,
+        medicao,
+        noTurno,
+        kgcF > 0,
+        kgcF,
+        pcp,
+        qcp
+      ]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -1251,18 +1327,39 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
 
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
+    const {
+      nome,
+      preco,
+      categoria,
+      ordem,
+      ativo,
+      venda_avulso,
+      tipo_medicao,
+      em_stock_turno,
+      venda_por_copo,
+      kg_por_copo,
+      preco_copos_pacote,
+      qtd_copos_pacote
+    } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const noTurno =
       em_stock_turno === undefined || em_stock_turno === null ? undefined : !!em_stock_turno;
+    const vpc = !!venda_por_copo && (categoria || '') === 'bebida';
+    const kgc = vpc ? parseFloat(kg_por_copo) || 0 : 0;
+    const kgcF = kgc > 0 ? kgc : 0;
+    const pcp = kgcF > 0 ? parseFloat(preco_copos_pacote) || 0 : 0;
+    const qcp = kgcF > 0 ? parseInt(qtd_copos_pacote, 10) || 0 : 0;
+    const copoVals = [kgcF > 0, kgcF, pcp, qcp];
     const r = noTurno === undefined
       ? await query(
-          'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7 WHERE id=$8 RETURNING *',
-          [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, req.params.id]
+          `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
+           venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11 WHERE id=$12 RETURNING *`,
+          [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, ...copoVals, req.params.id]
         )
       : await query(
-          'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8 WHERE id=$9 RETURNING *',
-          [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, noTurno, req.params.id]
+          `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
+           venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12 WHERE id=$13 RETURNING *`,
+          [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, noTurno, ...copoVals, req.params.id]
         );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -2427,7 +2524,8 @@ app.delete('/api/receitas/:id', auth, requireRole('admin','gestor'), async (req,
 app.get('/api/turnos/:id/vendas', auth, async (req, res) => {
   try {
     const r = await query(
-      `SELECT tv.*, p.nome as produto_nome, p.preco
+      `SELECT tv.*, p.nome as produto_nome, p.preco,
+              p.venda_por_copo, p.kg_por_copo, p.preco_copos_pacote, p.qtd_copos_pacote
        FROM turno_vendas tv JOIN produtos p ON tv.produto_id=p.id
        WHERE tv.turno_id=$1 ORDER BY p.nome`,
       [req.params.id]
@@ -2443,20 +2541,42 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
     const turnoId = req.params.id;
     const { produto_id, quantidade } = req.body;
 
+    const prodInfo = await client.query(
+      'SELECT venda_por_copo, kg_por_copo FROM produtos WHERE id=$1',
+      [produto_id]
+    );
+    const prow = prodInfo.rows[0];
+    const isCopo =
+      prow && prow.venda_por_copo === true && parseFloat(prow.kg_por_copo) > 0;
+
+    let newQty = parseFloat(quantidade);
+    if (isCopo) newQty = Math.max(0, Math.floor(newQty));
+
     const old = await client.query(
       'SELECT quantidade FROM turno_vendas WHERE turno_id=$1 AND produto_id=$2',
       [turnoId, produto_id]
     );
     const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
-    const delta = parseFloat(quantidade) - oldQty;
+    const delta = newQty - oldQty;
 
     await client.query(
       `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
        ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
-      [turnoId, produto_id, quantidade]
+      [turnoId, produto_id, newQty]
     );
 
     if (delta !== 0) {
+      if (isCopo) {
+        const kg = delta * parseFloat(prow.kg_por_copo);
+        await client.query(
+          `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
+           WHERE turno_id=$2 AND produto_id=$3`,
+          [kg, turnoId, produto_id]
+        );
+        await client.query('COMMIT');
+        res.json({ sucesso: true });
+        return;
+      }
       // Expand recipe recursively: if a component itself has a recipe, use its ingredients instead
       async function expandIngredientes(prodId, fator) {
         const r = await client.query(

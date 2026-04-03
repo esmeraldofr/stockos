@@ -404,7 +404,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-01-develop-ux';
+const STOCKOS_API_BUILD = '2026-03-31-reabrir-turno-admin';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -1857,6 +1857,22 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
     if (!r.rows.length) return res.status(400).json({ erro: 'Turno não encontrado ou já fechado' });
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Só admin: voltar a permitir edição após fecho (correcção de erros). */
+app.post('/api/turnos/:id/reabrir', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const r = await query(
+      "UPDATE turnos SET estado='aberto', fechado_em=NULL WHERE id=$1 AND estado='fechado' RETURNING *",
+      [req.params.id]
+    );
+    if (!r.rows.length) {
+      return res.status(400).json({ erro: 'Turno não encontrado ou já está aberto' });
+    }
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 app.put('/api/turnos/:id/stock', auth, async (req, res) => {

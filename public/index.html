@@ -1303,9 +1303,13 @@ async function loadTurno() {
     const canEdit  = isAberto;
     S.turnoCanEdit = canEdit;
 
+    const isAdminUser = S.user?.role === 'admin';
+    const reabrirBtn = !isAberto && isAdminUser
+      ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="reabrirTurno(event, '${turno.id}')">Reabrir</button>`
+      : '';
     show('turno-header-actions', isAberto
       ? `<button type="button" class="btn btn-danger btn-sm" onclick="fecharTurno(event, '${turno.id}')">Fechar</button>`
-      : '<span class="badge badge-grey">Fechado</span>'
+      : `<span class="badge badge-grey">Fechado</span>${reabrirBtn}`
     );
 
     // Separar comida e bebida
@@ -1737,6 +1741,20 @@ async function fecharTurno(ev, id) {
       await api('POST', `/turnos/${id}/fechar`);
       await loadTurno();
     } catch (e) { err('turno-msg', e.message); }
+  });
+}
+
+async function reabrirTurno(ev, id) {
+  if (!confirm('Reabrir este turno? Voltará a poder editar stock, caixa e registos. Usar só para corrigir erros.')) return;
+  await runAction(ev, async () => {
+    try {
+      await api('POST', `/turnos/${id}/reabrir`);
+      suc('turno-msg', 'Turno reaberto.');
+      setTimeout(() => show('turno-msg', ''), 2500);
+      await loadTurno();
+    } catch (e) {
+      err('turno-msg', e.message);
+    }
   });
 }
 

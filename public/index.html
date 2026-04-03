@@ -160,6 +160,21 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .produto-meta{font-size:12px;color:#64748b}
 .produto-actions{display:flex;gap:6px}
 
+/* Vendas (turno): grid em vez de CSS columns — evita sobreposição com linhas altas (bebidas por copo) */
+.vendas-menu-2col{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  column-gap:16px;
+  align-items:start;
+}
+.vendas-menu-2col .produto-row{
+  align-items:flex-start;
+  min-width:0;
+}
+@media(max-width:540px){
+  .vendas-menu-2col{grid-template-columns:1fr}
+}
+
 /* Alert */
 .alert{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:12px}
 .alert-error{background:#450a0a;color:#fca5a5;border:1px solid #7f1d1d}
@@ -1687,11 +1702,11 @@ async function loadVendasMenu(turnoId, canEdit) {
     const btnStyle = 'width:28px;height:28px;border-radius:6px;border:none;font-size:1.1rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;';
     const menuRows = menuProds.map(p => {
       const qty = vendasBuf[p.id] || 0;
-      return `<div class="produto-row" style="align-items:center">
+      return `<div class="produto-row">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
           ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
         </div>
-        <div style="display:flex;align-items:center;gap:6px">
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">
           ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',-1))" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
           <span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${qty}</span>
           ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',1))" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
@@ -1722,12 +1737,12 @@ async function loadVendasMenu(turnoId, canEdit) {
         cfg.qtdPacote >= 2 && cfg.precoPacote > 0
           ? `${fmt(cfg.preco)}/copo · ${cfg.qtdPacote} copos ${fmt(cfg.precoPacote)}`
           : `${fmt(cfg.preco)}/copo`;
-      return `<div class="produto-row" style="align-items:center">
+      return `<div class="produto-row">
         <div class="produto-info">
           <div class="produto-nome">${p.nome} <span style="font-size:10px;color:#64748b;font-weight:600">(copos)</span></div>
-          <div class="produto-meta">${precoLinha} · ${fmtNum(cfg.kgPorCopo)} kg/copo · stock ~${fmtNum(kgStock)} kg</div>
+          <div class="produto-meta" style="line-height:1.35">${precoLinha} · ${fmtNum(cfg.kgPorCopo)} kg/copo · stock ~${fmtNum(kgStock)} kg</div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px">
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">
           ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',-1))" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
           <span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${copos}</span>
           ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',1))" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
@@ -1738,11 +1753,11 @@ async function loadVendasMenu(turnoId, canEdit) {
       bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
       const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
       const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
-      return `<div class="produto-row" style="align-items:center">
+      return `<div class="produto-row">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
           ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)} · stock ${fmtNum(qty)} un</div>` : ''}
         </div>
-        <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;margin-top:2px">
           <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${fmtNum(qty)}</span>
         </div>
       </div>`;
@@ -1750,15 +1765,15 @@ async function loadVendasMenu(turnoId, canEdit) {
 
     const avulsoRows = avulsoProds.map(p => {
       const qty = calcStandaloneQty(p.id);
-      return `<div class="produto-row" style="align-items:center">
+      return `<div class="produto-row">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
           ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
         </div>
-        <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${fmtNum(qty)}</span>
+        <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700;flex-shrink:0;margin-top:2px">${fmtNum(qty)}</span>
       </div>`;
     }).join('');
 
-    const toGrid = rows => `<div style="columns:2;column-gap:16px">${rows}</div>`;
+    const toGrid = rows => `<div class="vendas-menu-2col">${rows}</div>`;
 
     const totalRow = `<div style="margin-top:14px;padding:10px 12px;background:#1e293b;border-radius:8px;display:flex;justify-content:space-between;align-items:center">
         <span style="font-weight:600;color:#94a3b8;font-size:0.85rem;text-transform:uppercase;letter-spacing:.05em">Total Vendas</span>

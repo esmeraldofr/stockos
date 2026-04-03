@@ -382,14 +382,13 @@ function fmtNum(v) {
   const n = parseFloat(v) || 0;
   return n.toLocaleString('pt-AO', { maximumFractionDigits: 2 });
 }
-/** Quantidade: célula ou input vazio quando é zero (não preenchido). */
-function isQtyZero(v) {
-  if (v === '' || v == null) return true;
-  const n = parseFloat(String(v).replace(/\./g, '').replace(',', '.'));
-  return !Number.isFinite(n) || Math.abs(n) < 1e-9;
-}
+/** Quantidade em inputs/células: vazio só sem valor; zero mostra sempre «0» (sem toLocaleString — evita casos raros de string vazia). */
 function fmtQtyInput(v) {
-  return isQtyZero(v) ? '' : fmtNum(v);
+  if (v === '' || v === null || v === undefined) return '';
+  const n = parseFloat(String(v).replace(/\./g, '').replace(',', '.'));
+  if (!Number.isFinite(n)) return '';
+  if (Math.abs(n) < 1e-12) return '0';
+  return fmtNum(n);
 }
 /** Valor em Kz para totais da caixa: vazio quando zero. */
 function fmtKzOrEmpty(v) {
@@ -398,17 +397,45 @@ function fmtKzOrEmpty(v) {
 }
 function fmtCaixaAttr(v) {
   const n = parseFloat(v);
-  return Number.isFinite(n) && n !== 0 ? String(v).trim() : '';
+  return Number.isFinite(n) ? String(n) : '';
 }
-function stockInputBlurQty(el) {
-  const n = parseRaw(el.value);
-  el.value = n === 0 ? '' : fmtNum(n);
+/** Valor inicial para inputs numéricos de stock (Encontrado / Deixado / Fechados). */
+function fmtStockNumberAttr(v) {
+  if (v === '' || v === null || v === undefined) return '0';
+  const n = parseFloat(String(v).replace(/\./g, '').replace(',', '.'));
+  if (!Number.isFinite(n)) return '0';
+  const r = Math.round(n * 1000) / 1000;
+  return String(r);
+}
+/** type=number: ao sair, vazio ou inválido → 0 visível (evita desaparecer o zero). */
+function stockNumberInputBlur(el) {
+  const pid = el.getAttribute('data-stock-pid');
+  const field = el.getAttribute('data-stock-field');
+  if (!pid || !field) return;
+  const raw = String(el.value ?? '').trim();
+  let n = parseFloat(raw);
+  if (!Number.isFinite(n) || raw === '') n = 0;
+  el.value = String(Math.round(n * 1000) / 1000);
+  el.classList.remove('stock-caixa-required-missing');
+  updateStock(pid, field, el.value);
+}
+function caixaInputBlur(el) {
+  if (!el || el.disabled) return;
+  if (String(el.value).trim() === '') {
+    el.value = '0';
+    calcCaixa();
+  }
 }
 function medicaoSigla(tipo) {
   return tipo === 'peso' ? 'kg' : 'un';
 }
+/** Aceita número (evita estragar decimais em updateStock) ou texto pt (1.234,5). Remove espaços finos do locale. */
 function parseRaw(v) {
-  return parseFloat(String(v).replace(/\./g, '').replace(',', '.')) || 0;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  let s = String(v ?? '').trim().replace(/[\s\u00a0\u202f\u2007]/g, '');
+  if (s === '') return 0;
+  const x = parseFloat(s.replace(/\./g, '').replace(',', '.'));
+  return Number.isFinite(x) ? x : 0;
 }
 function turnoLabel(nome) {
   return { manha: '🌅 Manhã', tarde: '🌤 Tarde', noite: '🌙 Noite' }[nome] || nome;
@@ -791,7 +818,7 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
             if (!refComum && String(d.referencia || '').trim()) refComum = String(d.referencia);
             if (!notasComum && String(d.notas || '').trim()) notasComum = String(d.notas);
           }
-          const saidasUnicaVal = totalSaidasNoDeposito > 0 ? String(totalSaidasNoDeposito) : '';
+          const saidasUnicaVal = (depositos || []).length ? String(totalSaidasNoDeposito) : '';
           return `
         ${turnosOrdenados.map(t => {
           const dep = depositosByTurno[String(t.id)];
@@ -800,7 +827,7 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
           const tid = `dep-tpa-${t.id}`;
           const caixaTpa = parseFloat(t.caixa?.tpa) || 0;
           const brutoNum = dep ? (parseFloat(dep.valor) || 0) : 0;
-          const brutoVal = dep && brutoNum > 0 ? String(brutoNum) : '';
+          const brutoVal = dep ? String(brutoNum) : '';
           const tpaVal = dep && dep.valor_tpa != null && dep.valor_tpa !== ''
             ? String(dep.valor_tpa)
             : (dep ? '0' : String(caixaTpa));
@@ -1366,16 +1393,16 @@ async function loadTurno() {
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div></td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
-            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.encontrado)}"
-              onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
-              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" title="Obrigatório" ${inputAttr}/></td>
+            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockNumberAttr(s.encontrado)}"
+              onblur="stockNumberInputBlur(this)"
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="encontrado" title="Obrigatório" ${inputAttr}/></td>
             <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
-            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.deixado)}"
-              onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
-              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" title="Obrigatório" ${inputAttr}/></td>
-            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.fechados)}"
-              onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
-              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','fechados',this.value)" data-stock-req="1" title="Obrigatório" ${inputAttr}/></td>
+            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockNumberAttr(s.deixado)}"
+              onblur="stockNumberInputBlur(this)"
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="deixado" title="Obrigatório" ${inputAttr}/></td>
+            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockNumberAttr(s.fechados)}"
+              onblur="stockNumberInputBlur(this)"
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','fechados',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="fechados" title="Obrigatório" ${inputAttr}/></td>
             <td class="td-calc" id="vend-${pid}">${vendTxt}</td>
             <td class="td-valor" id="val-${pid}">${valTxt}</td>
           </tr>`;
@@ -1453,15 +1480,15 @@ async function loadTurno() {
           <div class="caixa-grid">
             <div class="caixa-item">
               <label>TPA / Máquina <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
-              <input type="number" min="0" step="any" id="c-tpa" value="${fmtCaixaAttr(caixa.tpa)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" ${canEdit?'':'disabled'}/>
+              <input type="number" min="0" step="any" id="c-tpa" value="${fmtCaixaAttr(caixa.tpa)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" onblur="caixaInputBlur(this)" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
               <label>Transferência <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
-              <input type="number" min="0" step="any" id="c-transf" value="${fmtCaixaAttr(caixa.transferencia)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" ${canEdit?'':'disabled'}/>
+              <input type="number" min="0" step="any" id="c-transf" value="${fmtCaixaAttr(caixa.transferencia)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" onblur="caixaInputBlur(this)" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
               <label>Dinheiro <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
-              <input type="number" min="0" step="any" id="c-din" value="${fmtCaixaAttr(caixa.dinheiro)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" ${canEdit?'':'disabled'}/>
+              <input type="number" min="0" step="any" id="c-din" value="${fmtCaixaAttr(caixa.dinheiro)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" onblur="caixaInputBlur(this)" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
               <label>Saída</label>
@@ -1637,6 +1664,11 @@ async function deltaVenda(turnoId, prodId, delta) {
 function updateStock(pid, field, value) {
   if (!stockBuf[pid]) stockBuf[pid] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
   stockBuf[pid][field] = parseRaw(value);
+  const inp = document.querySelector(`input[type="number"][data-stock-pid="${pid}"][data-stock-field="${field}"]`);
+  if (inp && document.activeElement !== inp) {
+    const n = stockBuf[pid][field];
+    inp.value = fmtStockNumberAttr(n);
+  }
   const { encontrado:enc, entrada:ent, deixado:dei } = stockBuf[pid];
   const vend = Math.max(0, enc + ent - dei);
   const prod = S.turnoData?.stock?.find(s => s.produto_id === pid);
@@ -1811,6 +1843,9 @@ async function saveTurnoNotas(turnoId, notas) {
 
 async function fecharTurno(ev, id) {
   clearStockCaixaValidationHighlight();
+  document.querySelectorAll('input[data-stock-req="1"][type="number"]').forEach((el) => {
+    if (!el.disabled) stockNumberInputBlur(el);
+  });
   const missing = collectMissingStockCaixaObrigatorio();
   if (missing.length) {
     missing.forEach((el) => el.classList.add('stock-caixa-required-missing'));
@@ -2079,7 +2114,7 @@ function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
     el.innerHTML = formHtml + listaHtml;
     // Actualizar campo saída na caixa
     const cSaida = document.getElementById('c-saida');
-    if (cSaida) cSaida.value = total === 0 ? '' : total.toFixed(2);
+    if (cSaida) cSaida.value = total.toFixed(2);
     const elTG = document.getElementById('c-total-gerado');
     const elTF = document.getElementById('c-total-final');
     if (elTG && elTF) {

@@ -400,6 +400,15 @@ function fmtCaixaAttr(v) {
   const n = parseFloat(v);
   return Number.isFinite(n) && n !== 0 ? String(v).trim() : '';
 }
+/** Preço total em copos: pacotes (ex. 3×1000) + resto ao preço unitário (ex. 400/copo). */
+function precoVendaCopos(copos, precoUnit, qtdPacote, precoPacote) {
+  const c = Math.max(0, Math.floor(parseFloat(copos) || 0));
+  const u = parseFloat(precoUnit) || 0;
+  const n = parseInt(qtdPacote, 10) || 0;
+  const p = parseFloat(precoPacote) || 0;
+  if (n >= 2 && p > 0) return Math.floor(c / n) * p + (c % n) * u;
+  return c * u;
+}
 function stockInputBlurQty(el) {
   const n = parseRaw(el.value);
   el.value = n === 0 ? '' : fmtNum(n);
@@ -1205,8 +1214,10 @@ let stockBuf = {};
 let caixaBuf = {};
 let receitasBuf = {}; // { produto_id: [{componente_id, quantidade}] }
 let menuProdIds   = []; // ids dos produtos de menu (inserção manual)
-let bebidaProdIds = []; // ids das bebidas registadas em Vendas
+let bebidaProdIds = []; // bebidas “lata” (stock em unidades no resumo de vendas)
 let bebidaProdPrecos = {}; // { produto_id: preco } para calcular total
+let bebidaCopoProdIds = []; // bebidas vendidas por copo (stock em kg)
+let bebidaCopoCfg = {}; // id -> { kgPorCopo, preco, qtdPacote, precoPacote }
 let avulsoProdIds = []; // ids dos ingredientes com venda_avulso=true
 let vendasProdPrecos = {}; // { produto_id: preco } para todos os produtos de vendas
 
@@ -1238,6 +1249,10 @@ function refreshMenuQtys() {
     const el = document.getElementById(`venda-qty-${prodId}`);
     if (el) el.textContent = vendasBuf[prodId] || 0;
   }
+  for (const prodId of bebidaCopoProdIds) {
+    const el = document.getElementById(`venda-qty-${prodId}`);
+    if (el) el.textContent = String(vendasBuf[prodId] || 0);
+  }
   for (const prodId of bebidaProdIds) {
     const el = document.getElementById(`venda-qty-${prodId}`);
     const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
@@ -1263,7 +1278,12 @@ function refreshVendasTotal() {
   for (const prodId of avulsoProdIds) {
     total += calcStandaloneQty(prodId) * (vendasProdPrecos[prodId] || 0);
   }
-  // Bebidas (baseado no vendido do stock)
+  for (const prodId of bebidaCopoProdIds) {
+    const cfg = bebidaCopoCfg[prodId];
+    if (!cfg) continue;
+    const copos = vendasBuf[prodId] || 0;
+    total += precoVendaCopos(copos, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
+  }
   for (const prodId of bebidaProdIds) {
     const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
     total += Math.max(0, b.encontrado + b.entrada - b.deixado) * (vendasProdPrecos[prodId] || 0);
@@ -1559,6 +1579,24 @@ async function loadVendasMenu(turnoId, canEdit) {
       vendasProdPrecos[p.id] = parseFloat(p.preco) || 0;
     });
 
+    bebidaCopoCfg = {};
+    const bebidaCopoProds = bebidaProds.filter(
+      (p) => p.venda_por_copo && parseFloat(p.kg_por_copo) > 0
+    );
+    const bebidaOutras = bebidaProds.filter(
+      (p) => !(p.venda_por_copo && parseFloat(p.kg_por_copo) > 0)
+    );
+    bebidaCopoProdIds = bebidaCopoProds.map((p) => p.id);
+    bebidaProdIds = bebidaOutras.map((p) => p.id);
+    bebidaCopoProds.forEach((p) => {
+      bebidaCopoCfg[p.id] = {
+        kgPorCopo: parseFloat(p.kg_por_copo) || 0,
+        preco: parseFloat(p.preco) || 0,
+        qtdPacote: parseInt(p.qtd_copos_pacote, 10) || 0,
+        precoPacote: parseFloat(p.preco_copos_pacote) || 0
+      };
+    });
+
     menuProdIds = menuProds.map(p => p.id);
     const btnStyle = 'width:28px;height:28px;border-radius:6px;border:none;font-size:1.1rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;';
     const menuRows = menuProds.map(p => {
@@ -1575,15 +1613,40 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     }).join('');
 
-    bebidaProdIds = bebidaProds.map(p => p.id);
     bebidaProdPrecos = {};
-    const bebidaRows = bebidaProds.map(p => {
+    bebidaOutras.forEach((p) => {
+      bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
+    });
+    const bebidaCopoRows = bebidaCopoProds.map((p) => {
+      const cfg = bebidaCopoCfg[p.id];
+      const copos = vendasBuf[p.id] || 0;
+      const kgStock = (() => {
+        const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
+        return Math.max(0, b.encontrado + b.entrada - b.deixado);
+      })();
+      const precoLinha =
+        cfg.qtdPacote >= 2 && cfg.precoPacote > 0
+          ? `${fmt(cfg.preco)}/copo · ${cfg.qtdPacote} copos ${fmt(cfg.precoPacote)}`
+          : `${fmt(cfg.preco)}/copo`;
+      return `<div class="produto-row" style="align-items:center">
+        <div class="produto-info">
+          <div class="produto-nome">${p.nome} <span style="font-size:10px;color:#64748b;font-weight:600">(copos)</span></div>
+          <div class="produto-meta">${precoLinha} · ${fmtNum(cfg.kgPorCopo)} kg/copo · stock ~${fmtNum(kgStock)} kg</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',-1))" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
+          <span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${copos}</span>
+          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',1))" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+    const bebidaRows = bebidaOutras.map((p) => {
       bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
       const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
       const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
       return `<div class="produto-row" style="align-items:center">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
-          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
+          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)} · stock ${fmtNum(qty)} un</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           <span id="venda-qty-${p.id}" style="min-width:32px;text-align:center;font-weight:700">${fmtNum(qty)}</span>
@@ -1609,7 +1672,8 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     const html = (menuProds.length ? groupHeader('🍽️ Menu') + toGrid(menuRows) : '')
                + (avulsoProds.length ? groupHeader('🛒 Avulso') + toGrid(avulsoRows) : '')
-               + (bebidaProds.length ? groupHeader('🥤 Bebidas') + toGrid(bebidaRows) : '')
+               + (bebidaCopoProds.length ? groupHeader('🥤 Bebidas (por copo)') + toGrid(bebidaCopoRows) : '')
+               + (bebidaOutras.length ? groupHeader('🥤 Bebidas (unidade)') + toGrid(bebidaRows) : '')
                + totalRow;
     show('vendas-menu-list', html);
     refreshVendasTotal();
@@ -1619,15 +1683,22 @@ async function loadVendasMenu(turnoId, canEdit) {
 }
 
 async function deltaVenda(turnoId, prodId, delta) {
-  vendasBuf[prodId] = Math.max(0, (vendasBuf[prodId] || 0) + delta);
+  const prev = vendasBuf[prodId] || 0;
+  vendasBuf[prodId] = Math.max(0, prev + delta);
   const el = document.getElementById(`venda-qty-${prodId}`);
   if (el) el.textContent = vendasBuf[prodId];
   refreshVendasTotal();
   try {
     await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: vendasBuf[prodId] });
+    const cfg = bebidaCopoCfg[prodId];
+    if (cfg && cfg.kgPorCopo > 0) {
+      if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
+      const kgAdj = -delta * cfg.kgPorCopo;
+      stockBuf[prodId].deixado = Math.max(0, (parseFloat(stockBuf[prodId].deixado) || 0) + kgAdj);
+      updateStock(prodId, 'deixado', fmtNum(stockBuf[prodId].deixado));
+    }
   } catch(e) {
-    // reverter no erro
-    vendasBuf[prodId] = Math.max(0, vendasBuf[prodId] - delta);
+    vendasBuf[prodId] = prev;
     if (el) el.textContent = vendasBuf[prodId];
     refreshVendasTotal();
     alert('Erro ao registar venda: ' + e.message);
@@ -2143,6 +2214,22 @@ async function loadResumoTab(turnoId) {
         vendasLines.push({ nome: si?.produto_nome || `Produto ${pid}`, qty, preco, total: val });
       }
     });
+    bebidaCopoProdIds.forEach((pid) => {
+      const copos = vendasBuf[pid] || 0;
+      if (copos <= 0) return;
+      const cfg = bebidaCopoCfg[pid];
+      if (!cfg) return;
+      const val = precoVendaCopos(copos, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
+      totalVendasVal += val;
+      const si = stocks.find((s) => String(s.produto_id) === String(pid));
+      vendasLines.push({
+        nome: si?.produto_nome || `Produto ${pid}`,
+        qty: copos,
+        preco: cfg.preco,
+        total: val,
+        copo: true
+      });
+    });
 
     // — Irregularidades —
     const irr = [];
@@ -2232,17 +2319,17 @@ async function loadResumoTab(turnoId) {
 
     const vendasCard = vendasLines.length > 0 ? `
       <div class="card mt-16">
-        <div class="card-title">🍽️ Resumo de Vendas (Menu)</div>
+        <div class="card-title">🍽️ Resumo de Vendas</div>
         ${vendasLines.map(v => `
           <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1e293b">
             <span style="font-size:13px;color:#cbd5e1">${v.nome}</span>
             <span style="display:flex;gap:14px;align-items:center">
-              <span style="color:#64748b;font-size:12px">${v.qty} × ${fmt(v.preco)}</span>
+              <span style="color:#64748b;font-size:12px">${v.copo ? v.qty + ' copos' : v.qty + ' × ' + fmt(v.preco)}</span>
               <span style="font-weight:600;color:#e2e8f0;min-width:72px;text-align:right">${fmt(v.total)}</span>
             </span>
           </div>`).join('')}
         <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:2px solid #334155">
-          <span style="font-weight:600;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.05em">Total Vendas Menu</span>
+          <span style="font-weight:600;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.05em">Total Vendas</span>
           <span style="font-weight:700;color:#4ade80">${fmt(totalVendasVal)}</span>
         </div>
       </div>` : '';
@@ -3092,7 +3179,7 @@ async function loadProdutos() {
           ${items.map(p => `
             <div class="produto-row">
               <div class="produto-info">
-                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">só armazém</span>' : ''}</div>
+                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.venda_por_copo && parseFloat(p.kg_por_copo) > 0 ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">só armazém</span>' : ''}</div>
                 <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
               </div>
               ${isAdmin ? `
@@ -3138,11 +3225,19 @@ function showProdutoForm(id) {
       '</div>' +
       '<div id="prod-form-msg"></div>' +
       '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
-      '<div class="field"><label>Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
+      '<div class="field"><label id="p-preco-label">Preço (Kz)</label><input id="p-preco" type="number" min="0" step="any" value="0"/></div>' +
       '<div class="field"><label>Medição</label><select id="p-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
       '<div class="field" id="field-avulso"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso</label></div>' +
       '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Folha de stock do turno</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Se desmarcares, o produto não entra na contagem ao abrir turno (útil para consumíveis só de armazém).</div></div>' +
+      '<div class="field" id="field-copo-bebida" style="display:none">' +
+      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-venda-copo" style="width:16px;height:16px"/> Venda por copo (stock em kg, registo em copos)</label>' +
+      '<div id="field-copo-detalhe" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #334155">' +
+      '<div class="field"><label>Kg por copo servido</label><input id="p-kg-copo" type="number" min="0.001" step="0.001" value="0.27"/></div>' +
+      '<div class="field"><label>Preço do pacote (Kz) — ex. 1000 por 3 copos</label><input id="p-preco-pacote" type="number" min="0" step="1" value="0"/></div>' +
+      '<div class="field"><label>Número de copos no pacote — ex. 3</label><input id="p-qtd-pacote" type="number" min="0" step="1" value="0"/></div>' +
+      '<p style="font-size:11px;color:#64748b;margin:0;line-height:1.4">O campo «Preço» acima é o valor de <strong>1 copo</strong> (ex. 400 Kz). Se preencheres pacote (ex. 3 copos / 1000 Kz), o total usa pacotes completos + resto ao preço unitário.</p>' +
+      '</div></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
       (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +
@@ -3163,6 +3258,25 @@ function showProdutoForm(id) {
   if (p) document.getElementById('p-avulso').checked = !!p.venda_avulso;
   const st = document.getElementById('p-stock-turno');
   if (st) st.checked = p ? p.em_stock_turno !== false : true;
+  const pvc = document.getElementById('p-venda-copo');
+  if (pvc) pvc.checked = !!(p && p.venda_por_copo && parseFloat(p.kg_por_copo) > 0);
+  const pkg = document.getElementById('p-kg-copo');
+  if (pkg) pkg.value = p && parseFloat(p.kg_por_copo) > 0 ? p.kg_por_copo : 0.27;
+  const ppp = document.getElementById('p-preco-pacote');
+  if (ppp) ppp.value = p ? (p.preco_copos_pacote || 0) : 0;
+  const pqp = document.getElementById('p-qtd-pacote');
+  if (pqp) pqp.value = p ? (p.qtd_copos_pacote || 0) : 0;
+
+  function toggleCopoBebida() {
+    const cat = document.getElementById('p-cat').value;
+    const fb = document.getElementById('field-copo-bebida');
+    const fd = document.getElementById('field-copo-detalhe');
+    const pl = document.getElementById('p-preco-label');
+    if (fb) fb.style.display = cat === 'bebida' ? '' : 'none';
+    if (cat !== 'bebida' && document.getElementById('p-venda-copo')) document.getElementById('p-venda-copo').checked = false;
+    if (fd) fd.style.display = document.getElementById('p-venda-copo')?.checked && cat === 'bebida' ? '' : 'none';
+    if (pl) pl.textContent = cat === 'bebida' && document.getElementById('p-venda-copo')?.checked ? 'Preço 1 copo (Kz)' : 'Preço (Kz)';
+  }
 
   function toggleAvulso() {
     const cat = document.getElementById('p-cat').value;
@@ -3179,8 +3293,15 @@ function showProdutoForm(id) {
       sec.style.display = 'none';
     }
   }
-  document.getElementById('p-cat').addEventListener('change', () => { toggleAvulso(); if (isEdit && canEditReceita) toggleReceita(); });
+  document.getElementById('p-cat').addEventListener('change', () => {
+    toggleAvulso();
+    toggleCopoBebida();
+    if (isEdit && canEditReceita) toggleReceita();
+  });
+  const pvcEl = document.getElementById('p-venda-copo');
+  if (pvcEl) pvcEl.addEventListener('change', toggleCopoBebida);
   toggleAvulso();
+  toggleCopoBebida();
   if (isEdit && canEditReceita) toggleReceita();
 
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
@@ -3194,9 +3315,28 @@ function showProdutoForm(id) {
   document.getElementById('p-nome').focus();
 }
 
+function payloadProdutoCopo() {
+  const cat = val('p-cat');
+  const copo = cat === 'bebida' && document.getElementById('p-venda-copo')?.checked;
+  return {
+    venda_por_copo: !!copo,
+    kg_por_copo: copo ? parseFloat(val('p-kg-copo')) || 0 : 0,
+    preco_copos_pacote: copo ? parseFloat(val('p-preco-pacote')) || 0 : 0,
+    qtd_copos_pacote: copo ? parseInt(val('p-qtd-pacote'), 10) || 0 : 0
+  };
+}
+
 async function createProduto() {
   try {
-    await api('POST','/produtos',{nome:val('p-nome'),preco:parseFloat(val('p-preco'))||0,tipo_medicao:val('p-medicao'),categoria:val('p-cat'),venda_avulso:document.getElementById('p-avulso')?.checked||false,em_stock_turno:!!document.getElementById('p-stock-turno')?.checked});
+    await api('POST','/produtos',{
+      nome:val('p-nome'),
+      preco:parseFloat(val('p-preco'))||0,
+      tipo_medicao:val('p-medicao'),
+      categoria:val('p-cat'),
+      venda_avulso:document.getElementById('p-avulso')?.checked||false,
+      em_stock_turno:!!document.getElementById('p-stock-turno')?.checked,
+      ...payloadProdutoCopo()
+    });
     closeProdutoModal();
     suc('prod-msg','Produto criado!');
     setTimeout(()=>show('prod-msg',''),2000);
@@ -3212,7 +3352,8 @@ async function saveProduto(id) {
       categoria: val('p-cat'), ordem: parseInt(val('p-ordem'))||0,
       ativo: val('p-ativo')==='true',
       venda_avulso: document.getElementById('p-avulso')?.checked||false,
-      em_stock_turno: !!document.getElementById('p-stock-turno')?.checked
+      em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
+      ...payloadProdutoCopo()
     });
     closeProdutoModal();
     suc('prod-msg','Produto actualizado!');

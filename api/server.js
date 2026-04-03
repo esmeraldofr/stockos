@@ -257,6 +257,32 @@ async function initDB() {
     [],
     'produtos-em-stock-turno'
   );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_copo BOOLEAN NOT NULL DEFAULT FALSE`,
+    [],
+    'produtos-venda-por-copo'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS kg_por_copo NUMERIC(10,4) NOT NULL DEFAULT 0`,
+    [],
+    'produtos-kg-por-copo'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0`,
+    [],
+    'produtos-preco-copos-pacote'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote SMALLINT NOT NULL DEFAULT 0`,
+    [],
+    'produtos-qtd-copos-pacote'
+  );
+  await qry(
+    `UPDATE produtos SET venda_por_copo = true, kg_por_copo = 0.27, preco = 400, preco_copos_pacote = 1000, qtd_copos_pacote = 3, tipo_medicao = 'peso'
+     WHERE lower(trim(nome)) = 'fino' AND categoria = 'bebida' AND COALESCE(kg_por_copo, 0) = 0`,
+    [],
+    'produtos-fino-copo-default'
+  );
   /** Sem ALTER em utilizadores aqui: em BD restaurada o role da app não é owner → must be owner. criado_em já está no CREATE TABLE acima. */
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
@@ -404,7 +430,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-reabrir-turno-admin';
+const STOCKOS_API_BUILD = '2026-03-31-venda-copo-fino';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -1020,6 +1046,22 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS em_stock_turno BOOLEAN NOT NULL DEFAULT TRUE`,
     'produtos-em-stock-turno'
   );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_copo BOOLEAN NOT NULL DEFAULT FALSE`,
+    'produtos-venda-por-copo'
+  );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS kg_por_copo NUMERIC(10,4) NOT NULL DEFAULT 0`,
+    'produtos-kg-por-copo'
+  );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0`,
+    'produtos-preco-copos-pacote'
+  );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote SMALLINT NOT NULL DEFAULT 0`,
+    'produtos-qtd-copos-pacote'
+  );
   await run(`CREATE TABLE IF NOT EXISTS armazem_stock (
     id SERIAL PRIMARY KEY,
     produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
@@ -1238,12 +1280,35 @@ app.get('/api/produtos', auth, async (req, res) => {
 app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     const { nome, preco, categoria, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
+    const {
+      venda_por_copo,
+      kg_por_copo,
+      preco_copos_pacote,
+      qtd_copos_pacote
+    } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
     const noTurno = em_stock_turno === undefined || em_stock_turno === null ? true : !!em_stock_turno;
+    const vpc = !!venda_por_copo;
+    const kgc = parseFloat(kg_por_copo) || 0;
+    const pcp = parseFloat(preco_copos_pacote) || 0;
+    const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
     const r = await query(
-      'INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
-      [nome, preco||0, categoria||'outro', maxOrdem.rows[0].n, !!venda_avulso, medicao, noTurno]
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [
+        nome,
+        preco || 0,
+        categoria || 'outro',
+        maxOrdem.rows[0].n,
+        !!venda_avulso,
+        medicao,
+        noTurno,
+        vpc,
+        kgc,
+        pcp,
+        qcp
+      ]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -1252,18 +1317,58 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
+    const {
+      venda_por_copo,
+      kg_por_copo,
+      preco_copos_pacote,
+      qtd_copos_pacote
+    } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const noTurno =
       em_stock_turno === undefined || em_stock_turno === null ? undefined : !!em_stock_turno;
-    const r = noTurno === undefined
-      ? await query(
-          'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7 WHERE id=$8 RETURNING *',
-          [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, req.params.id]
-        )
-      : await query(
-          'UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8 WHERE id=$9 RETURNING *',
-          [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, noTurno, req.params.id]
-        );
+    const vpc = !!venda_por_copo;
+    const kgc = parseFloat(kg_por_copo) || 0;
+    const pcp = parseFloat(preco_copos_pacote) || 0;
+    const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
+    const r =
+      noTurno === undefined
+        ? await query(
+            `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
+             venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11 WHERE id=$12 RETURNING *`,
+            [
+              nome,
+              preco,
+              categoria,
+              ordem,
+              ativo,
+              !!venda_avulso,
+              medicao,
+              vpc,
+              kgc,
+              pcp,
+              qcp,
+              req.params.id
+            ]
+          )
+        : await query(
+            `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
+             venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12 WHERE id=$13 RETURNING *`,
+            [
+              nome,
+              preco,
+              categoria,
+              ordem,
+              ativo,
+              !!venda_avulso,
+              medicao,
+              noTurno,
+              vpc,
+              kgc,
+              pcp,
+              qcp,
+              req.params.id
+            ]
+          );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -2427,7 +2532,7 @@ app.delete('/api/receitas/:id', auth, requireRole('admin','gestor'), async (req,
 app.get('/api/turnos/:id/vendas', auth, async (req, res) => {
   try {
     const r = await query(
-      `SELECT tv.*, p.nome as produto_nome, p.preco
+      `SELECT tv.*, p.nome as produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo, p.preco_copos_pacote, p.qtd_copos_pacote
        FROM turno_vendas tv JOIN produtos p ON tv.produto_id=p.id
        WHERE tv.turno_id=$1 ORDER BY p.nome`,
       [req.params.id]
@@ -2443,50 +2548,70 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
     const turnoId = req.params.id;
     const { produto_id, quantidade } = req.body;
 
+    const prodRow = await client.query(
+      `SELECT venda_por_copo, kg_por_copo FROM produtos WHERE id=$1`,
+      [produto_id]
+    );
+    if (!prodRow.rows.length) throw new Error('Produto não encontrado');
+    const vendeCopo =
+      prodRow.rows[0].venda_por_copo === true && parseFloat(prodRow.rows[0].kg_por_copo) > 0;
+    const kgPorCopo = parseFloat(prodRow.rows[0].kg_por_copo) || 0;
+
+    const qtyCopos = vendeCopo
+      ? Math.max(0, Math.floor(parseFloat(quantidade) || 0))
+      : parseFloat(quantidade) || 0;
+
     const old = await client.query(
       'SELECT quantidade FROM turno_vendas WHERE turno_id=$1 AND produto_id=$2',
       [turnoId, produto_id]
     );
     const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
-    const delta = parseFloat(quantidade) - oldQty;
+    const delta = qtyCopos - oldQty;
 
     await client.query(
       `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
        ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
-      [turnoId, produto_id, quantidade]
+      [turnoId, produto_id, qtyCopos]
     );
 
     if (delta !== 0) {
-      // Expand recipe recursively: if a component itself has a recipe, use its ingredients instead
-      async function expandIngredientes(prodId, fator) {
-        const r = await client.query(
-          'SELECT componente_id, quantidade FROM receitas WHERE produto_id=$1',
-          [prodId]
-        );
-        if (r.rows.length === 0) {
-          // Leaf ingredient — subtract from stock directly
-          return [{ componente_id: prodId, quantidade: fator }];
-        }
-        const ingredientes = [];
-        for (const comp of r.rows) {
-          const sub = await expandIngredientes(comp.componente_id, fator * parseFloat(comp.quantidade));
-          ingredientes.push(...sub);
-        }
-        return ingredientes;
-      }
-
-      const ingredientes = await expandIngredientes(produto_id, delta);
-      // Aggregate in case the same ingredient appears multiple times
-      const totais = {};
-      for (const ing of ingredientes) {
-        totais[ing.componente_id] = (totais[ing.componente_id] || 0) + ing.quantidade;
-      }
-      for (const [compId, qtd] of Object.entries(totais)) {
+      if (vendeCopo) {
+        const kgDelta = delta * kgPorCopo;
         await client.query(
           `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
            WHERE turno_id=$2 AND produto_id=$3`,
-          [qtd, turnoId, compId]
+          [kgDelta, turnoId, produto_id]
         );
+      } else {
+        // Expand recipe recursively: if a component itself has a recipe, use its ingredients instead
+        async function expandIngredientes(prodId, fator) {
+          const r = await client.query(
+            'SELECT componente_id, quantidade FROM receitas WHERE produto_id=$1',
+            [prodId]
+          );
+          if (r.rows.length === 0) {
+            return [{ componente_id: prodId, quantidade: fator }];
+          }
+          const ingredientes = [];
+          for (const comp of r.rows) {
+            const sub = await expandIngredientes(comp.componente_id, fator * parseFloat(comp.quantidade));
+            ingredientes.push(...sub);
+          }
+          return ingredientes;
+        }
+
+        const ingredientes = await expandIngredientes(produto_id, delta);
+        const totais = {};
+        for (const ing of ingredientes) {
+          totais[ing.componente_id] = (totais[ing.componente_id] || 0) + ing.quantidade;
+        }
+        for (const [compId, qtd] of Object.entries(totais)) {
+          await client.query(
+            `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
+             WHERE turno_id=$2 AND produto_id=$3`,
+            [qtd, turnoId, compId]
+          );
+        }
       }
     }
 

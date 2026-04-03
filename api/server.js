@@ -430,7 +430,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-venda-copo-stock-num';
+const STOCKOS_API_BUILD = '2026-04-03-stock-decimal-parse';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.

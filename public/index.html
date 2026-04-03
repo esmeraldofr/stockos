@@ -382,10 +382,25 @@ function fmtNum(v) {
   const n = parseFloat(v) || 0;
   return n.toLocaleString('pt-AO', { maximumFractionDigits: 2 });
 }
+/**
+ * Quantidade/número a partir de string (API PostgreSQL ou texto).
+ * Com vírgula → pt-AO (1.234,5). Sem vírgula → ponto é decimal ("16.000" = 16, não 16000).
+ */
+function parsePtOrIsoNumberString(s) {
+  const t = String(s ?? '').trim().replace(/[\s\u00a0\u202f\u2007]/g, '');
+  if (t === '' || t === '-') return NaN;
+  if (t.includes(',')) {
+    const x = parseFloat(t.replace(/\./g, '').replace(',', '.'));
+    return Number.isFinite(x) ? x : NaN;
+  }
+  const x = parseFloat(t);
+  return Number.isFinite(x) ? x : NaN;
+}
+
 /** Quantidade em inputs/células: vazio só sem valor; zero mostra sempre «0» (sem toLocaleString — evita casos raros de string vazia). */
 function fmtQtyInput(v) {
   if (v === '' || v === null || v === undefined) return '';
-  const n = parseFloat(String(v).replace(/\./g, '').replace(',', '.'));
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : parsePtOrIsoNumberString(String(v));
   if (!Number.isFinite(n)) return '';
   if (Math.abs(n) < 1e-12) return '0';
   return fmtNum(n);
@@ -411,7 +426,7 @@ function precoVendaCopos(copos, precoUnit, qtdPacote, precoPacote) {
 /** Valor inicial para inputs numéricos de stock (Encontrado / Deixado / Fechados). */
 function fmtStockNumberAttr(v) {
   if (v === '' || v === null || v === undefined) return '0';
-  const n = parseFloat(String(v).replace(/\./g, '').replace(',', '.'));
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : parsePtOrIsoNumberString(String(v));
   if (!Number.isFinite(n)) return '0';
   const r = Math.round(n * 1000) / 1000;
   return String(r);
@@ -438,12 +453,12 @@ function caixaInputBlur(el) {
 function medicaoSigla(tipo) {
   return tipo === 'peso' ? 'kg' : 'un';
 }
-/** Aceita número (evita estragar decimais em updateStock) ou texto pt (1.234,5). Remove espaços finos do locale. */
+/** Aceita número, decimal ISO (16.5) ou texto pt (1.234,5). */
 function parseRaw(v) {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   let s = String(v ?? '').trim().replace(/[\s\u00a0\u202f\u2007]/g, '');
   if (s === '') return 0;
-  const x = parseFloat(s.replace(/\./g, '').replace(',', '.'));
+  const x = parsePtOrIsoNumberString(s);
   return Number.isFinite(x) ? x : 0;
 }
 function turnoLabel(nome) {

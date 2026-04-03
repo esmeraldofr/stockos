@@ -184,6 +184,7 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .turno-tab:hover{color:#cbd5e1;background:#1e293b}
 .turno-tab.active{color:#f1f5f9;background:#1e293b;border-bottom:2px solid #3b82f6;margin-bottom:-2px}
 .turno-tab-panel{display:none}.turno-tab-panel.active{display:block}
+input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-color:#f87171!important;box-shadow:0 0 0 1px rgba(248,113,113,.5)}
 .turno-view-toggle{margin-left:auto;flex-shrink:0;padding:5px 10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;align-self:center;transition:color .15s,border-color .15s}
 .turno-view-toggle:hover{color:#f1f5f9;border-color:#64748b}
 .turno-tabs-wrap{display:flex;align-items:flex-end;border-bottom:2px solid #1e293b;margin-bottom:16px}
@@ -1367,14 +1368,14 @@ async function loadTurno() {
             <td id="comp-${pid}">${compHtml}</td>
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.encontrado)}"
               onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
-              oninput="updateStock('${pid}','encontrado',this.value)" ${inputAttr}/></td>
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" title="Obrigatório" ${inputAttr}/></td>
             <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.deixado)}"
               onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
-              oninput="updateStock('${pid}','deixado',this.value)" ${inputAttr}/></td>
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" title="Obrigatório" ${inputAttr}/></td>
             <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.fechados)}"
               onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
-              oninput="updateStock('${pid}','fechados',this.value)" ${inputAttr}/></td>
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','fechados',this.value)" data-stock-req="1" title="Obrigatório" ${inputAttr}/></td>
             <td class="td-calc" id="vend-${pid}">${vendTxt}</td>
             <td class="td-valor" id="val-${pid}">${valTxt}</td>
           </tr>`;
@@ -1395,11 +1396,11 @@ async function loadTurno() {
     show('turno-content', `
       <div class="turno-tabs-wrap">
         <div class="turno-tabs">
-          <button type="button" class="turno-tab active" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
-          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
-          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
-          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
-          <button type="button" class="turno-tab" onclick="runAction(event, async (ev) => { await switchTurnoTab('resumo', ev.currentTarget); })">📋 Resumo</button>
+          <button type="button" class="turno-tab active" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
+          <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
+          <button type="button" class="turno-tab" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
+          <button type="button" class="turno-tab" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
+          <button type="button" class="turno-tab" data-turno-tab="resumo" onclick="runAction(event, async (ev) => { await switchTurnoTab('resumo', ev.currentTarget); })">📋 Resumo</button>
         </div>
         <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
       </div>
@@ -1413,10 +1414,10 @@ async function loadTurno() {
                   <th>Produto</th>
                   <th style="text-align:right">T. Anterior</th>
                   <th>Comparação</th>
-                  <th style="text-align:right">Encontrado</th>
+                  <th style="text-align:right">Encontrado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Entrada</th>
-                  <th style="text-align:right">Deixado</th>
-                  <th style="text-align:right">Fechados</th>
+                  <th style="text-align:right">Deixado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
+                  <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Vendido</th>
                   <th style="text-align:right">Valor</th>
                 </tr>
@@ -1451,16 +1452,16 @@ async function loadTurno() {
           <div class="card-title">💰 Caixa</div>
           <div class="caixa-grid">
             <div class="caixa-item">
-              <label>TPA / Máquina</label>
-              <input type="number" min="0" step="any" id="c-tpa" value="${fmtCaixaAttr(caixa.tpa)}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+              <label>TPA / Máquina <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
+              <input type="number" min="0" step="any" id="c-tpa" value="${fmtCaixaAttr(caixa.tpa)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
-              <label>Transferência</label>
-              <input type="number" min="0" step="any" id="c-transf" value="${fmtCaixaAttr(caixa.transferencia)}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+              <label>Transferência <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
+              <input type="number" min="0" step="any" id="c-transf" value="${fmtCaixaAttr(caixa.transferencia)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
-              <label>Dinheiro</label>
-              <input type="number" min="0" step="any" id="c-din" value="${fmtCaixaAttr(caixa.dinheiro)}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+              <label>Dinheiro <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
+              <input type="number" min="0" step="any" id="c-din" value="${fmtCaixaAttr(caixa.dinheiro)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
               <label>Saída</label>
@@ -1746,6 +1747,47 @@ function toggleTurnoView() {
   if (btn) btn.textContent = isScroll ? '▣ Abas' : '☰ Tudo';
 }
 
+function clearStockCaixaValidationHighlight() {
+  document.querySelectorAll('.stock-caixa-required-missing').forEach((el) =>
+    el.classList.remove('stock-caixa-required-missing')
+  );
+}
+
+function collectMissingStockCaixaObrigatorio() {
+  const missing = [];
+  document.querySelectorAll('input[data-stock-req="1"]').forEach((el) => {
+    if (el.disabled) return;
+    if (String(el.value).trim() === '') missing.push(el);
+  });
+  document.querySelectorAll('input[data-caixa-req="1"]').forEach((el) => {
+    if (el.disabled) return;
+    if (String(el.value).trim() === '') missing.push(el);
+  });
+  return missing;
+}
+
+async function focusTurnoFieldParaValidacao(el) {
+  if (!el) return;
+  const wrap = document.getElementById('turno-content');
+  const scrollMode = wrap?.classList.contains('scroll-mode');
+  if (!scrollMode) {
+    const panel = el.closest('.turno-tab-panel');
+    const tabId = panel && panel.id;
+    const name =
+      tabId === 'tab-stock' ? 'stock' : tabId === 'tab-registos' ? 'registos' : null;
+    if (name) {
+      const btn = document.querySelector('.turno-tab[data-turno-tab="' + name + '"]');
+      if (btn) await switchTurnoTab(name, btn);
+    }
+  }
+  requestAnimationFrame(() => {
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    try {
+      el.focus();
+    } catch (_) {}
+  });
+}
+
 async function guardarCaixa(turnoId) {
   try {
     show('turno-msg','');
@@ -1768,14 +1810,28 @@ async function saveTurnoNotas(turnoId, notas) {
 }
 
 async function fecharTurno(ev, id) {
+  clearStockCaixaValidationHighlight();
+  const missing = collectMissingStockCaixaObrigatorio();
+  if (missing.length) {
+    missing.forEach((el) => el.classList.add('stock-caixa-required-missing'));
+    err(
+      'turno-msg',
+      'Preenche todos os campos obrigatórios: em Stock (Encontrado, Deixado e Fechados de cada produto) e em Caixa (TPA, Transferência e Dinheiro). Podes usar 0 quando for o caso.'
+    );
+    await focusTurnoFieldParaValidacao(missing[0]);
+    return;
+  }
   if (!confirm('Fechar este turno? Não poderá ser editado depois.')) return;
   await runAction(ev, async () => {
     try {
       await guardarStock(id);
       await guardarCaixa(id);
       await api('POST', `/turnos/${id}/fechar`);
+      clearStockCaixaValidationHighlight();
       await loadTurno();
-    } catch (e) { err('turno-msg', e.message); }
+    } catch (e) {
+      err('turno-msg', e.message);
+    }
   });
 }
 

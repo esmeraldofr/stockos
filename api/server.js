@@ -430,7 +430,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-03-vendas-qty-input';
+const STOCKOS_API_BUILD = '2026-04-03-calendario-turnos';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -1893,6 +1893,36 @@ app.get('/api/dia', auth, async (req, res) => {
       });
     }
     res.json(result);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** Lista leve de turnos num mês (calendário): id, data, nome, estado. */
+app.get('/api/calendario-turnos', auth, async (req, res) => {
+  try {
+    const y = parseInt(req.query.ano, 10);
+    const m = parseInt(req.query.mes, 10);
+    if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) {
+      return res.status(400).json({ erro: 'Parâmetros ano e mes (1–12) são obrigatórios.' });
+    }
+    const pad = (n) => String(n).padStart(2, '0');
+    const dataIni = `${y}-${pad(m)}-01`;
+    const lastDay = new Date(y, m, 0).getDate();
+    const dataFim = `${y}-${pad(m)}-${pad(lastDay)}`;
+    const r = await query(
+      `SELECT id, data, nome, estado FROM turnos
+       WHERE data >= $1::date AND data <= $2::date
+       ORDER BY data, CASE nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`,
+      [dataIni, dataFim]
+    );
+    const rows = r.rows.map((row) => ({
+      id: row.id,
+      data: normDataPostgres(row.data),
+      nome: row.nome,
+      estado: row.estado
+    }));
+    res.json(rows);
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

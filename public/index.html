@@ -191,6 +191,29 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
   margin:0;
 }
 
+/* Calendário mensal (estado dos turnos) */
+.cal-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.cal-legend-intro{font-size:12px;color:#94a3b8;line-height:1.45;margin:0 0 14px}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.cal-wd{text-align:center;font-size:11px;font-weight:600;color:#64748b;padding:6px 2px;text-transform:uppercase;letter-spacing:.04em}
+.cal-cell{
+  min-height:76px;border:1px solid #334155;border-radius:10px;padding:6px 6px 8px;background:#0f172a;
+  cursor:pointer;transition:border-color .15s,background .15s
+}
+.cal-cell:hover{background:#1e293b;border-color:#475569}
+.cal-cell--today{border-color:#3b82f6;box-shadow:0 0 0 1px rgba(59,130,246,.35)}
+.cal-cell--empty{background:transparent;border:none;cursor:default;min-height:8px;pointer-events:none}
+.cal-daynum{font-size:14px;font-weight:700;color:#f1f5f9}
+.cal-shifts{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap;align-items:center}
+.cal-pill{font-size:9px;padding:2px 5px;border-radius:4px;font-weight:700;line-height:1.2}
+.cal-pill--livre{background:#1e293b;color:#64748b;border:1px dashed #475569}
+.cal-pill--aberto{background:#14532d;color:#86efac}
+.cal-pill--fechado{background:#292524;color:#a8a29e}
+@media(max-width:400px){
+  .cal-cell{min-height:68px;padding:4px}
+  .cal-pill{font-size:8px;padding:2px 3px}
+}
+
 /* Alert */
 .alert{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:12px}
 .alert-error{background:#450a0a;color:#fca5a5;border:1px solid #7f1d1d}
@@ -379,7 +402,9 @@ const S = {
   turnoCanEdit: false,
   produtos: [],
   utilizadores: [],
-  turnosDia: []
+  turnosDia: [],
+  /** YYYY-MM do mês visível na página Calendário */
+  calYM: null
 };
 
 // ── API ───────────────────────────────────────────────────────
@@ -686,11 +711,12 @@ async function navigate(page, params) {
 
 async function draw() {
   if (!S.token) { drawLogin(); return; }
-  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'depositos'].includes(S.page)) {
+  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'depositos', 'calendario'].includes(S.page)) {
     S.page = 'dia';
   }
   switch (S.page) {
     case 'dia':      await drawDia(); break;
+    case 'calendario': await drawCalendario(); break;
     case 'depositos':
       if (!['admin', 'gestor', 'compras'].includes(S.user?.role)) { await navigate('dia'); return; }
       await drawDepositos();
@@ -766,6 +792,10 @@ function navBar() {
       <button class="nav-btn ${S.page==='dia'?'active':''}" onclick="runAction(event, () => navigate('dia'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         Dia
+      </button>
+      <button class="nav-btn ${S.page==='calendario'?'active':''}" onclick="runAction(event, () => navigate('calendario'))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/><line x1="8" y1="18" x2="8" y2="18.01"/><line x1="12" y1="18" x2="12" y2="18.01"/><line x1="16" y1="18" x2="16" y2="18.01"/></svg>
+        Calendário
       </button>
       ${showDepositos ? `
       <button class="nav-btn ${S.page==='depositos'?'active':''}" onclick="runAction(event, () => navigate('depositos'))">
@@ -1186,6 +1216,122 @@ async function loadDia() {
     `);
   } catch(e) {
     show('dia-content', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+function calMonthTitle(ym) {
+  const parts = String(ym || '').split('-');
+  if (parts.length < 2) return ym;
+  const y = parseInt(parts[0], 10);
+  const mo = parseInt(parts[1], 10);
+  if (!Number.isFinite(y) || !Number.isFinite(mo)) return ym;
+  const d = new Date(y, mo - 1, 1);
+  const raw = d.toLocaleDateString('pt-AO', { month: 'long', year: 'numeric' });
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+async function drawCalendario() {
+  if (!S.calYM) S.calYM = S.date.slice(0, 7);
+  render(`
+    <div id="header">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:#f1f5f9">Calendário de turnos</div>
+        <div class="header-sub">${S.user?.nome}${S.user?.username ? ` · @${S.user.username}` : ''}</div>
+      </div>
+    </div>
+    <div id="content">
+      <div class="cal-toolbar">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => calShiftMonth(-1))">‹ Mês</button>
+        <span id="cal-month-label" style="font-weight:600;color:#e2e8f0;min-width:180px;text-align:center"></span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => calShiftMonth(1))">Mês ›</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => calGoToday())" style="margin-left:4px">Hoje</button>
+      </div>
+      <div id="cal-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadCalendarioTurnos();
+}
+
+function calShiftMonth(delta) {
+  const parts = String(S.calYM || '').split('-');
+  const y = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return;
+  const d = new Date(y, m - 1 + delta, 1);
+  S.calYM = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  loadCalendarioTurnos();
+}
+
+function calGoToday() {
+  S.calYM = new Date().toISOString().slice(0, 7);
+  loadCalendarioTurnos();
+}
+
+async function goDiaFromCal(iso) {
+  S.date = iso;
+  syncDatePickersAcrossPages();
+  await navigate('dia');
+}
+
+async function loadCalendarioTurnos() {
+  const wrap = document.getElementById('cal-content');
+  const lab = document.getElementById('cal-month-label');
+  if (lab) lab.textContent = calMonthTitle(S.calYM);
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="text-center" style="padding:32px;color:#64748b"><div class="spinner"></div></div>';
+  try {
+    const parts = String(S.calYM || '').split('-');
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    const rows = await api('GET', `/calendario-turnos?ano=${y}&mes=${m}`);
+    const byDay = {};
+    for (const r of rows) {
+      const dk = String(r.data).slice(0, 10);
+      if (!byDay[dk]) byDay[dk] = {};
+      byDay[dk][r.nome] = { estado: r.estado, id: r.id };
+    }
+    const pad = (n) => String(n).padStart(2, '0');
+    const lastDay = new Date(y, m, 0).getDate();
+    const today = new Date().toISOString().split('T')[0];
+    const weekHtml = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
+      .map((w) => `<div class="cal-wd">${w}</div>`)
+      .join('');
+    const jsDow1 = new Date(y, m - 1, 1).getDay();
+    const lead = (jsDow1 + 6) % 7;
+    let cells = '';
+    for (let i = 0; i < lead; i++) cells += '<div class="cal-cell cal-cell--empty"></div>';
+    for (let d = 1; d <= lastDay; d++) {
+      const iso = `${y}-${pad(m)}-${pad(d)}`;
+      const map = byDay[iso] || {};
+      const isToday = iso === today;
+      const pills = ['manha', 'tarde', 'noite'].map((nome) => {
+        const t = map[nome];
+        const L = nome === 'manha' ? 'M' : nome === 'tarde' ? 'T' : 'N';
+        if (!t) return `<span class="cal-pill cal-pill--livre" title="${turnoLabel(nome)}: não iniciado">${L}</span>`;
+        const cls = t.estado === 'aberto' ? 'cal-pill--aberto' : 'cal-pill--fechado';
+        const st = t.estado === 'aberto' ? 'aberto' : 'fechado';
+        return `<span class="cal-pill ${cls}" title="${turnoLabel(nome)}: ${st}">${L}</span>`;
+      }).join('');
+      cells += `
+        <div class="cal-cell${isToday ? ' cal-cell--today' : ''}" role="button" tabindex="0"
+          onclick="runAction(event, () => goDiaFromCal('${iso}'))"
+          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();runAction(event, () => goDiaFromCal('${iso}'))}">
+          <div class="cal-daynum">${d}</div>
+          <div class="cal-shifts">${pills}</div>
+        </div>`;
+    }
+    wrap.innerHTML = `
+      <div class="card">
+        <p class="cal-legend-intro">Cada dia: <strong>M</strong> manhã, <strong>T</strong> tarde, <strong>N</strong> noite.
+        <span class="cal-pill cal-pill--livre" style="margin:0 4px">M</span> não iniciado ·
+        <span class="cal-pill cal-pill--aberto" style="margin:0 4px">M</span> aberto ·
+        <span class="cal-pill cal-pill--fechado" style="margin:0 4px">M</span> fechado.
+        Toque num dia para ver a vista <strong>Dia</strong>.</p>
+        <div class="cal-grid">${weekHtml}${cells}</div>
+      </div>`;
+  } catch (e) {
+    wrap.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
   }
 }
 

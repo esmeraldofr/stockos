@@ -92,6 +92,12 @@ tr:hover td{background:#1e293b}
 .td-name .stock-prod-meta{font-size:11px;color:#64748b;font-weight:400;line-height:1.2;margin-top:3px;white-space:nowrap}
 tr:hover .td-name{background:#1e293b}
 tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
+#tab-stock tbody tr.stock-row--active td{background:rgba(59,130,246,.1)}
+#tab-stock tbody tr.stock-row--active .td-name{background:rgba(30,64,175,.28)}
+#tab-stock tbody tr.stock-row--active .td-name .stock-prod-nome{color:#e0f2fe}
+#tab-stock tbody tr.stock-row--active td:first-child{box-shadow:inset 3px 0 0 #3b82f6}
+#tab-stock tbody tr.stock-row--active:hover td{background:rgba(59,130,246,.14)}
+#tab-stock tbody tr.stock-row--active:hover .td-name{background:rgba(30,64,175,.34)}
 .section-header{position:sticky;left:0}
 .td-cat{font-size:10px;color:#64748b}
 .td-input{width:90px;text-align:right}
@@ -406,6 +412,38 @@ const S = {
   /** YYYY-MM do mês visível na página Calendário */
   calYM: null
 };
+
+/** Destaca a linha de stock em edição (foco num dos inputs Encontrado/Deixado/Fechados). */
+(function stockRowHighlightInit() {
+  function clearStockRowHighlight() {
+    document.querySelectorAll('#tab-stock tr.stock-row--active').forEach((r) => r.classList.remove('stock-row--active'));
+  }
+  document.addEventListener(
+    'focusin',
+    function (ev) {
+      const t = ev.target;
+      if (!t || !t.matches || !t.matches('#tab-stock input[data-stock-pid]')) return;
+      clearStockRowHighlight();
+      const tr = t.closest('tr.stock-row');
+      if (tr) tr.classList.add('stock-row--active');
+    },
+    true
+  );
+  document.addEventListener(
+    'focusout',
+    function (ev) {
+      const t = ev.target;
+      if (!t || !t.matches || !t.matches('#tab-stock input[data-stock-pid]')) return;
+      const tr = t.closest('tr.stock-row');
+      requestAnimationFrame(() => {
+        const ae = document.activeElement;
+        if (ae && tr && tr.contains(ae)) return;
+        clearStockRowHighlight();
+      });
+    },
+    true
+  );
+})();
 
 // ── API ───────────────────────────────────────────────────────
 const API = '/api';
@@ -1669,7 +1707,7 @@ async function loadTurno() {
             ? `${medicaoSigla(s.tipo_medicao)} · ${fmt(s.preco)}`
             : medicaoSigla(s.tipo_medicao);
         return `
-          <tr>
+          <tr class="stock-row">
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div></td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>

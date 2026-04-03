@@ -381,6 +381,28 @@ function fmtNum(v) {
   const n = parseFloat(v) || 0;
   return n.toLocaleString('pt-AO', { maximumFractionDigits: 2 });
 }
+/** Quantidade: célula ou input vazio quando é zero (não preenchido). */
+function isQtyZero(v) {
+  if (v === '' || v == null) return true;
+  const n = parseFloat(String(v).replace(/\./g, '').replace(',', '.'));
+  return !Number.isFinite(n) || Math.abs(n) < 1e-9;
+}
+function fmtQtyInput(v) {
+  return isQtyZero(v) ? '' : fmtNum(v);
+}
+/** Valor em Kz para totais da caixa: vazio quando zero. */
+function fmtKzOrEmpty(v) {
+  const n = parseFloat(v) || 0;
+  return n === 0 ? '' : fmt(n);
+}
+function fmtCaixaAttr(v) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) && n !== 0 ? String(v).trim() : '';
+}
+function stockInputBlurQty(el) {
+  const n = parseRaw(el.value);
+  el.value = n === 0 ? '' : fmtNum(n);
+}
 function medicaoSigla(tipo) {
   return tipo === 'peso' ? 'kg' : 'un';
 }
@@ -1326,6 +1348,8 @@ async function loadTurno() {
         const pid = s.produto_id;
         const vend = Math.max(0, (stockBuf[pid]?.encontrado||0) + (stockBuf[pid]?.entrada||0) - (stockBuf[pid]?.deixado||0));
         const val  = vend * parseFloat(s.preco);
+        const vendTxt = vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}` : '';
+        const valTxt = parseFloat(s.preco) > 0 && vend > 0 ? fmt(val) : (parseFloat(s.preco) > 0 ? '' : '—');
         let compHtml = '<span class="comp-null">—</span>';
         if (s.comparacao === 'igual') compHtml = '<span class="comp-igual">✓</span>';
         else if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
@@ -1341,18 +1365,18 @@ async function loadTurno() {
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div></td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
-            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.encontrado)}"
-              onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
+            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.encontrado)}"
+              onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
               oninput="updateStock('${pid}','encontrado',this.value)" ${inputAttr}/></td>
-            <td class="td-calc" id="entrada-${pid}">${fmtNum(s.entrada)}</td>
-            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.deixado)}"
-              onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
+            <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
+            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.deixado)}"
+              onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
               oninput="updateStock('${pid}','deixado',this.value)" ${inputAttr}/></td>
-            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtNum(s.fechados||0)}"
-              onfocus="this.value=parseRaw(this.value)||''" onblur="this.value=fmtNum(parseRaw(this.value))"
+            <td class="td-input"><input type="text" inputmode="decimal" value="${fmtQtyInput(s.fechados)}"
+              onfocus="this.value=parseRaw(this.value)||''" onblur="stockInputBlurQty(this)"
               oninput="updateStock('${pid}','fechados',this.value)" ${inputAttr}/></td>
-            <td class="td-calc" id="vend-${pid}">${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}</td>
-            <td class="td-valor" id="val-${pid}">${s.preco > 0 ? fmt(val) : '—'}</td>
+            <td class="td-calc" id="vend-${pid}">${vendTxt}</td>
+            <td class="td-valor" id="val-${pid}">${valTxt}</td>
           </tr>`;
       }).join('');
     }
@@ -1403,8 +1427,8 @@ async function loadTurno() {
                 ${tableFor(outro,'📦 Outros')}
                 <tr id="stock-total-row" style="font-weight:700;border-top:2px solid #334155;background:#1e293b">
                   <td colspan="7" style="padding:8px 10px;color:#94a3b8">Total</td>
-                  <td class="td-calc" id="total-vend">—</td>
-                  <td class="td-valor" id="total-val">—</td>
+                  <td class="td-calc" id="total-vend"></td>
+                  <td class="td-valor" id="total-val"></td>
                 </tr>
               </tbody>
             </table>
@@ -1428,28 +1452,28 @@ async function loadTurno() {
           <div class="caixa-grid">
             <div class="caixa-item">
               <label>TPA / Máquina</label>
-              <input type="number" min="0" id="c-tpa" value="${caixa.tpa||0}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+              <input type="number" min="0" step="any" id="c-tpa" value="${fmtCaixaAttr(caixa.tpa)}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
               <label>Transferência</label>
-              <input type="number" min="0" id="c-transf" value="${caixa.transferencia||0}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+              <input type="number" min="0" step="any" id="c-transf" value="${fmtCaixaAttr(caixa.transferencia)}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
               <label>Dinheiro</label>
-              <input type="number" min="0" id="c-din" value="${caixa.dinheiro||0}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
+              <input type="number" min="0" step="any" id="c-din" value="${fmtCaixaAttr(caixa.dinheiro)}" oninput="calcCaixa()" ${canEdit?'':'disabled'}/>
             </div>
             <div class="caixa-item">
               <label>Saída</label>
-              <input type="number" id="c-saida" value="${caixa.saida||0}" disabled style="opacity:.6"/>
+              <input type="number" step="any" id="c-saida" value="${fmtCaixaAttr(caixa.saida)}" disabled style="opacity:.6"/>
             </div>
           </div>
           <div class="caixa-total">
             <span class="caixa-total-label">Total Gerado</span>
-            <span class="caixa-total-value" id="c-total-gerado">${fmt(tg)}</span>
+            <span class="caixa-total-value" id="c-total-gerado">${fmtKzOrEmpty(tg)}</span>
           </div>
           <div class="caixa-total">
             <span class="caixa-total-label">Total Final</span>
-            <span class="caixa-total-value" id="c-total-final">${fmt(tf)}</span>
+            <span class="caixa-total-value" id="c-total-final">${fmtKzOrEmpty(tf)}</span>
           </div>
           <div style="margin-top:14px">
             <div class="card-title" style="margin-bottom:6px">📝 Observações</div>
@@ -1490,8 +1514,8 @@ async function loadTurno() {
   });
   const tv = document.getElementById('total-vend');
   const tva = document.getElementById('total-val');
-  if (tv) tv.textContent = fmtNum(initTotalVend);
-  if (tva) tva.textContent = fmt(initTotalVal);
+  if (tv) tv.textContent = initTotalVend > 0 ? fmtNum(initTotalVend) : '';
+  if (tva) tva.textContent = initTotalVal > 0 ? fmt(initTotalVal) : '';
 
     // Lazy load por aba para reduzir chamadas simultâneas e pressão no DB.
   } catch(e) {
@@ -1619,8 +1643,12 @@ function updateStock(pid, field, value) {
   const val = vend * preco;
   const ve = document.getElementById(`vend-${pid}`);
   const va = document.getElementById(`val-${pid}`);
-  if (ve) ve.textContent = fmtNum(vend);
-  if (va) va.textContent = preco > 0 ? fmt(val) : '—';
+  const tipoM = prod?.tipo_medicao || 'unidade';
+  if (ve) ve.textContent = vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(tipoM)}` : '';
+  if (va) {
+    va.textContent =
+      preco > 0 && vend > 0 ? fmt(val) : preco > 0 ? '' : '—';
+  }
   // Recalcular total
   let totalVend = 0, totalVal = 0;
   (S.turnoData?.stock || []).forEach(s => {
@@ -1631,8 +1659,8 @@ function updateStock(pid, field, value) {
   });
   const tv = document.getElementById('total-vend');
   const tva = document.getElementById('total-val');
-  if (tv) tv.textContent = fmtNum(totalVend);
-  if (tva) tva.textContent = fmt(totalVal);
+  if (tv) tv.textContent = totalVend > 0 ? fmtNum(totalVend) : '';
+  if (tva) tva.textContent = totalVal > 0 ? fmt(totalVal) : '';
   refreshMenuQtys();
   // Auto-save
   autoSaveSchedule();
@@ -1675,8 +1703,8 @@ function calcCaixa() {
   const tf = tg - saida;
   const elTG = document.getElementById('c-total-gerado');
   const elTF = document.getElementById('c-total-final');
-  if (elTG) elTG.textContent = fmt(tg);
-  if (elTF) elTF.textContent = fmt(tf);
+  if (elTG) elTG.textContent = fmtKzOrEmpty(tg);
+  if (elTF) elTF.textContent = fmtKzOrEmpty(tf);
   // Auto-save
   const turnoId = S.turnoData?.id;
   if (!turnoId) return;
@@ -1922,7 +1950,7 @@ async function submitEntrada(turnoId) {
     const soma = novaEntrada.filter(e => String(e.produto_id) === String(pid))
                             .reduce((s, e) => s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1), 0);
     const cell = document.getElementById(`entrada-${pid}`);
-    if (cell) cell.textContent = fmtNum(soma);
+    if (cell) cell.textContent = fmtQtyInput(soma);
     if (!stockBuf[pid]) stockBuf[pid] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
     stockBuf[pid].entrada = soma;
     updateStock(pid, 'entrada', soma);
@@ -1995,7 +2023,7 @@ function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
     el.innerHTML = formHtml + listaHtml;
     // Actualizar campo saída na caixa
     const cSaida = document.getElementById('c-saida');
-    if (cSaida) cSaida.value = total.toFixed(2);
+    if (cSaida) cSaida.value = total === 0 ? '' : total.toFixed(2);
     const elTG = document.getElementById('c-total-gerado');
     const elTF = document.getElementById('c-total-final');
     if (elTG && elTF) {
@@ -2003,8 +2031,9 @@ function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
       const transf= parseFloat(document.getElementById('c-transf')?.value)||0;
       const din   = parseFloat(document.getElementById('c-din')?.value)||0;
       const tg    = tpa + transf + din;
-      elTG.textContent = fmt(tg);
-      elTF.textContent = fmt(tg - total);
+      const tf    = tg - total;
+      elTG.textContent = fmtKzOrEmpty(tg);
+      elTF.textContent = fmtKzOrEmpty(tf);
     }
   } catch(e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;

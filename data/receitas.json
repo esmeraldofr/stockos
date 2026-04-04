@@ -1,8 +1,1 @@
-[{"id":10,"produto_id":"4b59fd41-9370-43f5-961d-16218c31d935","componente_id":"001fde33-e5a4-46b1-b1f3-567fe5db4174","quantidade":1.000}, 
- {"id":13,"produto_id":"4b59fd41-9370-43f5-961d-16218c31d935","componente_id":"023e0b51-c388-42db-8c19-17ab108f8c22","quantidade":1.000}, 
- {"id":12,"produto_id":"4b59fd41-9370-43f5-961d-16218c31d935","componente_id":"0421a491-331b-45ee-86f2-1096dfdaaabf","quantidade":1.000}, 
- {"id":11,"produto_id":"4b59fd41-9370-43f5-961d-16218c31d935","componente_id":"05e43d91-239d-48b9-adf1-aaf54f54e5db","quantidade":1.000}, 
- {"id":14,"produto_id":"4b59fd41-9370-43f5-961d-16218c31d935","componente_id":"0a8b1168-72f4-4db1-8a6d-d17dc8323e68","quantidade":1.000}, 
- {"id":5,"produto_id":"96bd69e5-5320-4e5d-b5f9-f95b487b5eed","componente_id":"0674d5b6-5c1f-4482-868d-289fb94cb09d","quantidade":1.000}, 
- {"id":4,"produto_id":"96bd69e5-5320-4e5d-b5f9-f95b487b5eed","componente_id":"4b59fd41-9370-43f5-961d-16218c31d935","quantidade":1.000}, 
- {"id":7,"produto_id":"96bd69e5-5320-4e5d-b5f9-f95b487b5eed","componente_id":"710d7777-aa09-40d5-b5d3-a44aa80ab093","quantidade":1.000}]
+{"code":"PGRST002","details":null,"hint":null,"message":"Could not query the database for the schema cache. Retrying."}

@@ -430,7 +430,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-03-stock-row-highlight';
+const STOCKOS_API_BUILD = '2026-04-03-resumo-dia-dois-casos';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -2205,12 +2205,120 @@ app.post('/api/turnos/:id/saidas', auth, async (req, res) => {
   } finally { client.release(); }
 });
 
+/** Igual à lógica da aba Vendas no cliente (menu, avulso, copos, bebidas unidade). */
+function precoVendaCoposSrv(copos, precoUnit, qtdPacote, precoPacote) {
+  const c = Math.max(0, Math.floor(parseFloat(copos) || 0));
+  const u = parseFloat(precoUnit) || 0;
+  const n = parseInt(String(qtdPacote), 10) || 0;
+  const p = parseFloat(precoPacote) || 0;
+  if (n >= 2 && p > 0) return Math.floor(c / n) * p + (c % n) * u;
+  return c * u;
+}
+
+function calcMenuQtySrv(stockBuf, receitasBuf, prodId) {
+  const recipe = receitasBuf[String(prodId)] || [];
+  if (!recipe.length) return null;
+  let min = Infinity;
+  for (const comp of recipe) {
+    const cid = String(comp.componente_id);
+    const b = stockBuf[cid] || { encontrado: 0, entrada: 0, deixado: 0 };
+    const vendido = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    min = Math.min(min, vendido / parseFloat(comp.quantidade));
+  }
+  return min === Infinity ? 0 : Math.floor(min);
+}
+
+function calcStandaloneQtySrv(stockBuf, receitasBuf, prodId) {
+  const pid = String(prodId);
+  const b = stockBuf[pid] || { encontrado: 0, entrada: 0, deixado: 0 };
+  const total = Math.max(0, b.encontrado + b.entrada - b.deixado);
+  let comboUsage = 0;
+  for (const menuProdId of Object.keys(receitasBuf)) {
+    const recipe = receitasBuf[menuProdId];
+    const comp = recipe.find((r) => String(r.componente_id) === pid);
+    if (comp) comboUsage += (calcMenuQtySrv(stockBuf, receitasBuf, menuProdId) || 0) * parseFloat(comp.quantidade);
+  }
+  return Math.max(0, total - comboUsage);
+}
+
+async function computeTotalVendasForTurno(turnoId) {
+  const [vendas, stockRows, produtos, receitasAll] = await Promise.all([
+    query(`SELECT produto_id, quantidade FROM turno_vendas WHERE turno_id=$1`, [turnoId]),
+    query(`SELECT produto_id, encontrado, entrada, deixado FROM turno_stock WHERE turno_id=$1`, [turnoId]),
+    query(
+      `SELECT id, preco, categoria, venda_avulso, venda_por_copo, kg_por_copo, preco_copos_pacote, qtd_copos_pacote
+       FROM produtos WHERE ativo=true`
+    ),
+    query(`SELECT produto_id, componente_id, quantidade FROM receitas`)
+  ]);
+  const receitasBuf = {};
+  for (const r of receitasAll.rows) {
+    const pid = String(r.produto_id);
+    if (!receitasBuf[pid]) receitasBuf[pid] = [];
+    receitasBuf[pid].push({ componente_id: r.componente_id, quantidade: parseFloat(r.quantidade) });
+  }
+  const stockBuf = {};
+  for (const r of stockRows.rows) {
+    const pid = String(r.produto_id);
+    stockBuf[pid] = {
+      encontrado: parseFloat(r.encontrado) || 0,
+      entrada: parseFloat(r.entrada) || 0,
+      deixado: parseFloat(r.deixado) || 0
+    };
+  }
+  const vendasBuf = {};
+  for (const r of vendas.rows) {
+    vendasBuf[String(r.produto_id)] = parseFloat(r.quantidade) || 0;
+  }
+  const pById = {};
+  for (const p of produtos.rows) pById[String(p.id)] = p;
+
+  const menuProdIds = produtos.rows.filter((p) => p.categoria === 'menu').map((p) => p.id);
+  const avulsoProdIds = produtos.rows
+    .filter((p) => p.venda_avulso && p.categoria !== 'menu' && p.categoria !== 'bebida')
+    .map((p) => p.id);
+  const bebidaProds = produtos.rows.filter((p) => p.categoria === 'bebida');
+  const bebidaCopoProdIds = bebidaProds.filter((p) => p.venda_por_copo && parseFloat(p.kg_por_copo) > 0).map((p) => p.id);
+  const bebidaOutras = bebidaProds.filter((p) => !p.venda_por_copo || !(parseFloat(p.kg_por_copo) > 0));
+
+  let total = 0;
+  for (const pid of menuProdIds) {
+    const pr = pById[String(pid)];
+    total += (vendasBuf[String(pid)] || 0) * (parseFloat(pr.preco) || 0);
+  }
+  for (const pid of avulsoProdIds) {
+    const pr = pById[String(pid)];
+    total += calcStandaloneQtySrv(stockBuf, receitasBuf, pid) * (parseFloat(pr.preco) || 0);
+  }
+  for (const pid of bebidaCopoProdIds) {
+    const p = pById[String(pid)];
+    const copos = vendasBuf[String(pid)] || 0;
+    total += precoVendaCoposSrv(copos, p.preco, p.qtd_copos_pacote, p.preco_copos_pacote);
+  }
+  for (const p of bebidaOutras) {
+    const pid = String(p.id);
+    const b = stockBuf[pid] || { encontrado: 0, entrada: 0, deixado: 0 };
+    const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    total += qty * (parseFloat(p.preco) || 0);
+  }
+  return total;
+}
+
+async function computeTotalVendasForDate(data) {
+  const turnos = await query(`SELECT id FROM turnos WHERE data=$1`, [data]);
+  let sum = 0;
+  for (const t of turnos.rows) {
+    sum += await computeTotalVendasForTurno(t.id);
+  }
+  return sum;
+}
+
 // ── DASHBOARD (agregado do dia — só admin) ────────────────────
 app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
   try {
     const data = req.query.data || new Date().toISOString().split('T')[0];
 
-    const [turnos, caixa] = await Promise.all([
+    const [turnos, caixa, totalVendasCalculado] = await Promise.all([
       query(
         `SELECT nome, estado, criado_em, fechado_em FROM turnos WHERE data=$1
          ORDER BY CASE nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
@@ -2228,23 +2336,14 @@ app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
          JOIN turnos t ON tc.turno_id=t.id
          WHERE t.data=$1`,
         [data]
-      )
+      ),
+      computeTotalVendasForDate(data)
     ]);
-
-    // Total vendas (bebidas com preço)
-    const vendas = await query(
-      `SELECT COALESCE(SUM(GREATEST(0, ts.encontrado+ts.entrada-ts.deixado) * p.preco),0) as total
-       FROM turno_stock ts
-       JOIN turnos t ON ts.turno_id=t.id
-       JOIN produtos p ON ts.produto_id=p.id
-       WHERE t.data=$1 AND p.em_stock_turno IS TRUE`,
-      [data]
-    );
 
     res.json({
       data,
       turnos: turnos.rows,
-      total_vendas: parseFloat(vendas.rows[0].total) || 0,
+      total_vendas_calculado: totalVendasCalculado,
       caixa: caixa.rows[0]
     });
   } catch(e) { res.status(500).json({ erro: e.message }); }

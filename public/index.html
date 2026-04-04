@@ -1220,30 +1220,42 @@ async function loadDia() {
     const resumoDia = isAdmin && dash ? `
       <div class="card">
         <div class="card-title">Resumo do dia</div>
-        <div class="total-grid">
-          <div class="total-item">
-            <div class="total-item-label">Total Vendas</div>
-            <div class="total-item-value" style="color:#4ade80">${fmt(dash.total_vendas)}</div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div style="border:1px solid #334155;border-radius:10px;padding:14px 16px;background:rgba(15,23,42,0.5)">
+            <div style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Estimativa automática (vendas)</div>
+            <div style="font-size:24px;font-weight:700;color:#4ade80;line-height:1.2">${fmt(dash.total_vendas_calculado ?? 0)}</div>
+            <p style="margin:10px 0 0;font-size:12px;color:#64748b;line-height:1.45">Soma para todos os turnos do dia, com a mesma regra da aba <strong>Vendas</strong> (menu, avulso, bebidas por copo e por unidade). É um valor <strong>estimado</strong> a partir de preços e quantidades.</p>
           </div>
-          <div class="total-item">
-            <div class="total-item-label">Total Caixa</div>
-            <div class="total-item-value" style="color:#4ade80">${fmt(c?.total_final||0)}</div>
-          </div>
-          <div class="total-item">
-            <div class="total-item-label">TPA</div>
-            <div class="total-item-value" style="font-size:16px">${fmt(c?.tpa||0)}</div>
-          </div>
-          <div class="total-item">
-            <div class="total-item-label">Dinheiro</div>
-            <div class="total-item-value" style="font-size:16px">${fmt(c?.dinheiro||0)}</div>
-          </div>
-          <div class="total-item">
-            <div class="total-item-label">Transferência</div>
-            <div class="total-item-value" style="font-size:16px">${fmt(c?.transferencia||0)}</div>
-          </div>
-          <div class="total-item">
-            <div class="total-item-label">Saída</div>
-            <div class="total-item-value" style="font-size:16px;color:#f87171">${fmt(c?.saida||0)}</div>
+          <div style="border:1px solid #334155;border-radius:10px;padding:14px 16px;background:rgba(15,23,42,0.5)">
+            <div style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Caixa (manual)</div>
+            <div style="font-size:24px;font-weight:700;color:#60a5fa;line-height:1.2">${fmt(c?.total_final||0)}</div>
+            <p style="margin:10px 0 0;font-size:12px;color:#64748b;line-height:1.45">Valores <strong>introduzidos</strong> por turno (TPA, transferência, dinheiro, saídas). O total final é a soma dos totais por turno.</p>
+            <div class="total-grid" style="margin-top:14px">
+              <div class="total-item">
+                <div class="total-item-label">Total gerado</div>
+                <div class="total-item-value" style="font-size:16px">${fmt(c?.total_gerado||0)}</div>
+              </div>
+              <div class="total-item">
+                <div class="total-item-label">Total final</div>
+                <div class="total-item-value" style="font-size:16px;color:#60a5fa">${fmt(c?.total_final||0)}</div>
+              </div>
+              <div class="total-item">
+                <div class="total-item-label">TPA</div>
+                <div class="total-item-value" style="font-size:16px">${fmt(c?.tpa||0)}</div>
+              </div>
+              <div class="total-item">
+                <div class="total-item-label">Dinheiro</div>
+                <div class="total-item-value" style="font-size:16px">${fmt(c?.dinheiro||0)}</div>
+              </div>
+              <div class="total-item">
+                <div class="total-item-label">Transferência</div>
+                <div class="total-item-value" style="font-size:16px">${fmt(c?.transferencia||0)}</div>
+              </div>
+              <div class="total-item">
+                <div class="total-item-label">Saída</div>
+                <div class="total-item-value" style="font-size:16px;color:#f87171">${fmt(c?.saida||0)}</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>` : '';

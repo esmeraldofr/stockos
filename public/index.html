@@ -1225,12 +1225,6 @@ async function loadDia() {
     const qMon = encodeURIComponent(monEsc);
     const qDom = encodeURIComponent(addDays(monEsc, 6));
 
-    const secondaryPromise = Promise.all([
-      isAdmin ? api('GET', `/dashboard?data=${encodeURIComponent(S.date)}&fast=1`).catch(() => null) : Promise.resolve(null),
-      isAdmin ? api('GET', `/dashboard/vendas-estimadas?data=${encodeURIComponent(S.date)}`).catch(() => null) : Promise.resolve(null),
-      api('GET', `/escala/semana?data_inicio=${qMon}&data_fim=${qDom}`).catch(() => ({ semana: [], template: [] }))
-    ]);
-
     const turnos = await api('GET', `/dia?data=${S.date}&resumo=1`);
     S.turnosDia = turnos;
     const turnoMap = {};
@@ -1275,18 +1269,29 @@ async function loadDia() {
       ${resumoLoading}
     `);
 
-    secondaryPromise.then(([dashFast, vendasEst, escalaPack]) => {
+    Promise.all([
+      isAdmin ? api('GET', `/dashboard?data=${encodeURIComponent(S.date)}&fast=1`).catch(() => null) : Promise.resolve(null),
+      isAdmin ? api('GET', `/dashboard/vendas-estimadas?data=${encodeURIComponent(S.date)}`).catch(() => null) : Promise.resolve(null),
+      api('GET', `/escala/semana?data_inicio=${qMon}&data_fim=${qDom}`).catch(() => ({ semana: [], template: [] }))
+    ]).then(([dashFast, vendasEst, escalaPack]) => {
       if (S.page !== 'dia') return;
-      const escRowsWeek = escalaPack?.semana || [];
-      const escTpl = escalaPack?.template || [];
-      const slotE = document.getElementById('dia-escala-slot');
-      if (slotE) slotE.outerHTML = htmlEscalaSemanaReadonly(escRowsWeek, escTpl, S.date);
-      if (isAdmin) {
-        const dash = dashFast
-          ? { ...dashFast, total_vendas_calculado: vendasEst?.total_vendas_calculado ?? 0 }
-          : null;
+      try {
+        const escRowsWeek = escalaPack?.semana || [];
+        const escTpl = escalaPack?.template || [];
+        const slotE = document.getElementById('dia-escala-slot');
+        if (slotE) slotE.outerHTML = htmlEscalaSemanaReadonly(escRowsWeek, escTpl, S.date);
+        if (isAdmin) {
+          const dash = dashFast && typeof dashFast === 'object'
+            ? { ...dashFast, total_vendas_calculado: vendasEst?.total_vendas_calculado ?? 0 }
+            : null;
+          const slotR = document.getElementById('dia-resumo-slot');
+          if (slotR) slotR.outerHTML = dash ? htmlResumoDiaAdmin(dash) : '<div id="dia-resumo-slot" class="card"><div class="card-title">Resumo do dia</div><p style="font-size:13px;color:#64748b">Não foi possível carregar o resumo.</p></div>';
+        }
+      } catch (err) {
+        const slotE = document.getElementById('dia-escala-slot');
+        if (slotE) slotE.innerHTML = `<div class="alert alert-error" style="margin:12px">${err && err.message ? err.message : String(err)}</div>`;
         const slotR = document.getElementById('dia-resumo-slot');
-        if (slotR) slotR.outerHTML = dash ? htmlResumoDiaAdmin(dash) : '<div id="dia-resumo-slot" class="card"><div class="card-title">Resumo do dia</div><p style="font-size:13px;color:#64748b">Não foi possível carregar o resumo.</p></div>';
+        if (slotR) slotR.innerHTML = `<div class="alert alert-error" style="margin:12px">${err && err.message ? err.message : String(err)}</div>`;
       }
     }).catch((e) => {
       if (S.page !== 'dia') return;

@@ -1171,60 +1171,8 @@ function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
     </div>`;
 }
 
-function htmlResumoDiaAdmin(dash, opts) {
-  if (!dash) return '';
-  const c = dash.caixa;
-  const vendasPending = opts && opts.vendasPending;
-  const vendasHtml = vendasPending
-    ? `<div id="dia-resumo-vendas-est-slot" style="min-height:36px;display:flex;align-items:center;gap:10px"><div class="spinner"></div><span style="font-size:13px;color:#64748b">A calcular estimativa…</span></div>`
-    : `<div style="font-size:24px;font-weight:700;color:#4ade80;line-height:1.2">${fmt(dash.total_vendas_calculado ?? 0)}</div>`;
-  return `
-      <div class="card">
-        <div class="card-title">Resumo do dia</div>
-        <div style="display:flex;flex-direction:column;gap:14px">
-          <div style="border:1px solid #334155;border-radius:10px;padding:14px 16px;background:rgba(15,23,42,0.5)">
-            <div style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Estimativa automática (vendas)</div>
-            ${vendasHtml}
-            <p style="margin:10px 0 0;font-size:12px;color:#64748b;line-height:1.45">Soma para todos os turnos do dia, com a mesma regra da aba <strong>Vendas</strong> (menu, avulso, bebidas por copo e por unidade). É um valor <strong>estimado</strong> a partir de preços e quantidades.</p>
-          </div>
-          <div style="border:1px solid #334155;border-radius:10px;padding:14px 16px;background:rgba(15,23,42,0.5)">
-            <div style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Caixa (manual)</div>
-            <div style="font-size:24px;font-weight:700;color:#60a5fa;line-height:1.2">${fmt(c?.total_final||0)}</div>
-            <p style="margin:10px 0 0;font-size:12px;color:#64748b;line-height:1.45">Valores <strong>introduzidos</strong> por turno (TPA, transferência, dinheiro, saídas). O total final é a soma dos totais por turno.</p>
-            <div class="total-grid" style="margin-top:14px">
-              <div class="total-item">
-                <div class="total-item-label">Total gerado</div>
-                <div class="total-item-value" style="font-size:16px">${fmt(c?.total_gerado||0)}</div>
-              </div>
-              <div class="total-item">
-                <div class="total-item-label">Total final</div>
-                <div class="total-item-value" style="font-size:16px;color:#60a5fa">${fmt(c?.total_final||0)}</div>
-              </div>
-              <div class="total-item">
-                <div class="total-item-label">TPA</div>
-                <div class="total-item-value" style="font-size:16px">${fmt(c?.tpa||0)}</div>
-              </div>
-              <div class="total-item">
-                <div class="total-item-label">Dinheiro</div>
-                <div class="total-item-value" style="font-size:16px">${fmt(c?.dinheiro||0)}</div>
-              </div>
-              <div class="total-item">
-                <div class="total-item-label">Transferência</div>
-                <div class="total-item-value" style="font-size:16px">${fmt(c?.transferencia||0)}</div>
-              </div>
-              <div class="total-item">
-                <div class="total-item-label">Saída</div>
-                <div class="total-item-value" style="font-size:16px;color:#f87171">${fmt(c?.saida||0)}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>`;
-}
-
 async function loadDia() {
   try {
-    const isAdmin = S.user?.role === 'admin';
     const monEsc = mondayOfWeekIso(S.date);
     const qMon = encodeURIComponent(monEsc);
     const qDom = encodeURIComponent(addDays(monEsc, 6));
@@ -1263,64 +1211,29 @@ async function loadDia() {
     }).join('');
 
     const escalaLoading = `<div id="dia-escala-slot" class="card"><div class="text-center" style="padding:28px;color:#64748b"><div class="spinner"></div><div style="margin-top:10px;font-size:12px">A carregar escala…</div></div></div>`;
-    const resumoLoading = isAdmin
-      ? `<div id="dia-resumo-slot" class="card"><div class="text-center" style="padding:28px;color:#64748b"><div class="spinner"></div><div style="margin-top:10px;font-size:12px">A carregar resumo…</div></div></div>`
-      : '';
 
     show('dia-content', `
       <div class="turno-cards">${cards}</div>
       ${escalaLoading}
-      ${resumoLoading}
     `);
 
-    Promise.all([
-      isAdmin ? api('GET', `/dashboard?data=${encodeURIComponent(S.date)}&fast=1`).catch(() => null) : Promise.resolve(null),
-      api('GET', `/escala/semana?data_inicio=${qMon}&data_fim=${qDom}`).catch(() => ({ semana: [], template: [] }))
-    ]).then(([dashFast, escalaPack]) => {
+    api('GET', `/escala/semana?data_inicio=${qMon}&data_fim=${qDom}`)
+      .catch(() => ({ semana: [], template: [] }))
+      .then((escalaPack) => {
       if (S.page !== 'dia') return;
       try {
         const escRowsWeek = escalaPack?.semana || [];
         const escTpl = escalaPack?.template || [];
         const slotE = document.getElementById('dia-escala-slot');
         if (slotE) slotE.outerHTML = htmlEscalaSemanaReadonly(escRowsWeek, escTpl, S.date);
-        if (isAdmin) {
-          const dash = dashFast && typeof dashFast === 'object'
-            ? { ...dashFast, total_vendas_calculado: null }
-            : null;
-          const slotR = document.getElementById('dia-resumo-slot');
-          if (slotR) {
-            slotR.outerHTML = dash
-              ? htmlResumoDiaAdmin(dash, { vendasPending: true })
-              : '<div id="dia-resumo-slot" class="card"><div class="card-title">Resumo do dia</div><p style="font-size:13px;color:#64748b">Não foi possível carregar o resumo.</p></div>';
-          }
-          if (dash) {
-            api('GET', `/dashboard/vendas-estimadas?data=${encodeURIComponent(S.date)}`)
-              .then((vendasEst) => {
-                if (S.page !== 'dia') return;
-                const el = document.getElementById('dia-resumo-vendas-est-slot');
-                if (el) {
-                  el.outerHTML = `<div style="font-size:24px;font-weight:700;color:#4ade80;line-height:1.2">${fmt(vendasEst?.total_vendas_calculado ?? 0)}</div>`;
-                }
-              })
-              .catch(() => {
-                if (S.page !== 'dia') return;
-                const el = document.getElementById('dia-resumo-vendas-est-slot');
-                if (el) el.innerHTML = '<span style="font-size:13px;color:#94a3b8">Estimativa indisponível.</span>';
-              });
-          }
-        }
       } catch (err) {
         const slotE = document.getElementById('dia-escala-slot');
         if (slotE) slotE.innerHTML = `<div class="alert alert-error" style="margin:12px">${err && err.message ? err.message : String(err)}</div>`;
-        const slotR = document.getElementById('dia-resumo-slot');
-        if (slotR) slotR.innerHTML = `<div class="alert alert-error" style="margin:12px">${err && err.message ? err.message : String(err)}</div>`;
       }
     }).catch((e) => {
       if (S.page !== 'dia') return;
       const slotE = document.getElementById('dia-escala-slot');
       if (slotE) slotE.innerHTML = `<div class="alert alert-error" style="margin:12px">${e.message}</div>`;
-      const slotR = document.getElementById('dia-resumo-slot');
-      if (slotR) slotR.innerHTML = `<div class="alert alert-error" style="margin:12px">${e.message}</div>`;
     });
   } catch(e) {
     show('dia-content', `<div class="alert alert-error">${e.message}</div>`);

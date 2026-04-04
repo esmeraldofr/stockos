@@ -2500,6 +2500,28 @@ async function computeTotalVendasForDate(data) {
   return sum;
 }
 
+/** Cache curto do total estimado (mesmo dia repetido ao navegar / refresh). TTL configurável. */
+const _vendasEstimadasCache = new Map();
+const VENDAS_ESTIMADAS_CACHE_MS = Math.max(
+  15_000,
+  (parseInt(process.env.VENDAS_ESTIMADAS_CACHE_SEC || '90', 10) || 90) * 1000
+);
+
+async function computeTotalVendasForDateCached(data) {
+  const now = Date.now();
+  const hit = _vendasEstimadasCache.get(data);
+  if (hit && now - hit.at < VENDAS_ESTIMADAS_CACHE_MS) return hit.total;
+  const total = await computeTotalVendasForDate(data);
+  _vendasEstimadasCache.set(data, { at: now, total });
+  if (_vendasEstimadasCache.size > 100) {
+    const cutoff = now - VENDAS_ESTIMADAS_CACHE_MS;
+    for (const [k, v] of _vendasEstimadasCache) {
+      if (!v || v.at < cutoff) _vendasEstimadasCache.delete(k);
+    }
+  }
+  return total;
+}
+
 // ── DASHBOARD (agregado do dia — só admin) ────────────────────
 async function dashboardCaixaTurnosRows(data) {
   const [turnos, caixa] = await Promise.all([
@@ -2529,7 +2551,7 @@ async function dashboardCaixaTurnosRows(data) {
 app.get('/api/dashboard/vendas-estimadas', auth, requireRole('admin'), async (req, res) => {
   try {
     const data = req.query.data || new Date().toISOString().split('T')[0];
-    const total = await computeTotalVendasForDate(data);
+    const total = await computeTotalVendasForDateCached(data);
     res.json({ data, total_vendas_calculado: total });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -2555,7 +2577,7 @@ app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
     }
 
     const { turnos, caixa } = await dashboardCaixaTurnosRows(data);
-    const totalVendasCalculado = await computeTotalVendasForDate(data);
+    const totalVendasCalculado = await computeTotalVendasForDateCached(data);
 
     res.json({
       data,

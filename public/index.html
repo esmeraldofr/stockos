@@ -1171,16 +1171,20 @@ function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
     </div>`;
 }
 
-function htmlResumoDiaAdmin(dash) {
+function htmlResumoDiaAdmin(dash, opts) {
   if (!dash) return '';
   const c = dash.caixa;
+  const vendasPending = opts && opts.vendasPending;
+  const vendasHtml = vendasPending
+    ? `<div id="dia-resumo-vendas-est-slot" style="min-height:36px;display:flex;align-items:center;gap:10px"><div class="spinner"></div><span style="font-size:13px;color:#64748b">A calcular estimativa…</span></div>`
+    : `<div style="font-size:24px;font-weight:700;color:#4ade80;line-height:1.2">${fmt(dash.total_vendas_calculado ?? 0)}</div>`;
   return `
       <div class="card">
         <div class="card-title">Resumo do dia</div>
         <div style="display:flex;flex-direction:column;gap:14px">
           <div style="border:1px solid #334155;border-radius:10px;padding:14px 16px;background:rgba(15,23,42,0.5)">
             <div style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Estimativa automática (vendas)</div>
-            <div style="font-size:24px;font-weight:700;color:#4ade80;line-height:1.2">${fmt(dash.total_vendas_calculado ?? 0)}</div>
+            ${vendasHtml}
             <p style="margin:10px 0 0;font-size:12px;color:#64748b;line-height:1.45">Soma para todos os turnos do dia, com a mesma regra da aba <strong>Vendas</strong> (menu, avulso, bebidas por copo e por unidade). É um valor <strong>estimado</strong> a partir de preços e quantidades.</p>
           </div>
           <div style="border:1px solid #334155;border-radius:10px;padding:14px 16px;background:rgba(15,23,42,0.5)">
@@ -1271,9 +1275,8 @@ async function loadDia() {
 
     Promise.all([
       isAdmin ? api('GET', `/dashboard?data=${encodeURIComponent(S.date)}&fast=1`).catch(() => null) : Promise.resolve(null),
-      isAdmin ? api('GET', `/dashboard/vendas-estimadas?data=${encodeURIComponent(S.date)}`).catch(() => null) : Promise.resolve(null),
       api('GET', `/escala/semana?data_inicio=${qMon}&data_fim=${qDom}`).catch(() => ({ semana: [], template: [] }))
-    ]).then(([dashFast, vendasEst, escalaPack]) => {
+    ]).then(([dashFast, escalaPack]) => {
       if (S.page !== 'dia') return;
       try {
         const escRowsWeek = escalaPack?.semana || [];
@@ -1282,10 +1285,29 @@ async function loadDia() {
         if (slotE) slotE.outerHTML = htmlEscalaSemanaReadonly(escRowsWeek, escTpl, S.date);
         if (isAdmin) {
           const dash = dashFast && typeof dashFast === 'object'
-            ? { ...dashFast, total_vendas_calculado: vendasEst?.total_vendas_calculado ?? 0 }
+            ? { ...dashFast, total_vendas_calculado: null }
             : null;
           const slotR = document.getElementById('dia-resumo-slot');
-          if (slotR) slotR.outerHTML = dash ? htmlResumoDiaAdmin(dash) : '<div id="dia-resumo-slot" class="card"><div class="card-title">Resumo do dia</div><p style="font-size:13px;color:#64748b">Não foi possível carregar o resumo.</p></div>';
+          if (slotR) {
+            slotR.outerHTML = dash
+              ? htmlResumoDiaAdmin(dash, { vendasPending: true })
+              : '<div id="dia-resumo-slot" class="card"><div class="card-title">Resumo do dia</div><p style="font-size:13px;color:#64748b">Não foi possível carregar o resumo.</p></div>';
+          }
+          if (dash) {
+            api('GET', `/dashboard/vendas-estimadas?data=${encodeURIComponent(S.date)}`)
+              .then((vendasEst) => {
+                if (S.page !== 'dia') return;
+                const el = document.getElementById('dia-resumo-vendas-est-slot');
+                if (el) {
+                  el.outerHTML = `<div style="font-size:24px;font-weight:700;color:#4ade80;line-height:1.2">${fmt(vendasEst?.total_vendas_calculado ?? 0)}</div>`;
+                }
+              })
+              .catch(() => {
+                if (S.page !== 'dia') return;
+                const el = document.getElementById('dia-resumo-vendas-est-slot');
+                if (el) el.innerHTML = '<span style="font-size:13px;color:#94a3b8">Estimativa indisponível.</span>';
+              });
+          }
         }
       } catch (err) {
         const slotE = document.getElementById('dia-escala-slot');

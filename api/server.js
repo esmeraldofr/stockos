@@ -69,7 +69,8 @@ const _dbUrl = normalizeSupabasePoolerUrl(_dbUrlRaw);
 const _sqlOpts = {
   ssl: 'require',
   prepare: false,
-  max: Math.min(5, Math.max(2, parseInt(process.env.PG_POOL_MAX || '4', 10) || 4)),
+  /** Serverless + pooler em modo transacção: mais slots reduzem filas quando há vários GET em paralelo. */
+  max: Math.min(10, Math.max(3, parseInt(process.env.PG_POOL_MAX || '6', 10) || 6)),
   idle_timeout: 20,
   max_lifetime: 60 * 30,
   connect_timeout: 15
@@ -226,6 +227,7 @@ async function ensureStockosPerfIndexes() {
   const stmts = [
     'CREATE INDEX IF NOT EXISTS idx_turnos_data ON turnos (data)',
     'CREATE INDEX IF NOT EXISTS idx_turno_stock_turno_id ON turno_stock (turno_id)',
+    'CREATE INDEX IF NOT EXISTS idx_turno_stock_turno_prod ON turno_stock (turno_id, produto_id)',
     'CREATE INDEX IF NOT EXISTS idx_turno_vendas_turno_id ON turno_vendas (turno_id)',
     'CREATE INDEX IF NOT EXISTS idx_turno_caixa_turno_id ON turno_caixa (turno_id)',
     'CREATE INDEX IF NOT EXISTS idx_escala_data ON escala (data)'
@@ -519,7 +521,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-perf-dia-dashboard-escala';
+const STOCKOS_API_BUILD = '2026-03-31-perf-turno-dia-escala-cache';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -1896,12 +1898,23 @@ app.get('/api/dia', auth, async (req, res) => {
       req.query.resumo === '1' ||
       req.query.resumo === 'true' ||
       String(req.query.resumo || '').toLowerCase() === 'yes';
+    const turnoOnlyRaw = req.query.turno_id;
+    const turnoOnlyId =
+      !resumo && turnoOnlyRaw != null && String(turnoOnlyRaw).trim() !== ''
+        ? parseInt(String(turnoOnlyRaw).trim(), 10)
+        : NaN;
+    const turnoOnlyFilter = Number.isFinite(turnoOnlyId) && turnoOnlyId > 0 ? turnoOnlyId : null;
+
     const turnos = await query(
-      `SELECT t.*, u.nome as utilizador_nome FROM turnos t
-       LEFT JOIN utilizadores u ON t.utilizador_id=u.id
-       WHERE t.data=$1
-       ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
-      [data]
+      turnoOnlyFilter
+        ? `SELECT t.*, u.nome as utilizador_nome FROM turnos t
+           LEFT JOIN utilizadores u ON t.utilizador_id=u.id
+           WHERE t.data=$1 AND t.id=$2`
+        : `SELECT t.*, u.nome as utilizador_nome FROM turnos t
+           LEFT JOIN utilizadores u ON t.utilizador_id=u.id
+           WHERE t.data=$1
+           ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
+      turnoOnlyFilter ? [data, turnoOnlyFilter] : [data]
     );
 
     if (!turnos.rows.length) {
@@ -2504,8 +2517,18 @@ async function computeTotalVendasForDate(data) {
 const _vendasEstimadasCache = new Map();
 const VENDAS_ESTIMADAS_CACHE_MS = Math.max(
   15_000,
-  (parseInt(process.env.VENDAS_ESTIMADAS_CACHE_SEC || '90', 10) || 90) * 1000
+  (parseInt(process.env.VENDAS_ESTIMADAS_CACHE_SEC || '180', 10) || 180) * 1000
 );
+
+/** Resposta de /escala/semana (template muda raramente). */
+const _escalaSemanaCache = new Map();
+const ESCALA_SEMANA_CACHE_MS = Math.max(
+  5000,
+  (parseInt(process.env.ESCALA_SEMANA_CACHE_SEC || '45', 10) || 45) * 1000
+);
+function clearEscalaSemanaCache() {
+  _escalaSemanaCache.clear();
+}
 
 async function computeTotalVendasForDateCached(data) {
   const now = Date.now();
@@ -3069,6 +3092,12 @@ app.get('/api/escala/semana', auth, async (req, res) => {
   try {
     const { data_inicio, data_fim } = req.query;
     if (!data_inicio || !data_fim) return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios' });
+    const cacheKey = `${data_inicio}\t${data_fim}`;
+    const now = Date.now();
+    const hit = _escalaSemanaCache.get(cacheKey);
+    if (hit && now - hit.at < ESCALA_SEMANA_CACHE_MS) {
+      return res.json(hit.body);
+    }
     const [sem, tpl] = await Promise.all([
       query(
         `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id,
@@ -3086,7 +3115,15 @@ app.get('/api/escala/semana', auth, async (req, res) => {
         ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
       `)
     ]);
-    res.json({ semana: sem.rows, template: tpl.rows });
+    const body = { semana: sem.rows, template: tpl.rows };
+    _escalaSemanaCache.set(cacheKey, { at: now, body });
+    if (_escalaSemanaCache.size > 120) {
+      const cutoff = now - ESCALA_SEMANA_CACHE_MS;
+      for (const [k, v] of _escalaSemanaCache) {
+        if (!v || v.at < cutoff) _escalaSemanaCache.delete(k);
+      }
+    }
+    res.json(body);
   } catch (e) {
     if (String(e.message || '').includes('does not exist')) {
       try {
@@ -3135,9 +3172,11 @@ app.put('/api/escala', auth, requireRole('admin', 'gestor'), async (req, res) =>
          RETURNING *`,
         [data, turno, utilizador_id, notas || '']
       );
+      clearEscalaSemanaCache();
       res.json(r.rows[0]);
     } else {
       await query(`DELETE FROM escala WHERE data=$1 AND turno=$2`, [data, turno]);
+      clearEscalaSemanaCache();
       res.json({ sucesso: true });
     }
   } catch(e) {
@@ -3194,6 +3233,7 @@ app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (re
        RETURNING *`,
       [dia_semana, turno, u, n]
     );
+    clearEscalaSemanaCache();
     res.json(ins.rows[0] || { sucesso: true });
   } catch(e) {
     if (e.message.includes('does not exist')) {
@@ -3205,6 +3245,7 @@ app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (re
 app.delete('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     await query(`DELETE FROM escala_template WHERE id=$1`, [req.params.id]);
+    clearEscalaSemanaCache();
     res.json({ sucesso: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

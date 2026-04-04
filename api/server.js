@@ -430,7 +430,7 @@ async function initDB() {
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-03-resumo-dia-dois-casos';
+const STOCKOS_API_BUILD = '2026-04-03-dashboard-vendas-batch';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -2241,46 +2241,17 @@ function calcStandaloneQtySrv(stockBuf, receitasBuf, prodId) {
   return Math.max(0, total - comboUsage);
 }
 
-async function computeTotalVendasForTurno(turnoId) {
-  const [vendas, stockRows, produtos, receitasAll] = await Promise.all([
-    query(`SELECT produto_id, quantidade FROM turno_vendas WHERE turno_id=$1`, [turnoId]),
-    query(`SELECT produto_id, encontrado, entrada, deixado FROM turno_stock WHERE turno_id=$1`, [turnoId]),
-    query(
-      `SELECT id, preco, categoria, venda_avulso, venda_por_copo, kg_por_copo, preco_copos_pacote, qtd_copos_pacote
-       FROM produtos WHERE ativo=true`
-    ),
-    query(`SELECT produto_id, componente_id, quantidade FROM receitas`)
-  ]);
-  const receitasBuf = {};
-  for (const r of receitasAll.rows) {
-    const pid = String(r.produto_id);
-    if (!receitasBuf[pid]) receitasBuf[pid] = [];
-    receitasBuf[pid].push({ componente_id: r.componente_id, quantidade: parseFloat(r.quantidade) });
-  }
-  const stockBuf = {};
-  for (const r of stockRows.rows) {
-    const pid = String(r.produto_id);
-    stockBuf[pid] = {
-      encontrado: parseFloat(r.encontrado) || 0,
-      entrada: parseFloat(r.entrada) || 0,
-      deixado: parseFloat(r.deixado) || 0
-    };
-  }
-  const vendasBuf = {};
-  for (const r of vendas.rows) {
-    vendasBuf[String(r.produto_id)] = parseFloat(r.quantidade) || 0;
-  }
-  const pById = {};
-  for (const p of produtos.rows) pById[String(p.id)] = p;
-
-  const menuProdIds = produtos.rows.filter((p) => p.categoria === 'menu').map((p) => p.id);
-  const avulsoProdIds = produtos.rows
-    .filter((p) => p.venda_avulso && p.categoria !== 'menu' && p.categoria !== 'bebida')
-    .map((p) => p.id);
-  const bebidaProds = produtos.rows.filter((p) => p.categoria === 'bebida');
-  const bebidaCopoProdIds = bebidaProds.filter((p) => p.venda_por_copo && parseFloat(p.kg_por_copo) > 0).map((p) => p.id);
-  const bebidaOutras = bebidaProds.filter((p) => !p.venda_por_copo || !(parseFloat(p.kg_por_copo) > 0));
-
+/** Soma vendas para um turno (buffers já carregados). */
+function computeTotalVendasTurnoBuffers(
+  vendasBuf,
+  stockBuf,
+  pById,
+  menuProdIds,
+  avulsoProdIds,
+  bebidaCopoProdIds,
+  bebidaOutras,
+  receitasBuf
+) {
   let total = 0;
   for (const pid of menuProdIds) {
     const pr = pById[String(pid)];
@@ -2304,11 +2275,71 @@ async function computeTotalVendasForTurno(turnoId) {
   return total;
 }
 
+/** Uma query batch por tipo — evita N× repetir produtos/receitas por turno. */
 async function computeTotalVendasForDate(data) {
   const turnos = await query(`SELECT id FROM turnos WHERE data=$1`, [data]);
+  if (!turnos.rows.length) return 0;
+  const ids = turnos.rows.map((t) => t.id);
+  const [vendasAll, stockAll, produtos, receitasAll] = await Promise.all([
+    query(
+      `SELECT turno_id, produto_id, quantidade FROM turno_vendas WHERE turno_id = ANY($1::int[])`,
+      [ids]
+    ),
+    query(
+      `SELECT turno_id, produto_id, encontrado, entrada, deixado FROM turno_stock WHERE turno_id = ANY($1::int[])`,
+      [ids]
+    ),
+    query(
+      `SELECT id, preco, categoria, venda_avulso, venda_por_copo, kg_por_copo, preco_copos_pacote, qtd_copos_pacote
+       FROM produtos WHERE ativo=true`
+    ),
+    query(`SELECT produto_id, componente_id, quantidade FROM receitas`)
+  ]);
+  const receitasBuf = {};
+  for (const r of receitasAll.rows) {
+    const pid = String(r.produto_id);
+    if (!receitasBuf[pid]) receitasBuf[pid] = [];
+    receitasBuf[pid].push({ componente_id: r.componente_id, quantidade: parseFloat(r.quantidade) });
+  }
+  const pById = {};
+  for (const p of produtos.rows) pById[String(p.id)] = p;
+  const menuProdIds = produtos.rows.filter((p) => p.categoria === 'menu').map((p) => p.id);
+  const avulsoProdIds = produtos.rows
+    .filter((p) => p.venda_avulso && p.categoria !== 'menu' && p.categoria !== 'bebida')
+    .map((p) => p.id);
+  const bebidaProds = produtos.rows.filter((p) => p.categoria === 'bebida');
+  const bebidaCopoProdIds = bebidaProds.filter((p) => p.venda_por_copo && parseFloat(p.kg_por_copo) > 0).map((p) => p.id);
+  const bebidaOutras = bebidaProds.filter((p) => !p.venda_por_copo || !(parseFloat(p.kg_por_copo) > 0));
+
+  const vendasByTurno = {};
+  for (const r of vendasAll.rows) {
+    const tid = r.turno_id;
+    if (!vendasByTurno[tid]) vendasByTurno[tid] = {};
+    vendasByTurno[tid][String(r.produto_id)] = parseFloat(r.quantidade) || 0;
+  }
+  const stockByTurno = {};
+  for (const r of stockAll.rows) {
+    const tid = r.turno_id;
+    if (!stockByTurno[tid]) stockByTurno[tid] = {};
+    stockByTurno[tid][String(r.produto_id)] = {
+      encontrado: parseFloat(r.encontrado) || 0,
+      entrada: parseFloat(r.entrada) || 0,
+      deixado: parseFloat(r.deixado) || 0
+    };
+  }
+
   let sum = 0;
-  for (const t of turnos.rows) {
-    sum += await computeTotalVendasForTurno(t.id);
+  for (const tid of ids) {
+    sum += computeTotalVendasTurnoBuffers(
+      vendasByTurno[tid] || {},
+      stockByTurno[tid] || {},
+      pById,
+      menuProdIds,
+      avulsoProdIds,
+      bebidaCopoProdIds,
+      bebidaOutras,
+      receitasBuf
+    );
   }
   return sum;
 }

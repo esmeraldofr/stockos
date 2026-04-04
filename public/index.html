@@ -1077,7 +1077,7 @@ async function loadDepositos() {
     let depositosErro = '';
     if (depWrap.ok) depositos = depWrap.data || [];
     else depositosErro = (depWrap.err && depWrap.err.message) ? depWrap.err.message : String(depWrap.err);
-    const turnos = await api('GET', `/dia?data=${S.date}`);
+    const turnos = await api('GET', `/dia?data=${S.date}&resumo=1`);
     S.turnosDia = turnos;
     show('depositos-content', renderDepositosSection(turnos, depositos, depositosErro));
     queueMicrotask(() => { updateDepPreviewTotal(); updateDepSaidasDestinoRequired(); });
@@ -1225,7 +1225,7 @@ async function loadDia() {
     const qMon = encodeURIComponent(monEsc);
     const qDom = encodeURIComponent(addDays(monEsc, 6));
 
-    const turnos = await api('GET', `/dia?data=${S.date}`);
+    const turnos = await api('GET', `/dia?data=${S.date}&resumo=1`);
     S.turnosDia = turnos;
     const turnoMap = {};
     turnos.forEach(t => { turnoMap[t.nome] = t; });
@@ -1672,7 +1672,7 @@ async function navTurno(dir) {
     nextIdx = 0;
   }
 
-  const all = await api('GET', `/dia?data=${nextDate}`);
+  const all = await api('GET', `/dia?data=${nextDate}&resumo=1`);
   const t = all.find(x => x.nome === TURNO_ORDER[nextIdx]);
   if (!t) return;
   S.date = nextDate;

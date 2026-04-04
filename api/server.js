@@ -500,7 +500,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-login-before-enum';
+const STOCKOS_API_BUILD = '2026-03-31-dia-resumo-api';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -1873,6 +1873,10 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
 app.get('/api/dia', auth, async (req, res) => {
   try {
     const data = req.query.data || new Date().toISOString().split('T')[0];
+    const resumo =
+      req.query.resumo === '1' ||
+      req.query.resumo === 'true' ||
+      String(req.query.resumo || '').toLowerCase() === 'yes';
     const turnos = await query(
       `SELECT t.*, u.nome as utilizador_nome FROM turnos t
        LEFT JOIN utilizadores u ON t.utilizador_id=u.id
@@ -1886,6 +1890,49 @@ app.get('/api/dia', auth, async (req, res) => {
     }
 
     const ids = turnos.rows.map((t) => t.id);
+
+    /** Vista lista (página Dia, depósitos): sem linhas de stock nem comparação com turno anterior — muito mais rápido. */
+    if (resumo) {
+      const [caixaAll, vendasAgg] = await Promise.all([
+        query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids]),
+        query(
+          `SELECT ts.turno_id,
+             COALESCE(SUM(
+               GREATEST(
+                 0::numeric,
+                 COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric
+               ) * COALESCE(p.preco,0)::numeric
+             ), 0)::numeric AS total_vendas
+           FROM turno_stock ts
+           INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE
+           WHERE ts.turno_id = ANY($1::int[])
+           GROUP BY ts.turno_id`,
+          [ids]
+        )
+      ]);
+      const caixaByTurno = {};
+      for (const row of caixaAll.rows) {
+        caixaByTurno[row.turno_id] = row;
+      }
+      const vendasByTurno = {};
+      for (const row of vendasAgg.rows) {
+        vendasByTurno[row.turno_id] = parseFloat(row.total_vendas) || 0;
+      }
+      const result = [];
+      for (const turno of turnos.rows) {
+        const c = caixaByTurno[turno.id] || { tpa: 0, transferencia: 0, dinheiro: 0, saida: 0 };
+        const totalGerado = parseFloat(c.tpa || 0) + parseFloat(c.transferencia || 0) + parseFloat(c.dinheiro || 0);
+        const totalFinal = totalGerado - parseFloat(c.saida || 0);
+        result.push({
+          ...turno,
+          stock: [],
+          caixa: { ...c, total_gerado: totalGerado, total_final: totalFinal },
+          total_vendas: vendasByTurno[turno.id] || 0
+        });
+      }
+      return res.json(result);
+    }
+
     const [stockAll, caixaAll] = await Promise.all([
       query(
         `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem, p.tipo_medicao

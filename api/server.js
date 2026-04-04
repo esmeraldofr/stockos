@@ -69,7 +69,7 @@ const _dbUrl = normalizeSupabasePoolerUrl(_dbUrlRaw);
 const _sqlOpts = {
   ssl: 'require',
   prepare: false,
-  max: Math.min(5, Math.max(2, parseInt(process.env.PG_POOL_MAX || '2', 10) || 2)),
+  max: Math.min(5, Math.max(2, parseInt(process.env.PG_POOL_MAX || '4', 10) || 4)),
   idle_timeout: 20,
   max_lifetime: 60 * 30,
   connect_timeout: 15
@@ -236,6 +236,21 @@ function markLoginReady() {
   }
 }
 
+let resolveDbReady;
+let rejectDbReady;
+let dbReadyResolved = false;
+/** Resolve quando GET /api/dia, escala, dashboard, produtos podem correr (antes de seed/dedup pesados). */
+const dbReady = new Promise((resolve, reject) => {
+  resolveDbReady = resolve;
+  rejectDbReady = reject;
+});
+function markDbReady() {
+  if (!dbReadyResolved) {
+    dbReadyResolved = true;
+    resolveDbReady();
+  }
+}
+
 /**
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
@@ -249,6 +264,7 @@ async function initDB() {
     if (chk.rows.length && chk.rows[0].v === STOCKOS_BOOTSTRAP_VERSION) {
       await ensureRoleEnumCompras();
       markLoginReady();
+      markDbReady();
       console.log('DB ready (bootstrap skip)');
       return;
     }
@@ -445,6 +461,8 @@ async function initDB() {
   await qry(`ALTER TABLE turno_faltas ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'turno_faltas-userid-text');
   await qry(`ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key`, [], 'escala_template-drop-unique-old');
   await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_template_dia_turno_utilizador_key') THEN ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id); END IF; END $$`, [], 'escala_template-add-unique-new');
+  /** API pode servir /dia, escala, dashboard; o resto (dedup, seed 37 produtos, meta) continua sem bloquear o middleware. */
+  markDbReady();
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
   // Garantir constraint única no nome
@@ -471,13 +489,17 @@ async function initDB() {
   );
   console.log('DB ready');
 }
-const dbReady = initDB().catch((e) => {
-  if (!loginReadyResolved) rejectLoginReady(e);
-  throw e;
-});
+initDB()
+  .then(() => {
+    markDbReady();
+  })
+  .catch((e) => {
+    if (!loginReadyResolved) rejectLoginReady(e);
+    if (!dbReadyResolved) rejectDbReady(e);
+  });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-login-ready-early';
+const STOCKOS_API_BUILD = '2026-03-31-dbready-before-seed';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.

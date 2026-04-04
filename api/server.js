@@ -221,7 +221,25 @@ async function qry(sql, params, label) {
   catch(e) { console.error(`[initDB:${label}]`, e.message); }
 }
 
+/**
+ * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
+ * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
+ */
+const STOCKOS_BOOTSTRAP_VERSION = '2026-03-31-init-fast';
+
 async function initDB() {
+  await qry(`CREATE TABLE IF NOT EXISTS stockos_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`, [], 'stockos_meta');
+  try {
+    const chk = await query(`SELECT v FROM stockos_meta WHERE k = $1`, ['bootstrap']);
+    if (chk.rows.length && chk.rows[0].v === STOCKOS_BOOTSTRAP_VERSION) {
+      await ensureRoleEnumCompras();
+      console.log('DB ready (bootstrap skip)');
+      return;
+    }
+  } catch (e) {
+    console.warn('[initDB] bootstrap check:', e && e.message);
+  }
+
   await qry(`CREATE TABLE IF NOT EXISTS utilizadores (
     id SERIAL PRIMARY KEY, nome VARCHAR(150) NOT NULL, email VARCHAR(200) NOT NULL UNIQUE,
     senha_hash TEXT NOT NULL DEFAULT '', role VARCHAR(20) NOT NULL DEFAULT 'operador',
@@ -425,12 +443,17 @@ async function initDB() {
     ON CONFLICT (nome) DO NOTHING`, [], 'produtos-seed');
   await qry(`UPDATE produtos SET venda_avulso=true, preco=1000 WHERE nome='Batata Pré-frita'`, [], 'batata-avulso');
   await ensureRoleEnumCompras();
+  await qry(
+    `INSERT INTO stockos_meta (k,v) VALUES ('bootstrap', $1) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [STOCKOS_BOOTSTRAP_VERSION],
+    'meta-bootstrap'
+  );
   console.log('DB ready');
 }
 const dbReady = initDB();
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-03-dashboard-vendas-batch';
+const STOCKOS_API_BUILD = '2026-03-31-perf-cold-bootstrap';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -486,6 +509,17 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '6mb' }));
+/** Antes de await dbReady: health não bloqueia em initDB (dezenas de queries DDL em cold start). */
+app.get('/api/health', (req, res) =>
+  res.json({
+    status: 'ok',
+    v: 5,
+    build: STOCKOS_API_BUILD,
+    tier: stockosDeploymentTier(),
+    develop_only: isStockosDevelopOnly(),
+    read_only: isStockosApiReadOnly()
+  })
+);
 app.use(express.static('public'));
 app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { res.status(500).json({ erro: 'DB não disponível' }); } });
 
@@ -920,17 +954,6 @@ async function assertTurnoFechado(turnoId) {
 }
 
 // ── AUTH ──────────────────────────────────────────────────────
-app.get('/api/health', (req, res) =>
-  res.json({
-    status: 'ok',
-    v: 4,
-    build: STOCKOS_API_BUILD,
-    tier: stockosDeploymentTier(),
-    develop_only: isStockosDevelopOnly(),
-    read_only: isStockosApiReadOnly()
-  })
-);
-
 /** Informação de runtime útil em develop (e em local); 404 noutros tiers. */
 app.get('/api/dev/info', (req, res) => {
   if (!allowStockosDevDiagnostics()) {

@@ -221,6 +221,21 @@ async function qry(sql, params, label) {
   catch(e) { console.error(`[initDB:${label}]`, e.message); }
 }
 
+let resolveLoginReady;
+let rejectLoginReady;
+/** Resolve quando login pode fazer SELECT em utilizadores (antes do resto do initDB acabar). */
+const dbLoginReady = new Promise((resolve, reject) => {
+  resolveLoginReady = resolve;
+  rejectLoginReady = reject;
+});
+let loginReadyResolved = false;
+function markLoginReady() {
+  if (!loginReadyResolved) {
+    loginReadyResolved = true;
+    resolveLoginReady();
+  }
+}
+
 /**
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
@@ -233,6 +248,7 @@ async function initDB() {
     const chk = await query(`SELECT v FROM stockos_meta WHERE k = $1`, ['bootstrap']);
     if (chk.rows.length && chk.rows[0].v === STOCKOS_BOOTSTRAP_VERSION) {
       await ensureRoleEnumCompras();
+      markLoginReady();
       console.log('DB ready (bootstrap skip)');
       return;
     }
@@ -245,6 +261,12 @@ async function initDB() {
     senha_hash TEXT NOT NULL DEFAULT '', role VARCHAR(20) NOT NULL DEFAULT 'operador',
     ativo BOOLEAN NOT NULL DEFAULT TRUE, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, [], 'utilizadores');
+  await qry(
+    `INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`,
+    [hashPassword('admin123')],
+    'admin-early'
+  );
+  markLoginReady();
   await qry(`CREATE TABLE IF NOT EXISTS produtos (
     id SERIAL PRIMARY KEY, nome VARCHAR(200) NOT NULL, preco NUMERIC(15,2) NOT NULL DEFAULT 0,
     categoria VARCHAR(20) NOT NULL DEFAULT 'outro', ordem INTEGER NOT NULL DEFAULT 0, ativo BOOLEAN NOT NULL DEFAULT TRUE,
@@ -423,7 +445,6 @@ async function initDB() {
   await qry(`ALTER TABLE turno_faltas ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'turno_faltas-userid-text');
   await qry(`ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key`, [], 'escala_template-drop-unique-old');
   await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_template_dia_turno_utilizador_key') THEN ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id); END IF; END $$`, [], 'escala_template-add-unique-new');
-  await qry(`INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`, [hashPassword('admin123')], 'admin');
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
   // Garantir constraint única no nome
@@ -450,10 +471,13 @@ async function initDB() {
   );
   console.log('DB ready');
 }
-const dbReady = initDB();
+const dbReady = initDB().catch((e) => {
+  if (!loginReadyResolved) rejectLoginReady(e);
+  throw e;
+});
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-perf-cold-bootstrap';
+const STOCKOS_API_BUILD = '2026-03-31-login-ready-early';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -520,6 +544,30 @@ app.get('/api/health', (req, res) =>
     read_only: isStockosApiReadOnly()
   })
 );
+/** Antes de await dbReady: só espera dbLoginReady (utilizadores + admin ou bootstrap). */
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    await dbLoginReady;
+    const password = (req.body.password || '').trim();
+    const login = loginFromBody(req);
+    if (!login || !password) return res.status(400).json({ erro: 'Nome de utilizador e senha são obrigatórios' });
+    const r = await queryUtilizadorPorLogin(login);
+    if (!r.rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
+    const user = r.rows[0];
+    if (user.senha_hash !== hashPassword(password)) return res.status(401).json({ erro: 'Credenciais inválidas' });
+    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username });
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username }
+    });
+  } catch (e) {
+    console.error('[auth/login]', pgErrText(e));
+    res.status(500).json({
+      erro:
+        'Não foi possível autenticar. Usa o email completo (ex.: admin@stockos.ao). Se persistir, o user da DATABASE_URL precisa de GRANT SELECT (e UPDATE nas colunas usadas) em public.utilizadores.'
+    });
+  }
+});
 app.use(express.static('public'));
 app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { res.status(500).json({ erro: 'DB não disponível' }); } });
 
@@ -636,25 +684,37 @@ function pgErrText(e) {
 }
 
 /**
- * Login só com SELECT, em duas queries separadas (nunca «OR email OR username» na mesma frase).
- * 1) Sempre tenta casar por email (inclui quando o utilizador escreve só «admin» — não encontra).
- * 2) Só se não houver «@» e a 1.ª não devolveu linhas, tenta só coluna username.
+ * Um SELECT: email exacto ou username (só se $1 não tiver «@»). Preferência por email se ambos casassem.
+ * Fallback em duas queries se a coluna username não existir (BD muito antiga).
  */
 async function queryUtilizadorPorLogin(login) {
   const L = String(login || '').trim();
-  const byEmail = await query(
-    `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
-    [L]
-  );
-  if (byEmail.rows.length > 0 || L.includes('@')) return byEmail;
   try {
-    return await query(
-      `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(username)=LOWER($1)`,
+    const r = await query(
+      `SELECT * FROM utilizadores WHERE ativo=true AND (
+        LOWER(email) = LOWER($1)
+        OR (STRPOS($1, '@') = 0 AND LOWER(COALESCE(username, '')) = LOWER($1))
+      )
+      ORDER BY CASE WHEN LOWER(email) = LOWER($1) THEN 0 ELSE 1 END
+      LIMIT 1`,
       [L]
     );
+    return r;
   } catch (e) {
-    console.warn('[auth/login] lookup por username ignorado:', pgErrText(e));
-    return byEmail;
+    const byEmail = await query(
+      `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=LOWER($1)`,
+      [L]
+    );
+    if (byEmail.rows.length > 0 || L.includes('@')) return byEmail;
+    try {
+      return await query(
+        `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(username)=LOWER($1)`,
+        [L]
+      );
+    } catch (e2) {
+      console.warn('[auth/login] lookup por username ignorado:', pgErrText(e2));
+      return byEmail;
+    }
   }
 }
 
@@ -1241,30 +1301,6 @@ app.post('/api/reseed-produtos', auth, requireRole('admin'), async (req, res) =>
       ('Sumol Manga',700,'bebida',34),('Cuca Lata',700,'bebida',35),('Nocal Lata',700,'bebida',36),('Dopel',700,'bebida',37)`);
     res.json({ ok: true, mensagem: '37 produtos reinseridos' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
-});
-
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    /** Sem DDL nem information_schema — só SELECT; migrações em /api/migrate. */
-    const password = (req.body.password || '').trim();
-    const login = loginFromBody(req);
-    if (!login || !password) return res.status(400).json({ erro: 'Nome de utilizador e senha são obrigatórios' });
-    const r = await queryUtilizadorPorLogin(login);
-    if (!r.rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
-    const user = r.rows[0];
-    if (user.senha_hash !== hashPassword(password)) return res.status(401).json({ erro: 'Credenciais inválidas' });
-    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username });
-    res.json({
-      token,
-      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username }
-    });
-  } catch (e) {
-    console.error('[auth/login]', pgErrText(e));
-    res.status(500).json({
-      erro:
-        'Não foi possível autenticar. Usa o email completo (ex.: admin@stockos.ao). Se persistir, o user da DATABASE_URL precisa de GRANT SELECT (e UPDATE nas colunas usadas) em public.utilizadores.'
-    });
-  }
 });
 
 app.get('/api/auth/me', auth, async (req, res) => {

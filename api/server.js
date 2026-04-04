@@ -221,6 +221,24 @@ async function qry(sql, params, label) {
   catch(e) { console.error(`[initDB:${label}]`, e.message); }
 }
 
+/** Índices leves (IF NOT EXISTS) — aceleram /dia, dashboard, escala. Corre após init. */
+async function ensureStockosPerfIndexes() {
+  const stmts = [
+    'CREATE INDEX IF NOT EXISTS idx_turnos_data ON turnos (data)',
+    'CREATE INDEX IF NOT EXISTS idx_turno_stock_turno_id ON turno_stock (turno_id)',
+    'CREATE INDEX IF NOT EXISTS idx_turno_vendas_turno_id ON turno_vendas (turno_id)',
+    'CREATE INDEX IF NOT EXISTS idx_turno_caixa_turno_id ON turno_caixa (turno_id)',
+    'CREATE INDEX IF NOT EXISTS idx_escala_data ON escala (data)'
+  ];
+  for (let i = 0; i < stmts.length; i++) {
+    try {
+      await query(stmts[i]);
+    } catch (e) {
+      console.warn('[idx]', i, (e && e.message) || e);
+    }
+  }
+}
+
 let resolveLoginReady;
 let rejectLoginReady;
 /** Resolve quando login pode fazer SELECT em utilizadores (antes do resto do initDB acabar). */
@@ -493,6 +511,7 @@ async function initDB() {
 initDB()
   .then(() => {
     markDbReady();
+    return ensureStockosPerfIndexes();
   })
   .catch((e) => {
     if (!loginReadyResolved) rejectLoginReady(e);
@@ -500,7 +519,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-dia-resumo-api';
+const STOCKOS_API_BUILD = '2026-03-31-perf-dia-dashboard-escala';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -2420,9 +2439,17 @@ async function computeTotalVendasForDate(data) {
     ),
     query(
       `SELECT id, preco, categoria, venda_avulso, venda_por_copo, kg_por_copo, preco_copos_pacote, qtd_copos_pacote
-       FROM produtos WHERE ativo=true`
+       FROM produtos WHERE ativo=true AND (
+         categoria IN ('menu','bebida') OR COALESCE(venda_avulso,false) IS TRUE
+         OR id IN (SELECT DISTINCT produto_id FROM turno_vendas WHERE turno_id = ANY($1::int[]))
+         OR id IN (SELECT DISTINCT produto_id FROM turno_stock WHERE turno_id = ANY($1::int[]))
+       )`,
+      [ids]
     ),
-    query(`SELECT produto_id, componente_id, quantidade FROM receitas`)
+    query(
+      `SELECT r.produto_id, r.componente_id, r.quantidade FROM receitas r
+       INNER JOIN produtos p ON p.id = r.produto_id AND p.categoria = 'menu' AND p.ativo = true`
+    )
   ]);
   const receitasBuf = {};
   for (const r of receitasAll.rows) {
@@ -2474,37 +2501,67 @@ async function computeTotalVendasForDate(data) {
 }
 
 // ── DASHBOARD (agregado do dia — só admin) ────────────────────
+async function dashboardCaixaTurnosRows(data) {
+  const [turnos, caixa] = await Promise.all([
+    query(
+      `SELECT nome, estado, criado_em, fechado_em FROM turnos WHERE data=$1
+       ORDER BY CASE nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
+      [data]
+    ),
+    query(
+      `SELECT
+         COALESCE(SUM(tc.tpa),0)           as tpa,
+         COALESCE(SUM(tc.transferencia),0)  as transferencia,
+         COALESCE(SUM(tc.dinheiro),0)       as dinheiro,
+         COALESCE(SUM(tc.saida),0)          as saida,
+         COALESCE(SUM(tc.tpa+tc.transferencia+tc.dinheiro),0) as total_gerado,
+         COALESCE(SUM(tc.tpa+tc.transferencia+tc.dinheiro-tc.saida),0) as total_final
+       FROM turno_caixa tc
+       JOIN turnos t ON tc.turno_id=t.id
+       WHERE t.data=$1`,
+      [data]
+    )
+  ]);
+  return { turnos: turnos.rows, caixa: caixa.rows[0] };
+}
+
+/** Só o total estimado (pesado) — pedir em paralelo com dashboard?fast=1 na página Dia. */
+app.get('/api/dashboard/vendas-estimadas', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const data = req.query.data || new Date().toISOString().split('T')[0];
+    const total = await computeTotalVendasForDate(data);
+    res.json({ data, total_vendas_calculado: total });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
   try {
     const data = req.query.data || new Date().toISOString().split('T')[0];
+    const fast =
+      req.query.fast === '1' ||
+      req.query.fast === 'true' ||
+      String(req.query.fast || '').toLowerCase() === 'yes';
 
-    const [turnos, caixa, totalVendasCalculado] = await Promise.all([
-      query(
-        `SELECT nome, estado, criado_em, fechado_em FROM turnos WHERE data=$1
-         ORDER BY CASE nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
-        [data]
-      ),
-      query(
-        `SELECT
-           COALESCE(SUM(tc.tpa),0)           as tpa,
-           COALESCE(SUM(tc.transferencia),0)  as transferencia,
-           COALESCE(SUM(tc.dinheiro),0)       as dinheiro,
-           COALESCE(SUM(tc.saida),0)          as saida,
-           COALESCE(SUM(tc.tpa+tc.transferencia+tc.dinheiro),0) as total_gerado,
-           COALESCE(SUM(tc.tpa+tc.transferencia+tc.dinheiro-tc.saida),0) as total_final
-         FROM turno_caixa tc
-         JOIN turnos t ON tc.turno_id=t.id
-         WHERE t.data=$1`,
-        [data]
-      ),
-      computeTotalVendasForDate(data)
-    ]);
+    if (fast) {
+      const { turnos, caixa } = await dashboardCaixaTurnosRows(data);
+      return res.json({
+        data,
+        turnos,
+        caixa,
+        total_vendas_calculado: null
+      });
+    }
+
+    const { turnos, caixa } = await dashboardCaixaTurnosRows(data);
+    const totalVendasCalculado = await computeTotalVendasForDate(data);
 
     res.json({
       data,
-      turnos: turnos.rows,
+      turnos,
       total_vendas_calculado: totalVendasCalculado,
-      caixa: caixa.rows[0]
+      caixa
     });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -2984,6 +3041,44 @@ async function ensureEscala() {
   await query(`ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key`).catch(()=>{});
   await query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_data_turno_utilizador_key') THEN ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id); END IF; END $$`).catch(()=>{});
 }
+
+/** Uma ida HTTP: escala da semana + template (página Dia). */
+app.get('/api/escala/semana', auth, async (req, res) => {
+  try {
+    const { data_inicio, data_fim } = req.query;
+    if (!data_inicio || !data_fim) return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios' });
+    const [sem, tpl] = await Promise.all([
+      query(
+        `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id,
+                u.nome as utilizador_nome, u.role as utilizador_role
+         FROM escala e
+         LEFT JOIN utilizadores u ON e.utilizador_id::text = u.id::text
+         WHERE e.data >= $1 AND e.data <= $2
+         ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
+        [data_inicio, data_fim]
+      ),
+      query(`
+        SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, u.nome as utilizador_nome
+        FROM escala_template et
+        LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text
+        ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
+      `)
+    ]);
+    res.json({ semana: sem.rows, template: tpl.rows });
+  } catch (e) {
+    if (String(e.message || '').includes('does not exist')) {
+      try {
+        await ensureEscala();
+        await ensureEscalaTemplate();
+        res.json({ semana: [], template: [] });
+      } catch (e2) {
+        res.status(500).json({ erro: e2.message });
+      }
+    } else {
+      res.status(500).json({ erro: e.message });
+    }
+  }
+});
 
 app.get('/api/escala', auth, async (req, res) => {
   try {

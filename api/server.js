@@ -262,8 +262,9 @@ async function initDB() {
   try {
     const chk = await query(`SELECT v FROM stockos_meta WHERE k = $1`, ['bootstrap']);
     if (chk.rows.length && chk.rows[0].v === STOCKOS_BOOTSTRAP_VERSION) {
-      await ensureRoleEnumCompras();
+      /** Login só precisa de SELECT em utilizadores — não esperar pelo DO/ALTER do enum «compras». */
       markLoginReady();
+      await ensureRoleEnumCompras();
       markDbReady();
       console.log('DB ready (bootstrap skip)');
       return;
@@ -499,7 +500,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-dbready-before-seed';
+const STOCKOS_API_BUILD = '2026-03-31-login-before-enum';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.

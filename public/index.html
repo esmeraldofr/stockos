@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-resumo-tab-vendas-only">
+<html lang="pt" data-stockos-ui="2026-03-31-entradas-saidas-aba-stock">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1824,10 +1824,7 @@ async function loadTurno() {
             </table>
           </div>
         </div>
-      </div>
-
-      <div id="tab-registos" class="turno-tab-panel">
-        <div class="card" id="registos-movimentos-card">
+        <div class="card mt-16" id="registos-movimentos-card">
           <div class="card-title">📦💸 Entradas de stock e saídas de caixa</div>
           <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 18px">No mesmo sítio: <strong style="color:#cbd5e1">quantidades</strong> que entram ou saem do stock (armazém ou compra) e <strong style="color:#cbd5e1">valores</strong> que saem da caixa — despesas e compras de stock (aparecem na lista abaixo com as entradas por compra).</p>
           <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Stock — quantidades</div>
@@ -1837,7 +1834,10 @@ async function loadTurno() {
             <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
           </div>
         </div>
-        <div class="card mt-16">
+      </div>
+
+      <div id="tab-registos" class="turno-tab-panel">
+        <div class="card">
           <div class="card-title">💰 Caixa</div>
           <div class="caixa-grid">
             <div class="caixa-item">
@@ -1907,7 +1907,7 @@ async function loadTurno() {
   if (tv) tv.textContent = initTotalVend > 0 ? fmtNum(initTotalVend) : '';
   if (tva) tva.textContent = initTotalVal > 0 ? fmt(initTotalVal) : '';
 
-    // Lazy load por aba para reduzir chamadas simultâneas e pressão no DB.
+    await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -2309,7 +2309,7 @@ async function switchTurnoTab(name, btn) {
   if (name === 'escala') {
     await loadEscalaTurno();
   }
-  if (name === 'registos') {
+  if (name === 'stock') {
     const tid = S.turnoData?.id;
     const stock = S.turnoData?.stock || [];
     if (tid) await loadRegistosMovimentosSection(tid, stock, !!S.turnoCanEdit);

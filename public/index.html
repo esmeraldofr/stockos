@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-armazem-tabs-notas-opc">
+<html lang="pt" data-stockos-ui="2026-03-31-fornecedores-crud">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -422,7 +422,7 @@ const S = {
 
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM' };
-const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'armazem', 'produtos', 'escala', 'admin'];
+const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin'];
 
 function _storageGet(key) {
   try {
@@ -932,7 +932,7 @@ async function navigate(page, params) {
 
 async function draw() {
   if (!S.token) { drawLogin(); return; }
-  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'depositos', 'calendario'].includes(S.page)) {
+  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario'].includes(S.page)) {
     S.page = 'dia';
   }
   if (S.page === 'admin' && S.user?.role !== 'admin') {
@@ -955,6 +955,10 @@ async function draw() {
         break;
       case 'historico':await drawHistorico(); break;
       case 'armazem':  await drawArmazem(); break;
+      case 'fornecedores':
+        if (!['admin', 'gestor', 'compras'].includes(S.user?.role)) { await navigate('dia'); return; }
+        await drawFornecedores();
+        break;
       case 'produtos': await drawProdutos(); break;
       case 'escala':   await drawEscala(); break;
       case 'admin':    await drawAdmin(); break;
@@ -1050,6 +1054,11 @@ function navBar() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
         Produtos
       </button>
+      ${showArmazem ? `
+      <button class="nav-btn ${S.page==='fornecedores'?'active':''}" onclick="runAction(event, () => navigate('fornecedores'))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 18V6a2 2 0 00-2-2H4a2 2 0 00-2 2v11a1 1 0 001 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 001-1v-3.65a1 1 0 00-.22-.624l-3.48-4.35A1 1 0 0017.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>
+        Fornecedores
+      </button>` : ''}
       ${showArmazem ? `
       <button class="nav-btn ${S.page==='armazem'?'active':''}" onclick="runAction(event, () => navigate('armazem'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>
@@ -3425,7 +3434,32 @@ async function loadHistorico() {
   } catch(e) { show('hist-content',`<div class="alert alert-error">${e.message}</div>`); }
 }
 
-// ── ARMAZÉM ────────────────────────────────────────────────────
+// ── ARMAZÉM / FORNECEDORES ─────────────────────────────────────
+function updateFxFornecedorLivreVisibility() {
+  const sel = document.getElementById('fx-fornecedor-id');
+  const livre = document.getElementById('fx-fornecedor-livre');
+  if (!livre || !sel) return;
+  if (sel.value === 'livre') {
+    livre.style.display = '';
+  } else {
+    livre.style.display = 'none';
+    if (sel.value !== 'livre') livre.value = '';
+  }
+}
+
+function populateFxFornecedorSelect() {
+  const sel = document.getElementById('fx-fornecedor-id');
+  if (!sel) return;
+  const rows = S.fornecedores || [];
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— Selecciona ou outro —</option>' +
+    rows.map((f) => `<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join('') +
+    '<option value="livre">Outro nome…</option>';
+  if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
+  else if (prev === 'livre') sel.value = 'livre';
+  updateFxFornecedorLivreVisibility();
+}
+
 function switchArmazemTab(name, btn) {
   document.querySelectorAll('#content > .armazem-tab-panel').forEach((p) => p.classList.remove('active'));
   const wrap = btn && btn.closest('.turno-tabs-wrap');
@@ -3476,7 +3510,10 @@ async function drawArmazem() {
         <div id="fatura-form-msg"></div>
         <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="STK-20260405-001 (automático)"/>
           <div style="font-size:11px;color:#64748b;margin-top:4px">Gerado automaticamente (STK-data do dia-sequência); podes editar.</div></div>
-        <div class="field"><label>Fornecedor</label><input id="fx-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
+        <div class="field"><label>Fornecedor</label>
+          <select id="fx-fornecedor-id" style="width:100%;max-width:100%;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:14px"></select>
+          <input id="fx-fornecedor-livre" type="text" placeholder="Nome se escolheste «Outro nome…»" style="display:none;margin-top:8px;width:100%;box-sizing:border-box;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:14px"/>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">Selecciona um fornecedor ou «Outro nome…». <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;vertical-align:baseline" onclick="runAction(event, () => navigate('fornecedores'))">Gerir fornecedores</button></div></div>
         <div class="field"><label>Notas (opcional)</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
         <div class="field">
           <label>Foto da fatura</label>
@@ -3521,6 +3558,8 @@ async function drawArmazem() {
     flb.addEventListener('input', () => updateFaturaExcessoUI());
     flb.addEventListener('change', () => updateFaturaExcessoUI());
   }
+  const fxSel = document.getElementById('fx-fornecedor-id');
+  if (fxSel) fxSel.addEventListener('change', updateFxFornecedorLivreVisibility);
   await refreshArmazemFundos();
   await loadArmazemData();
 }
@@ -3552,13 +3591,15 @@ async function loadArmazemData() {
   try {
     const dataDia = S.date || new Date().toISOString().split('T')[0];
     const q = encodeURIComponent(dataDia);
-    const [inventario, compras, produtos, faturas] = await Promise.all([
+    const [inventario, compras, produtos, faturas, fornecedores] = await Promise.all([
       api('GET', '/armazem/inventario'),
       api('GET', '/armazem/compras?limit=50&data=' + q),
       api('GET', '/produtos?todos=1'),
-      api('GET', '/armazem/faturas?limit=40&data=' + q)
+      api('GET', '/armazem/faturas?limit=40&data=' + q),
+      api('GET', '/fornecedores')
     ]);
     S.produtos = produtos;
+    S.fornecedores = fornecedores;
 
     if (!inventario.length) {
       show('armazem-inventario', '<div style="color:#64748b">Sem produtos no inventário.</div>');
@@ -3619,6 +3660,7 @@ async function loadArmazemData() {
         </tr>`).join('')}</tbody></table></div>`);
     }
     applyFxNumeroSugerido(dataDia, faturas);
+    populateFxFornecedorSelect();
   } catch(e) {
     show('armazem-inventario', `<div class="alert alert-error">${e.message}</div>`);
     show('armazem-faturas', `<div class="alert alert-error">${e.message}</div>`);
@@ -4053,14 +4095,24 @@ async function submitFaturaArmazem() {
     const fotoB64 = await fileToDataUrl(fotoInp.files[0]);
     const totalEst = computeFaturaTotalEstimado();
     const saldo = S.armazemSaldoDia != null ? S.armazemSaldoDia : 0;
+    const selF = document.getElementById('fx-fornecedor-id');
+    const vForn = selF ? selF.value : '';
+    let fornecedor_id = '';
+    let fornecedorTxt = '';
+    if (vForn === 'livre') {
+      fornecedorTxt = val('fx-fornecedor-livre');
+    } else if (vForn && /^\d+$/.test(vForn)) {
+      fornecedor_id = vForn;
+    }
     const payload = {
       numero_fatura: val('fx-numero'),
-      fornecedor: val('fx-fornecedor'),
+      fornecedor: fornecedorTxt,
       data_emissao: String(S.date || new Date().toISOString().split('T')[0]).slice(0, 10),
       notas: val('fx-notas'),
       linhas,
       foto_fatura_base64: fotoB64
     };
+    if (fornecedor_id) payload.fornecedor_id = fornecedor_id;
     if (totalEst > saldo + 0.01) {
       payload.justificacao_excesso = val('fx-justificacao');
       const ts = val('fx-turno-saida');
@@ -4069,7 +4121,13 @@ async function submitFaturaArmazem() {
     await api('POST', '/armazem/faturas', payload);
     if (msg) msg.innerHTML = '<div class="alert alert-success">Fatura registada com sucesso.</div>';
     document.getElementById('fx-numero').value = '';
-    document.getElementById('fx-fornecedor').value = '';
+    const selR = document.getElementById('fx-fornecedor-id');
+    if (selR) selR.value = '';
+    const livR = document.getElementById('fx-fornecedor-livre');
+    if (livR) {
+      livR.value = '';
+      livR.style.display = 'none';
+    }
     document.getElementById('fx-notas').value = '';
     const jf = document.getElementById('fx-justificacao');
     if (jf) jf.value = '';
@@ -4082,6 +4140,83 @@ async function submitFaturaArmazem() {
     await loadArmazemData();
   } catch(e) {
     if (msg) msg.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
+// ── FORNECEDORES ─────────────────────────────────────────────
+async function drawFornecedores() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Fornecedores</div>
+        <div class="header-sub">Catálogo usado nas faturas de compra (armazém)</div>
+      </div>
+    </div>
+    <div id="content">
+      <div id="fornec-msg"></div>
+      <div class="card">
+        <div class="card-title">Novo fornecedor</div>
+        <div class="field"><label>Nome</label><input id="forn-nome" type="text" placeholder="Ex.: Distribuidora X"/></div>
+        <div class="field"><label>Notas (opcional)</label><input id="forn-notas" type="text" placeholder="NIF, contacto, condições…"/></div>
+        <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, submitNovoFornecedor)">Criar</button>
+      </div>
+      <div class="card">
+        <div class="card-title">Lista</div>
+        <div id="fornec-list"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+    </div>
+    ${navBar()}
+  `);
+  await refreshFornecedoresList();
+}
+
+async function submitNovoFornecedor() {
+  const nome = val('forn-nome');
+  if (!nome) {
+    show('fornec-msg', '<div class="alert alert-error">Indica o nome do fornecedor.</div>');
+    return;
+  }
+  try {
+    await api('POST', '/fornecedores', { nome, notas: val('forn-notas') });
+    show('fornec-msg', '<div class="alert alert-success">Fornecedor criado.</div>');
+    document.getElementById('forn-nome').value = '';
+    document.getElementById('forn-notas').value = '';
+    await refreshFornecedoresList();
+  } catch (e) {
+    show('fornec-msg', `<div class="alert alert-error">${e.message}</div>`);
+  }
+}
+
+async function refreshFornecedoresList() {
+  const el = document.getElementById('fornec-list');
+  if (!el) return;
+  try {
+    const rows = await api('GET', '/fornecedores?todos=1');
+    S.fornecedoresLista = rows;
+    if (!rows.length) {
+      el.innerHTML = '<div style="color:#64748b">Ainda não há fornecedores.</div>';
+      return;
+    }
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Nome</th><th>Notas</th><th>Estado</th><th style="text-align:right">Ações</th></tr></thead>
+      <tbody>${rows.map((f) => `<tr>
+        <td>${escapeHtml(f.nome)}</td>
+        <td style="color:#94a3b8;font-size:12px">${f.notas ? escapeHtml(f.notas) : '—'}</td>
+        <td>${f.ativo ? '<span style="color:#4ade80">Activo</span>' : '<span style="color:#64748b">Inactivo</span>'}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => toggleFornecedorAtivo(${f.id}, ${f.ativo ? false : true}))">${f.ativo ? 'Desactivar' : 'Reactivar'}</button>
+        </td>
+      </tr>`).join('')}</tbody></table></div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
+async function toggleFornecedorAtivo(id, ativo) {
+  try {
+    await api('PUT', '/fornecedores/' + id, { ativo: !!ativo });
+    await refreshFornecedoresList();
+  } catch (e) {
+    alert(e.message || String(e));
   }
 }
 

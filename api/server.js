@@ -1666,6 +1666,75 @@ async function refreshFaturaTotalAgg(client, faturaId) {
   return { deletedFatura: false };
 }
 
+async function ensureFornecedores() {
+  await query(`CREATE TABLE IF NOT EXISTS fornecedores (
+    id SERIAL PRIMARY KEY,
+    nome TEXT NOT NULL,
+    notas TEXT NOT NULL DEFAULT '',
+    ativo BOOLEAN NOT NULL DEFAULT true,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    criado_por TEXT NOT NULL DEFAULT ''
+  )`);
+  await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS fornecedor_id INTEGER`).catch(() => {});
+  await query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_fornecedor_id_fkey') THEN
+      ALTER TABLE armazem_faturas ADD CONSTRAINT armazem_faturas_fornecedor_id_fkey
+      FOREIGN KEY (fornecedor_id) REFERENCES fornecedores(id) ON DELETE SET NULL;
+    END IF;
+  END $$`).catch(() => {});
+}
+
+app.get('/api/fornecedores', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+  try {
+    await ensureFornecedores();
+    const todos = req.query.todos === '1';
+    const r = await query(
+      `SELECT * FROM fornecedores ${todos ? '' : 'WHERE ativo = true'} ORDER BY LOWER(nome)`
+    );
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.post('/api/fornecedores', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+  try {
+    await ensureFornecedores();
+    const { nome, notas } = req.body || {};
+    const n = String(nome || '').trim();
+    if (!n) return res.status(400).json({ erro: 'Nome é obrigatório' });
+    const r = await query(
+      `INSERT INTO fornecedores (nome, notas, criado_por) VALUES ($1, $2, $3) RETURNING *`,
+      [n, String(notas || '').trim(), String(req.user.id || '')]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
+});
+
+app.put('/api/fornecedores/:id', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+  try {
+    await ensureFornecedores();
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id)) return res.status(400).json({ erro: 'ID inválido' });
+    const { nome, notas, ativo } = req.body || {};
+    const row = await query('SELECT * FROM fornecedores WHERE id=$1', [id]);
+    if (!row.rows.length) return res.status(404).json({ erro: 'Fornecedor não encontrado' });
+    const nomeF = nome != null ? String(nome).trim() : row.rows[0].nome;
+    if (!nomeF) return res.status(400).json({ erro: 'Nome é obrigatório' });
+    const notasF = notas != null ? String(notas).trim() : row.rows[0].notas;
+    const ativoF = ativo !== undefined && ativo !== null ? !!ativo : row.rows[0].ativo;
+    const r = await query(
+      `UPDATE fornecedores SET nome=$1, notas=$2, ativo=$3 WHERE id=$4 RETURNING *`,
+      [nomeF, notasF, ativoF, id]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
+});
+
 async function ensureArmazemTables() {
   const pidCheck = await query(
     `SELECT data_type
@@ -1746,6 +1815,7 @@ async function ensureArmazemTables() {
       FOREIGN KEY (turno_saida_id) REFERENCES turno_saidas(id) ON DELETE SET NULL;
     END IF;
   END $$`).catch(() => {});
+  await ensureFornecedores();
 }
 
 app.get('/api/armazem/saldo', auth, requireRole('admin','gestor','compras'), async (req, res) => {
@@ -2012,9 +2082,35 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { numero_fatura, fornecedor, data_emissao, notas, linhas, justificacao_excesso, turno_saida_id, foto_fatura_base64 } = req.body || {};
+    const {
+      numero_fatura,
+      fornecedor,
+      data_emissao,
+      notas,
+      linhas,
+      justificacao_excesso,
+      turno_saida_id,
+      foto_fatura_base64,
+      fornecedor_id: fornecedorIdBody
+    } = req.body || {};
     if (!Array.isArray(linhas) || !linhas.length) throw new Error('Adicione pelo menos uma linha à fatura');
     const dataFat = (data_emissao || new Date().toISOString().split('T')[0]).trim();
+
+    let fornecedorNome = (fornecedor || '').trim();
+    let fornecedorId = null;
+    if (fornecedorIdBody != null && fornecedorIdBody !== '') {
+      const fid = parseInt(fornecedorIdBody, 10);
+      if (!Number.isNaN(fid)) {
+        const fr = await client.query(
+          'SELECT id, nome FROM fornecedores WHERE id=$1 AND ativo IS TRUE',
+          [fid]
+        );
+        if (fr.rows.length) {
+          fornecedorId = fr.rows[0].id;
+          fornecedorNome = String(fr.rows[0].nome || '').trim();
+        }
+      }
+    }
     const libRow = await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);
     const fatRow = await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [dataFat]);
     const totalLib = parseFloat(libRow.rows[0].t) || 0;
@@ -2060,20 +2156,21 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
     }
 
     const ins = await client.query(
-      `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id, fornecedor_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [
         (numero_fatura || '').trim(),
-        (fornecedor || '').trim(),
+        fornecedorNome,
         dataFat,
         (notas || '').trim(),
         String(req.user.id || ''),
         just,
-        tsid
+        tsid,
+        fornecedorId
       ]
     );
     fid = ins.rows[0].id;
-    const forn = (fornecedor || '').trim();
+    const forn = fornecedorNome;
     sumTotal = 0;
     for (const linha of linhas) {
       const row = await processArmazemCompraLine(client, req, linha, { fatura_id: fid, fornecedor_header: forn });

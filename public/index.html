@@ -1,8 +1,10 @@
 <!DOCTYPE html>
-<html lang="pt">
+<html lang="pt" data-stockos-ui="2026-04-03-turno-tab-resumo">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+<meta http-equiv="Pragma" content="no-cache"/>
 <title>StockOS</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -529,6 +531,19 @@ function fmtCaixaAttr(v) {
   const n = parseFloat(v);
   return Number.isFinite(n) ? String(n) : '';
 }
+/** Evita mostrar «Produto <uuid>» ou só o uuid quando o nome na BD está incorrecto. */
+function nomeVendaBebidaLegivel(pid, nomeCatalogo) {
+  const raw = String(nomeCatalogo || '').trim();
+  /** BD por vezes guarda «… (copos)»; sem isto o regex ^Produto uuid$ falha. */
+  const n = raw.replace(/\s*\(copos\)\s*$/i, '').trim();
+  const uuidSolo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const produtoUuid = /^Produto\s+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!n) return 'Bebida';
+  if (uuidSolo.test(n)) return 'Bebida';
+  if (produtoUuid.test(n)) return 'Bebida';
+  if (/^Produto\s+[0-9a-f-]{36}/i.test(n)) return 'Bebida';
+  return n;
+}
 /** Preço total em copos: pacotes (ex. 3×1000) + resto ao preço unitário (ex. 400/copo). */
 function precoVendaCopos(copos, precoUnit, qtdPacote, precoPacote) {
   const c = Math.max(0, Math.floor(parseFloat(copos) || 0));
@@ -808,7 +823,11 @@ async function doLogin() {
     S.token = data.token; S.user = data.user;
     localStorage.setItem('token', S.token);
     localStorage.setItem('user', JSON.stringify(S.user));
-    await navigate('dia');
+    // Não await: navigate → drawDia → loadDia espera dbReady no servidor (cold start longo);
+    // se await, o botão «Entrar» fica em «A processar…» até a BD terminar o init.
+    navigate('dia').catch((e) =>
+      err('login-msg', sanitizeLoginErr(e && e.message != null ? e.message : String(e)))
+    );
   } catch (e) { err('login-msg', sanitizeLoginErr(e && e.message != null ? e.message : String(e))); }
 }
 
@@ -1524,6 +1543,41 @@ let vendasProdPrecos = {}; // { produto_id: preco } para todos os produtos de ve
 /** Nome a partir do catálogo (evita «Produto uuid» quando stock e vendas diferem no id). */
 let vendasProdNomes = {};
 
+/** Linha de stock do turno para um produto: `stockBuf` (editável) ou fallback a `S.turnoData.stock`. */
+function getStockLineForProduto(pid) {
+  const k = String(pid);
+  if (stockBuf[k] != null) return stockBuf[k];
+  const row = (S.turnoData?.stock || []).find(s => String(s.produto_id) === k);
+  if (row) {
+    return {
+      encontrado: parseFloat(row.encontrado) || 0,
+      entrada: parseFloat(row.entrada) || 0,
+      deixado: parseFloat(row.deixado) || 0,
+      fechados: parseFloat(row.fechados) || 0
+    };
+  }
+  return { encontrado: 0, entrada: 0, deixado: 0, fechados: 0 };
+}
+
+/** Bebidas por unidade: linhas a partir do stock do turno (API), não só do catálogo /produtos. */
+function forEachBebidaUnidadeVendidaLinha(cb) {
+  const copo = new Set((bebidaCopoProdIds || []).map(String));
+  for (const s of S.turnoData?.stock || []) {
+    if (s.categoria !== 'bebida') continue;
+    const pid = String(s.produto_id);
+    if (copo.has(pid)) continue;
+    const b = getStockLineForProduto(pid);
+    let vend = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    if (vend <= 0 && parseFloat(s.vendido) > 0) vend = Math.max(0, parseFloat(s.vendido));
+    if (vend <= 0) continue;
+    const nome = s.produto_nome || vendasProdNomes[pid] || 'Bebida';
+    let unit = parseFloat(s.preco) || 0;
+    if (!unit) unit = parseFloat(vendasProdPrecos[pid]) || parseFloat(vendasProdPrecos[Number(pid)]) || 0;
+    const sub = vend * unit;
+    cb({ pid, s, vend, nome, unit, sub });
+  }
+}
+
 function calcMenuQty(prodId) {
   const recipe = receitasBuf[prodId] || [];
   if (!recipe.length) return null;
@@ -1564,8 +1618,11 @@ function refreshMenuQtys() {
   }
   for (const prodId of bebidaProdIds) {
     const el = document.getElementById(`venda-qty-${prodId}`);
-    const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
-    const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    const pid = String(prodId);
+    const b = getStockLineForProduto(prodId);
+    let qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    const rowSt = (S.turnoData?.stock || []).find(r => String(r.produto_id) === pid);
+    if (qty <= 0 && rowSt && parseFloat(rowSt.vendido) > 0) qty = Math.max(0, parseFloat(rowSt.vendido));
     if (el) el.textContent = fmtNum(qty);
   }
   for (const prodId of avulsoProdIds) {
@@ -1581,23 +1638,24 @@ function refreshVendasTotal() {
   let total = 0;
   // Menu (inserção manual)
   for (const prodId of menuProdIds) {
-    total += (vendasBuf[prodId] || 0) * (vendasProdPrecos[prodId] || 0);
+    const k = String(prodId);
+    total += (vendasBuf[k] || 0) * (vendasProdPrecos[prodId] || 0);
   }
   // Avulso
   for (const prodId of avulsoProdIds) {
     total += calcStandaloneQty(prodId) * (vendasProdPrecos[prodId] || 0);
   }
   for (const prodId of bebidaCopoProdIds) {
-    const cfg = bebidaCopoCfg[prodId];
+    const k = String(prodId);
+    const cfg = bebidaCopoCfg[k];
     if (!cfg) continue;
-    const copos = vendasBuf[prodId] || 0;
+    const copos = vendasBuf[k] || 0;
     total += precoVendaCopos(copos, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
   }
-  // Bebidas (baseado no vendido do stock)
-  for (const prodId of bebidaProdIds) {
-    const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
-    total += Math.max(0, b.encontrado + b.entrada - b.deixado) * (vendasProdPrecos[prodId] || 0);
-  }
+  // Bebidas por unidade: mesmo critério que o resumo (linhas do stock do turno na API)
+  forEachBebidaUnidadeVendidaLinha(({ sub }) => {
+    total += sub;
+  });
   elTot.textContent = fmt(total);
 }
 
@@ -1638,7 +1696,8 @@ async function loadTurno() {
     S.turnoData = turno;
     stockBuf = {};
     turno.stock.forEach(s => {
-      stockBuf[s.produto_id] = {
+      const sid = String(s.produto_id);
+      stockBuf[sid] = {
         encontrado: parseFloat(s.encontrado)||0,
         entrada: parseFloat(s.entrada)||0,
         deixado: parseFloat(s.deixado)||0,
@@ -1730,6 +1789,7 @@ async function loadTurno() {
           <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
           <button type="button" class="turno-tab" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
           <button type="button" class="turno-tab" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
+          <button type="button" class="turno-tab" data-turno-tab="resumo" onclick="runAction(event, async (ev) => { await switchTurnoTab('resumo', ev.currentTarget); })">📋 Resumo</button>
         </div>
         <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
       </div>
@@ -1829,6 +1889,10 @@ async function loadTurno() {
           <div id="turno-escala-list"><span style="color:#64748b">A carregar...</span></div>
         </div>
       </div>
+
+      <div id="tab-resumo" class="turno-tab-panel">
+        <div id="turno-resumo-mount"><span style="color:#64748b">Abre este separador para carregar o resumo.</span></div>
+      </div>
     `);
   // Inicializar total após render
   let initTotalVend = 0, initTotalVal = 0;
@@ -1863,10 +1927,14 @@ async function loadVendasMenu(turnoId, canEdit) {
     const avulsoProds = prods.filter(p => p.venda_avulso && p.categoria !== 'menu' && p.categoria !== 'bebida');
     vendasProdNomes = {};
     prods.forEach((p) => {
-      vendasProdNomes[p.id] = p.nome;
+      vendasProdNomes[String(p.id)] = p.nome;
     });
     vendasBuf = {};
-    vendas.forEach(v => { vendasBuf[v.produto_id] = parseFloat(v.quantidade); });
+    vendas.forEach((v) => {
+      const pid = String(v.produto_id);
+      vendasBuf[pid] = parseFloat(v.quantidade);
+      if (v.produto_nome) vendasProdNomes[pid] = v.produto_nome;
+    });
 
     receitasBuf = {};
     todasReceitas.forEach(r => {
@@ -1890,7 +1958,7 @@ async function loadVendasMenu(turnoId, canEdit) {
 
     menuProdIds = menuProds.map(p => p.id);
     const menuRows = menuProds.map(p => {
-      const qty = vendasBuf[p.id] || 0;
+      const qty = vendasBuf[String(p.id)] || 0;
       const qtyCtrl = canEdit
         ? `<input type="number" min="0" step="1" inputmode="numeric" autocomplete="off" class="venda-qty-input" id="venda-qty-${p.id}" data-venda-pid="${p.id}" data-venda-turno="${turnoId}" value="${qty}" onblur="vendaQtyInputBlur(this)"/>`
         : `<span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${qty}</span>`;
@@ -1904,23 +1972,42 @@ async function loadVendasMenu(turnoId, canEdit) {
 
     const bebidaCopoProds = bebidaProds.filter((p) => p.venda_por_copo && parseFloat(p.kg_por_copo) > 0);
     const bebidaOutras = bebidaProds.filter((p) => !p.venda_por_copo || !(parseFloat(p.kg_por_copo) > 0));
-    bebidaCopoProdIds = bebidaCopoProds.map((p) => p.id);
+    bebidaCopoProdIds = bebidaCopoProds.map((p) => String(p.id));
     bebidaCopoCfg = {};
     bebidaCopoProds.forEach((p) => {
-      bebidaCopoCfg[p.id] = {
-        nome: p.nome,
+      const pid = String(p.id);
+      const nomeJoin = vendasProdNomes[pid];
+      bebidaCopoCfg[pid] = {
+        nome: nomeVendaBebidaLegivel(pid, nomeJoin || p.nome),
         kgPorCopo: parseFloat(p.kg_por_copo) || 0,
         preco: parseFloat(p.preco) || 0,
         qtdPacote: parseInt(p.qtd_copos_pacote, 10) || 0,
         precoPacote: parseFloat(p.preco_copos_pacote) || 0
       };
     });
+    /** Vendas por copo em produtos inactivos ou fora do GET /produtos — alinhar totais e inputs. */
+    for (const v of vendas) {
+      const isCopo = !!v.venda_por_copo && parseFloat(v.kg_por_copo) > 0;
+      if (!isCopo) continue;
+      const pid = String(v.produto_id);
+      if (!bebidaCopoCfg[pid]) {
+        bebidaCopoCfg[pid] = {
+          nome: nomeVendaBebidaLegivel(pid, v.produto_nome),
+          kgPorCopo: parseFloat(v.kg_por_copo) || 0,
+          preco: parseFloat(v.preco) || 0,
+          qtdPacote: parseInt(v.qtd_copos_pacote, 10) || 0,
+          precoPacote: parseFloat(v.preco_copos_pacote) || 0
+        };
+      }
+      if (!bebidaCopoProdIds.includes(pid)) bebidaCopoProdIds.push(pid);
+    }
     bebidaProdIds = bebidaOutras.map((p) => p.id);
     bebidaProdPrecos = {};
     const bebidaCopoRows = bebidaCopoProds.map((p) => {
-      const cfg = bebidaCopoCfg[p.id];
-      const copos = vendasBuf[p.id] || 0;
-      const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
+      const pid = String(p.id);
+      const cfg = bebidaCopoCfg[pid];
+      const copos = vendasBuf[pid] || 0;
+      const b = getStockLineForProduto(p.id);
       const kgStock = Math.max(0, b.encontrado + b.entrada - b.deixado);
       const precoLinha =
         cfg.qtdPacote >= 2 && cfg.precoPacote > 0
@@ -1931,7 +2018,7 @@ async function loadVendasMenu(turnoId, canEdit) {
         : `<span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${copos}</span>`;
       return `<div class="produto-row">
         <div class="produto-info">
-          <div class="produto-nome">${p.nome} <span style="font-size:10px;color:#64748b;font-weight:600">(copos)</span></div>
+          <div class="produto-nome">${cfg.nome} <span style="font-size:10px;color:#64748b;font-weight:600">(copos)</span></div>
           <div class="produto-meta" style="line-height:1.35">${precoLinha} · ${fmtNum(cfg.kgPorCopo)} kg/copo · stock ~${fmtNum(kgStock)} kg</div>
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">${qtyCopo}</div>
@@ -1939,8 +2026,11 @@ async function loadVendasMenu(turnoId, canEdit) {
     }).join('');
     const bebidaRows = bebidaOutras.map((p) => {
       bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
-      const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
-      const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
+      const pid = String(p.id);
+      const b = getStockLineForProduto(p.id);
+      let qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
+      const rowSt = (S.turnoData.stock || []).find(r => String(r.produto_id) === pid);
+      if (qty <= 0 && rowSt && parseFloat(rowSt.vendido) > 0) qty = Math.max(0, parseFloat(rowSt.vendido));
       return `<div class="produto-row">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
           ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)} · stock ${fmtNum(qty)} un</div>` : ''}
@@ -1963,11 +2053,92 @@ async function loadVendasMenu(turnoId, canEdit) {
 
     const toGrid = rows => `<div class="vendas-menu-2col">${rows}</div>`;
 
+    const resumoLinhas = [];
+    let resumoSoma = 0;
+    for (const p of menuProds) {
+      const qty = vendasBuf[String(p.id)] || 0;
+      if (qty <= 0) continue;
+      const unit = parseFloat(p.preco) || 0;
+      const sub = qty * unit;
+      resumoSoma += sub;
+      const mid = unit > 0 ? `${fmtNum(qty)} × ${fmt(unit)}` : `${fmtNum(qty)}`;
+      resumoLinhas.push(
+        `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid #334155;font-size:14px">
+          <span style="color:#e2e8f0;font-weight:600">${escapeHtml(p.nome)}</span>
+          <span style="color:#94a3b8;font-size:13px;text-align:right;flex:1">${mid}</span>
+          <span style="color:#f1f5f9;font-weight:700;white-space:nowrap">${fmt(sub)}</span>
+        </div>`
+      );
+    }
+    /** Copos: usar `vendas` (não só bebidaCopoProds) para não falhar se o produto saiu do filtro ou está inactivo. */
+    for (const v of vendas) {
+      const isCopo = !!v.venda_por_copo && parseFloat(v.kg_por_copo) > 0;
+      if (!isCopo) continue;
+      const pid = String(v.produto_id);
+      const copos = parseFloat(v.quantidade) || 0;
+      if (copos <= 0) continue;
+      const cfgBase = bebidaCopoCfg[pid];
+      const preco = cfgBase ? cfgBase.preco : parseFloat(v.preco) || 0;
+      const qtdPacote = cfgBase ? cfgBase.qtdPacote : parseInt(v.qtd_copos_pacote, 10) || 0;
+      const precoPacote = cfgBase ? cfgBase.precoPacote : parseFloat(v.preco_copos_pacote) || 0;
+      const sub = precoVendaCopos(copos, preco, qtdPacote, precoPacote);
+      resumoSoma += sub;
+      const nomeLinha = cfgBase ? cfgBase.nome : nomeVendaBebidaLegivel(pid, v.produto_nome);
+      const label = `${escapeHtml(nomeLinha)} (copos)`;
+      resumoLinhas.push(
+        `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid #334155;font-size:14px">
+          <span style="color:#e2e8f0;font-weight:600">${label}</span>
+          <span style="color:#94a3b8;font-size:13px;text-align:right;flex:1">${fmtNum(copos)} copos</span>
+          <span style="color:#f1f5f9;font-weight:700;white-space:nowrap">${fmt(sub)}</span>
+        </div>`
+      );
+    }
+    for (const p of avulsoProds) {
+      const qty = calcStandaloneQty(p.id);
+      if (qty <= 0) continue;
+      const unit = parseFloat(p.preco) || 0;
+      const sub = qty * unit;
+      resumoSoma += sub;
+      const mid = unit > 0 ? `${fmtNum(qty)} × ${fmt(unit)}` : `${fmtNum(qty)}`;
+      resumoLinhas.push(
+        `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid #334155;font-size:14px">
+          <span style="color:#e2e8f0;font-weight:600">${escapeHtml(p.nome)}</span>
+          <span style="color:#94a3b8;font-size:13px;text-align:right;flex:1">${mid}</span>
+          <span style="color:#f1f5f9;font-weight:700;white-space:nowrap">${fmt(sub)}</span>
+        </div>`
+      );
+    }
+    forEachBebidaUnidadeVendidaLinha(({ vend, nome, unit, sub }) => {
+      resumoSoma += sub;
+      const mid = unit > 0 ? `${fmtNum(vend)} × ${fmt(unit)}` : `${fmtNum(vend)}`;
+      resumoLinhas.push(
+        `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid #334155;font-size:14px">
+          <span style="color:#e2e8f0;font-weight:600">${escapeHtml(nome)}</span>
+          <span style="color:#94a3b8;font-size:13px;text-align:right;flex:1">${mid}</span>
+          <span style="color:#f1f5f9;font-weight:700;white-space:nowrap">${fmt(sub)}</span>
+        </div>`
+      );
+    });
+
+    const resumoCard =
+      resumoLinhas.length > 0
+        ? `<div class="card" style="margin-bottom:16px;padding:14px 16px">
+        <div class="card-title" style="margin-bottom:10px">🍽️ Resumo de vendas</div>
+        <div>${resumoLinhas.join('')}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:12px;border-top:2px solid #334155">
+          <span style="font-weight:600;color:#94a3b8;font-size:0.85rem;text-transform:uppercase;letter-spacing:.05em">Total vendas</span>
+          <span style="font-weight:700;font-size:1.1rem;color:#4ade80">${fmt(resumoSoma)}</span>
+        </div>
+      </div>`
+        : '';
+
     const totalRow = `<div style="margin-top:14px;padding:10px 12px;background:#1e293b;border-radius:8px;display:flex;justify-content:space-between;align-items:center">
         <span style="font-weight:600;color:#94a3b8;font-size:0.85rem;text-transform:uppercase;letter-spacing:.05em">Total Vendas</span>
         <span id="vendas-total-geral" style="font-weight:700;font-size:1.1rem;color:#4ade80">—</span>
       </div>`;
-    const html = (menuProds.length ? groupHeader('🍽️ Menu') + toGrid(menuRows) : '')
+    const html =
+      resumoCard +
+      (menuProds.length ? groupHeader('🍽️ Menu') + toGrid(menuRows) : '')
                + (avulsoProds.length ? groupHeader('🛒 Avulso') + toGrid(avulsoRows) : '')
                + (bebidaCopoProds.length ? groupHeader('🥤 Bebidas (por copo)') + toGrid(bebidaCopoRows) : '')
                + (bebidaOutras.length ? groupHeader('🥤 Bebidas (unidade)') + toGrid(bebidaRows) : '')
@@ -1977,6 +2148,80 @@ async function loadVendasMenu(turnoId, canEdit) {
   } catch(e) {
     show('vendas-menu-list', `<span style="color:#ef4444">${e.message}</span>`);
   }
+}
+
+/** Separador «Resumo»: financeiro + stock + mesmo bloco de vendas que na aba Vendas (menu, copos, bebidas unidade). */
+async function loadTurnoResumoTab(turnoId) {
+  const mount = document.getElementById('turno-resumo-mount');
+  if (!mount) return;
+  mount.innerHTML = '<span style="color:#64748b">A carregar…</span>';
+  const turno = S.turnoData;
+  if (!turno) {
+    mount.innerHTML = '<span style="color:#ef4444">Sem dados do turno.</span>';
+    return;
+  }
+  const cx = turno.caixa || {};
+  const tpa = parseFloat(cx.tpa) || 0;
+  const transf = parseFloat(cx.transferencia) || 0;
+  const din = parseFloat(cx.dinheiro) || 0;
+  const saida = parseFloat(cx.saida) || 0;
+  const tg = tpa + transf + din;
+  const tf = tg - saida;
+
+  let totalUnd = 0;
+  let totalValStock = 0;
+  for (const s of turno.stock || []) {
+    let v = parseFloat(s.vendido);
+    if (!Number.isFinite(v) || v < 0) {
+      const b = getStockLineForProduto(s.produto_id);
+      v = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    }
+    totalUnd += v;
+    const val = parseFloat(s.valor);
+    if (Number.isFinite(val) && val >= 0) totalValStock += val;
+    else totalValStock += v * (parseFloat(s.preco) || 0);
+  }
+
+  const financeiroHtml =
+    '<div class="card" style="margin-bottom:12px">' +
+    '<div class="card-title">Resumo financeiro</div>' +
+    '<div style="display:grid;gap:8px;font-size:14px">' +
+    `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">TPA / máquina</span><span>${fmtKzOrEmpty(tpa)}</span></div>` +
+    `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Transferência</span><span>${fmtKzOrEmpty(transf)}</span></div>` +
+    `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Dinheiro</span><span>${fmtKzOrEmpty(din)}</span></div>` +
+    `<div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid #334155;font-weight:600"><span>Total gerado</span><span>${fmtKzOrEmpty(tg)}</span></div>` +
+    `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Despesas (saída)</span><span>${fmtKzOrEmpty(saida)}</span></div>` +
+    `<div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid #334155;font-weight:700;color:#4ade80"><span>Total final</span><span>${fmtKzOrEmpty(tf)}</span></div>` +
+    '</div></div>';
+
+  const stockHtml =
+    '<div class="card" style="margin-bottom:12px">' +
+    '<div class="card-title">Resumo de stock</div>' +
+    '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">' +
+    `<span style="color:#e2e8f0;font-weight:600">Total vendido (und.): <strong>${fmtNum(totalUnd)}</strong></span>` +
+    `<span style="color:#94a3b8">Valor de stock: <strong style="color:#f1f5f9">${fmt(totalValStock)}</strong></span>` +
+    '</div></div>';
+
+  try {
+    await loadVendasMenu(turnoId, false);
+  } catch (e) {
+    mount.innerHTML = financeiroHtml + stockHtml + `<div class="card"><span style="color:#ef4444">${escapeHtml(e.message)}</span></div>`;
+    return;
+  }
+
+  const vendasList = document.getElementById('vendas-menu-list');
+  let resumoVendasHtml = '';
+  const directCard = vendasList?.querySelector(':scope > .card');
+  if (directCard) {
+    let clone = directCard.outerHTML;
+    clone = clone.replace(/\bid="vendas-total-geral"/g, 'id="resumo-tab-total-vendas"');
+    resumoVendasHtml = clone;
+  } else {
+    resumoVendasHtml =
+      '<div class="card"><div class="card-title">Resumo de vendas</div><span style="color:#64748b">Sem linhas de resumo (abre Vendas para sincronizar).</span></div>';
+  }
+
+  mount.innerHTML = financeiroHtml + stockHtml + resumoVendasHtml;
 }
 
 /** Grava quantidade de venda (menu ou bebida por copo) ao sair do input. */
@@ -2114,6 +2359,10 @@ async function switchTurnoTab(name, btn) {
   if (name === 'vendas') {
     const tid = S.turnoData?.id;
     if (tid) await loadVendasMenu(tid, !!S.turnoCanEdit);
+  }
+  if (name === 'resumo') {
+    const tid = S.turnoData?.id;
+    if (tid) await loadTurnoResumoTab(tid);
   }
 }
 

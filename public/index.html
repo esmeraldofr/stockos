@@ -3462,7 +3462,8 @@ async function drawArmazem() {
         <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha. Anexa a <strong>foto da fatura</strong> (obrigatório). Se o total exceder o saldo do dia, deves justificar a origem do dinheiro (podes associar uma saída de caixa do mesmo dia).</p>
         <div id="fatura-form-msg"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="Ex: FT 2025/012"/></div>
+          <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="STK-20260405-001 (automático)"/>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">Gerado automaticamente (STK-data-sequência); podes editar.</div></div>
           <div class="field"><label>Data</label><input id="fx-data" type="date"/></div>
         </div>
         <div class="field"><label>Fornecedor</label><input id="fx-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
@@ -3521,6 +3522,30 @@ async function drawArmazem() {
   }
   await refreshArmazemFundos();
   await loadArmazemData();
+}
+
+/** Próximo número sugerido para a data de emissão: STK-YYYYMMDD-NNN (NNN = ordem no dia). */
+function suggestNumeroFaturaArmazem(dataIso, faturas) {
+  const day = String(dataIso || '').slice(0, 10);
+  const ymd = day.replace(/-/g, '');
+  if (!/^\d{8}$/.test(ymd)) {
+    const fb = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    return `STK-${fb}-001`;
+  }
+  const n = (Array.isArray(faturas) ? faturas.length : 0) + 1;
+  return `STK-${ymd}-${String(n).padStart(3, '0')}`;
+}
+
+function applyFxNumeroSugerido(dataDia, faturas) {
+  const el = document.getElementById('fx-numero');
+  if (!el || S.page !== 'armazem') return;
+  const fxD = document.getElementById('fx-data');
+  const diaRef = (fxD && fxD.value ? fxD.value : dataDia).slice(0, 10);
+  const sug = suggestNumeroFaturaArmazem(diaRef, faturas);
+  const cur = String(el.value || '').trim();
+  if (!cur || /^STK-\d{8}-\d{3}$/i.test(cur)) {
+    el.value = sug;
+  }
 }
 
 async function loadArmazemData() {
@@ -3593,6 +3618,7 @@ async function loadArmazemData() {
           </td>` : ''}
         </tr>`).join('')}</tbody></table></div>`);
     }
+    applyFxNumeroSugerido(dataDia, faturas);
   } catch(e) {
     show('armazem-inventario', `<div class="alert alert-error">${e.message}</div>`);
     show('armazem-faturas', `<div class="alert alert-error">${e.message}</div>`);

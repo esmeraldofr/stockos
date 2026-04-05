@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-historico-total-dia-coluna">
+<html lang="pt" data-stockos-ui="2026-04-05-dia-semana-pt-AO">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -71,9 +71,14 @@ button.is-action-busy{cursor:wait!important}
 
 /* Turno cards */
 .turno-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px}
+.turno-cards--dia-totals{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:900px){.turno-cards--dia-totals{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:500px){.turno-cards{grid-template-columns:1fr}}
+@media(max-width:500px){.turno-cards--dia-totals{grid-template-columns:1fr}}
 .turno-card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px;cursor:pointer;transition:.2s}
 .turno-card:hover{border-color:#3b82f6;background:#172554}
+.turno-card.turno-card--total-dia{cursor:default}
+.turno-card.turno-card--total-dia:hover{border-color:#3b82f6;background:#172554}
 .turno-card.aberto{border-color:#22c55e}
 .turno-card.fechado{border-color:#475569;opacity:.8}
 .turno-card-nome{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8;margin-bottom:6px}
@@ -115,7 +120,6 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .entradas-select{flex:1.5;min-width:140px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:13px}
 .entradas-qty{width:80px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:13px;text-align:right}
 .entradas-notas{flex:2;min-width:120px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:13px}
-.td-valor{color:#4ade80;text-align:right;font-weight:600}
 .comp-igual{color:#4ade80;font-size:12px}
 .comp-falta{color:#f87171;font-size:12px}
 .comp-sobra{color:#fb923c;font-size:12px}
@@ -143,7 +147,8 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .date-nav{display:flex;align-items:center;gap:10px;background:#1e293b;border:1px solid #334155;border-radius:10px;padding:8px 12px;margin-bottom:16px}
 .date-nav button{background:none;border:none;color:#94a3b8;cursor:pointer;padding:2px 6px;font-size:18px;border-radius:4px}
 .date-nav button:hover{background:#334155;color:#f1f5f9}
-.date-nav span{flex:1;text-align:center;font-weight:600;font-size:15px}
+.date-nav > span{flex:1;min-width:0;text-align:center;font-weight:600;font-size:15px}
+#date-label{display:block;line-height:1.35;white-space:normal;word-break:break-word}
 
 /* Login */
 #login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px}
@@ -611,6 +616,24 @@ function dateLabel(d) {
   if (!y || !m || !dd) return raw;
   return `${dd}/${m}/${y}`;
 }
+/** Nome do dia da semana (pt-AO), ex.: terça-feira */
+function weekdayLabel(d) {
+  if (d == null || d === '') return '';
+  const raw = String(d).trim();
+  const dayPart = raw.includes('T') ? raw.split('T')[0] : raw.slice(0, 10);
+  const [y, mo, dd] = dayPart.split('-');
+  if (!y || !mo || !dd) return '';
+  const dt = new Date(parseInt(y, 10), parseInt(mo, 10) - 1, parseInt(dd, 10));
+  if (isNaN(dt.getTime())) return '';
+  const w = dt.toLocaleDateString('pt-AO', { weekday: 'long' });
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+/** Data DD/MM/AAAA · dia da semana */
+function dateLabelWithWeekday(d) {
+  const dl = dateLabel(d);
+  const wd = weekdayLabel(d);
+  return wd ? `${dl} · ${wd}` : dl;
+}
 /** Data e hora local (DD/MM/AAAA HH:mm:ss) a partir de ISO ou timestamp. */
 function dateTimeLabel(d) {
   if (d == null || d === '') return '—';
@@ -904,7 +927,7 @@ async function drawDia() {
       <div class="date-nav">
         <button type="button" onclick="runAction(event, () => changeDate(-1))">‹</button>
         <span style="position:relative;cursor:pointer">
-          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
+          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabelWithWeekday(S.date)}</span>
           <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
         </span>
         <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>
@@ -918,7 +941,7 @@ async function drawDia() {
 
 function syncDatePickersAcrossPages() {
   const dl = document.getElementById('date-label');
-  if (dl) dl.textContent = dateLabel(S.date);
+  if (dl) dl.textContent = dateLabelWithWeekday(S.date);
   const dp = document.getElementById('date-picker');
   if (dp) dp.value = S.date;
   const fx = document.getElementById('fx-data');
@@ -1117,7 +1140,7 @@ async function drawDepositos() {
       <div class="date-nav">
         <button type="button" onclick="runAction(event, () => changeDate(-1))">‹</button>
         <span style="position:relative;cursor:pointer">
-          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
+          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabelWithWeekday(S.date)}</span>
           <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
         </span>
         <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>
@@ -1229,10 +1252,30 @@ async function loadDia() {
         </div>`;
     }).join('');
 
+    let dayTv = 0;
+    let dayTg = 0;
+    let dayTf = 0;
+    for (const t of turnos) {
+      const c = t.caixa || {};
+      dayTv += parseFloat(t.total_vendas) || 0;
+      dayTg += parseFloat(c.total_gerado) || 0;
+      dayTf += parseFloat(c.total_final) || 0;
+    }
+    const totalDiaCard = `
+          <div class="turno-card turno-card--total-dia" style="border-color:#3b82f6;background:#172554">
+            <div class="turno-card-nome" style="color:#93c5fd">Total do dia</div>
+            <div style="font-size:10px;color:#64748b;margin-bottom:8px;text-align:center">soma dos turnos</div>
+            <div style="font-size:11px;line-height:1.55;text-align:center">
+              <div><span style="color:#64748b">Vendas</span> <span style="font-weight:700;color:#a5b4fc">${fmt(dayTv)}</span></div>
+              <div><span style="color:#64748b">Gerado</span> <span style="font-weight:700;color:#fbbf24">${fmt(dayTg)}</span></div>
+              <div><span style="color:#64748b">Final</span> <span style="font-weight:700;color:#4ade80">${fmt(dayTf)}</span></div>
+            </div>
+          </div>`;
+
     const escalaLoading = `<div id="dia-escala-slot" class="card"><div class="text-center" style="padding:28px;color:#64748b"><div class="spinner"></div><div style="margin-top:10px;font-size:12px">A carregar escala…</div></div></div>`;
 
     show('dia-content', `
-      <div class="turno-cards">${cards}</div>
+      <div class="turno-cards turno-cards--dia-totals">${cards}${totalDiaCard}</div>
       ${escalaLoading}
     `);
 
@@ -1712,7 +1755,7 @@ async function loadTurno() {
     };
 
     document.getElementById('turno-title').textContent =
-      `${turnoLabel(turno.nome)} — ${dateLabel(S.date)}`;
+      `${turnoLabel(turno.nome)} — ${dateLabelWithWeekday(S.date)}`;
 
     const isAberto = turno.estado === 'aberto';
     const canEdit  = isAberto;
@@ -1737,19 +1780,14 @@ async function loadTurno() {
       return items.map(s => {
         const pid = s.produto_id;
         const vend = Math.max(0, (stockBuf[pid]?.encontrado||0) + (stockBuf[pid]?.entrada||0) - (stockBuf[pid]?.deixado||0));
-        const val  = vend * parseFloat(s.preco);
         const vendTxt = vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}` : '';
-        const valTxt = parseFloat(s.preco) > 0 && vend > 0 ? fmt(val) : (parseFloat(s.preco) > 0 ? '' : '—');
         let compHtml = '<span class="comp-null">—</span>';
         if (s.comparacao === 'igual') compHtml = '<span class="comp-igual">✓</span>';
         else if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
         else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
 
         const inputAttr = canEdit ? '' : 'disabled';
-        const metaLinha =
-          parseFloat(s.preco) > 0
-            ? `${medicaoSigla(s.tipo_medicao)} · ${fmt(s.preco)}`
-            : medicaoSigla(s.tipo_medicao);
+        const metaLinha = medicaoSigla(s.tipo_medicao);
         return `
           <tr class="stock-row">
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div></td>
@@ -1766,7 +1804,6 @@ async function loadTurno() {
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','fechados',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="fechados" title="Obrigatório" ${inputAttr}/></td>
             <td class="td-calc" id="vend-${pid}">${vendTxt}</td>
-            <td class="td-valor" id="val-${pid}">${valTxt}</td>
           </tr>`;
       }).join('');
     }
@@ -1807,18 +1844,12 @@ async function loadTurno() {
                   <th style="text-align:right">Deixado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Vendido</th>
-                  <th style="text-align:right">Valor</th>
                 </tr>
               </thead>
               <tbody>
                 ${tableFor(comida,'🧂 Ingredientes')}
                 ${tableFor(bebida,'🥤 Bebidas')}
                 ${tableFor(outro,'📦 Outros')}
-                <tr id="stock-total-row" style="font-weight:700;border-top:2px solid #334155;background:#1e293b">
-                  <td colspan="7" style="padding:8px 10px;color:#94a3b8">Total</td>
-                  <td class="td-calc" id="total-vend"></td>
-                  <td class="td-valor" id="total-val"></td>
-                </tr>
               </tbody>
             </table>
           </div>
@@ -1896,19 +1927,6 @@ async function loadTurno() {
       </div>
 
     `);
-  // Inicializar total após render
-  let initTotalVend = 0, initTotalVal = 0;
-  turno.stock.forEach(s => {
-    const b = stockBuf[s.produto_id] || { encontrado:0, entrada:0, deixado:0 };
-    const v = Math.max(0, b.encontrado + b.entrada - b.deixado);
-    initTotalVend += v;
-    initTotalVal += v * (parseFloat(s.preco) || 0);
-  });
-  const tv = document.getElementById('total-vend');
-  const tva = document.getElementById('total-val');
-  if (tv) tv.textContent = initTotalVend > 0 ? fmtNum(initTotalVend) : '';
-  if (tva) tva.textContent = initTotalVal > 0 ? fmt(initTotalVal) : '';
-
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
     await loadTurnoResumoTab(turno.id);
     renderIrregularidadesTurno();
@@ -2226,28 +2244,9 @@ function updateStock(pid, field, value) {
   const { encontrado:enc, entrada:ent, deixado:dei } = stockBuf[pid];
   const vend = Math.max(0, enc + ent - dei);
   const prod = S.turnoData?.stock?.find(s => s.produto_id === pid);
-  const preco = parseFloat(prod?.preco) || 0;
-  const val = vend * preco;
   const ve = document.getElementById(`vend-${pid}`);
-  const va = document.getElementById(`val-${pid}`);
   const tipoM = prod?.tipo_medicao || 'unidade';
   if (ve) ve.textContent = vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(tipoM)}` : '';
-  if (va) {
-    va.textContent =
-      preco > 0 && vend > 0 ? fmt(val) : preco > 0 ? '' : '—';
-  }
-  // Recalcular total
-  let totalVend = 0, totalVal = 0;
-  (S.turnoData?.stock || []).forEach(s => {
-    const b = stockBuf[s.produto_id] || { encontrado:0, entrada:0, deixado:0 };
-    const v = Math.max(0, b.encontrado + b.entrada - b.deixado);
-    totalVend += v;
-    totalVal += v * (parseFloat(s.preco) || 0);
-  });
-  const tv = document.getElementById('total-vend');
-  const tva = document.getElementById('total-val');
-  if (tv) tv.textContent = totalVend > 0 ? fmtNum(totalVend) : '';
-  if (tva) tva.textContent = totalVal > 0 ? fmt(totalVal) : '';
   refreshMenuQtys();
   renderIrregularidadesTurno();
   // Auto-save
@@ -3112,7 +3111,7 @@ async function loadHistorico() {
         </div>`;
         return `
       <div class="card" style="margin-bottom:12px">
-        <div style="font-weight:600;font-size:15px;margin-bottom:2px">${dateLabel(d)}</div>
+        <div style="font-weight:600;font-size:15px;margin-bottom:2px">${dateLabelWithWeekday(d)}</div>
         <div style="font-size:12px;color:#64748b;margin-bottom:10px">${d} · ${day.turnos.length} turno(s)</div>
         <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;overflow-x:auto;-webkit-overflow-scrolling:touch">
           ${turnosCols}${totalDiaCol}
@@ -3150,7 +3149,7 @@ async function drawArmazem() {
   render(`
     <div id="header">
       <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Armazém</div>
-        <div class="header-sub">Registo diário · ${dateLabel(S.date)}</div>
+        <div class="header-sub">Registo diário · ${dateLabelWithWeekday(S.date)}</div>
       </div>
     </div>
     <div id="content">
@@ -3158,7 +3157,7 @@ async function drawArmazem() {
       <div class="date-nav">
         <button type="button" onclick="runAction(event, () => changeDate(-1))">‹</button>
         <span style="position:relative;cursor:pointer">
-          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabel(S.date)}</span>
+          <span id="date-label" style="text-decoration:underline dotted #475569">${dateLabelWithWeekday(S.date)}</span>
           <input type="date" id="date-picker" value="${S.date}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="pickDate(this.value)">
         </span>
         <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>

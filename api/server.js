@@ -222,7 +222,7 @@ async function qry(sql, params, label) {
   catch(e) { console.error(`[initDB:${label}]`, e.message); }
 }
 
-/** Índices leves (IF NOT EXISTS) — aceleram /dia, dashboard, escala. Corre após init. */
+/** Índices leves (IF NOT EXISTS) — aceleram /dia, escala. Corre após init. */
 async function ensureStockosPerfIndexes() {
   const stmts = [
     'CREATE INDEX IF NOT EXISTS idx_turnos_data ON turnos (data)',
@@ -259,7 +259,7 @@ function markLoginReady() {
 let resolveDbReady;
 let rejectDbReady;
 let dbReadyResolved = false;
-/** Resolve quando GET /api/dia, escala, dashboard, produtos podem correr (antes de seed/dedup pesados). */
+/** Resolve quando GET /api/dia, escala, produtos podem correr (antes de seed/dedup pesados). */
 const dbReady = new Promise((resolve, reject) => {
   resolveDbReady = resolve;
   rejectDbReady = reject;
@@ -482,7 +482,7 @@ async function initDB() {
   await qry(`ALTER TABLE turno_faltas ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'turno_faltas-userid-text');
   await qry(`ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key`, [], 'escala_template-drop-unique-old');
   await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_template_dia_turno_utilizador_key') THEN ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id); END IF; END $$`, [], 'escala_template-add-unique-new');
-  /** API pode servir /dia, escala, dashboard; o resto (dedup, seed 37 produtos, meta) continua sem bloquear o middleware. */
+  /** API pode servir /dia, escala; o resto (dedup, seed 37 produtos, meta) continua sem bloquear o middleware. */
   markDbReady();
   // Remover duplicados de produtos (manter o de menor id por nome)
   await qry(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, [], 'produtos-dedup');
@@ -521,7 +521,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-perf-turno-dia-escala-cache';
+const STOCKOS_API_BUILD = '2026-03-31-remove-dashboard-resumo-dia';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -2366,160 +2366,6 @@ app.post('/api/turnos/:id/saidas', auth, async (req, res) => {
   } finally { client.release(); }
 });
 
-/** Igual à lógica da aba Vendas no cliente (menu, avulso, copos, bebidas unidade). */
-function precoVendaCoposSrv(copos, precoUnit, qtdPacote, precoPacote) {
-  const c = Math.max(0, Math.floor(parseFloat(copos) || 0));
-  const u = parseFloat(precoUnit) || 0;
-  const n = parseInt(String(qtdPacote), 10) || 0;
-  const p = parseFloat(precoPacote) || 0;
-  if (n >= 2 && p > 0) return Math.floor(c / n) * p + (c % n) * u;
-  return c * u;
-}
-
-function calcMenuQtySrv(stockBuf, receitasBuf, prodId) {
-  const recipe = receitasBuf[String(prodId)] || [];
-  if (!recipe.length) return null;
-  let min = Infinity;
-  for (const comp of recipe) {
-    const cid = String(comp.componente_id);
-    const b = stockBuf[cid] || { encontrado: 0, entrada: 0, deixado: 0 };
-    const vendido = Math.max(0, b.encontrado + b.entrada - b.deixado);
-    min = Math.min(min, vendido / parseFloat(comp.quantidade));
-  }
-  return min === Infinity ? 0 : Math.floor(min);
-}
-
-function calcStandaloneQtySrv(stockBuf, receitasBuf, prodId) {
-  const pid = String(prodId);
-  const b = stockBuf[pid] || { encontrado: 0, entrada: 0, deixado: 0 };
-  const total = Math.max(0, b.encontrado + b.entrada - b.deixado);
-  let comboUsage = 0;
-  for (const menuProdId of Object.keys(receitasBuf)) {
-    const recipe = receitasBuf[menuProdId];
-    const comp = recipe.find((r) => String(r.componente_id) === pid);
-    if (comp) comboUsage += (calcMenuQtySrv(stockBuf, receitasBuf, menuProdId) || 0) * parseFloat(comp.quantidade);
-  }
-  return Math.max(0, total - comboUsage);
-}
-
-/** Soma vendas para um turno (buffers já carregados). */
-function computeTotalVendasTurnoBuffers(
-  vendasBuf,
-  stockBuf,
-  pById,
-  menuProdIds,
-  avulsoProdIds,
-  bebidaCopoProdIds,
-  bebidaOutras,
-  receitasBuf
-) {
-  let total = 0;
-  for (const pid of menuProdIds) {
-    const pr = pById[String(pid)];
-    total += (vendasBuf[String(pid)] || 0) * (parseFloat(pr.preco) || 0);
-  }
-  for (const pid of avulsoProdIds) {
-    const pr = pById[String(pid)];
-    total += calcStandaloneQtySrv(stockBuf, receitasBuf, pid) * (parseFloat(pr.preco) || 0);
-  }
-  for (const pid of bebidaCopoProdIds) {
-    const p = pById[String(pid)];
-    const copos = vendasBuf[String(pid)] || 0;
-    total += precoVendaCoposSrv(copos, p.preco, p.qtd_copos_pacote, p.preco_copos_pacote);
-  }
-  for (const p of bebidaOutras) {
-    const pid = String(p.id);
-    const b = stockBuf[pid] || { encontrado: 0, entrada: 0, deixado: 0 };
-    const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
-    total += qty * (parseFloat(p.preco) || 0);
-  }
-  return total;
-}
-
-/** Uma query batch por tipo — evita N× repetir produtos/receitas por turno. */
-async function computeTotalVendasForDate(data) {
-  const turnos = await query(`SELECT id FROM turnos WHERE data=$1`, [data]);
-  if (!turnos.rows.length) return 0;
-  const ids = turnos.rows.map((t) => t.id);
-  const [vendasAll, stockAll, produtos, receitasAll] = await Promise.all([
-    query(
-      `SELECT turno_id, produto_id, quantidade FROM turno_vendas WHERE turno_id = ANY($1::int[])`,
-      [ids]
-    ),
-    query(
-      `SELECT turno_id, produto_id, encontrado, entrada, deixado FROM turno_stock WHERE turno_id = ANY($1::int[])`,
-      [ids]
-    ),
-    query(
-      `SELECT id, preco, categoria, venda_avulso, venda_por_copo, kg_por_copo, preco_copos_pacote, qtd_copos_pacote
-       FROM produtos WHERE ativo=true AND (
-         categoria IN ('menu','bebida') OR COALESCE(venda_avulso,false) IS TRUE
-         OR id IN (SELECT DISTINCT produto_id FROM turno_vendas WHERE turno_id = ANY($1::int[]))
-         OR id IN (SELECT DISTINCT produto_id FROM turno_stock WHERE turno_id = ANY($1::int[]))
-       )`,
-      [ids]
-    ),
-    query(
-      `SELECT r.produto_id, r.componente_id, r.quantidade FROM receitas r
-       INNER JOIN produtos p ON p.id = r.produto_id AND p.categoria = 'menu' AND p.ativo = true`
-    )
-  ]);
-  const receitasBuf = {};
-  for (const r of receitasAll.rows) {
-    const pid = String(r.produto_id);
-    if (!receitasBuf[pid]) receitasBuf[pid] = [];
-    receitasBuf[pid].push({ componente_id: r.componente_id, quantidade: parseFloat(r.quantidade) });
-  }
-  const pById = {};
-  for (const p of produtos.rows) pById[String(p.id)] = p;
-  const menuProdIds = produtos.rows.filter((p) => p.categoria === 'menu').map((p) => p.id);
-  const avulsoProdIds = produtos.rows
-    .filter((p) => p.venda_avulso && p.categoria !== 'menu' && p.categoria !== 'bebida')
-    .map((p) => p.id);
-  const bebidaProds = produtos.rows.filter((p) => p.categoria === 'bebida');
-  const bebidaCopoProdIds = bebidaProds.filter((p) => p.venda_por_copo && parseFloat(p.kg_por_copo) > 0).map((p) => p.id);
-  const bebidaOutras = bebidaProds.filter((p) => !p.venda_por_copo || !(parseFloat(p.kg_por_copo) > 0));
-
-  const vendasByTurno = {};
-  for (const r of vendasAll.rows) {
-    const tid = r.turno_id;
-    if (!vendasByTurno[tid]) vendasByTurno[tid] = {};
-    vendasByTurno[tid][String(r.produto_id)] = parseFloat(r.quantidade) || 0;
-  }
-  const stockByTurno = {};
-  for (const r of stockAll.rows) {
-    const tid = r.turno_id;
-    if (!stockByTurno[tid]) stockByTurno[tid] = {};
-    stockByTurno[tid][String(r.produto_id)] = {
-      encontrado: parseFloat(r.encontrado) || 0,
-      entrada: parseFloat(r.entrada) || 0,
-      deixado: parseFloat(r.deixado) || 0
-    };
-  }
-
-  let sum = 0;
-  for (const tid of ids) {
-    sum += computeTotalVendasTurnoBuffers(
-      vendasByTurno[tid] || {},
-      stockByTurno[tid] || {},
-      pById,
-      menuProdIds,
-      avulsoProdIds,
-      bebidaCopoProdIds,
-      bebidaOutras,
-      receitasBuf
-    );
-  }
-  return sum;
-}
-
-/** Cache curto do total estimado (mesmo dia repetido ao navegar / refresh). TTL configurável. */
-const _vendasEstimadasCache = new Map();
-const VENDAS_ESTIMADAS_CACHE_MS = Math.max(
-  15_000,
-  (parseInt(process.env.VENDAS_ESTIMADAS_CACHE_SEC || '180', 10) || 180) * 1000
-);
-
 /** Resposta de /escala/semana (template muda raramente). */
 const _escalaSemanaCache = new Map();
 const ESCALA_SEMANA_CACHE_MS = Math.max(
@@ -2529,87 +2375,6 @@ const ESCALA_SEMANA_CACHE_MS = Math.max(
 function clearEscalaSemanaCache() {
   _escalaSemanaCache.clear();
 }
-
-async function computeTotalVendasForDateCached(data) {
-  const now = Date.now();
-  const hit = _vendasEstimadasCache.get(data);
-  if (hit && now - hit.at < VENDAS_ESTIMADAS_CACHE_MS) return hit.total;
-  const total = await computeTotalVendasForDate(data);
-  _vendasEstimadasCache.set(data, { at: now, total });
-  if (_vendasEstimadasCache.size > 100) {
-    const cutoff = now - VENDAS_ESTIMADAS_CACHE_MS;
-    for (const [k, v] of _vendasEstimadasCache) {
-      if (!v || v.at < cutoff) _vendasEstimadasCache.delete(k);
-    }
-  }
-  return total;
-}
-
-// ── DASHBOARD (agregado do dia — só admin) ────────────────────
-async function dashboardCaixaTurnosRows(data) {
-  const [turnos, caixa] = await Promise.all([
-    query(
-      `SELECT nome, estado, criado_em, fechado_em FROM turnos WHERE data=$1
-       ORDER BY CASE nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
-      [data]
-    ),
-    query(
-      `SELECT
-         COALESCE(SUM(tc.tpa),0)           as tpa,
-         COALESCE(SUM(tc.transferencia),0)  as transferencia,
-         COALESCE(SUM(tc.dinheiro),0)       as dinheiro,
-         COALESCE(SUM(tc.saida),0)          as saida,
-         COALESCE(SUM(tc.tpa+tc.transferencia+tc.dinheiro),0) as total_gerado,
-         COALESCE(SUM(tc.tpa+tc.transferencia+tc.dinheiro-tc.saida),0) as total_final
-       FROM turno_caixa tc
-       JOIN turnos t ON tc.turno_id=t.id
-       WHERE t.data=$1`,
-      [data]
-    )
-  ]);
-  return { turnos: turnos.rows, caixa: caixa.rows[0] };
-}
-
-/** Só o total estimado (pesado) — pedir em paralelo com dashboard?fast=1 na página Dia. */
-app.get('/api/dashboard/vendas-estimadas', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const data = req.query.data || new Date().toISOString().split('T')[0];
-    const total = await computeTotalVendasForDateCached(data);
-    res.json({ data, total_vendas_calculado: total });
-  } catch (e) {
-    res.status(500).json({ erro: e.message });
-  }
-});
-
-app.get('/api/dashboard', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const data = req.query.data || new Date().toISOString().split('T')[0];
-    const fast =
-      req.query.fast === '1' ||
-      req.query.fast === 'true' ||
-      String(req.query.fast || '').toLowerCase() === 'yes';
-
-    if (fast) {
-      const { turnos, caixa } = await dashboardCaixaTurnosRows(data);
-      return res.json({
-        data,
-        turnos,
-        caixa,
-        total_vendas_calculado: null
-      });
-    }
-
-    const { turnos, caixa } = await dashboardCaixaTurnosRows(data);
-    const totalVendasCalculado = await computeTotalVendasForDateCached(data);
-
-    res.json({
-      data,
-      turnos,
-      total_vendas_calculado: totalVendasCalculado,
-      caixa
-    });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
-});
 
 app.get('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
   try {

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-irregularidades-registos">
+<html lang="pt" data-stockos-ui="2026-03-31-irregularidades-tres-colunas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1846,7 +1846,7 @@ async function loadTurno() {
         <div id="turno-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
         <div class="card mt-16" id="turno-irregularidades-card">
           <div class="card-title">⚠️ Irregularidades</div>
-          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 12px">Stock face ao <strong style="color:#cbd5e1">deixado do turno anterior</strong> (falta ou sobra no «encontrado»).</p>
+          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 12px"><strong style="color:#cbd5e1">T. anterior</strong> = deixado no fim do turno anterior · <strong style="color:#cbd5e1">Vendas</strong> = registado na aba Vendas (menu, copos, avulso) ou vendido pelo stock (restantes) · <strong style="color:#cbd5e1">Deixado</strong> = deixado neste turno. Linhas a laranja: «encontrado» ≠ T. anterior.</p>
           <div id="turno-irregularidades-list"><span style="color:#64748b">—</span></div>
         </div>
         <div class="card mt-16">
@@ -2204,6 +2204,8 @@ async function vendaQtyInputBlur(el) {
       if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
       stockBuf[prodId].deixado = Math.max(0, (parseFloat(stockBuf[prodId].deixado) || 0) - delta * cfg.kgPorCopo);
       updateStock(prodId, 'deixado', fmtStockNumberAttr(stockBuf[prodId].deixado));
+    } else {
+      renderIrregularidadesTurno();
     }
   } catch(e) {
     vendasBuf[prodId] = prev;
@@ -2252,44 +2254,81 @@ function updateStock(pid, field, value) {
   autoSaveSchedule();
 }
 
-/** Lista na aba Registos: produtos com falta/sobra vs deixado do turno anterior (sincroniza com a coluna Comparação). */
+/**
+ * Quantidade «vendida» como na aba Vendas: menu/copos/avulso em vendasBuf; resto = enc+entrada−deixado (stock).
+ */
+function getVendidoRegistadoEmVendas(s) {
+  const pid = String(s.produto_id);
+  const idn = Number(pid);
+  if (menuProdIds.length && menuProdIds.includes(idn)) {
+    return Math.max(0, parseFloat(vendasBuf[pid]) || 0);
+  }
+  if (bebidaCopoProdIds.length && bebidaCopoProdIds.includes(pid)) {
+    return Math.max(0, parseFloat(vendasBuf[pid]) || 0);
+  }
+  if (avulsoProdIds.length && avulsoProdIds.includes(idn)) {
+    return calcStandaloneQty(pid);
+  }
+  const b = getStockLineForProduto(pid);
+  let vend = Math.max(0, b.encontrado + b.entrada - b.deixado);
+  if (vend <= 0 && parseFloat(s.vendido) > 0) vend = Math.max(0, parseFloat(s.vendido));
+  return vend;
+}
+
+/** Tabela Registos: T. anterior (deixado), Vendas, Deixado; destaca se encontrado ≠ T. anterior. */
 function renderIrregularidadesTurno() {
   const mount = document.getElementById('turno-irregularidades-list');
   if (!mount) return;
   const stock = S.turnoData?.stock || [];
-  let temPrev = false;
-  const linhas = [];
+  if (!stock.length) {
+    mount.innerHTML = '<span style="color:#64748b;font-size:13px">Sem linhas de stock neste turno.</span>';
+    return;
+  }
+  const body = [];
   for (const s of stock) {
     const prev = s.prev_deixado;
-    if (prev === null || prev === undefined) continue;
-    temPrev = true;
     const pid = s.produto_id;
-    const b = stockBuf[pid] || { encontrado: 0, entrada: 0, deixado: 0 };
+    const pidStr = String(pid);
+    const b = stockBuf[pid] || { encontrado: 0, entrada: 0, deixado: 0, fechados: 0 };
     const enc = parseFloat(b.encontrado);
     const encN = Number.isFinite(enc) ? enc : parseFloat(s.encontrado) || 0;
-    const diff = encN - parseFloat(prev);
-    if (Math.abs(diff) < 0.001) continue;
+    const deiN = Number.isFinite(parseFloat(b.deixado)) ? parseFloat(b.deixado) : parseFloat(s.deixado) || 0;
+    const vendasQty = getVendidoRegistadoEmVendas(s);
     const med = medicaoSigla(s.tipo_medicao || 'unidade');
-    const abs = Math.abs(diff);
-    const isFalta = diff < 0;
-    linhas.push(
-      `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid #334155;font-size:14px">
-        <span style="color:#e2e8f0;font-weight:600">${escapeHtml(s.produto_nome)}</span>
-        <span style="font-size:13px;font-weight:600;white-space:nowrap;${isFalta ? 'color:#f87171' : 'color:#4ade80'}">${isFalta ? 'Falta' : 'Sobra'} ${fmtNum(abs)} ${med}</span>
-      </div>`
+    const prevTxt = prev !== null && prev !== undefined ? `${fmtNum(parseFloat(prev))} ${med}` : '—';
+    const vendasTxt =
+      bebidaCopoProdIds.length && bebidaCopoProdIds.includes(pidStr)
+        ? `${fmtNum(vendasQty)} copos`
+        : `${fmtNum(vendasQty)} ${med}`;
+    const deixadoTxt = `${fmtNum(deiN)} ${med}`;
+    let alertEnc = false;
+    if (prev !== null && prev !== undefined && Math.abs(encN - parseFloat(prev)) >= 0.001) {
+      alertEnc = true;
+    }
+    const rowBg = alertEnc ? 'background:rgba(251,146,60,0.08)' : '';
+    body.push(
+      `<tr style="border-bottom:1px solid #334155;${rowBg}">
+        <td style="padding:8px 10px 8px 0;font-size:13px;color:#e2e8f0;font-weight:600">${escapeHtml(s.produto_nome)}</td>
+        <td style="padding:8px 6px;text-align:right;font-size:13px;color:#cbd5e1;white-space:nowrap">${prevTxt}</td>
+        <td style="padding:8px 6px;text-align:right;font-size:13px;color:#a5b4fc;white-space:nowrap">${vendasTxt}</td>
+        <td style="padding:8px 0 8px 6px;text-align:right;font-size:13px;color:#86efac;white-space:nowrap">${deixadoTxt}</td>
+      </tr>`
     );
   }
-  if (!temPrev) {
-    mount.innerHTML =
-      '<span style="color:#64748b;font-size:13px">Sem turno anterior para comparar — as irregularidades aparecem quando existir histórico.</span>';
-    return;
-  }
-  if (!linhas.length) {
-    mount.innerHTML =
-      '<span style="color:#64748b;font-size:13px">Nenhuma irregularidade (stock alinhado com o turno anterior).</span>';
-    return;
-  }
-  mount.innerHTML = linhas.join('');
+  mount.innerHTML = `
+    <div class="table-wrap" style="overflow-x:auto;margin:0 -4px">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:2px solid #334155;color:#94a3b8;text-align:left;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.05em">
+            <th style="padding:6px 10px 8px 0;font-weight:600">Produto</th>
+            <th style="padding:6px 6px 8px;text-align:right;font-weight:600">T. anterior</th>
+            <th style="padding:6px 6px 8px;text-align:right;font-weight:600">Vendas</th>
+            <th style="padding:6px 0 8px 6px;text-align:right;font-weight:600">Deixado</th>
+          </tr>
+        </thead>
+        <tbody>${body.join('')}</tbody>
+      </table>
+    </div>`;
 }
 
 let autoSaveTimer = null;
@@ -2360,6 +2399,7 @@ async function switchTurnoTab(name, btn) {
   if (name === 'registos') {
     const tid = S.turnoData?.id;
     if (tid) await loadTurnoResumoTab(tid);
+    renderIrregularidadesTurno();
   }
 }
 

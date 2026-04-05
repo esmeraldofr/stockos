@@ -1,4 +1,9 @@
 require('dotenv').config();
+/** Preferir IPv4 ao resolver hosts (ex. Supabase). Evita ENETUNREACH quando só há rota IPv4. */
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
 const express = require('express');
 const cors    = require('cors');
 const crypto  = require('crypto');
@@ -183,8 +188,9 @@ const query = async (text, params) => {
       const msg = String(e && e.message ? e.message : e);
       const transient =
         attempt === 0 &&
-        (/ECONNRESET|ECONNREFUSED|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03|MaxClientsInSessionMode|pool_size/i.test(msg) ||
-          e.code === 'ECONNRESET');
+        (/ECONNRESET|ECONNREFUSED|ENETUNREACH|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03|MaxClientsInSessionMode|pool_size/i.test(msg) ||
+          e.code === 'ECONNRESET' ||
+          e.code === 'ENETUNREACH');
       if (transient) {
         await resetPgSingleton();
         continue;

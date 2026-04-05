@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-05-stock-sem-outro">
+<html lang="pt" data-stockos-ui="2026-04-05-fino-barril-zero-recipiente">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -569,6 +569,16 @@ function stockNumberInputBlur(el) {
   const raw = String(el.value ?? '').trim();
   let n = parseFloat(raw);
   if (!Number.isFinite(n) || raw === '') n = 0;
+  const row = S.turnoData?.stock?.find((s) => String(s.produto_id) === String(pid));
+  const kgBarril = getFinoBarrilRecipienteKgFromRow(row);
+  if (
+    S.turnoCanEdit &&
+    kgBarril != null &&
+    (field === 'encontrado' || field === 'deixado') &&
+    n === 0
+  ) {
+    n = kgBarril;
+  }
   el.value = String(Math.round(n * 1000) / 1000);
   el.classList.remove('stock-caixa-required-missing');
   updateStock(pid, field, el.value);
@@ -1736,6 +1746,8 @@ async function loadTurno() {
     const canEdit  = isAberto;
     S.turnoCanEdit = canEdit;
 
+    const finoBarrilAjustadoRecipiente = aplicarFinoBarrilZeroParaRecipienteKg(turno, canEdit);
+
     const isAdminUser = S.user?.role === 'admin';
     const reabrirBtn = !isAberto && isAdminUser
       ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="reabrirTurno(event, '${turno.id}')">Reabrir</button>`
@@ -1911,6 +1923,13 @@ async function loadTurno() {
       }
     }
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
+    if (finoBarrilAjustadoRecipiente && turno.id) {
+      try {
+        await guardarStock(turno.id);
+      } catch (e) {
+        /* silencioso: rede / validação */
+      }
+    }
     await loadTurnoResumoTab(turno.id);
     renderIrregularidadesTurno();
   } catch(e) {
@@ -2267,6 +2286,32 @@ function resolveProdutoIdPorNome(stockArr, nomeNorm) {
   if (row) return String(row.produto_id);
   const pr = (S.produtos || []).find((p) => prodNomeNorm(p.nome) === nomeNorm);
   return pr ? String(pr.id) : null;
+}
+/** Peso do recipiente vazio (barril): usa `peso_tara_kg` ou 12,9 kg. */
+function getFinoBarrilRecipienteKgFromRow(stockRow) {
+  if (!stockRow || prodNomeNorm(stockRow.produto_nome) !== 'fino barril') return null;
+  const t = parseFloat(stockRow.peso_tara_kg);
+  return Number.isFinite(t) && t > 0 ? t : 12.9;
+}
+/** Encontrado/Deixado a 0 → peso do recipiente (só turno aberto). */
+function aplicarFinoBarrilZeroParaRecipienteKg(turno, canEdit) {
+  if (!canEdit || !turno?.stock?.length) return false;
+  const row = turno.stock.find((s) => prodNomeNorm(s.produto_nome) === 'fino barril');
+  if (!row) return false;
+  const kg = getFinoBarrilRecipienteKgFromRow(row);
+  if (kg == null) return false;
+  const sid = String(row.produto_id);
+  if (!stockBuf[sid]) return false;
+  let ch = false;
+  if (parseFloat(stockBuf[sid].encontrado) === 0) {
+    stockBuf[sid].encontrado = kg;
+    ch = true;
+  }
+  if (parseFloat(stockBuf[sid].deixado) === 0) {
+    stockBuf[sid].deixado = kg;
+    ch = true;
+  }
+  return ch;
 }
 
 /** Resumo das irregularidades (encontrado ≠ T. anterior) + tabela de detalhe só para essas linhas. */

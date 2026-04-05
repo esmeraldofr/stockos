@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-05-fino-barril-tara-kg">
+<html lang="pt" data-stockos-ui="2026-04-05-fino-cruzamento-copos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1854,7 +1854,7 @@ async function loadTurno() {
         <div id="turno-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
         <div class="card mt-16" id="turno-irregularidades-card">
           <div class="card-title">⚠️ Irregularidades</div>
-          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 12px">Em cima: <strong style="color:#cbd5e1">resumo</strong> só dos casos em que o «encontrado» ≠ deixado do turno anterior. Abaixo: tabela T. anterior / Vendas / Deixado para esses produtos.</p>
+          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 12px">Em cima: <strong style="color:#cbd5e1">resumo</strong> só dos casos em que o «encontrado» ≠ deixado do turno anterior. Abaixo: tabela T. anterior / Vendas / Deixado para esses produtos. <strong style="color:#cbd5e1">Fino:</strong> comparação entre copos inferidos do barril (kg ÷ 0,270) e a soma de copos em vendas (Fino 400 + Fino 1000).</p>
           <div id="turno-irregularidades-list"><span style="color:#64748b">—</span></div>
         </div>
         <div class="card mt-16">
@@ -1904,6 +1904,13 @@ async function loadTurno() {
       </div>
 
     `);
+    if (!S.produtos || !S.produtos.length) {
+      try {
+        S.produtos = await api('GET', '/produtos');
+      } catch (e) {
+        /* resolve IDs Fino 400/1000 sem catálogo */
+      }
+    }
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
     await loadTurnoResumoTab(turno.id);
     renderIrregularidadesTurno();
@@ -2251,6 +2258,18 @@ function getVendidoRegistadoEmVendas(s) {
   return vend;
 }
 
+/** 1 copo Fino = 0,270 kg (barril → copos em irregularidades). */
+const KG_FINO_COPO = 0.27;
+function prodNomeNorm(n) {
+  return String(n || '').trim().toLowerCase();
+}
+function resolveProdutoIdPorNome(stockArr, nomeNorm) {
+  const row = stockArr.find((s) => prodNomeNorm(s.produto_nome) === nomeNorm);
+  if (row) return String(row.produto_id);
+  const pr = (S.produtos || []).find((p) => prodNomeNorm(p.nome) === nomeNorm);
+  return pr ? String(pr.id) : null;
+}
+
 /** Resumo das irregularidades (encontrado ≠ T. anterior) + tabela de detalhe só para essas linhas. */
 function renderIrregularidadesTurno() {
   const mount = document.getElementById('turno-irregularidades-list');
@@ -2348,7 +2367,54 @@ function renderIrregularidadesTurno() {
     </div>`;
   }
 
-  mount.innerHTML = resumoHtml + tabelaHtml;
+  let finoHtml = '';
+  const barrilRow = stock.find((s) => prodNomeNorm(s.produto_nome) === 'fino barril');
+  if (barrilRow) {
+    const pidB = String(barrilRow.produto_id);
+    const b = stockBuf[pidB] || { encontrado: 0, entrada: 0, deixado: 0 };
+    const enc = parseFloat(b.encontrado);
+    const ent = parseFloat(b.entrada);
+    const dei = parseFloat(b.deixado);
+    const encN = Number.isFinite(enc) ? enc : parseFloat(barrilRow.encontrado) || 0;
+    const entN = Number.isFinite(ent) ? ent : parseFloat(barrilRow.entrada) || 0;
+    const deiN = Number.isFinite(dei) ? dei : parseFloat(barrilRow.deixado) || 0;
+    const kgVend = Math.max(0, encN + entN - deiN);
+    const coposStock = kgVend / KG_FINO_COPO;
+    const id400 = resolveProdutoIdPorNome(stock, 'fino 400');
+    const id1000 = resolveProdutoIdPorNome(stock, 'fino 1000');
+    let v400 = 0;
+    let v1000 = 0;
+    if (id400) v400 = parseFloat(vendasBuf[id400]) || 0;
+    if (id1000) v1000 = parseFloat(vendasBuf[id1000]) || 0;
+    const coposVendas = v400 + v1000;
+    const diff = coposStock - coposVendas;
+    const ok = Math.abs(diff) < 0.06;
+    const missing = !id400 || !id1000;
+    const border = ok && !missing ? 'rgba(74,222,128,0.25)' : 'rgba(251,146,60,0.45)';
+    const bg = ok && !missing ? 'rgba(74,222,128,0.08)' : 'rgba(251,146,60,0.1)';
+    const titleCol = ok && !missing ? '#4ade80' : '#fb923c';
+    const lin400 = id400 ? `${fmtNum(v400)} copos` : '<span style="color:#64748b">— (produto não encontrado)</span>';
+    const lin1000 = id1000 ? `${fmtNum(v1000)} copos` : '<span style="color:#64748b">— (produto não encontrado)</span>';
+    finoHtml = `
+    <div style="margin-top:16px;padding:12px 14px;border-radius:8px;border:1px solid ${border};background:${bg}">
+      <div style="font-weight:700;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px;color:${titleCol}">Cruzamento Fino — barril vs vendas (400 + 1000)</div>
+      <div style="font-size:13px;color:#cbd5e1;line-height:1.55">
+        <div><span style="color:#94a3b8">Peso vendido (Fino Barril):</span> <strong>${fmtNum(kgVend)} kg</strong> → <strong>${fmtNum(coposStock)} copos</strong> <span style="color:#64748b">(÷ ${fmtNum(KG_FINO_COPO)} kg/copo)</span></div>
+        <div style="margin-top:6px"><span style="color:#94a3b8">Vendas Fino 400:</span> ${lin400}</div>
+        <div><span style="color:#94a3b8">Vendas Fino 1000:</span> ${lin1000}</div>
+        <div style="margin-top:6px"><span style="color:#94a3b8">Soma copos (400 + 1000):</span> <strong>${fmtNum(coposVendas)}</strong></div>
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid #334155">
+          <span style="color:#94a3b8">Diferença (stock − vendas):</span>
+          <strong style="color:${ok && !missing ? '#4ade80' : '#fb923c'}">${diff >= 0 ? '+' : ''}${fmtNum(diff)} copos</strong>
+          ${ok && !missing ? '<span style="color:#64748b;font-size:12px"> · dentro da tolerância</span>' : ''}
+        </div>
+        ${missing ? '<div style="margin-top:8px;font-size:12px;color:#fbbf24">Confirma que existem produtos «Fino 400» e «Fino 1000» no catálogo e na folha de stock.</div>' : ''}
+        ${!ok && !missing ? '<div style="margin-top:8px;font-size:12px;color:#fdba74">Valores divergentes: verifica registos de stock e de vendas no turno.</div>' : ''}
+      </div>
+    </div>`;
+  }
+
+  mount.innerHTML = resumoHtml + tabelaHtml + finoHtml;
 }
 
 let autoSaveTimer = null;

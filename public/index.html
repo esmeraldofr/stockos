@@ -1521,6 +1521,8 @@ let bebidaCopoCfg = {}; // { id: { kgPorCopo, preco, qtdPacote, precoPacote } }
 let bebidaProdPrecos = {}; // { produto_id: preco } para calcular total
 let avulsoProdIds = []; // ids dos ingredientes com venda_avulso=true
 let vendasProdPrecos = {}; // { produto_id: preco } para todos os produtos de vendas
+/** Nome a partir do catálogo (evita «Produto uuid» quando stock e vendas diferem no id). */
+let vendasProdNomes = {};
 
 function calcMenuQty(prodId) {
   const recipe = receitasBuf[prodId] || [];
@@ -1864,6 +1866,10 @@ async function loadVendasMenu(turnoId, canEdit) {
     const menuProds   = prods.filter(p => p.categoria === 'menu');
     const bebidaProds = prods.filter(p => p.categoria === 'bebida');
     const avulsoProds = prods.filter(p => p.venda_avulso && p.categoria !== 'menu' && p.categoria !== 'bebida');
+    vendasProdNomes = {};
+    prods.forEach((p) => {
+      vendasProdNomes[p.id] = p.nome;
+    });
     vendasBuf = {};
     vendas.forEach(v => { vendasBuf[v.produto_id] = parseFloat(v.quantidade); });
 
@@ -1907,6 +1913,7 @@ async function loadVendasMenu(turnoId, canEdit) {
     bebidaCopoCfg = {};
     bebidaCopoProds.forEach((p) => {
       bebidaCopoCfg[p.id] = {
+        nome: p.nome,
         kgPorCopo: parseFloat(p.kg_por_copo) || 0,
         preco: parseFloat(p.preco) || 0,
         qtdPacote: parseInt(p.qtd_copos_pacote, 10) || 0,
@@ -2483,12 +2490,25 @@ async function loadResumoTab(turnoId) {
   if (!el) return;
   el.innerHTML = '<div style="color:#64748b;text-align:center;padding:32px"><div class="spinner"></div></div>';
   try {
+    await loadVendasMenu(turnoId, !!S.turnoCanEdit);
     const [entradas, saidas] = await Promise.all([
       api('GET', `/turnos/${turnoId}/entradas`),
       api('GET', `/turnos/${turnoId}/saidas`)
     ]);
     const turno  = S.turnoData;
     const stocks = turno?.stock || [];
+
+    function nomeProdutoVenda(pid) {
+      const si = stocks.find((s) => String(s.produto_id) === String(pid));
+      return (
+        vendasProdNomes[pid] ||
+        vendasProdNomes[String(pid)] ||
+        bebidaCopoCfg[pid]?.nome ||
+        bebidaCopoCfg[String(pid)]?.nome ||
+        si?.produto_nome ||
+        `Produto ${pid}`
+      );
+    }
 
     // — Caixa (ler do DOM se disponível) —
     const tpa    = parseFloat(document.getElementById('c-tpa')?.value)    || caixaBuf.tpa           || 0;
@@ -2520,8 +2540,7 @@ async function loadResumoTab(turnoId) {
       if (qty > 0) {
         const val = qty * preco;
         totalVendasVal += val;
-        const si  = stocks.find(s => String(s.produto_id) === String(pid));
-        vendasLines.push({ nome: si?.produto_nome || `Produto ${pid}`, qty, preco, total: val, copo: false });
+        vendasLines.push({ nome: nomeProdutoVenda(pid), qty, preco, total: val, copo: false });
       }
     });
     bebidaCopoProdIds.forEach((pid) => {
@@ -2531,9 +2550,8 @@ async function loadResumoTab(turnoId) {
       if (!cfg) return;
       const val = precoVendaCopos(qty, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
       totalVendasVal += val;
-      const si = stocks.find((s) => String(s.produto_id) === String(pid));
       vendasLines.push({
-        nome: `${si?.produto_nome || `Produto ${pid}`} (copos)`,
+        nome: `${nomeProdutoVenda(pid)} (copos)`,
         qty,
         preco: cfg.preco,
         total: val,

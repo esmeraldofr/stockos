@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-historico-por-turno">
+<html lang="pt" data-stockos-ui="2026-03-31-historico-colunas-turno">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3057,29 +3057,36 @@ async function loadHistorico() {
       cur.turnos.push(r);
     }
 
+    const ordemTurno = ['manha', 'tarde', 'noite'];
     const rowsHtml = days
       .map((day) => {
         const d = day.data;
-        const turnosBlocks = day.turnos
-          .map((t, idx) => {
+        const byNome = {};
+        day.turnos.forEach((t) => {
+          byNome[t.nome] = t;
+        });
+        const turnosCols = ordemTurno
+          .map((nome) => {
+            const t = byNome[nome];
+            if (!t) {
+              return `
+        <div style="padding:10px 8px;background:#0f172a;border-radius:8px;border:1px dashed #334155;min-height:120px;display:flex;align-items:center;justify-content:center">
+          <span style="font-size:12px;color:#475569">${turnoLabel(nome)} · sem registo</span>
+        </div>`;
+            }
             const tv = parseFloat(t.total_vendas) || 0;
             const tg = parseFloat(t.total_gerado) || 0;
             const tf = parseFloat(t.total_final) || 0;
             const est = t.estado === 'fechado' ? 'Fechado' : 'Aberto';
-            const border = idx < day.turnos.length - 1 ? 'border-bottom:1px solid #334155' : '';
             return `
-        <div class="js-busy-click" style="cursor:pointer;padding:10px 0;${border}"
+        <div class="js-busy-click" style="cursor:pointer;padding:10px 8px;background:#1e293b;border-radius:8px;border:1px solid #334155;min-width:0"
           onclick="runAction(event, async () => { S.date='${d}'; S.turnoId='${t.turno_id}'; syncDatePickersAcrossPages(); await navigate('dia'); })">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
-            <div>
-              <span style="font-weight:700;color:#e2e8f0">${turnoLabel(t.nome)}</span>
-              <span style="font-size:11px;color:#64748b;margin-left:8px">${est}</span>
-            </div>
-            <div style="text-align:right;font-size:12px;line-height:1.6;min-width:0">
-              <div><span style="color:#64748b">Total vendas</span> <span style="font-weight:700;color:#a5b4fc">${fmt(tv)}</span></div>
-              <div><span style="color:#64748b">Total gerado</span> <span style="font-weight:700;color:#fbbf24">${fmt(tg)}</span></div>
-              <div><span style="color:#64748b">Total final</span> <span style="font-weight:700;color:#4ade80">${fmt(tf)}</span></div>
-            </div>
+          <div style="font-weight:700;color:#e2e8f0;font-size:13px;margin-bottom:6px;text-align:center">${turnoLabel(nome)}</div>
+          <div style="font-size:10px;color:#64748b;text-align:center;margin-bottom:8px">${est}</div>
+          <div style="font-size:11px;line-height:1.55;text-align:center">
+            <div><span style="color:#64748b">Vendas</span> <span style="font-weight:700;color:#a5b4fc">${fmt(tv)}</span></div>
+            <div><span style="color:#64748b">Gerado</span> <span style="font-weight:700;color:#fbbf24">${fmt(tg)}</span></div>
+            <div><span style="color:#64748b">Final</span> <span style="font-weight:700;color:#4ade80">${fmt(tf)}</span></div>
           </div>
         </div>`;
           })
@@ -3087,8 +3094,10 @@ async function loadHistorico() {
         return `
       <div class="card" style="margin-bottom:12px">
         <div style="font-weight:600;font-size:15px;margin-bottom:2px">${dateLabel(d)}</div>
-        <div style="font-size:12px;color:#64748b;margin-bottom:8px">${d} · ${day.turnos.length} turno(s)</div>
-        ${turnosBlocks}
+        <div style="font-size:12px;color:#64748b;margin-bottom:10px">${d} · ${day.turnos.length} turno(s)</div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;overflow-x:auto;-webkit-overflow-scrolling:touch">
+          ${turnosCols}
+        </div>
       </div>`;
       })
       .join('');
@@ -3110,7 +3119,7 @@ async function loadHistorico() {
             <span style="font-weight:700;color:#4ade80;font-size:1.1rem">${fmt(sumFinal)}</span>
           </div>
         </div>
-        <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">Cada linha é um turno. Total vendas = stock (× preço); totais gerado/final = caixa. Clica num turno para abrir esse dia com o turno seleccionado.</p>
+        <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">Por dia: três colunas (Manhã · Tarde · Noite). Total vendas = stock (× preço); gerado/final = caixa. Clica num turno para abrir o dia com esse turno.</p>
       </div>
       ${rowsHtml}
     `);

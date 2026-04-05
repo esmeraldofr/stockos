@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-irregularidades-tres-colunas">
+<html lang="pt" data-stockos-ui="2026-03-31-irregularidades-resumo">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1846,7 +1846,7 @@ async function loadTurno() {
         <div id="turno-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
         <div class="card mt-16" id="turno-irregularidades-card">
           <div class="card-title">⚠️ Irregularidades</div>
-          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 12px"><strong style="color:#cbd5e1">T. anterior</strong> = deixado no fim do turno anterior · <strong style="color:#cbd5e1">Vendas</strong> = registado na aba Vendas (menu, copos, avulso) ou vendido pelo stock (restantes) · <strong style="color:#cbd5e1">Deixado</strong> = deixado neste turno. Linhas a laranja: «encontrado» ≠ T. anterior.</p>
+          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 12px">Em cima: <strong style="color:#cbd5e1">resumo</strong> só dos casos em que o «encontrado» ≠ deixado do turno anterior. Abaixo: tabela T. anterior / Vendas / Deixado para esses produtos.</p>
           <div id="turno-irregularidades-list"><span style="color:#64748b">—</span></div>
         </div>
         <div class="card mt-16">
@@ -2275,7 +2275,7 @@ function getVendidoRegistadoEmVendas(s) {
   return vend;
 }
 
-/** Tabela Registos: T. anterior (deixado), Vendas, Deixado; destaca se encontrado ≠ T. anterior. */
+/** Resumo das irregularidades (encontrado ≠ T. anterior) + tabela de detalhe só para essas linhas. */
 function renderIrregularidadesTurno() {
   const mount = document.getElementById('turno-irregularidades-list');
   if (!mount) return;
@@ -2284,9 +2284,12 @@ function renderIrregularidadesTurno() {
     mount.innerHTML = '<span style="color:#64748b;font-size:13px">Sem linhas de stock neste turno.</span>';
     return;
   }
-  const body = [];
+
+  const rows = [];
+  let temPrev = false;
   for (const s of stock) {
     const prev = s.prev_deixado;
+    if (prev !== null && prev !== undefined) temPrev = true;
     const pid = s.produto_id;
     const pidStr = String(pid);
     const b = stockBuf[pid] || { encontrado: 0, entrada: 0, deixado: 0, fechados: 0 };
@@ -2302,20 +2305,58 @@ function renderIrregularidadesTurno() {
         : `${fmtNum(vendasQty)} ${med}`;
     const deixadoTxt = `${fmtNum(deiN)} ${med}`;
     let alertEnc = false;
-    if (prev !== null && prev !== undefined && Math.abs(encN - parseFloat(prev)) >= 0.001) {
-      alertEnc = true;
+    let prevNum = null;
+    if (prev !== null && prev !== undefined) {
+      prevNum = parseFloat(prev);
+      if (Math.abs(encN - prevNum) >= 0.001) alertEnc = true;
     }
-    const rowBg = alertEnc ? 'background:rgba(251,146,60,0.08)' : '';
-    body.push(
-      `<tr style="border-bottom:1px solid #334155;${rowBg}">
-        <td style="padding:8px 10px 8px 0;font-size:13px;color:#e2e8f0;font-weight:600">${escapeHtml(s.produto_nome)}</td>
-        <td style="padding:8px 6px;text-align:right;font-size:13px;color:#cbd5e1;white-space:nowrap">${prevTxt}</td>
-        <td style="padding:8px 6px;text-align:right;font-size:13px;color:#a5b4fc;white-space:nowrap">${vendasTxt}</td>
-        <td style="padding:8px 0 8px 6px;text-align:right;font-size:13px;color:#86efac;white-space:nowrap">${deixadoTxt}</td>
+    rows.push({ s, encN, deiN, med, prevTxt, vendasTxt, deixadoTxt, alertEnc, prevNum, prevRaw: prev });
+  }
+
+  let resumoHtml = '';
+  if (!temPrev) {
+    resumoHtml =
+      '<div style="padding:10px 12px;background:#1e293b;border-radius:8px;margin-bottom:12px;font-size:13px;color:#94a3b8">Sem turno anterior para comparar — o resumo de irregularidades precisa de histórico.</div>';
+  } else {
+    const irr = rows.filter((r) => r.alertEnc);
+    if (irr.length === 0) {
+      resumoHtml = `<div style="padding:12px 14px;background:rgba(74,222,128,0.12);border-radius:8px;margin-bottom:12px;border:1px solid rgba(74,222,128,0.25)">
+        <span style="color:#4ade80;font-weight:700">✓ Resumo:</span>
+        <span style="color:#cbd5e1;font-size:14px"> nenhuma irregularidade — o «encontrado» coincide com o deixado do turno anterior em todos os produtos com histórico.</span>
+      </div>`;
+    } else {
+      const bullets = irr
+        .map((r) => {
+          const diff = r.encN - r.prevNum;
+          const abs = Math.abs(diff);
+          const tipo = diff < 0 ? 'Falta' : 'Sobra';
+          return `<div style="padding:8px 0;border-bottom:1px solid #334155;font-size:14px;line-height:1.4">
+            <span style="color:#fb923c;font-weight:700">${tipo} ${fmtNum(abs)} ${r.med}</span>
+            <span style="color:#f1f5f9;font-weight:600"> — ${escapeHtml(r.s.produto_nome)}</span>
+            <div style="font-size:12px;color:#64748b;margin-top:4px">Encontrado ${fmtNum(r.encN)} ${r.med} · T. anterior ${fmtNum(r.prevNum)} ${r.med}</div>
+          </div>`;
+        })
+        .join('');
+      resumoHtml = `<div style="padding:12px 14px;background:rgba(251,146,60,0.1);border-radius:8px;margin-bottom:14px;border:1px solid rgba(251,146,60,0.35)">
+        <div style="font-weight:700;color:#fb923c;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Resumo — ${irr.length} irregularidade${irr.length !== 1 ? 's' : ''}</div>
+        ${bullets}
+      </div>`;
+    }
+  }
+
+  const irrRows = rows.filter((r) => r.alertEnc);
+  let tabelaHtml = '';
+  if (temPrev && irrRows.length > 0) {
+    const body = irrRows.map(
+      (r) =>
+        `<tr style="border-bottom:1px solid #334155">
+        <td style="padding:8px 10px 8px 0;font-size:13px;color:#e2e8f0;font-weight:600">${escapeHtml(r.s.produto_nome)}</td>
+        <td style="padding:8px 6px;text-align:right;font-size:13px;color:#cbd5e1;white-space:nowrap">${r.prevTxt}</td>
+        <td style="padding:8px 6px;text-align:right;font-size:13px;color:#a5b4fc;white-space:nowrap">${r.vendasTxt}</td>
+        <td style="padding:8px 0 8px 6px;text-align:right;font-size:13px;color:#86efac;white-space:nowrap">${r.deixadoTxt}</td>
       </tr>`
     );
-  }
-  mount.innerHTML = `
+    tabelaHtml = `<div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Detalhe (só irregularidades)</div>
     <div class="table-wrap" style="overflow-x:auto;margin:0 -4px">
       <table style="width:100%;border-collapse:collapse;font-size:13px">
         <thead>
@@ -2329,6 +2370,9 @@ function renderIrregularidadesTurno() {
         <tbody>${body.join('')}</tbody>
       </table>
     </div>`;
+  }
+
+  mount.innerHTML = resumoHtml + tabelaHtml;
 }
 
 let autoSaveTimer = null;

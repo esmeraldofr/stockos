@@ -361,10 +361,20 @@ async function initDB() {
     'produtos-qtd-pacote-copo'
   );
   await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS peso_tara_kg NUMERIC(10,3) NOT NULL DEFAULT 0`,
+    [],
+    'produtos-peso-tara-kg'
+  );
+  await qry(
     `UPDATE produtos SET venda_por_copo=true, kg_por_copo=0.27, preco=400, preco_copos_pacote=1000, qtd_copos_pacote=3, tipo_medicao='peso'
      WHERE LOWER(TRIM(nome))='fino' AND categoria='bebida' AND COALESCE(kg_por_copo,0)=0`,
     [],
     'produtos-seed-fino-copo'
+  );
+  await qry(
+    `UPDATE produtos SET peso_tara_kg = 12.9 WHERE LOWER(TRIM(nome)) = 'fino barril'`,
+    [],
+    'produtos-seed-fino-barril-tara'
   );
   /** Sem ALTER em utilizadores aqui: em BD restaurada o role da app não é owner → must be owner. criado_em já está no CREATE TABLE acima. */
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
@@ -527,7 +537,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-remove-dashboard-resumo-dia';
+const STOCKOS_API_BUILD = '2026-04-05-produtos-peso-tara-kg';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -1196,9 +1206,17 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     'produtos-qtd-pacote-copo'
   );
   await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS peso_tara_kg NUMERIC(10,3) NOT NULL DEFAULT 0`,
+    'produtos-peso-tara-kg'
+  );
+  await run(
     `UPDATE produtos SET venda_por_copo=true, kg_por_copo=0.27, preco=400, preco_copos_pacote=1000, qtd_copos_pacote=3, tipo_medicao='peso'
      WHERE LOWER(TRIM(nome))='fino' AND categoria='bebida' AND COALESCE(kg_por_copo,0)=0`,
     'produtos-seed-fino-copo'
+  );
+  await run(
+    `UPDATE produtos SET peso_tara_kg = 12.9 WHERE LOWER(TRIM(nome)) = 'fino barril'`,
+    'produtos-seed-fino-barril-tara'
   );
   await run(`CREATE TABLE IF NOT EXISTS armazem_stock (
     id SERIAL PRIMARY KEY,
@@ -1403,7 +1421,8 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
       venda_por_copo,
       kg_por_copo,
       preco_copos_pacote,
-      qtd_copos_pacote
+      qtd_copos_pacote,
+      peso_tara_kg
     } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
@@ -1413,9 +1432,11 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
     const kgcF = kgc > 0 ? kgc : 0;
     const pcp = kgcF > 0 ? parseFloat(preco_copos_pacote) || 0 : 0;
     const qcp = kgcF > 0 ? parseInt(qtd_copos_pacote, 10) || 0 : 0;
+    const pt = parseFloat(peso_tara_kg);
+    const pTara = Number.isFinite(pt) && pt >= 0 ? pt : 0;
     const r = await query(
-      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,peso_tara_kg)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [
         nome,
         preco || 0,
@@ -1427,7 +1448,8 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
         kgcF > 0,
         kgcF,
         pcp,
-        qcp
+        qcp,
+        pTara
       ]
     );
     res.json(r.rows[0]);
@@ -1448,7 +1470,8 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
       venda_por_copo,
       kg_por_copo,
       preco_copos_pacote,
-      qtd_copos_pacote
+      qtd_copos_pacote,
+      peso_tara_kg
     } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const noTurno =
@@ -1458,16 +1481,18 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
     const kgcF = kgc > 0 ? kgc : 0;
     const pcp = kgcF > 0 ? parseFloat(preco_copos_pacote) || 0 : 0;
     const qcp = kgcF > 0 ? parseInt(qtd_copos_pacote, 10) || 0 : 0;
-    const copoVals = [kgcF > 0, kgcF, pcp, qcp];
+    const pt = parseFloat(peso_tara_kg);
+    const pTara = Number.isFinite(pt) && pt >= 0 ? pt : 0;
+    const copoVals = [kgcF > 0, kgcF, pcp, qcp, pTara];
     const r = noTurno === undefined
       ? await query(
           `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
-           venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11 WHERE id=$12 RETURNING *`,
+           venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11,peso_tara_kg=$12 WHERE id=$13 RETURNING *`,
           [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, ...copoVals, req.params.id]
         )
       : await query(
           `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
-           venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12 WHERE id=$13 RETURNING *`,
+           venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12,peso_tara_kg=$13 WHERE id=$14 RETURNING *`,
           [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, noTurno, ...copoVals, req.params.id]
         );
     res.json(r.rows[0]);
@@ -1973,7 +1998,8 @@ app.get('/api/dia', auth, async (req, res) => {
 
     const [stockAll, caixaAll] = await Promise.all([
       query(
-        `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem, p.tipo_medicao
+        `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem, p.tipo_medicao,
+                COALESCE(p.peso_tara_kg, 0)::numeric AS peso_tara_kg
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
          WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE

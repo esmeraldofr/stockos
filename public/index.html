@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-05-dia-sem-total-dia-card">
+<html lang="pt" data-stockos-ui="2026-04-05-fino-barril-tara-kg">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1762,7 +1762,9 @@ async function loadTurno() {
         else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
 
         const inputAttr = canEdit ? '' : 'disabled';
-        const metaLinha = medicaoSigla(s.tipo_medicao);
+        const taraKg = parseFloat(s.peso_tara_kg) || 0;
+        let metaLinha = medicaoSigla(s.tipo_medicao);
+        if (taraKg > 0) metaLinha += ` · recipiente ${fmtNum(taraKg)} kg`;
         return `
           <tr class="stock-row">
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div></td>
@@ -3684,7 +3686,7 @@ async function loadProdutos() {
             <div class="produto-row">
               <div class="produto-info">
                 <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.venda_por_copo && parseFloat(p.kg_por_copo) > 0 ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">só armazém</span>' : ''}</div>
-                <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
+                <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'}${parseFloat(p.peso_tara_kg) > 0 ? ` · recipiente ${fmtNum(parseFloat(p.peso_tara_kg))} kg` : ''} · #${p.ordem}</div>
               </div>
               ${isAdmin ? `
               <div class="produto-actions">
@@ -3731,6 +3733,11 @@ function showProdutoForm(id) {
       '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
       '<div class="field"><label id="p-preco-label">Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
       '<div class="field"><label>Medição</label><select id="p-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>' +
+      '<div class="field" id="field-tara" style="display:none">' +
+        '<label>Peso do recipiente (tara) kg</label>' +
+        '<input id="p-tara" type="number" step="0.01" min="0" value="0"/>' +
+        '<div style="font-size:11px;color:#64748b;margin-top:4px">Peso vazio do barril/vasilhame na balança. Na folha regista o <strong>peso líquido</strong> (peso na balança − tara).</div>' +
+      '</div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
       '<div class="field" id="field-avulso"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso</label></div>' +
       '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Folha de stock do turno</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Se desmarcares, o produto não entra na contagem ao abrir turno (útil para consumíveis só de armazém).</div></div>' +
@@ -3755,6 +3762,8 @@ function showProdutoForm(id) {
   document.getElementById('p-nome').value = p ? (p.nome || '') : '';
   document.getElementById('p-preco').value = p ? (p.preco || 0) : 0;
   document.getElementById('p-medicao').value = p ? (p.tipo_medicao || 'unidade') : 'unidade';
+  const pt = document.getElementById('p-tara');
+  if (pt) pt.value = p && p.peso_tara_kg != null ? String(parseFloat(p.peso_tara_kg) || 0) : '0';
   document.getElementById('p-cat').value = p ? (p.categoria || 'outro') : 'outro';
   document.getElementById('p-ordem').value = p ? (p.ordem || 0) : 0;
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
@@ -3785,6 +3794,10 @@ function showProdutoForm(id) {
     const c = document.getElementById('p-copo')?.checked;
     lbl.textContent = (cat === 'bebida' && c) ? 'Preço por copo (Kz)' : 'Preço (Kz)';
   }
+  function toggleTaraField() {
+    const ft = document.getElementById('field-tara');
+    if (ft) ft.style.display = document.getElementById('p-medicao')?.value === 'peso' ? '' : 'none';
+  }
   function toggleCopoBebida() {
     const fb = document.getElementById('field-copo-bebida');
     if (fb) fb.style.display = document.getElementById('p-cat')?.value === 'bebida' ? '' : 'none';
@@ -3811,6 +3824,7 @@ function showProdutoForm(id) {
       sec.style.display = 'none';
     }
   }
+  document.getElementById('p-medicao')?.addEventListener('change', toggleTaraField);
   document.getElementById('p-cat').addEventListener('change', () => {
     toggleAvulso();
     toggleCopoBebida();
@@ -3819,6 +3833,7 @@ function showProdutoForm(id) {
   });
   document.getElementById('p-copo')?.addEventListener('change', toggleCopoDetalhes);
   toggleAvulso();
+  toggleTaraField();
   toggleCopoBebida();
   toggleCopoDetalhes();
   if (isEdit && canEditReceita) toggleReceita();
@@ -3845,6 +3860,7 @@ async function createProduto() {
       categoria: val('p-cat'),
       venda_avulso: document.getElementById('p-avulso')?.checked || false,
       em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
+      peso_tara_kg: parseFloat(val('p-tara')) || 0,
       ...copo
     });
     closeProdutoModal();
@@ -3865,6 +3881,7 @@ async function saveProduto(id) {
       ativo: val('p-ativo')==='true',
       venda_avulso: document.getElementById('p-avulso')?.checked||false,
       em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
+      peso_tara_kg: parseFloat(val('p-tara')) || 0,
       ...copo
     });
     closeProdutoModal();

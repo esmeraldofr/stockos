@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-entradas-saidas-aba-stock">
+<html lang="pt" data-stockos-ui="2026-03-31-resumo-vendas-registos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1789,7 +1789,6 @@ async function loadTurno() {
           <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
           <button type="button" class="turno-tab" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
           <button type="button" class="turno-tab" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
-          <button type="button" class="turno-tab" data-turno-tab="resumo" onclick="runAction(event, async (ev) => { await switchTurnoTab('resumo', ev.currentTarget); })">📋 Resumo</button>
         </div>
         <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
       </div>
@@ -1873,6 +1872,7 @@ async function loadTurno() {
               onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
           </div>
         </div>
+        <div id="turno-resumo-mount" class="mt-16"><span style="color:#64748b">A carregar…</span></div>
       </div>
 
       <div id="tab-vendas" class="turno-tab-panel">
@@ -1890,9 +1890,6 @@ async function loadTurno() {
         </div>
       </div>
 
-      <div id="tab-resumo" class="turno-tab-panel">
-        <div id="turno-resumo-mount"><span style="color:#64748b">Abre este separador para carregar o resumo.</span></div>
-      </div>
     `);
   // Inicializar total após render
   let initTotalVend = 0, initTotalVal = 0;
@@ -1908,6 +1905,7 @@ async function loadTurno() {
   if (tva) tva.textContent = initTotalVal > 0 ? fmt(initTotalVal) : '';
 
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
+    await loadTurnoResumoTab(turno.id);
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -2150,7 +2148,7 @@ async function loadVendasMenu(turnoId, canEdit) {
   }
 }
 
-/** Separador «Resumo»: mesmo bloco de vendas que na aba Vendas (menu, copos, bebidas unidade). */
+/** Aba Registos: mesmo bloco «Resumo de vendas» que na aba Vendas (menu, copos, bebidas unidade). */
 async function loadTurnoResumoTab(turnoId) {
   const mount = document.getElementById('turno-resumo-mount');
   if (!mount) return;
@@ -2318,7 +2316,7 @@ async function switchTurnoTab(name, btn) {
     const tid = S.turnoData?.id;
     if (tid) await loadVendasMenu(tid, !!S.turnoCanEdit);
   }
-  if (name === 'resumo') {
+  if (name === 'registos') {
     const tid = S.turnoData?.id;
     if (tid) await loadTurnoResumoTab(tid);
   }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-05-fino-barril-zero-recipiente">
+<html lang="pt" data-stockos-ui="2026-03-31-armazem-header-data-sync">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -75,7 +75,10 @@ button.is-action-busy{cursor:wait!important}
 .turno-card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px;cursor:pointer;transition:.2s}
 .turno-card:hover{border-color:#3b82f6;background:#172554}
 .turno-card.aberto{border-color:#22c55e}
+.turno-card.turno-card--antecipado.aberto{border-color:#d97706}
 .turno-card.fechado{border-color:#475569;opacity:.8}
+.turno-card.turno-card--locked{cursor:not-allowed;opacity:.85}
+.turno-card.turno-card--locked:hover{border-color:#334155;background:#1e293b}
 .turno-card-nome{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8;margin-bottom:6px}
 .turno-card-status{margin-bottom:8px}
 .turno-card-value{font-size:20px;font-weight:700;color:#f1f5f9}
@@ -226,6 +229,7 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .alert{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:12px}
 .alert-error{background:#450a0a;color:#fca5a5;border:1px solid #7f1d1d}
 .alert-success{background:#14532d;color:#86efac;border:1px solid #166534}
+.alert-warn{background:#451a03;color:#fdba74;border:1px solid #c2410c}
 
 /* Estado de gravação no turno: altura estável, sem saltar o layout */
 .turno-msg{
@@ -414,6 +418,88 @@ const S = {
   /** YYYY-MM do mês visível na página Calendário */
   calYM: null
 };
+
+/** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
+const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM' };
+const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'armazem', 'produtos', 'escala', 'admin'];
+
+function _storageGet(key) {
+  try {
+    return localStorage.getItem(key) || sessionStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+function _storageSet(key, val) {
+  try {
+    if (val == null || val === '') localStorage.removeItem(key);
+    else localStorage.setItem(key, val);
+  } catch (_) {}
+  try {
+    sessionStorage.removeItem(key);
+  } catch (_) {}
+}
+
+(function restoreSessionUi() {
+  try {
+    const hashRaw = typeof location !== 'undefined' && location.hash ? String(location.hash).replace(/^#/, '').trim() : '';
+    if (hashRaw) {
+      const p = decodeURIComponent(hashRaw.split(/[/?]/)[0]).trim();
+      if (p && ALLOWED_PAGES.includes(p)) S.page = p;
+    } else {
+      const p = _storageGet(UI_STATE_KEYS.page);
+      if (p && ALLOWED_PAGES.includes(p)) S.page = p;
+    }
+    const d = _storageGet(UI_STATE_KEYS.date);
+    const tid = _storageGet(UI_STATE_KEYS.turnoId);
+    const cy = _storageGet(UI_STATE_KEYS.calYM);
+    if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) S.date = d;
+    if (S.page === 'turno' && tid) S.turnoId = tid;
+    if (cy && /^\d{4}-\d{2}$/.test(cy)) S.calYM = cy;
+  } catch (_) {}
+})();
+
+function syncUrlHashToPage() {
+  try {
+    if (!S.token || typeof history === 'undefined' || !history.replaceState) return;
+    const h = '#' + S.page;
+    if ((location.hash || '') !== h) {
+      history.replaceState(null, '', location.pathname + (location.search || '') + h);
+    }
+  } catch (_) {}
+}
+
+function persistUiState() {
+  try {
+    if (!S.token) return;
+    _storageSet(UI_STATE_KEYS.page, S.page);
+    _storageSet(UI_STATE_KEYS.date, S.date);
+    if (S.page === 'turno' && S.turnoId != null && S.turnoId !== '') {
+      _storageSet(UI_STATE_KEYS.turnoId, String(S.turnoId));
+    } else {
+      _storageSet(UI_STATE_KEYS.turnoId, null);
+    }
+    if (S.calYM) _storageSet(UI_STATE_KEYS.calYM, S.calYM);
+    else _storageSet(UI_STATE_KEYS.calYM, null);
+    syncUrlHashToPage();
+  } catch (_) {}
+}
+
+function clearSessionUiState() {
+  try {
+    Object.values(UI_STATE_KEYS).forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch (_) {}
+      try {
+        sessionStorage.removeItem(k);
+      } catch (_) {}
+    });
+    if (typeof history !== 'undefined' && history.replaceState) {
+      history.replaceState(null, '', location.pathname + (location.search || ''));
+    }
+  } catch (_) {}
+}
 
 /** Destaca a linha de stock em edição (foco num dos inputs Encontrado/Deixado/Fechados). */
 (function stockRowHighlightInit() {
@@ -610,6 +696,58 @@ const TURNO_HORARIO = {
   tarde: '15:00 – 00:00',
   noite: '23:00 – 08:00'
 };
+/** Minutos desde meia-noite (início oficial); mesmo critério que a API — Luanda. */
+const TURNO_INICIO_MINUTES = { manha: 7 * 60, tarde: 15 * 60, noite: 23 * 60 };
+const TZ_STOCKOS = 'Africa/Luanda';
+/** Garante YYYY-MM-DD com zeros — evita comparar "2026-04-06" com "2026-4-6" (ordem lexicográfica errada). */
+function normalizeIsoDateStr(s) {
+  const m = String(s || '').trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!m) return '';
+  return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+}
+function luandaTodayStr() {
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ_STOCKOS, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const parts = fmt.formatToParts(new Date());
+  const y = parts.find((p) => p.type === 'year').value;
+  const mo = parts.find((p) => p.type === 'month').value;
+  const da = parts.find((p) => p.type === 'day').value;
+  return `${y}-${mo}-${da}`;
+}
+function luandaMinutesNow() {
+  const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: TZ_STOCKOS, hour: '2-digit', minute: '2-digit', hour12: false });
+  const parts = fmt.formatToParts(new Date());
+  const h = parseInt(parts.find((p) => p.type === 'hour').value, 10);
+  const m = parseInt(parts.find((p) => p.type === 'minute').value, 10);
+  return h * 60 + m;
+}
+/** { ok, msg? } — bloqueia data futura e, no dia de hoje, antes do horário de início do turno. */
+function podeAbrirTurnoAgora(dataIso, nome) {
+  const day = normalizeIsoDateStr(String(dataIso || '').slice(0, 10));
+  if (!day) return { ok: false, msg: 'Data inválida.' };
+  const today = normalizeIsoDateStr(luandaTodayStr());
+  if (day > today) return { ok: false, msg: 'Não é possível abrir turno para uma data futura.' };
+  if (day < today) return { ok: true };
+  const start = TURNO_INICIO_MINUTES[nome];
+  if (start === undefined) return { ok: true };
+  if (luandaMinutesNow() < start) {
+    const hh = Math.floor(start / 60);
+    const mm = start % 60;
+    return {
+      ok: false,
+      msg: `Só é possível abrir ${turnoLabel(nome)} após ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} (Angola).`
+    };
+  }
+  return { ok: true };
+}
+/** Hoje (Luanda) e ainda antes do início oficial — registo «aberto» não devia existir (abertura antecipada). */
+function turnoAbertoAntesDoHorarioOficial(dataIso, nome) {
+  const day = normalizeIsoDateStr(String(dataIso || '').slice(0, 10));
+  const today = normalizeIsoDateStr(luandaTodayStr());
+  if (day !== today) return false;
+  const start = TURNO_INICIO_MINUTES[nome];
+  if (start === undefined) return false;
+  return luandaMinutesNow() < start;
+}
 function turnoHorarioLabel(nome) {
   return TURNO_HORARIO[nome] || '';
 }
@@ -787,6 +925,7 @@ async function runAction(ev, work) {
 async function navigate(page, params) {
   S.page = page;
   if (params) Object.assign(S, params);
+  if (page !== 'turno') S.turnoId = null;
   await draw();
 }
 
@@ -795,20 +934,33 @@ async function draw() {
   if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'depositos', 'calendario'].includes(S.page)) {
     S.page = 'dia';
   }
-  switch (S.page) {
-    case 'dia':      await drawDia(); break;
-    case 'calendario': await drawCalendario(); break;
-    case 'depositos':
-      if (!['admin', 'gestor', 'compras'].includes(S.user?.role)) { await navigate('dia'); return; }
-      await drawDepositos();
-      break;
-    case 'turno':    await drawTurno(); break;
-    case 'historico':await drawHistorico(); break;
-    case 'armazem':  await drawArmazem(); break;
-    case 'produtos': await drawProdutos(); break;
-    case 'escala':   await drawEscala(); break;
-    case 'admin':    await drawAdmin(); break;
-    default:         await drawDia();
+  if (S.page === 'admin' && S.user?.role !== 'admin') {
+    S.page = 'dia';
+  }
+  if (S.page === 'escala' && !(S.user?.role === 'admin' || S.user?.role === 'gestor')) {
+    S.page = 'dia';
+  }
+  try {
+    switch (S.page) {
+      case 'dia':      await drawDia(); break;
+      case 'calendario': await drawCalendario(); break;
+      case 'depositos':
+        if (!['admin', 'gestor', 'compras'].includes(S.user?.role)) { await navigate('dia'); return; }
+        await drawDepositos();
+        break;
+      case 'turno':
+        if (!S.turnoId) { S.page = 'dia'; await drawDia(); break; }
+        await drawTurno();
+        break;
+      case 'historico':await drawHistorico(); break;
+      case 'armazem':  await drawArmazem(); break;
+      case 'produtos': await drawProdutos(); break;
+      case 'escala':   await drawEscala(); break;
+      case 'admin':    await drawAdmin(); break;
+      default:         await drawDia();
+    }
+  } finally {
+    if (S.token) persistUiState();
   }
 }
 
@@ -862,6 +1014,7 @@ async function doLogin() {
 function doLogout() {
   S.token = null; S.user = null;
   localStorage.removeItem('token'); localStorage.removeItem('user');
+  clearSessionUiState();
   drawLogin();
 }
 
@@ -951,6 +1104,8 @@ function syncDatePickersAcrossPages() {
   if (dp) dp.value = S.date;
   const fx = document.getElementById('fx-data');
   if (fx) fx.value = S.date;
+  const armSub = document.getElementById('armazem-registo-dia');
+  if (armSub) armSub.textContent = 'Registo diário · ' + dateLabelWithWeekday(S.date);
 }
 
 async function changeDate(n) {
@@ -961,6 +1116,7 @@ async function changeDate(n) {
     await refreshArmazemFundos();
     await loadArmazemData();
   } else await loadDia();
+  persistUiState();
 }
 async function pickDate(val) {
   if (!val) return;
@@ -971,6 +1127,7 @@ async function pickDate(val) {
     await refreshArmazemFundos();
     await loadArmazemData();
   } else await loadDia();
+  persistUiState();
 }
 
 async function reloadDepositsView() {
@@ -1232,6 +1389,18 @@ async function loadDia() {
     const cards = ['manha','tarde','noite'].map(nome => {
       const t = turnoMap[nome];
       if (!t) {
+        const pr = podeAbrirTurnoAgora(S.date, nome);
+        if (!pr.ok) {
+          return `
+          <div class="turno-card turno-card--locked">
+            <div class="turno-card-nome">${turnoLabel(nome)}</div>
+            <div class="badge badge-grey" style="margin-bottom:8px">Não iniciado</div>
+            <div style="font-size:11px;color:#94a3b8;line-height:1.35;margin-bottom:8px">${escapeHtml(pr.msg)}</div>
+            <div class="turno-card-abrir">
+              <button type="button" class="btn btn-primary btn-sm btn-full" disabled>Abrir Turno</button>
+            </div>
+          </div>`;
+        }
         return `
           <div class="turno-card" onclick="runAction(event, () => abrirTurno('${nome}'))">
             <div class="turno-card-nome">${turnoLabel(nome)}</div>
@@ -1244,16 +1413,25 @@ async function loadDia() {
       const totalVendas = t.total_vendas || 0;
       const totalCaixa  = t.caixa?.total_final || 0;
       const cls = t.estado === 'aberto' ? 'aberto' : 'fechado';
+      const antecipado = t.estado === 'aberto' && turnoAbertoAntesDoHorarioOficial(S.date, nome);
+      const startM = TURNO_INICIO_MINUTES[nome];
+      const hi = startM != null ? `${String(Math.floor(startM / 60)).padStart(2, '0')}:${String(startM % 60).padStart(2, '0')}` : '';
       const badge = t.estado === 'aberto'
-        ? '<span class="badge badge-green">Aberto</span>'
+        ? (antecipado
+          ? '<span class="badge badge-amber">Aberto antes do horário</span>'
+          : '<span class="badge badge-green">Aberto</span>')
         : '<span class="badge badge-grey">Fechado</span>';
+      const avisoAnt = antecipado
+        ? `<div style="font-size:11px;color:#fb923c;margin-top:6px;line-height:1.35">Início oficial ${hi}. Fecha o turno e volta a abrir após essa hora se for erro.</div>`
+        : '';
       return `
-        <div class="turno-card ${cls}" onclick="runAction(event, () => navigate('turno',{turnoId:'${t.id}'}))">
+        <div class="turno-card ${cls}${antecipado ? ' turno-card--antecipado' : ''}" onclick="runAction(event, () => navigate('turno',{turnoId:'${t.id}'}))">
           <div class="turno-card-nome">${turnoLabel(nome)}</div>
           <div class="turno-card-status">${badge}</div>
           <div class="turno-card-value">${fmt(totalCaixa)}</div>
           <div class="turno-card-label">Total Caixa</div>
           <div style="font-size:12px;color:#64748b;margin-top:4px">Vendas: ${fmt(totalVendas)}</div>
+          ${avisoAnt}
         </div>`;
     }).join('');
 
@@ -1329,11 +1507,13 @@ function calShiftMonth(delta) {
   const d = new Date(y, m - 1 + delta, 1);
   S.calYM = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   loadCalendarioTurnos();
+  persistUiState();
 }
 
 function calGoToday() {
   S.calYM = new Date().toISOString().slice(0, 7);
   loadCalendarioTurnos();
+  persistUiState();
 }
 
 async function goDiaFromCal(iso) {
@@ -1528,6 +1708,11 @@ async function removeBorderoDia(ev) {
 }
 
 async function abrirTurno(nome) {
+  const pr = podeAbrirTurnoAgora(S.date, nome);
+  if (!pr.ok) {
+    alert(pr.msg);
+    return;
+  }
   try {
     await api('POST', '/turnos/abrir', { data: S.date, nome });
     await loadDia();
@@ -1713,6 +1898,7 @@ async function navTurno(dir) {
   S.date = nextDate;
   S.turnoId = t.id;
   await loadTurno();
+  persistUiState();
 }
 
 async function loadTurno() {
@@ -1741,6 +1927,17 @@ async function loadTurno() {
 
     document.getElementById('turno-title').textContent =
       `${turnoLabel(turno.nome)} — ${dateLabelWithWeekday(S.date)}`;
+
+    const turnoMsgEl = document.getElementById('turno-msg');
+    if (turnoMsgEl) {
+      if (turno.estado === 'aberto' && turnoAbertoAntesDoHorarioOficial(S.date, turno.nome)) {
+        const sm = TURNO_INICIO_MINUTES[turno.nome];
+        const hi = sm != null ? `${String(Math.floor(sm / 60)).padStart(2, '0')}:${String(sm % 60).padStart(2, '0')}` : '';
+        turnoMsgEl.innerHTML = `<div class="alert alert-warn" style="margin:0 0 10px;font-size:12px">Este turno foi aberto antes do horário oficial (início às ${hi} em Angola). Fecha o turno e volta a abrir após essa hora, ou contacta a gerência.</div>`;
+      } else {
+        turnoMsgEl.innerHTML = '<span class="turno-msg-spacer">&nbsp;</span>';
+      }
+    }
 
     const isAberto = turno.estado === 'aberto';
     const canEdit  = isAberto;
@@ -3236,7 +3433,7 @@ async function drawArmazem() {
   render(`
     <div id="header">
       <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Armazém</div>
-        <div class="header-sub">Registo diário · ${dateLabelWithWeekday(S.date)}</div>
+        <div id="armazem-registo-dia" class="header-sub">Registo diário · ${dateLabelWithWeekday(S.date)}</div>
       </div>
     </div>
     <div id="content">
@@ -3314,6 +3511,7 @@ async function drawArmazem() {
       syncDatePickersAcrossPages();
       refreshArmazemFundos();
       loadArmazemData();
+      persistUiState();
     });
   }
   const flb = document.getElementById('fatura-linhas-body');
@@ -3374,19 +3572,25 @@ async function loadArmazemData() {
         }).join('')}</tbody></table></div>`);
     }
 
+    const isAdminArmazem = S.user?.role === 'admin';
+    S.armazemComprasRows = compras;
     if (!compras.length) {
       show('armazem-compras', `<div style="color:#64748b">Nenhuma linha de compra para ${dateLabel(dataDia)}.</div>`);
     } else {
       show('armazem-compras', `<div class="table-wrap"><table>
-        <thead><tr><th>Data / hora</th><th>Fatura</th><th>Produto</th><th>Embalagem</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th></tr></thead>
+        <thead><tr><th>Data / hora</th><th>Fatura</th><th>Produto</th><th>Embalagem</th><th style="text-align:right">Qtd</th><th style="text-align:right">Unit.</th><th style="text-align:right">Total</th>${isAdminArmazem ? '<th style="text-align:right;min-width:140px">Ações</th>' : ''}</tr></thead>
         <tbody>${compras.map(c => `<tr>
           <td style="font-size:12px;color:#94a3b8">${dateTimeLabel(c.criado_em)}</td>
           <td style="font-size:11px;color:#64748b">${c.fatura_numero ? c.fatura_numero : '—'}</td>
-          <td>${c.produto_nome}</td>
+          <td>${escapeHtml(c.produto_nome)}</td>
           <td style="font-size:12px;color:#94a3b8">${(parseFloat(c.caixas)||0) > 0 && (parseFloat(c.qtd_por_caixa)||0) > 0 ? `${fmtNum(c.caixas)} cx x ${fmtNum(c.qtd_por_caixa)}` : '—'}</td>
           <td style="text-align:right">${fmtNum(c.quantidade)} ${medicaoSigla(c.tipo_medicao)}</td>
           <td style="text-align:right">${fmt(c.preco_unitario)}</td>
           <td style="text-align:right;color:#fbbf24">${fmt(c.valor_total)}</td>
+          ${isAdminArmazem ? `<td style="text-align:right;white-space:nowrap">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => openEditCompraLinhaModalById(${c.id}))">Editar</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => deleteCompraLinhaArmazem(event, ${c.id}))">Apagar</button>
+          </td>` : ''}
         </tr>`).join('')}</tbody></table></div>`);
     }
   } catch(e) {
@@ -3394,6 +3598,101 @@ async function loadArmazemData() {
     show('armazem-faturas', `<div class="alert alert-error">${e.message}</div>`);
     show('armazem-compras', `<div class="alert alert-error">${e.message}</div>`);
   }
+}
+
+function closeCompraLinhaModal() {
+  const el = document.getElementById('compra-linha-modal');
+  if (el) el.remove();
+}
+
+function openEditCompraLinhaModalById(id) {
+  const c = (S.armazemComprasRows || []).find((x) => String(x.id) === String(id));
+  if (!c) return;
+  openEditCompraLinhaModal(c);
+}
+
+function openEditCompraLinhaModal(c) {
+  closeCompraLinhaModal();
+  const produtos = S.produtos || [];
+  const prodOpts = produtos
+    .map((p) => `<option value="${p.id}" ${String(p.id) === String(c.produto_id) ? 'selected' : ''}>${escapeHtml(p.nome)}</option>`)
+    .join('');
+  const div = document.createElement('div');
+  div.id = 'compra-linha-modal';
+  div.className = 'modal-overlay';
+  div.innerHTML = `
+    <div class="modal" style="max-width:min(520px,96vw)">
+      <div class="modal-header">
+        <div class="modal-title">Editar linha de compra</div>
+        <button type="button" class="modal-close" id="clm-close" aria-label="Fechar">×</button>
+      </div>
+      <p style="font-size:12px;color:#94a3b8;margin:-8px 0 12px">Fatura: ${escapeHtml(c.fatura_numero || '—')} · ${c.fatura_id ? 'ligada a fatura' : 'sem fatura'}</p>
+      <div class="field"><label>Produto</label><select id="clm-prod">${prodOpts}</select></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="field"><label>Quantidade</label><input id="clm-qty" type="number" min="0.001" step="any" value="${String(c.quantidade ?? '')}"/></div>
+        <div class="field"><label>Preço unitário (Kz)</label><input id="clm-preco" type="number" min="0.01" step="any" value="${String(c.preco_unitario ?? '')}"/></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+        <div class="field"><label>Nº caixas (opcional)</label><input id="clm-caixas" type="number" min="0" step="any" value="${String(c.caixas ?? '')}"/></div>
+        <div class="field"><label>Qtd por caixa (opcional)</label><input id="clm-qtdcaixa" type="number" min="0" step="any" value="${String(c.qtd_por_caixa ?? '')}"/></div>
+      </div>
+      <div class="field"><label>Fornecedor (linha)</label><input id="clm-forn" type="text" value="${escapeHtml(String(c.fornecedor || ''))}"/></div>
+      <div class="field"><label>Notas</label><textarea id="clm-notas" rows="2">${escapeHtml(c.notas || '')}</textarea></div>
+      <div class="flex gap-8 mt-8">
+        <button type="button" class="btn btn-success" id="clm-save">Guardar</button>
+        <button type="button" class="btn btn-ghost" id="clm-cancel">Cancelar</button>
+      </div>
+  </div>`;
+  document.body.appendChild(div);
+  const stop = (e) => e.stopPropagation();
+  div.querySelector('.modal').addEventListener('click', stop);
+  div.addEventListener('click', (e) => {
+    if (e.target === div) closeCompraLinhaModal();
+  });
+  document.getElementById('clm-close').addEventListener('click', closeCompraLinhaModal);
+  document.getElementById('clm-cancel').addEventListener('click', closeCompraLinhaModal);
+  document.getElementById('clm-save').addEventListener('click', () => saveEditCompraLinhaFromModal(c.id));
+}
+
+async function saveEditCompraLinhaFromModal(id) {
+  const prod = document.getElementById('clm-prod');
+  const qtyIn = document.getElementById('clm-qty');
+  const precoIn = document.getElementById('clm-preco');
+  const cx = document.getElementById('clm-caixas');
+  const qcx = document.getElementById('clm-qtdcaixa');
+  const forn = document.getElementById('clm-forn');
+  const notas = document.getElementById('clm-notas');
+  try {
+    const payload = {
+      produto_id: prod.value,
+      quantidade: parseFloat(qtyIn.value),
+      caixas: parseFloat(cx.value) || 0,
+      qtd_por_caixa: parseFloat(qcx.value) || 0,
+      preco_unitario: parseFloat(precoIn.value),
+      fornecedor: (forn && forn.value) || '',
+      notas: (notas && notas.value) || ''
+    };
+    await api('PUT', '/armazem/compras/' + id, payload);
+    closeCompraLinhaModal();
+    await refreshArmazemFundos();
+    await loadArmazemData();
+  } catch (e) {
+    alert(e.message || String(e));
+  }
+}
+
+async function deleteCompraLinhaArmazem(ev, id) {
+  if (!confirm('Remover esta linha de compra? O inventário será recalculado.')) return;
+  await runAction(ev, async () => {
+    try {
+      const r = await api('DELETE', '/armazem/compras/' + id);
+      if (r.fatura_deleted) alert('Última linha removida: o cabeçalho da fatura foi também removido.');
+      await refreshArmazemFundos();
+      await loadArmazemData();
+    } catch (e) {
+      alert(e.message || String(e));
+    }
+  });
 }
 
 async function refreshArmazemFundos() {

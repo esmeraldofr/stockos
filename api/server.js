@@ -696,6 +696,49 @@ function prevTurno(nome, data) {
   return { nome: 'tarde', data };
 }
 
+/** Início oficial do turno (minutos desde meia-noite), fuso Africa/Luanda. */
+const TURNO_INICIO_MINUTES = { manha: 7 * 60, tarde: 15 * 60, noite: 23 * 60 };
+const TZ_STOCKOS = 'Africa/Luanda';
+
+function normalizeIsoDateStr(s) {
+  const m = String(s || '').trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!m) return '';
+  return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+}
+function luandaDateStr(d = new Date()) {
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ_STOCKOS, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const parts = fmt.formatToParts(d);
+  const y = parts.find((p) => p.type === 'year').value;
+  const mo = parts.find((p) => p.type === 'month').value;
+  const da = parts.find((p) => p.type === 'day').value;
+  return `${y}-${mo}-${da}`;
+}
+function luandaMinutesNow(d = new Date()) {
+  const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: TZ_STOCKOS, hour: '2-digit', minute: '2-digit', hour12: false });
+  const parts = fmt.formatToParts(d);
+  const h = parseInt(parts.find((p) => p.type === 'hour').value, 10);
+  const m = parseInt(parts.find((p) => p.type === 'minute').value, 10);
+  return h * 60 + m;
+}
+/** Rejeita abertura antes da data/hora permitida (data futura ou mesmo dia antes do início do turno). */
+function assertPodeAbrirTurno(data, nome) {
+  const day = normalizeIsoDateStr(String(data || '').slice(0, 10));
+  if (!day) throw new Error('Data inválida');
+  const today = normalizeIsoDateStr(luandaDateStr());
+  if (day > today) throw new Error('Não é possível abrir turno para uma data futura.');
+  if (day < today) return;
+  const start = TURNO_INICIO_MINUTES[nome];
+  if (start === undefined) return;
+  if (luandaMinutesNow() < start) {
+    const hh = Math.floor(start / 60);
+    const mm = start % 60;
+    const label = { manha: 'Manhã', tarde: 'Tarde', noite: 'Noite' }[nome] || nome;
+    throw new Error(
+      `Só é possível abrir o turno ${label} após ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} (horário de Angola).`
+    );
+  }
+}
+
 function normDataPostgres(d) {
   if (d == null || d === '') return '';
   if (typeof d === 'string') return d.slice(0, 10);
@@ -1588,6 +1631,41 @@ async function processArmazemCompraLine(client, req, body, opts) {
   return compra.rows[0];
 }
 
+/** Recalcula stock e custo médio a partir de todas as linhas de compra do produto (após editar/apagar linha). */
+async function recalculateArmazemStockForProduct(client, produtoId) {
+  const r = await client.query(
+    `SELECT COALESCE(SUM(quantidade),0) AS q_sum, COALESCE(SUM(valor_total),0) AS v_sum
+     FROM armazem_compras WHERE produto_id=$1`,
+    [produtoId]
+  );
+  const q = parseFloat(r.rows[0].q_sum) || 0;
+  const v = parseFloat(r.rows[0].v_sum) || 0;
+  const custo = q > 0 ? v / q : 0;
+  await client.query(
+    `INSERT INTO armazem_stock (produto_id, quantidade, custo_medio, atualizado_em)
+     VALUES ($1,$2,$3,NOW())
+     ON CONFLICT (produto_id) DO UPDATE
+     SET quantidade=$2, custo_medio=$3, atualizado_em=NOW()`,
+    [produtoId, q, custo]
+  );
+}
+
+/** Actualiza total da fatura; se não restarem linhas, apaga o cabeçalho da fatura. */
+async function refreshFaturaTotalAgg(client, faturaId) {
+  const cnt = await client.query(`SELECT COUNT(*)::int AS n FROM armazem_compras WHERE fatura_id=$1`, [faturaId]);
+  if (!cnt.rows[0].n) {
+    await client.query(`DELETE FROM armazem_faturas WHERE id=$1`, [faturaId]);
+    return { deletedFatura: true };
+  }
+  const s = await client.query(
+    `SELECT COALESCE(SUM(valor_total),0) AS t FROM armazem_compras WHERE fatura_id=$1`,
+    [faturaId]
+  );
+  const t = parseFloat(s.rows[0].t) || 0;
+  await client.query(`UPDATE armazem_faturas SET total_valor=$1 WHERE id=$2`, [t, faturaId]);
+  return { deletedFatura: false };
+}
+
 async function ensureArmazemTables() {
   const pidCheck = await query(
     `SELECT data_type
@@ -1806,6 +1884,93 @@ app.post('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), 
     [rowId]
   );
   res.json(merged.rows[0]);
+});
+
+app.delete('/api/armazem/compras/:id', auth, requireRole('admin'), async (req, res) => {
+  await ensureArmazemTables();
+  const id = parseInt(String(req.params.id || ''), 10);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ erro: 'ID inválido' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const old = await client.query('SELECT * FROM armazem_compras WHERE id=$1', [id]);
+    if (!old.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ erro: 'Linha não encontrada' });
+    }
+    const row = old.rows[0];
+    const pid = row.produto_id;
+    const fid = row.fatura_id;
+    await client.query('DELETE FROM armazem_compras WHERE id=$1', [id]);
+    await recalculateArmazemStockForProduct(client, pid);
+    let fatura_deleted = false;
+    if (fid != null) {
+      const r = await refreshFaturaTotalAgg(client, fid);
+      fatura_deleted = r.deletedFatura;
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, fatura_deleted });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(400).json({ erro: e.message });
+  } finally {
+    await client.release();
+  }
+});
+
+app.put('/api/armazem/compras/:id', auth, requireRole('admin'), async (req, res) => {
+  await ensureArmazemTables();
+  const id = parseInt(String(req.params.id || ''), 10);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ erro: 'ID inválido' });
+  const body = req.body || {};
+  const caixasNum = parseFloat(body.caixas) || 0;
+  const qtdPorCaixaNum = parseFloat(body.qtd_por_caixa) || 0;
+  const qtyRaw = parseFloat(body.quantidade);
+  const qty = caixasNum > 0 && qtdPorCaixaNum > 0 ? caixasNum * qtdPorCaixaNum : qtyRaw;
+  const precoUnit = parseFloat(body.preco_unitario);
+  const pidNew = body.produto_id != null && body.produto_id !== '' ? body.produto_id : null;
+  if (!qty || qty <= 0) return res.status(400).json({ erro: 'Quantidade inválida' });
+  if (!precoUnit || precoUnit <= 0) return res.status(400).json({ erro: 'Preço unitário inválido' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const old = await client.query('SELECT * FROM armazem_compras WHERE id=$1', [id]);
+    if (!old.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ erro: 'Linha não encontrada' });
+    }
+    const row = old.rows[0];
+    const pidOld = row.produto_id;
+    const pid = pidNew != null ? pidNew : pidOld;
+    const chk = await client.query('SELECT 1 FROM produtos WHERE id=$1', [pid]);
+    if (!chk.rows.length) throw new Error('Produto inválido');
+    const total = qty * precoUnit;
+    const forn = String(body.fornecedor != null ? body.fornecedor : row.fornecedor || '').trim();
+    const notaLine = String(body.notas != null ? body.notas : row.notas || '').trim();
+    await client.query(
+      `UPDATE armazem_compras SET produto_id=$1, quantidade=$2, caixas=$3, qtd_por_caixa=$4,
+       preco_unitario=$5, valor_total=$6, fornecedor=$7, notas=$8 WHERE id=$9`,
+      [pid, qty, caixasNum, qtdPorCaixaNum, precoUnit, total, forn, notaLine, id]
+    );
+    const pids = new Set([String(pidOld), String(pid)]);
+    for (const p of pids) {
+      await recalculateArmazemStockForProduct(client, p);
+    }
+    if (row.fatura_id != null) await refreshFaturaTotalAgg(client, row.fatura_id);
+    await client.query('COMMIT');
+    const merged = await query(
+      `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
+       FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id WHERE c.id=$1`,
+      [id]
+    );
+    res.json(merged.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(400).json({ erro: e.message });
+  } finally {
+    await client.release();
+  }
 });
 
 app.get('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
@@ -2140,6 +2305,7 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
     await client.query('BEGIN');
     const { data, nome } = req.body;
     if (!data || !nome) throw new Error('Data e nome obrigatórios');
+    assertPodeAbrirTurno(data, nome);
 
     const exists = await client.query('SELECT id FROM turnos WHERE data=$1 AND nome=$2', [data, nome]);
     if (exists.rows.length) throw new Error(`Turno ${nome} já existe para ${data}`);

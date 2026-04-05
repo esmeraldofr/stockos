@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-resumo-acima-caixa">
+<html lang="pt" data-stockos-ui="2026-03-31-abas-stock-vendas-registos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1786,8 +1786,8 @@ async function loadTurno() {
       <div class="turno-tabs-wrap">
         <div class="turno-tabs">
           <button type="button" class="turno-tab active" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
-          <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
           <button type="button" class="turno-tab" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
+          <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
           <button type="button" class="turno-tab" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
         </div>
         <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
@@ -1835,6 +1835,13 @@ async function loadTurno() {
         </div>
       </div>
 
+      <div id="tab-vendas" class="turno-tab-panel">
+        <div class="card" id="vendas-menu-card">
+          <div class="card-title">🍽️ Vendas de Menu</div>
+          <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
+        </div>
+      </div>
+
       <div id="tab-registos" class="turno-tab-panel">
         <div id="turno-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
         <div class="card mt-16">
@@ -1872,13 +1879,6 @@ async function loadTurno() {
               ${canEdit ? '' : 'disabled'}
               onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
           </div>
-        </div>
-      </div>
-
-      <div id="tab-vendas" class="turno-tab-panel">
-        <div class="card" id="vendas-menu-card">
-          <div class="card-title">🍽️ Vendas de Menu</div>
-          <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
         </div>
       </div>
 

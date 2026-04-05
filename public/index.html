@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-03-turno-tab-resumo">
+<html lang="pt" data-stockos-ui="2026-03-31-resumo-tab-vendas-only">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2150,62 +2150,20 @@ async function loadVendasMenu(turnoId, canEdit) {
   }
 }
 
-/** Separador «Resumo»: financeiro + stock + mesmo bloco de vendas que na aba Vendas (menu, copos, bebidas unidade). */
+/** Separador «Resumo»: mesmo bloco de vendas que na aba Vendas (menu, copos, bebidas unidade). */
 async function loadTurnoResumoTab(turnoId) {
   const mount = document.getElementById('turno-resumo-mount');
   if (!mount) return;
   mount.innerHTML = '<span style="color:#64748b">A carregar…</span>';
-  const turno = S.turnoData;
-  if (!turno) {
+  if (!S.turnoData) {
     mount.innerHTML = '<span style="color:#ef4444">Sem dados do turno.</span>';
     return;
   }
-  const cx = turno.caixa || {};
-  const tpa = parseFloat(cx.tpa) || 0;
-  const transf = parseFloat(cx.transferencia) || 0;
-  const din = parseFloat(cx.dinheiro) || 0;
-  const saida = parseFloat(cx.saida) || 0;
-  const tg = tpa + transf + din;
-  const tf = tg - saida;
-
-  let totalUnd = 0;
-  let totalValStock = 0;
-  for (const s of turno.stock || []) {
-    let v = parseFloat(s.vendido);
-    if (!Number.isFinite(v) || v < 0) {
-      const b = getStockLineForProduto(s.produto_id);
-      v = Math.max(0, b.encontrado + b.entrada - b.deixado);
-    }
-    totalUnd += v;
-    const val = parseFloat(s.valor);
-    if (Number.isFinite(val) && val >= 0) totalValStock += val;
-    else totalValStock += v * (parseFloat(s.preco) || 0);
-  }
-
-  const financeiroHtml =
-    '<div class="card" style="margin-bottom:12px">' +
-    '<div class="card-title">Resumo financeiro</div>' +
-    '<div style="display:grid;gap:8px;font-size:14px">' +
-    `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">TPA / máquina</span><span>${fmtKzOrEmpty(tpa)}</span></div>` +
-    `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Transferência</span><span>${fmtKzOrEmpty(transf)}</span></div>` +
-    `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Dinheiro</span><span>${fmtKzOrEmpty(din)}</span></div>` +
-    `<div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid #334155;font-weight:600"><span>Total gerado</span><span>${fmtKzOrEmpty(tg)}</span></div>` +
-    `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Despesas (saída)</span><span>${fmtKzOrEmpty(saida)}</span></div>` +
-    `<div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid #334155;font-weight:700;color:#4ade80"><span>Total final</span><span>${fmtKzOrEmpty(tf)}</span></div>` +
-    '</div></div>';
-
-  const stockHtml =
-    '<div class="card" style="margin-bottom:12px">' +
-    '<div class="card-title">Resumo de stock</div>' +
-    '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">' +
-    `<span style="color:#e2e8f0;font-weight:600">Total vendido (und.): <strong>${fmtNum(totalUnd)}</strong></span>` +
-    `<span style="color:#94a3b8">Valor de stock: <strong style="color:#f1f5f9">${fmt(totalValStock)}</strong></span>` +
-    '</div></div>';
 
   try {
     await loadVendasMenu(turnoId, false);
   } catch (e) {
-    mount.innerHTML = financeiroHtml + stockHtml + `<div class="card"><span style="color:#ef4444">${escapeHtml(e.message)}</span></div>`;
+    mount.innerHTML = `<div class="card"><span style="color:#ef4444">${escapeHtml(e.message)}</span></div>`;
     return;
   }
 
@@ -2221,7 +2179,7 @@ async function loadTurnoResumoTab(turnoId) {
       '<div class="card"><div class="card-title">Resumo de vendas</div><span style="color:#64748b">Sem linhas de resumo (abre Vendas para sincronizar).</span></div>';
   }
 
-  mount.innerHTML = financeiroHtml + stockHtml + resumoVendasHtml;
+  mount.innerHTML = resumoVendasHtml;
 }
 
 /** Grava quantidade de venda (menu ou bebida por copo) ao sair do input. */

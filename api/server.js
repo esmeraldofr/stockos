@@ -2440,8 +2440,7 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
     const { produto_id, tipo, origem, preco, quantidade, notas } = req.body;
     if (!produto_id || !quantidade || parseFloat(quantidade) <= 0)
       throw new Error('produto_id e quantidade (> 0) são obrigatórios');
-    if (!notas || !notas.trim())
-      throw new Error('A nota é obrigatória');
+    const notasVal = String(notas != null ? notas : '').trim();
     const tipoVal   = tipo   === 'tirar'  ? 'tirar'  : 'entrada';
     const origemVal = origem === 'compra' ? 'compra' : 'armazem';
     const precoVal  = origemVal === 'compra' ? (parseFloat(preco) || 0) : 0;
@@ -2458,7 +2457,7 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
 
     const registo = await client.query(
       'INSERT INTO turno_entradas (turno_id, produto_id, tipo, origem, preco, quantidade, notas) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
-      [turnoId, produto_id, tipoVal, origemVal, precoVal, quantidade, notas.trim()]
+      [turnoId, produto_id, tipoVal, origemVal, precoVal, quantidade, notasVal]
     );
 
     // entrada = soma das entradas - soma das saídas
@@ -2559,11 +2558,11 @@ app.post('/api/turnos/:id/saidas', auth, async (req, res) => {
     const { descricao, valor, notas } = req.body;
     if (!descricao || !descricao.trim()) throw new Error('Descrição é obrigatória');
     if (!valor || parseFloat(valor) <= 0) throw new Error('Valor deve ser maior que 0');
-    if (!notas || !notas.trim()) throw new Error('A nota é obrigatória');
+    const notasVal = String(notas != null ? notas : '').trim();
 
     const r = await client.query(
       'INSERT INTO turno_saidas (turno_id, descricao, valor, notas) VALUES ($1,$2,$3,$4) RETURNING *',
-      [turnoId, descricao.trim(), valor, notas.trim()]
+      [turnoId, descricao.trim(), valor, notasVal]
     );
     // Recalcular saida na caixa (despesas + compras)
     const novasSaida = await calcSaidaTotal(turnoId, client);

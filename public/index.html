@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-05-hash-route-armazem-sync">
+<html lang="pt" data-stockos-ui="2026-03-31-armazem-tabs-notas-opc">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -271,6 +271,7 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .turno-tab:hover{color:#cbd5e1;background:#1e293b}
 .turno-tab.active{color:#f1f5f9;background:#1e293b;border-bottom:2px solid #3b82f6;margin-bottom:-2px}
 .turno-tab-panel{display:none}.turno-tab-panel.active{display:block}
+#content > .armazem-tab-panel{display:none}#content > .armazem-tab-panel.active{display:block}
 input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-color:#f87171!important;box-shadow:0 0 0 1px rgba(248,113,113,.5)}
 .turno-view-toggle{margin-left:auto;flex-shrink:0;padding:5px 10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;align-self:center;transition:color .15s,border-color .15s}
 .turno-view-toggle:hover{color:#f1f5f9;border-color:#64748b}
@@ -1102,8 +1103,6 @@ function syncDatePickersAcrossPages() {
   if (dl) dl.textContent = dateLabelWithWeekday(S.date);
   const dp = document.getElementById('date-picker');
   if (dp) dp.value = S.date;
-  const fx = document.getElementById('fx-data');
-  if (fx) fx.value = S.date;
   const armSub = document.getElementById('armazem-registo-dia');
   if (armSub) armSub.textContent = 'Registo diário · ' + dateLabelWithWeekday(S.date);
 }
@@ -1245,7 +1244,7 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
           <input id="dep-ref-dia" type="text" placeholder="Nº operação / guia" value="${String(refComum).replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
         </div>
         <div class="field">
-          <label>Notas</label>
+          <label>Notas (opcional)</label>
           <input id="dep-notas-dia" type="text" placeholder="Opcional" value="${String(notasComum).replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
         </div>
         <div class="field">
@@ -2894,7 +2893,7 @@ function renderEntradasSection(turnoId, stocks, canEdit, entradas) {
         <select id="e-produto" class="entradas-select">${opts}</select>
         <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd (un)" class="entradas-qty"/>
         <input id="e-preco" type="number" min="0" step="any" placeholder="Preço" class="entradas-qty" style="display:none"/>
-        <input id="e-notas" type="text" placeholder="Nota obrigatória" class="entradas-notas"/>
+        <input id="e-notas" type="text" placeholder="Notas (opcional)" class="entradas-notas"/>
         <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, () => submitEntrada(${turnoId}))">Registar</button>
       </div>
       <div id="entrada-form-msg" style="margin-bottom:8px"></div>` : '';
@@ -2987,7 +2986,6 @@ async function submitEntrada(turnoId) {
   const msg    = document.getElementById('entrada-form-msg');
   if (!pid)  { if (msg) { msg.className='alert alert-error'; msg.textContent='Selecciona um produto.'; } return; }
   if (!qty || qty <= 0) { if (msg) { msg.className='alert alert-error'; msg.textContent='Quantidade inválida.'; } return; }
-  if (!notas) { if (msg) { msg.className='alert alert-error'; msg.textContent='A nota é obrigatória.'; } return; }
   try {
     await api('POST', `/turnos/${turnoId}/entradas`, { produto_id: pid, tipo, origem, preco, quantidade: qty, notas });
     document.getElementById('e-produto').value = '';
@@ -3022,7 +3020,7 @@ function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
       <div class="entradas-form">
         <input id="s-desc" type="text" placeholder="Descrição (ex: gasóleo, embalagens)" class="entradas-notas" style="flex:2"/>
         <input id="s-valor" type="number" min="0.01" step="any" placeholder="Valor" class="entradas-qty"/>
-        <input id="s-notas" type="text" placeholder="Nota obrigatória" class="entradas-notas" style="flex:1.5"/>
+        <input id="s-notas" type="text" placeholder="Notas (opcional)" class="entradas-notas" style="flex:1.5"/>
         <button type="button" class="btn btn-danger btn-sm" onclick="runAction(event, () => submitSaida(${turnoId}))">Registar</button>
       </div>
       <div id="saida-form-msg" style="margin-bottom:8px"></div>` : '';
@@ -3276,7 +3274,6 @@ async function submitSaida(turnoId) {
   const msg   = document.getElementById('saida-form-msg');
   if (!desc)  { if (msg) { msg.className='alert alert-error'; msg.textContent='Descrição obrigatória.'; } return; }
   if (!valor || valor <= 0) { if (msg) { msg.className='alert alert-error'; msg.textContent='Valor inválido.'; } return; }
-  if (!notas) { if (msg) { msg.className='alert alert-error'; msg.textContent='A nota é obrigatória.'; } return; }
   try {
     await api('POST', `/turnos/${turnoId}/saidas`, { descricao: desc, valor, notas });
     document.getElementById('s-desc').value  = '';
@@ -3429,6 +3426,15 @@ async function loadHistorico() {
 }
 
 // ── ARMAZÉM ────────────────────────────────────────────────────
+function switchArmazemTab(name, btn) {
+  document.querySelectorAll('#content > .armazem-tab-panel').forEach((p) => p.classList.remove('active'));
+  const wrap = btn && btn.closest('.turno-tabs-wrap');
+  if (wrap) wrap.querySelectorAll('.turno-tab').forEach((b) => b.classList.remove('active'));
+  const panel = document.getElementById('armazem-panel-' + name);
+  if (panel) panel.classList.add('active');
+  if (btn) btn.classList.add('active');
+}
+
 async function drawArmazem() {
   render(`
     <div id="header">
@@ -3446,14 +3452,21 @@ async function drawArmazem() {
         </span>
         <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>
       </div>
+      <div class="turno-tabs-wrap">
+        <div class="turno-tabs">
+          <button type="button" class="turno-tab active" onclick="switchArmazemTab('dia', this)">📋 Registo do dia</button>
+          <button type="button" class="turno-tab" onclick="switchArmazemTab('inventario', this)">📦 Inventário</button>
+        </div>
+      </div>
+      <div id="armazem-panel-dia" class="armazem-tab-panel active">
       <div class="card">
         <div class="card-title">💰 Fundos para compras (dia)</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Tudo nesta página refere-se ao <strong>dia seleccionado</strong> acima. Libertações e saldo são desse dia; a data da fatura de compra sincroniza com esse dia.</p>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Tudo nesta página refere-se ao <strong>dia seleccionado</strong> acima. Libertações, faturas e compras usam essa data; a emissão da fatura de compra segue o mesmo dia.</p>
         <div id="armazem-fundos-banner"></div>
         <div id="armazem-libertacoes-list" style="margin-bottom:12px"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <div class="field"><label>Valor (Kz)</label><input id="lib-valor" type="number" min="0.01" step="any" placeholder="0"/></div>
-          <div class="field"><label>Notas</label><input id="lib-notas" type="text" placeholder="Ex.: manhã, gerência"/></div>
+          <div class="field"><label>Notas (opcional)</label><input id="lib-notas" type="text" placeholder="Ex.: manhã, gerência"/></div>
         </div>
         <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, submitLibertacaoArmazem)">+ Registar libertação</button>
       </div>
@@ -3461,13 +3474,10 @@ async function drawArmazem() {
         <div class="card-title">📄 Fatura de compra</div>
         <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha. Anexa a <strong>foto da fatura</strong> (obrigatório). Se o total exceder o saldo do dia, deves justificar a origem do dinheiro (podes associar uma saída de caixa do mesmo dia).</p>
         <div id="fatura-form-msg"></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="STK-20260405-001 (automático)"/>
-          <div style="font-size:11px;color:#64748b;margin-top:4px">Gerado automaticamente (STK-data-sequência); podes editar.</div></div>
-          <div class="field"><label>Data</label><input id="fx-data" type="date"/></div>
-        </div>
+        <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="STK-20260405-001 (automático)"/>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">Gerado automaticamente (STK-data do dia-sequência); podes editar.</div></div>
         <div class="field"><label>Fornecedor</label><input id="fx-fornecedor" type="text" placeholder="Nome do fornecedor"/></div>
-        <div class="field"><label>Notas</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
+        <div class="field"><label>Notas (opcional)</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
         <div class="field">
           <label>Foto da fatura</label>
           <input type="file" id="fx-foto-fatura" accept="image/jpeg,image/png,image/webp" capture="environment"/>
@@ -3486,11 +3496,6 @@ async function drawArmazem() {
         </div>
       </div>
       <div class="card">
-        <div class="card-title">📦 Inventário do Armazém</div>
-        <p style="font-size:12px;color:#64748b;margin:0 0 10px">Stock e custo médio <strong>acumulados</strong> (não filtrados por dia).</p>
-        <div id="armazem-inventario"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
-      </div>
-      <div class="card">
         <div class="card-title">📑 Faturas do dia</div>
         <div id="armazem-faturas"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
       </div>
@@ -3498,23 +3503,19 @@ async function drawArmazem() {
         <div class="card-title">🧾 Compras do dia</div>
         <div id="armazem-compras"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
       </div>
+      </div>
+      <div id="armazem-panel-inventario" class="armazem-tab-panel">
+      <div class="card">
+        <div class="card-title">📦 Inventário do Armazém</div>
+        <p style="font-size:12px;color:#64748b;margin:0 0 10px">Stock e custo médio <strong>acumulados</strong> (não filtrados por dia).</p>
+        <div id="armazem-inventario"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+      </div>
     </div>
     ${navBar()}
   `);
-  const fxData = document.getElementById('fx-data');
-  if (fxData) fxData.value = S.date;
   document.getElementById('fatura-linhas-body').innerHTML = '';
   addFaturaLinha();
-  const fxD = document.getElementById('fx-data');
-  if (fxD) {
-    fxD.addEventListener('change', () => {
-      S.date = fxD.value || S.date;
-      syncDatePickersAcrossPages();
-      refreshArmazemFundos();
-      loadArmazemData();
-      persistUiState();
-    });
-  }
   const flb = document.getElementById('fatura-linhas-body');
   if (flb) {
     flb.addEventListener('input', () => updateFaturaExcessoUI());
@@ -3539,8 +3540,7 @@ function suggestNumeroFaturaArmazem(dataIso, faturas) {
 function applyFxNumeroSugerido(dataDia, faturas) {
   const el = document.getElementById('fx-numero');
   if (!el || S.page !== 'armazem') return;
-  const fxD = document.getElementById('fx-data');
-  const diaRef = (fxD && fxD.value ? fxD.value : dataDia).slice(0, 10);
+  const diaRef = String(dataDia || S.date || new Date().toISOString().split('T')[0]).slice(0, 10);
   const sug = suggestNumeroFaturaArmazem(diaRef, faturas);
   const cur = String(el.value || '').trim();
   if (!cur || /^STK-\d{8}-\d{3}$/i.test(cur)) {
@@ -3663,7 +3663,7 @@ function openEditCompraLinhaModal(c) {
         <div class="field"><label>Qtd por caixa (opcional)</label><input id="clm-qtdcaixa" type="number" min="0" step="any" value="${String(c.qtd_por_caixa ?? '')}"/></div>
       </div>
       <div class="field"><label>Fornecedor (linha)</label><input id="clm-forn" type="text" value="${escapeHtml(String(c.fornecedor || ''))}"/></div>
-      <div class="field"><label>Notas</label><textarea id="clm-notas" rows="2">${escapeHtml(c.notas || '')}</textarea></div>
+      <div class="field"><label>Notas (opcional)</label><textarea id="clm-notas" rows="2">${escapeHtml(c.notas || '')}</textarea></div>
       <div class="flex gap-8 mt-8">
         <button type="button" class="btn btn-success" id="clm-save">Guardar</button>
         <button type="button" class="btn btn-ghost" id="clm-cancel">Cancelar</button>
@@ -3724,8 +3724,7 @@ async function deleteCompraLinhaArmazem(ev, id) {
 async function refreshArmazemFundos() {
   const banner = document.getElementById('armazem-fundos-banner');
   const list = document.getElementById('armazem-libertacoes-list');
-  const fxData = document.getElementById('fx-data');
-  const data = (fxData && fxData.value) ? fxData.value : new Date().toISOString().split('T')[0];
+  const data = String(S.date || new Date().toISOString().split('T')[0]).slice(0, 10);
   try {
     const [saldoInfo, saidas] = await Promise.all([
       api('GET', '/armazem/saldo?data=' + encodeURIComponent(data)),
@@ -3769,7 +3768,7 @@ async function refreshArmazemFundos() {
 }
 
 async function submitLibertacaoArmazem() {
-  const data = val('fx-data') || new Date().toISOString().split('T')[0];
+  const data = String(S.date || new Date().toISOString().split('T')[0]).slice(0, 10);
   const valor = parseFloat(document.getElementById('lib-valor')?.value);
   const notas = val('lib-notas');
   if (!valor || valor <= 0) {
@@ -4057,7 +4056,7 @@ async function submitFaturaArmazem() {
     const payload = {
       numero_fatura: val('fx-numero'),
       fornecedor: val('fx-fornecedor'),
-      data_emissao: val('fx-data'),
+      data_emissao: String(S.date || new Date().toISOString().split('T')[0]).slice(0, 10),
       notas: val('fx-notas'),
       linhas,
       foto_fatura_base64: fotoB64

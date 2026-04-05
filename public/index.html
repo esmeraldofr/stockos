@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-historico-colunas-turno">
+<html lang="pt" data-stockos-ui="2026-03-31-historico-total-dia-coluna">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3065,6 +3065,14 @@ async function loadHistorico() {
         day.turnos.forEach((t) => {
           byNome[t.nome] = t;
         });
+        let dayTv = 0;
+        let dayTg = 0;
+        let dayTf = 0;
+        day.turnos.forEach((t) => {
+          dayTv += parseFloat(t.total_vendas) || 0;
+          dayTg += parseFloat(t.total_gerado) || 0;
+          dayTf += parseFloat(t.total_final) || 0;
+        });
         const turnosCols = ordemTurno
           .map((nome) => {
             const t = byNome[nome];
@@ -3091,12 +3099,23 @@ async function loadHistorico() {
         </div>`;
           })
           .join('');
+        const totalDiaCol = `
+        <div class="js-busy-click" style="cursor:pointer;padding:10px 8px;background:#172554;border-radius:8px;border:1px solid #3b82f6;min-width:0"
+          onclick="runAction(event, async () => { S.date='${d}'; S.turnoId=null; syncDatePickersAcrossPages(); await navigate('dia'); })">
+          <div style="font-weight:700;color:#93c5fd;font-size:13px;margin-bottom:6px;text-align:center">Total do dia</div>
+          <div style="font-size:10px;color:#64748b;text-align:center;margin-bottom:8px">soma dos turnos</div>
+          <div style="font-size:11px;line-height:1.55;text-align:center">
+            <div><span style="color:#64748b">Vendas</span> <span style="font-weight:700;color:#a5b4fc">${fmt(dayTv)}</span></div>
+            <div><span style="color:#64748b">Gerado</span> <span style="font-weight:700;color:#fbbf24">${fmt(dayTg)}</span></div>
+            <div><span style="color:#64748b">Final</span> <span style="font-weight:700;color:#4ade80">${fmt(dayTf)}</span></div>
+          </div>
+        </div>`;
         return `
       <div class="card" style="margin-bottom:12px">
         <div style="font-weight:600;font-size:15px;margin-bottom:2px">${dateLabel(d)}</div>
         <div style="font-size:12px;color:#64748b;margin-bottom:10px">${d} · ${day.turnos.length} turno(s)</div>
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;overflow-x:auto;-webkit-overflow-scrolling:touch">
-          ${turnosCols}
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;overflow-x:auto;-webkit-overflow-scrolling:touch">
+          ${turnosCols}${totalDiaCol}
         </div>
       </div>`;
       })
@@ -3119,7 +3138,7 @@ async function loadHistorico() {
             <span style="font-weight:700;color:#4ade80;font-size:1.1rem">${fmt(sumFinal)}</span>
           </div>
         </div>
-        <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">Por dia: três colunas (Manhã · Tarde · Noite). Total vendas = stock (× preço); gerado/final = caixa. Clica num turno para abrir o dia com esse turno.</p>
+        <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">Por dia: Manhã · Tarde · Noite e <strong style="color:#94a3b8">Total do dia</strong> (soma dos três). Clica num turno para esse turno; clica em Total do dia para o dia.</p>
       </div>
       ${rowsHtml}
     `);

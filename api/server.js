@@ -376,6 +376,11 @@ async function initDB() {
     [],
     'produtos-seed-fino-barril-tara'
   );
+  await qry(
+    `UPDATE produtos SET em_stock_turno = false WHERE categoria = 'outro'`,
+    [],
+    'produtos-outro-sem-folha-stock'
+  );
   /** Sem ALTER em utilizadores aqui: em BD restaurada o role da app não é owner → must be owner. criado_em já está no CREATE TABLE acima. */
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`, [], 'alter-criado');
@@ -537,7 +542,11 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-05-produtos-peso-tara-kg';
+const STOCKOS_API_BUILD = '2026-04-05-stock-so-menu-ing-bebida';
+
+/** Folha de stock do turno: só Menu, Ingredientes e Bebidas — categoria «outro» não entra. */
+const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
+const SQL_P_STOCK_CATEGORIAS = "p.categoria IN ('menu','ingredientes','bebida')";
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -1217,6 +1226,10 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   await run(
     `UPDATE produtos SET peso_tara_kg = 12.9 WHERE LOWER(TRIM(nome)) = 'fino barril'`,
     'produtos-seed-fino-barril-tara'
+  );
+  await run(
+    `UPDATE produtos SET em_stock_turno = false WHERE categoria = 'outro'`,
+    'produtos-outro-sem-folha-stock'
   );
   await run(`CREATE TABLE IF NOT EXISTS armazem_stock (
     id SERIAL PRIMARY KEY,
@@ -1967,7 +1980,7 @@ app.get('/api/dia', auth, async (req, res) => {
                ) * COALESCE(p.preco,0)::numeric
              ), 0)::numeric AS total_vendas
            FROM turno_stock ts
-           INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE
+           INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
            WHERE ts.turno_id = ANY($1::int[])
            GROUP BY ts.turno_id`,
           [ids]
@@ -2002,7 +2015,7 @@ app.get('/api/dia', auth, async (req, res) => {
                 COALESCE(p.peso_tara_kg, 0)::numeric AS peso_tara_kg
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
-         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE
+         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
          ORDER BY ts.turno_id, p.ordem, p.nome`,
         [ids]
       ),
@@ -2038,7 +2051,7 @@ app.get('/api/dia', auth, async (req, res) => {
         `SELECT ts.produto_id, ts.deixado, t.data, t.nome
          FROM turno_stock ts
          JOIN turnos t ON ts.turno_id=t.id
-         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE
+         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
          WHERE ${conds}`,
         params
       );
@@ -2139,7 +2152,7 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
 
     // Stock do turno: só produtos activos marcados para a folha de stock
     const produtos = await client.query(
-      'SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE ORDER BY ordem'
+      `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`
     );
     for (const p of produtos.rows) {
       // Pré-preencher "encontrado" com o "deixado" do turno anterior
@@ -2199,7 +2212,7 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   try {
     const { produto_id, encontrado, deixado, fechados } = req.body;
     const chk = await query(
-      'SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE',
+      `SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS}`,
       [produto_id]
     );
     if (!chk.rows.length) {
@@ -2268,7 +2281,7 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
     const precoVal  = origemVal === 'compra' ? (parseFloat(preco) || 0) : 0;
 
     const emStock = await client.query(
-      'SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE',
+      `SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS}`,
       [produto_id]
     );
     if (!emStock.rows.length) {
@@ -2660,7 +2673,7 @@ app.get('/api/historico', auth, async (req, res) => {
              ) * COALESCE(p.preco,0)::numeric
            ), 0)::numeric AS total_vendas
          FROM turno_stock ts
-         INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE
+         INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
          GROUP BY ts.turno_id
        ) v ON v.turno_id = t.id
        WHERE t.data BETWEEN $1::date AND $2::date

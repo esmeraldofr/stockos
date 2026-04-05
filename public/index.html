@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-05-stock-secao-menu">
+<html lang="pt" data-stockos-ui="2026-04-05-stock-sem-outro">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1745,11 +1745,10 @@ async function loadTurno() {
       : `<span class="badge badge-grey">Fechado</span>${reabrirBtn}`
     );
 
-    // Separar comida e bebida
+    // Folha de stock: só Menu, Ingredientes e Bebidas (API não devolve «outro»)
     const menu    = turno.stock.filter(s => s.categoria === 'menu');
     const comida  = turno.stock.filter(s => s.categoria === 'ingredientes');
     const bebida  = turno.stock.filter(s => s.categoria === 'bebida');
-    const outro   = turno.stock.filter(s => !['menu','ingredientes','bebida'].includes(s.categoria));
 
     function stockRows(items) {
       return items.map(s => {
@@ -1827,7 +1826,6 @@ async function loadTurno() {
                 ${tableFor(menu,'🍽️ Menu')}
                 ${tableFor(comida,'🧂 Ingredientes')}
                 ${tableFor(bebida,'🥤 Bebidas')}
-                ${tableFor(outro,'📦 Outros')}
               </tbody>
             </table>
           </div>
@@ -3807,7 +3805,7 @@ function showProdutoForm(id) {
       '</div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
       '<div class="field" id="field-avulso"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso</label></div>' +
-      '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Folha de stock do turno</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Se desmarcares, o produto não entra na contagem ao abrir turno (útil para consumíveis só de armazém).</div></div>' +
+      '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Folha de stock do turno</label><div id="p-stock-turno-hint-extra" style="font-size:11px;margin-top:4px;margin-left:24px"></div><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">A folha do turno inclui só <strong style="color:#cbd5e1">Menu</strong>, <strong style="color:#cbd5e1">Ingredientes</strong> e <strong style="color:#cbd5e1">Bebida</strong>. Categoria <strong>Outro</strong> não é controlada em stock no turno.</div></div>' +
       '<div id="field-copo-bebida" style="display:none;margin-top:6px;border-left:2px solid #334155;padding-left:10px">' +
         '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-copo" style="width:16px;height:16px"> Venda por copo</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Stock em kg no turno; registo de vendas em copos. O preço acima é por copo avulso.</div></div>' +
         '<div id="field-copo-detalhes" style="display:none">' +
@@ -3836,7 +3834,11 @@ function showProdutoForm(id) {
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
   if (p) document.getElementById('p-avulso').checked = !!p.venda_avulso;
   const st = document.getElementById('p-stock-turno');
-  if (st) st.checked = p ? p.em_stock_turno !== false : true;
+  if (st) {
+    const cat0 = p ? (p.categoria || 'outro') : 'outro';
+    if (cat0 === 'outro') st.checked = false;
+    else st.checked = p ? p.em_stock_turno !== false : true;
+  }
   const pcopo = document.getElementById('p-copo');
   const pkg = document.getElementById('p-kg-copo');
   const ppac = document.getElementById('p-preco-pacote');
@@ -3881,6 +3883,21 @@ function showProdutoForm(id) {
     const fa = document.getElementById('field-avulso');
     if (fa) fa.style.display = (cat === 'ingredientes' || cat === 'outro') ? '' : 'none';
   }
+  function toggleStockTurnoPorCategoria() {
+    const cat = document.getElementById('p-cat')?.value;
+    const st = document.getElementById('p-stock-turno');
+    const hx = document.getElementById('p-stock-turno-hint-extra');
+    if (cat === 'outro') {
+      if (st) {
+        st.checked = false;
+        st.disabled = true;
+      }
+      if (hx) hx.innerHTML = '<span style="color:#fdba74">Categoria «Outro» não integra a folha de stock do turno.</span>';
+    } else {
+      if (st) st.disabled = false;
+      if (hx) hx.innerHTML = '';
+    }
+  }
   function toggleReceita() {
     const sec = document.getElementById('receita-section');
     if (!sec) return;
@@ -3896,6 +3913,7 @@ function showProdutoForm(id) {
     toggleAvulso();
     toggleCopoBebida();
     toggleCopoDetalhes();
+    toggleStockTurnoPorCategoria();
     if (isEdit && canEditReceita) toggleReceita();
   });
   document.getElementById('p-copo')?.addEventListener('change', toggleCopoDetalhes);
@@ -3903,6 +3921,7 @@ function showProdutoForm(id) {
   toggleTaraField();
   toggleCopoBebida();
   toggleCopoDetalhes();
+  toggleStockTurnoPorCategoria();
   if (isEdit && canEditReceita) toggleReceita();
 
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
@@ -3920,13 +3939,14 @@ async function createProduto() {
   try {
     const copo = readProdutoCopoFields();
     const med = copo.venda_por_copo && copo.kg_por_copo > 0 ? 'peso' : val('p-medicao');
+    const cat = val('p-cat');
     await api('POST','/produtos',{
       nome: val('p-nome'),
       preco: parseFloat(val('p-preco')) || 0,
       tipo_medicao: med,
-      categoria: val('p-cat'),
+      categoria: cat,
       venda_avulso: document.getElementById('p-avulso')?.checked || false,
-      em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
+      em_stock_turno: cat === 'outro' ? false : !!document.getElementById('p-stock-turno')?.checked,
       peso_tara_kg: parseFloat(val('p-tara')) || 0,
       ...copo
     });
@@ -3941,13 +3961,14 @@ async function saveProduto(id) {
   try {
     const copo = readProdutoCopoFields();
     const med = copo.venda_por_copo && copo.kg_por_copo > 0 ? 'peso' : val('p-medicao');
+    const cat = val('p-cat');
     await api('PUT',`/produtos/${id}`,{
       nome: val('p-nome'), preco: parseFloat(val('p-preco'))||0,
       tipo_medicao: med,
-      categoria: val('p-cat'), ordem: parseInt(val('p-ordem'))||0,
+      categoria: cat, ordem: parseInt(val('p-ordem'))||0,
       ativo: val('p-ativo')==='true',
       venda_avulso: document.getElementById('p-avulso')?.checked||false,
-      em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
+      em_stock_turno: cat === 'outro' ? false : !!document.getElementById('p-stock-turno')?.checked,
       peso_tara_kg: parseFloat(val('p-tara')) || 0,
       ...copo
     });

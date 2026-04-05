@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-05-dia-semana-pt-AO">
+<html lang="pt" data-stockos-ui="2026-04-05-dia-sem-total-dia-card">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -71,14 +71,9 @@ button.is-action-busy{cursor:wait!important}
 
 /* Turno cards */
 .turno-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px}
-.turno-cards--dia-totals{grid-template-columns:repeat(4,minmax(0,1fr))}
-@media(max-width:900px){.turno-cards--dia-totals{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:500px){.turno-cards{grid-template-columns:1fr}}
-@media(max-width:500px){.turno-cards--dia-totals{grid-template-columns:1fr}}
 .turno-card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px;cursor:pointer;transition:.2s}
 .turno-card:hover{border-color:#3b82f6;background:#172554}
-.turno-card.turno-card--total-dia{cursor:default}
-.turno-card.turno-card--total-dia:hover{border-color:#3b82f6;background:#172554}
 .turno-card.aberto{border-color:#22c55e}
 .turno-card.fechado{border-color:#475569;opacity:.8}
 .turno-card-nome{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8;margin-bottom:6px}
@@ -1252,30 +1247,10 @@ async function loadDia() {
         </div>`;
     }).join('');
 
-    let dayTv = 0;
-    let dayTg = 0;
-    let dayTf = 0;
-    for (const t of turnos) {
-      const c = t.caixa || {};
-      dayTv += parseFloat(t.total_vendas) || 0;
-      dayTg += parseFloat(c.total_gerado) || 0;
-      dayTf += parseFloat(c.total_final) || 0;
-    }
-    const totalDiaCard = `
-          <div class="turno-card turno-card--total-dia" style="border-color:#3b82f6;background:#172554">
-            <div class="turno-card-nome" style="color:#93c5fd">Total do dia</div>
-            <div style="font-size:10px;color:#64748b;margin-bottom:8px;text-align:center">soma dos turnos</div>
-            <div style="font-size:11px;line-height:1.55;text-align:center">
-              <div><span style="color:#64748b">Vendas</span> <span style="font-weight:700;color:#a5b4fc">${fmt(dayTv)}</span></div>
-              <div><span style="color:#64748b">Gerado</span> <span style="font-weight:700;color:#fbbf24">${fmt(dayTg)}</span></div>
-              <div><span style="color:#64748b">Final</span> <span style="font-weight:700;color:#4ade80">${fmt(dayTf)}</span></div>
-            </div>
-          </div>`;
-
     const escalaLoading = `<div id="dia-escala-slot" class="card"><div class="text-center" style="padding:28px;color:#64748b"><div class="spinner"></div><div style="margin-top:10px;font-size:12px">A carregar escala…</div></div></div>`;
 
     show('dia-content', `
-      <div class="turno-cards turno-cards--dia-totals">${cards}${totalDiaCard}</div>
+      <div class="turno-cards">${cards}</div>
       ${escalaLoading}
     `);
 

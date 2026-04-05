@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-resumo-so-registos">
+<html lang="pt" data-stockos-ui="2026-03-31-irregularidades-registos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1844,6 +1844,11 @@ async function loadTurno() {
 
       <div id="tab-registos" class="turno-tab-panel">
         <div id="turno-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
+        <div class="card mt-16" id="turno-irregularidades-card">
+          <div class="card-title">⚠️ Irregularidades</div>
+          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 12px">Stock face ao <strong style="color:#cbd5e1">deixado do turno anterior</strong> (falta ou sobra no «encontrado»).</p>
+          <div id="turno-irregularidades-list"><span style="color:#64748b">—</span></div>
+        </div>
         <div class="card mt-16">
           <div class="card-title">💰 Caixa</div>
           <div class="caixa-grid">
@@ -1906,6 +1911,7 @@ async function loadTurno() {
 
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
     await loadTurnoResumoTab(turno.id);
+    renderIrregularidadesTurno();
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -2241,8 +2247,49 @@ function updateStock(pid, field, value) {
   if (tv) tv.textContent = totalVend > 0 ? fmtNum(totalVend) : '';
   if (tva) tva.textContent = totalVal > 0 ? fmt(totalVal) : '';
   refreshMenuQtys();
+  renderIrregularidadesTurno();
   // Auto-save
   autoSaveSchedule();
+}
+
+/** Lista na aba Registos: produtos com falta/sobra vs deixado do turno anterior (sincroniza com a coluna Comparação). */
+function renderIrregularidadesTurno() {
+  const mount = document.getElementById('turno-irregularidades-list');
+  if (!mount) return;
+  const stock = S.turnoData?.stock || [];
+  let temPrev = false;
+  const linhas = [];
+  for (const s of stock) {
+    const prev = s.prev_deixado;
+    if (prev === null || prev === undefined) continue;
+    temPrev = true;
+    const pid = s.produto_id;
+    const b = stockBuf[pid] || { encontrado: 0, entrada: 0, deixado: 0 };
+    const enc = parseFloat(b.encontrado);
+    const encN = Number.isFinite(enc) ? enc : parseFloat(s.encontrado) || 0;
+    const diff = encN - parseFloat(prev);
+    if (Math.abs(diff) < 0.001) continue;
+    const med = medicaoSigla(s.tipo_medicao || 'unidade');
+    const abs = Math.abs(diff);
+    const isFalta = diff < 0;
+    linhas.push(
+      `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid #334155;font-size:14px">
+        <span style="color:#e2e8f0;font-weight:600">${escapeHtml(s.produto_nome)}</span>
+        <span style="font-size:13px;font-weight:600;white-space:nowrap;${isFalta ? 'color:#f87171' : 'color:#4ade80'}">${isFalta ? 'Falta' : 'Sobra'} ${fmtNum(abs)} ${med}</span>
+      </div>`
+    );
+  }
+  if (!temPrev) {
+    mount.innerHTML =
+      '<span style="color:#64748b;font-size:13px">Sem turno anterior para comparar — as irregularidades aparecem quando existir histórico.</span>';
+    return;
+  }
+  if (!linhas.length) {
+    mount.innerHTML =
+      '<span style="color:#64748b;font-size:13px">Nenhuma irregularidade (stock alinhado com o turno anterior).</span>';
+    return;
+  }
+  mount.innerHTML = linhas.join('');
 }
 
 let autoSaveTimer = null;

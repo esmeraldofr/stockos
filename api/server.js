@@ -2608,25 +2608,57 @@ app.delete('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor', 'c
 });
 
 // ── HISTÓRICO ─────────────────────────────────────────────────
+/** Por dia: total_vendas (Σ stock vendido × preço, como em GET /dia), total_gerado e total_final (caixa). */
 app.get('/api/historico', auth, async (req, res) => {
   try {
     const { inicio, fim } = req.query;
+    const d1 = inicio || '2020-01-01';
+    const d2 = fim || new Date().toISOString().split('T')[0];
     const r = await query(
-      `SELECT
-         t.data,
-         COUNT(DISTINCT t.id) as num_turnos,
-         COALESCE(SUM(tc.tpa),0) as tpa,
-         COALESCE(SUM(tc.transferencia),0) as transferencia,
-         COALESCE(SUM(tc.dinheiro),0) as dinheiro,
-         COALESCE(SUM(tc.tpa+tc.transferencia+tc.dinheiro),0) as total_gerado,
-         COALESCE(SUM(tc.saida),0) as saida,
-         COALESCE(SUM(tc.tpa+tc.transferencia+tc.dinheiro-tc.saida),0) as total_final
-       FROM turnos t
-       LEFT JOIN turno_caixa tc ON tc.turno_id=t.id
-       WHERE t.data BETWEEN $1 AND $2
-       GROUP BY t.data
-       ORDER BY t.data DESC`,
-      [inicio || '2020-01-01', fim || new Date().toISOString().split('T')[0]]
+      `WITH caixa_dia AS (
+         SELECT
+           t.data,
+           COUNT(DISTINCT t.id)::int AS num_turnos,
+           COALESCE(SUM(COALESCE(tc.tpa,0)),0) AS tpa,
+           COALESCE(SUM(COALESCE(tc.transferencia,0)),0) AS transferencia,
+           COALESCE(SUM(COALESCE(tc.dinheiro,0)),0) AS dinheiro,
+           COALESCE(SUM(COALESCE(tc.tpa,0)+COALESCE(tc.transferencia,0)+COALESCE(tc.dinheiro,0)),0) AS total_gerado,
+           COALESCE(SUM(COALESCE(tc.saida,0)),0) AS saida,
+           COALESCE(SUM(COALESCE(tc.tpa,0)+COALESCE(tc.transferencia,0)+COALESCE(tc.dinheiro,0)-COALESCE(tc.saida,0)),0) AS total_final
+         FROM turnos t
+         LEFT JOIN turno_caixa tc ON tc.turno_id = t.id
+         WHERE t.data BETWEEN $1::date AND $2::date
+         GROUP BY t.data
+       ),
+       vendas_dia AS (
+         SELECT
+           t.data,
+           COALESCE(SUM(
+             GREATEST(
+               0::numeric,
+               COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric
+             ) * COALESCE(p.preco,0)::numeric
+           ), 0)::numeric AS total_vendas
+         FROM turnos t
+         INNER JOIN turno_stock ts ON ts.turno_id = t.id
+         INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE
+         WHERE t.data BETWEEN $1::date AND $2::date
+         GROUP BY t.data
+       )
+       SELECT
+         c.data,
+         c.num_turnos,
+         COALESCE(v.total_vendas, 0) AS total_vendas,
+         c.tpa,
+         c.transferencia,
+         c.dinheiro,
+         c.total_gerado,
+         c.saida,
+         c.total_final
+       FROM caixa_dia c
+       LEFT JOIN vendas_dia v ON v.data = c.data
+       ORDER BY c.data DESC`,
+      [d1, d2]
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }

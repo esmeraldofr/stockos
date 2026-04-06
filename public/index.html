@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-06-sem-modo-tudo">
+<html lang="pt" data-stockos-ui="2026-04-06-irr-trabalharam">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2070,6 +2070,7 @@ async function loadTurno() {
         <div class="card mt-12" id="turno-irregularidades-card" style="display:none">
           <div class="card-title">⚠️ Irregularidades</div>
           <div id="turno-irregularidades-meta" style="font-size:12px;color:#94a3b8;margin:-4px 0 10px;line-height:1.4"></div>
+          <div id="turno-irregularidades-equipa" style="font-size:11px;color:#64748b;margin:0 0 10px;line-height:1.4"></div>
           <div id="turno-irregularidades-list"></div>
         </div>
         <div class="card mt-16">
@@ -2518,6 +2519,32 @@ function aplicarFinoBarrilZeroParaRecipienteKg(turno, canEdit) {
   return ch;
 }
 
+/** Nomes de quem registou presença no turno (equipa real), para o cartão Irregularidades. */
+async function refreshIrregularidadesEquipaLine(show) {
+  const el = document.getElementById('turno-irregularidades-equipa');
+  if (!el) return;
+  if (!show) {
+    el.textContent = '';
+    return;
+  }
+  const tid = S.turnoData?.id;
+  if (!tid) {
+    el.textContent = '';
+    return;
+  }
+  try {
+    const equipaReal = await api('GET', `/turnos/${tid}/equipa-real`);
+    const names = (equipaReal || [])
+      .map((r) => String(r.utilizador_nome || '').trim())
+      .filter(Boolean);
+    el.textContent = names.length
+      ? `Trabalharam: ${names.join(', ')}`
+      : 'Trabalharam: — (sem registo na aba Escala)';
+  } catch (_) {
+    el.textContent = '';
+  }
+}
+
 /** Só conteúdo quando há irregularidade real (caixa, stock vs T. anterior, Fino). Sem mensagens «está tudo ok». */
 function renderIrregularidadesTurno() {
   const mount = document.getElementById('turno-irregularidades-list');
@@ -2554,7 +2581,9 @@ function renderIrregularidadesTurno() {
   const stock = S.turnoData?.stock || [];
   if (!stock.length) {
     mount.innerHTML = caixaVendasHtml;
-    setIrregCardVisible(!!caixaVendasHtml);
+    const showCard = !!caixaVendasHtml;
+    setIrregCardVisible(showCard);
+    void refreshIrregularidadesEquipaLine(showCard);
     return;
   }
 
@@ -2640,7 +2669,9 @@ function renderIrregularidadesTurno() {
 
   const html = (caixaVendasHtml + resumoHtml + finoHtml).trim();
   mount.innerHTML = html;
-  setIrregCardVisible(!!html);
+  const showCard = !!html;
+  setIrregCardVisible(showCard);
+  void refreshIrregularidadesEquipaLine(showCard);
 }
 
 let autoSaveTimer = null;
@@ -3190,6 +3221,7 @@ async function loadEscalaTurno() {
       if (userSel) userSel.onchange = toggleExtra;
       toggleExtra();
     }
+    renderIrregularidadesTurno();
   } catch (e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }

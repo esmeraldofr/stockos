@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-06-irr-trabalharam">
+<html lang="pt" data-stockos-ui="2026-04-06-fino-barril-so-stock">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1756,6 +1756,11 @@ let vendasProdPrecos = {}; // { produto_id: preco } para todos os produtos de ve
 /** Nome a partir do catálogo (evita «Produto uuid» quando stock e vendas diferem no id). */
 let vendasProdNomes = {};
 
+/** Fino Barril só na folha de stock (kg), não na aba Vendas nem nos totais de vendas. */
+function isFinoBarrilNome(nome) {
+  return String(nome || '').trim().toLowerCase() === 'fino barril';
+}
+
 /** Linha de stock do turno para um produto: `stockBuf` (editável) ou fallback a `S.turnoData.stock`. */
 function getStockLineForProduto(pid) {
   const k = String(pid);
@@ -1778,6 +1783,8 @@ function forEachBebidaUnidadeVendidaLinha(cb) {
   for (const s of S.turnoData?.stock || []) {
     if (s.categoria !== 'bebida') continue;
     const pid = String(s.produto_id);
+    if (isFinoBarrilNome(s.produto_nome)) continue;
+    if (isFinoBarrilNome(vendasProdNomes[pid])) continue;
     if (copo.has(pid)) continue;
     const b = getStockLineForProduto(pid);
     let vend = Math.max(0, b.encontrado + b.entrada - b.deixado);
@@ -2154,7 +2161,7 @@ async function loadVendasMenu(turnoId, canEdit) {
       api('GET', '/receitas')
     ]);
     const menuProds   = prods.filter(p => p.categoria === 'menu');
-    const bebidaProds = prods.filter(p => p.categoria === 'bebida');
+    const bebidaProds = prods.filter(p => p.categoria === 'bebida').filter((p) => !isFinoBarrilNome(p.nome));
     const avulsoProds = prods.filter(p => p.venda_avulso && p.categoria !== 'menu' && p.categoria !== 'bebida');
     vendasProdNomes = {};
     prods.forEach((p) => {
@@ -2220,6 +2227,7 @@ async function loadVendasMenu(turnoId, canEdit) {
     for (const v of vendas) {
       const isCopo = !!v.venda_por_copo && parseFloat(v.kg_por_copo) > 0;
       if (!isCopo) continue;
+      if (isFinoBarrilNome(v.produto_nome)) continue;
       const pid = String(v.produto_id);
       if (!bebidaCopoCfg[pid]) {
         bebidaCopoCfg[pid] = {
@@ -2305,6 +2313,7 @@ async function loadVendasMenu(turnoId, canEdit) {
     for (const v of vendas) {
       const isCopo = !!v.venda_por_copo && parseFloat(v.kg_por_copo) > 0;
       if (!isCopo) continue;
+      if (isFinoBarrilNome(v.produto_nome)) continue;
       const pid = String(v.produto_id);
       const copos = parseFloat(v.quantidade) || 0;
       if (copos <= 0) continue;

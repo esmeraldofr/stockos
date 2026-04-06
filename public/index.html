@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-06-irr-dia-turno">
+<html lang="pt" data-stockos-ui="2026-04-06-sem-modo-tudo">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -272,13 +272,6 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .turno-tab-panel{display:none}.turno-tab-panel.active{display:block}
 #content > .armazem-tab-panel{display:none}#content > .armazem-tab-panel.active{display:block}
 input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-color:#f87171!important;box-shadow:0 0 0 1px rgba(248,113,113,.5)}
-.turno-view-toggle{margin-left:auto;flex-shrink:0;padding:5px 10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;align-self:center;transition:color .15s,border-color .15s}
-.turno-view-toggle:hover{color:#f1f5f9;border-color:#64748b}
-.turno-tabs-wrap{display:flex;align-items:flex-end;border-bottom:2px solid #1e293b;margin-bottom:16px}
-.turno-tabs-wrap .turno-tabs{border-bottom:none;margin-bottom:0;flex:1}
-.scroll-mode .turno-tab-panel{display:block!important}
-.scroll-mode .turno-tabs .turno-tab{opacity:.5;pointer-events:none}
-.scroll-mode .turno-view-toggle{color:#3b82f6;border-color:#3b82f6}
 
 /* Escala da semana (página Dia) — grelha turnos × dias */
 .dia-escala-intro{font-size:12px;color:#94a3b8;margin:0 0 14px;line-height:1.45}
@@ -2022,14 +2015,11 @@ async function loadTurno() {
     const tf = tg - parseFloat(caixa.saida||0);
 
     show('turno-content', `
-      <div class="turno-tabs-wrap">
-        <div class="turno-tabs">
+      <div class="turno-tabs">
           <button type="button" class="turno-tab active" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
           <button type="button" class="turno-tab" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
           <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
           <button type="button" class="turno-tab" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
-        </div>
-        <button class="turno-view-toggle" id="turno-view-btn" onclick="toggleTurnoView()" title="Alternar vista">☰ Tudo</button>
       </div>
 
       <div id="tab-stock" class="turno-tab-panel active">
@@ -2701,8 +2691,6 @@ function calcCaixa() {
 }
 
 async function switchTurnoTab(name, btn) {
-  const wrap = document.getElementById('turno-content');
-  if (wrap?.classList.contains('scroll-mode')) return;
   document.querySelectorAll('.turno-tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.turno-tab').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name)?.classList.add('active');
@@ -2726,13 +2714,6 @@ async function switchTurnoTab(name, btn) {
   }
 }
 
-function toggleTurnoView() {
-  const wrap = document.getElementById('turno-content');
-  const btn  = document.getElementById('turno-view-btn');
-  const isScroll = wrap?.classList.toggle('scroll-mode');
-  if (btn) btn.textContent = isScroll ? '▣ Abas' : '☰ Tudo';
-}
-
 function clearStockCaixaValidationHighlight() {
   document.querySelectorAll('.stock-caixa-required-missing').forEach((el) =>
     el.classList.remove('stock-caixa-required-missing')
@@ -2754,17 +2735,13 @@ function collectMissingStockCaixaObrigatorio() {
 
 async function focusTurnoFieldParaValidacao(el) {
   if (!el) return;
-  const wrap = document.getElementById('turno-content');
-  const scrollMode = wrap?.classList.contains('scroll-mode');
-  if (!scrollMode) {
-    const panel = el.closest('.turno-tab-panel');
-    const tabId = panel && panel.id;
-    const name =
-      tabId === 'tab-stock' ? 'stock' : tabId === 'tab-registos' ? 'registos' : null;
-    if (name) {
-      const btn = document.querySelector('.turno-tab[data-turno-tab="' + name + '"]');
-      if (btn) await switchTurnoTab(name, btn);
-    }
+  const panel = el.closest('.turno-tab-panel');
+  const tabId = panel && panel.id;
+  const name =
+    tabId === 'tab-stock' ? 'stock' : tabId === 'tab-registos' ? 'registos' : null;
+  if (name) {
+    const btn = document.querySelector('.turno-tab[data-turno-tab="' + name + '"]');
+    if (btn) await switchTurnoTab(name, btn);
   }
   requestAnimationFrame(() => {
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -3450,8 +3427,8 @@ function populateFxFornecedorSelect() {
 
 function switchArmazemTab(name, btn) {
   document.querySelectorAll('#content > .armazem-tab-panel').forEach((p) => p.classList.remove('active'));
-  const wrap = btn && btn.closest('.turno-tabs-wrap');
-  if (wrap) wrap.querySelectorAll('.turno-tab').forEach((b) => b.classList.remove('active'));
+  const tabs = btn && btn.closest('.turno-tabs');
+  if (tabs) tabs.querySelectorAll('.turno-tab').forEach((b) => b.classList.remove('active'));
   const panel = document.getElementById('armazem-panel-' + name);
   if (panel) panel.classList.add('active');
   if (btn) btn.classList.add('active');
@@ -3474,11 +3451,9 @@ async function drawArmazem() {
         </span>
         <button type="button" onclick="runAction(event, () => changeDate(1))">›</button>
       </div>
-      <div class="turno-tabs-wrap">
-        <div class="turno-tabs">
+      <div class="turno-tabs">
           <button type="button" class="turno-tab active" onclick="switchArmazemTab('dia', this)">📋 Registo do dia</button>
           <button type="button" class="turno-tab" onclick="switchArmazemTab('inventario', this)">📦 Inventário</button>
-        </div>
       </div>
       <div id="armazem-panel-dia" class="armazem-tab-panel active">
       <div class="card">

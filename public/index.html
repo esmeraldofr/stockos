@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-06-irreg-batata-stock-vendas">
+<html lang="pt" data-stockos-ui="2026-04-06-batata-irreg-unidade">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2565,12 +2565,12 @@ async function refreshIrregularidadesEquipaLine(show) {
   }
 }
 
-/** Tolerância kg ao comparar Batata stock vs soma imputável às vendas (ruído float). */
+/** Tolerância ao comparar quantidade Batata (stock vs Σ menus; ruído float). */
 const KG_BATATA_IRREG_EPS = 0.02;
 
 /**
- * Kg de Batata Pré-frita só a partir de vendas de produtos **menu** que têm linha de receita
- * directa `componente_id` = Batata (não inclui venda avulsa nem sub-menus por expansão recursiva).
+ * Quantidade (un. ou kg conforme receita) de Batata Pré-frita a partir de vendas de **menu**
+ * com linha de receita directa para o componente Batata (sem venda avulsa nem expansão recursiva).
  */
 function totalKgBatataFromMenusComReceitaDirecta(vm, batataId, receitasByProduto, produtos) {
   let total = 0;
@@ -2741,21 +2741,22 @@ function buildIrregularidadesHtmlParts({
     const encN = Number.isFinite(enc) ? enc : parseFloat(batataRow.encontrado) || 0;
     const entN = Number.isFinite(ent) ? ent : parseFloat(batataRow.entrada) || 0;
     const deiN = Number.isFinite(dei) ? dei : parseFloat(batataRow.deixado) || 0;
-    const kgStock = Math.max(0, encN + entN - deiN);
+    const qtyStock = Math.max(0, encN + entN - deiN);
     const batataId = parseInt(batataRow.produto_id, 10);
     const rbp = receitasByProdutoFromIrregBuf(receitasIrreg);
     const vm = vmFromVendasBufIrreg(vendasBuf);
-    const kgVendas = totalKgBatataFromMenusComReceitaDirecta(vm, batataId, rbp, prodArr);
-    const diff = kgStock - kgVendas;
+    const qtyMenus = totalKgBatataFromMenusComReceitaDirecta(vm, batataId, rbp, prodArr);
+    const diff = qtyStock - qtyMenus;
+    const batataUm = medicaoSigla(batataRow.tipo_medicao || 'unidade');
     if (Math.abs(diff) >= KG_BATATA_IRREG_EPS) {
       const border = 'rgba(251,146,60,0.45)';
       const bg = 'rgba(251,146,60,0.1)';
       batataHtml = `
     <div style="margin-top:10px;padding:8px 10px;border-radius:6px;border:1px solid ${border};background:${bg};font-size:12px;color:#cbd5e1;line-height:1.4">
       <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">Batata Pré-frita (stock vs menus)</div>
-      <div>Stock <span style="color:#94a3b8">(enc.+entr.−deix.)</span> <strong>${fmtNum(kgStock)}</strong> kg</div>
-      <div style="margin-top:4px">Σ menus com Batata na receita <span style="color:#64748b">(qtd. menu × kg/receita)</span> <strong>${fmtNum(kgVendas)}</strong> kg</div>
-      <div style="margin-top:4px"><span style="color:#94a3b8">Δ</span> <strong style="color:#fb923c">${diff >= 0 ? '+' : ''}${fmtNum(diff)}</strong> kg</div>
+      <div>Stock <span style="color:#94a3b8">(enc.+entr.−deix.)</span> <strong>${fmtNum(qtyStock)}</strong> ${batataUm}</div>
+      <div style="margin-top:4px">Σ menus com Batata na receita <span style="color:#64748b">(vendas × qtd. na receita)</span> <strong>${fmtNum(qtyMenus)}</strong> ${batataUm}</div>
+      <div style="margin-top:4px"><span style="color:#94a3b8">Δ</span> <strong style="color:#fb923c">${diff >= 0 ? '+' : ''}${fmtNum(diff)}</strong> ${batataUm}</div>
     </div>`;
     }
   }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-07-irreg-coxa-stock-vs-menus">
+<html lang="pt" data-stockos-ui="2026-04-07-stock-enc-alert-prev">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -657,6 +657,19 @@ function stockNumberInputBlur(el) {
     n === 0
   ) {
     n = kgBarril;
+  }
+  if (field === 'encontrado' && row) {
+    const prev = row.prev_deixado;
+    if (prev !== null && prev !== undefined) {
+      const prevNum = parseFloat(prev);
+      if (Number.isFinite(prevNum) && Math.abs(n - prevNum) >= 0.001) {
+        const nom = String(row.produto_nome || '').trim() || 'Produto';
+        const med = medicaoSigla(row.tipo_medicao || 'unidade');
+        alert(
+          `Encontrado (${fmtNum(n)} ${med}) é diferente de T. anterior (${fmtNum(prevNum)} ${med}).\n\n${nom}`
+        );
+      }
+    }
   }
   el.value = String(Math.round(n * 1000) / 1000);
   el.classList.remove('stock-caixa-required-missing');

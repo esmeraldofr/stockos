@@ -2196,43 +2196,6 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
   res.json({ ...fat.rows[0], linhas: linhasOut.rows });
 });
 
-/** Mesma árvore que `expandIngredientes` em POST /turnos/:id/vendas (receitas até folhas). */
-function expandIngredientesMem(prodId, fator, receitasByProduto) {
-  const rows = receitasByProduto[prodId] || [];
-  if (!rows.length) {
-    return [{ componente_id: prodId, quantidade: fator }];
-  }
-  const out = [];
-  for (const comp of rows) {
-    out.push(
-      ...expandIngredientesMem(
-        comp.componente_id,
-        fator * parseFloat(comp.quantidade),
-        receitasByProduto
-      )
-    );
-  }
-  return out;
-}
-
-/** Quantidade de um componente (ex. kg Batata Pré-frita) imputável às vendas do turno. */
-function totalComponenteFromVendasTurno(vm, componenteId, receitasByProduto) {
-  let total = 0;
-  for (const pidStr of Object.keys(vm)) {
-    const pid = parseInt(pidStr, 10);
-    const qty = parseFloat(vm[pidStr]) || 0;
-    if (!Number.isFinite(pid) || qty <= 0) continue;
-    const leaves = expandIngredientesMem(pid, qty, receitasByProduto);
-    const totais = {};
-    for (const ing of leaves) {
-      const k = ing.componente_id;
-      totais[k] = (totais[k] || 0) + ing.quantidade;
-    }
-    total += totais[componenteId] || 0;
-  }
-  return total;
-}
-
 // ── TURNOS ────────────────────────────────────────────────────
 app.get('/api/dia', auth, async (req, res) => {
   try {
@@ -2308,7 +2271,7 @@ app.get('/api/dia', auth, async (req, res) => {
       return res.json(result);
     }
 
-    const [stockAll, caixaAll, receitasAll, vendasAll, batataProd] = await Promise.all([
+    const [stockAll, caixaAll] = await Promise.all([
       query(
         `SELECT ts.*, p.nome as produto_nome, p.preco, p.categoria, p.ordem, p.tipo_medicao,
                 COALESCE(p.peso_tara_kg, 0)::numeric AS peso_tara_kg
@@ -2318,29 +2281,8 @@ app.get('/api/dia', auth, async (req, res) => {
          ORDER BY ts.turno_id, p.ordem, p.nome`,
         [ids]
       ),
-      query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids]),
-      query(`SELECT produto_id, componente_id, quantidade FROM receitas`),
-      query(`SELECT turno_id, produto_id, quantidade FROM turno_vendas WHERE turno_id = ANY($1::int[])`, [ids]),
-      query(`SELECT id FROM produtos WHERE LOWER(TRIM(nome)) = LOWER(TRIM($1))`, ['Batata Pré-frita'])
+      query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids])
     ]);
-
-    const batataId = batataProd.rows.length ? parseInt(batataProd.rows[0].id, 10) : null;
-    const receitasByProduto = {};
-    for (const row of receitasAll.rows) {
-      const pid = parseInt(row.produto_id, 10);
-      if (!receitasByProduto[pid]) receitasByProduto[pid] = [];
-      receitasByProduto[pid].push({
-        componente_id: parseInt(row.componente_id, 10),
-        quantidade: parseFloat(row.quantidade)
-      });
-    }
-    const vendasByTurno = {};
-    for (const v of vendasAll.rows) {
-      const tid = v.turno_id;
-      if (!vendasByTurno[tid]) vendasByTurno[tid] = {};
-      const pkey = parseInt(v.produto_id, 10);
-      vendasByTurno[tid][pkey] = parseFloat(v.quantidade) || 0;
-    }
 
     const stockByTurno = {};
     for (const row of stockAll.rows) {
@@ -2392,11 +2334,7 @@ app.get('/api/dia', auth, async (req, res) => {
         const enc = parseFloat(s.encontrado);
         const ent = parseFloat(s.entrada);
         const dei = parseFloat(s.deixado);
-        let vend = Math.max(0, enc + ent - dei);
-        if (batataId != null && parseInt(s.produto_id, 10) === batataId) {
-          const vm = vendasByTurno[turno.id] || {};
-          vend = totalComponenteFromVendasTurno(vm, batataId, receitasByProduto);
-        }
+        const vend = Math.max(0, enc + ent - dei);
         const val = vend * parseFloat(s.preco);
 
         let comparacao = null;

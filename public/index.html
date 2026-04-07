@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-irregularidades-unificadas">
+<html lang="pt" data-stockos-ui="2026-04-06-batata-vendido-receitas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1897,6 +1897,7 @@ function refreshVendasTotal() {
   const total = getTotalVendasTurnoKz();
   const elTot = document.getElementById('vendas-total-geral');
   if (elTot) elTot.textContent = fmt(total);
+  refreshBatataVendidoCell();
   renderIrregularidadesTurno();
 }
 
@@ -1990,7 +1991,10 @@ async function loadTurno() {
     function stockRows(items) {
       return items.map(s => {
         const pid = s.produto_id;
-        const vend = Math.max(0, (stockBuf[pid]?.encontrado||0) + (stockBuf[pid]?.entrada||0) - (stockBuf[pid]?.deixado||0));
+        const isBatataPf = prodNomeNorm(s.produto_nome) === 'batata pré-frita';
+        const vend = isBatataPf
+          ? Math.max(0, kgBatataImputavelDasVendas())
+          : Math.max(0, (stockBuf[pid]?.encontrado||0) + (stockBuf[pid]?.entrada||0) - (stockBuf[pid]?.deixado||0));
         const vendTxt = vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}` : '';
         /* Comparação: só falta/sobra visíveis; sem ✓ verde quando enc. = T. anterior (não «mencionar» o normal). */
         let compHtml = '<span class="comp-null">—</span>';
@@ -2161,6 +2165,8 @@ async function loadTurno() {
 }
 
 let vendasBuf = {};
+/** Evita calcular Batata a partir de `vendasBuf` de outro turno antes de `loadVendasMenu`. */
+let lastVendasLoadedForTurnoId = null;
 /** HTML do card «Resumo de vendas» (só na aba Registos; não duplicar em Vendas). */
 let lastResumoVendasCardHtml = '';
 
@@ -2394,6 +2400,7 @@ async function loadVendasMenu(turnoId, canEdit) {
                + (bebidaOutras.length ? groupHeader('🥤 Bebidas (unidade)') + toGrid(bebidaRows) : '')
                + totalRow;
     show('vendas-menu-list', html);
+    lastVendasLoadedForTurnoId = turnoId;
     refreshVendasTotal();
   } catch(e) {
     lastResumoVendasCardHtml = '';
@@ -2469,8 +2476,11 @@ function updateStock(pid, field, value) {
     inp.value = fmtStockNumberAttr(n);
   }
   const { encontrado:enc, entrada:ent, deixado:dei } = stockBuf[pid];
-  const vend = Math.max(0, enc + ent - dei);
-  const prod = S.turnoData?.stock?.find(s => s.produto_id === pid);
+  const prod = S.turnoData?.stock?.find(s => String(s.produto_id) === String(pid));
+  let vend = Math.max(0, enc + ent - dei);
+  if (prod && prodNomeNorm(prod.produto_nome) === 'batata pré-frita') {
+    vend = Math.max(0, kgBatataImputavelDasVendas());
+  }
   const ve = document.getElementById(`vend-${pid}`);
   const tipoM = prod?.tipo_medicao || 'unidade';
   if (ve) ve.textContent = vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(tipoM)}` : '';
@@ -2493,6 +2503,9 @@ function getVendidoRegistadoEmVendas(s) {
     return Math.max(0, parseFloat(vendasBuf[pid]) || 0);
   }
   if (avulsoProdIds.length && avulsoProdIds.includes(idn)) {
+    if (prodNomeNorm(s.produto_nome) === 'batata pré-frita') {
+      return Math.max(0, kgBatataImputavelDasVendas());
+    }
     return calcStandaloneQty(pid);
   }
   const b = getStockLineForProduto(pid);
@@ -2506,6 +2519,85 @@ const KG_FINO_COPO = 0.27;
 function prodNomeNorm(n) {
   return String(n || '').trim().toLowerCase();
 }
+
+/** Igual a `expandIngredientesMem` na API: receitas até folhas (Batata Pré-frita nos combos). */
+function expandIngredientesMemUi(prodId, fator, receitasByProduto) {
+  const rows = receitasByProduto[prodId] || receitasByProduto[String(prodId)] || [];
+  if (!rows.length) {
+    return [{ componente_id: prodId, quantidade: fator }];
+  }
+  const out = [];
+  for (const comp of rows) {
+    out.push(
+      ...expandIngredientesMemUi(
+        comp.componente_id,
+        fator * parseFloat(comp.quantidade),
+        receitasByProduto
+      )
+    );
+  }
+  return out;
+}
+
+function totalComponenteFromVendasUi(vm, componenteId, receitasByProduto) {
+  let total = 0;
+  for (const pidStr of Object.keys(vm)) {
+    const pid = parseInt(pidStr, 10);
+    const qty = parseFloat(vm[pidStr]) || 0;
+    if (!Number.isFinite(pid) || qty <= 0) continue;
+    const leaves = expandIngredientesMemUi(pid, qty, receitasByProduto);
+    const totais = {};
+    for (const ing of leaves) {
+      const k = ing.componente_id;
+      totais[k] = (totais[k] || 0) + ing.quantidade;
+    }
+    total += totais[componenteId] || 0;
+  }
+  return total;
+}
+
+function receitasByProdutoFromBuf() {
+  const o = {};
+  for (const [k, rows] of Object.entries(receitasBuf)) {
+    const pid = parseInt(k, 10);
+    if (!o[pid]) o[pid] = [];
+    for (const r of rows) {
+      o[pid].push({ componente_id: parseInt(r.componente_id, 10), quantidade: parseFloat(r.quantidade) });
+    }
+  }
+  return o;
+}
+
+function vmFromVendasBuf() {
+  const vm = {};
+  for (const [k, v] of Object.entries(vendasBuf)) {
+    vm[parseInt(k, 10)] = parseFloat(v) || 0;
+  }
+  return vm;
+}
+
+/** kg de Batata Pré-frita imputável às vendas (combos + venda avulsa), alinhado com GET /api/dia. */
+function kgBatataImputavelDasVendas() {
+  const batataRow = (S.turnoData?.stock || []).find((s) => prodNomeNorm(s.produto_nome) === 'batata pré-frita');
+  if (!batataRow) return 0;
+  const batataId = parseInt(batataRow.produto_id, 10);
+  if (!Number.isFinite(batataId)) return 0;
+  const tid = S.turnoData?.id;
+  if (!tid || String(lastVendasLoadedForTurnoId) !== String(tid)) {
+    return Math.max(0, parseFloat(batataRow.vendido) || 0);
+  }
+  return totalComponenteFromVendasUi(vmFromVendasBuf(), batataId, receitasByProdutoFromBuf());
+}
+
+function refreshBatataVendidoCell() {
+  const row = (S.turnoData?.stock || []).find((s) => prodNomeNorm(s.produto_nome) === 'batata pré-frita');
+  if (!row) return;
+  const ve = document.getElementById(`vend-${row.produto_id}`);
+  if (!ve) return;
+  const kg = kgBatataImputavelDasVendas();
+  ve.textContent = kg > 0 ? `${fmtNum(kg)} ${medicaoSigla(row.tipo_medicao)}` : '';
+}
+
 function resolveProdutoIdPorNomeFromLists(stockArr, produtosArr, nomeNorm) {
   const row = stockArr.find((s) => prodNomeNorm(s.produto_nome) === nomeNorm);
   if (row) return String(row.produto_id);

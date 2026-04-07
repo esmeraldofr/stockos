@@ -28,6 +28,7 @@ jobs:
           DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
 
       - name: Sincronizar DATABASE_URL (Production) na Vercel
+        if: ${{ secrets.VERCEL_TOKEN != '' && secrets.VERCEL_PROJECT_ID != '' }}
         run: |
           set -euo pipefail
           export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID}"
@@ -42,6 +43,7 @@ jobs:
           DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
 
       - name: Deploy to Vercel
+        if: ${{ secrets.VERCEL_TOKEN != '' && secrets.VERCEL_PROJECT_ID != '' }}
         run: |
           npx vercel@latest --prod --yes --no-clipboard --token "$VERCEL_TOKEN" \
             --build-env NODE_ENV=production \
@@ -54,3 +56,8 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
           GITHUB_REF: refs/heads/main
+
+      - name: Aviso — deploy por CI sem secrets Vercel
+        if: ${{ secrets.VERCEL_TOKEN == '' || secrets.VERCEL_PROJECT_ID == '' }}
+        run: |
+          echo "::notice::Sync/deploy por CLI ignorados (VERCEL_TOKEN ou VERCEL_PROJECT_ID em falta). Configura os secrets no repositório ou mantém só o deploy automático da Vercel (integração Git)."

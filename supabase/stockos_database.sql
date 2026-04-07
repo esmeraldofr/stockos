@@ -239,8 +239,8 @@ END $$;
 --  DADOS INICIAIS — UTILIZADORES
 --  Senhas: definidas pelo admin ou password inicial na criação do utilizador
 -- ============================================================
-INSERT INTO utilizadores (nome, email, senha_hash, role) VALUES
-  ('Admin', 'admin@stockos.ao', '', 'admin')
+INSERT INTO utilizadores (nome, email, senha_hash, role, username) VALUES
+  ('Admin', 'admin@stockos.ao', '', 'admin', 'admin')
   ON CONFLICT (email) DO NOTHING;
 UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = '';
 UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao';

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-batata-irreg-nome-flex">
+<html lang="pt" data-stockos-ui="2026-04-07-batata-irreg-nome-nbsp">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2506,9 +2506,14 @@ const KG_FINO_COPO = 0.27;
 function prodNomeNorm(n) {
   return String(n || '').trim().toLowerCase();
 }
-/** Bloco irregularidades Batata: nome exacto legado ou prefixo `Batata Pré-frita …` (ex.: "… stock"). */
+/** Bloco irregularidades Batata: nome legado ou prefixo `Batata Pré-frita …` (ex.: "… stock"). NBSP → espaço. */
 function isProdutoBatataIrreg(nome) {
-  const bn = prodNomeNorm(nome);
+  let bn = String(nome || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   return bn === 'batata pré-frita' || bn.startsWith('batata pré-frita ');
 }
 function resolveProdutoIdPorNomeFromLists(stockArr, produtosArr, nomeNorm) {

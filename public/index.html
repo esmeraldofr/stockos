@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-07-stock-enc-alert-prev">
+<html lang="pt" data-stockos-ui="2026-04-07-stock-bebida-sort-prev">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2002,7 +2002,15 @@ async function loadTurno() {
     // Folha de stock: só Menu, Ingredientes e Bebidas (API não devolve «outro»)
     const menu    = turno.stock.filter(s => s.categoria === 'menu');
     const comida  = turno.stock.filter(s => s.categoria === 'ingredientes');
-    const bebida  = turno.stock.filter(s => s.categoria === 'bebida');
+    const bebida  = turno.stock
+      .filter((s) => s.categoria === 'bebida')
+      .sort((a, b) => {
+        const pa = a.prev_deixado != null && a.prev_deixado !== '' ? parseFloat(a.prev_deixado) : NaN;
+        const pb = b.prev_deixado != null && b.prev_deixado !== '' ? parseFloat(b.prev_deixado) : NaN;
+        const va = Number.isFinite(pa) ? pa : -Infinity;
+        const vb = Number.isFinite(pb) ? pb : -Infinity;
+        return vb - va;
+      });
 
     function stockRows(items) {
       return items.map((s) => {

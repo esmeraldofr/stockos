@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-06-batata-irreg-unidade">
+<html lang="pt" data-stockos-ui="2026-03-31-batata-irreg-nome-flex">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2506,6 +2506,11 @@ const KG_FINO_COPO = 0.27;
 function prodNomeNorm(n) {
   return String(n || '').trim().toLowerCase();
 }
+/** Bloco irregularidades Batata: nome exacto legado ou prefixo `Batata Pré-frita …` (ex.: "… stock"). */
+function isProdutoBatataIrreg(nome) {
+  const bn = prodNomeNorm(nome);
+  return bn === 'batata pré-frita' || bn.startsWith('batata pré-frita ');
+}
 function resolveProdutoIdPorNomeFromLists(stockArr, produtosArr, nomeNorm) {
   const row = stockArr.find((s) => prodNomeNorm(s.produto_nome) === nomeNorm);
   if (row) return String(row.produto_id);
@@ -2731,7 +2736,7 @@ function buildIrregularidadesHtmlParts({
   }
 
   let batataHtml = '';
-  const batataRow = stock.find((s) => prodNomeNorm(s.produto_nome) === 'batata pré-frita');
+  const batataRow = stock.find((s) => isProdutoBatataIrreg(s.produto_nome));
   if (batataRow && receitasIrreg && Object.keys(receitasIrreg).length) {
     const pidB = String(batataRow.produto_id);
     const b = stockBuf[pidB] || { encontrado: 0, entrada: 0, deixado: 0 };
@@ -2753,7 +2758,7 @@ function buildIrregularidadesHtmlParts({
       const bg = 'rgba(251,146,60,0.1)';
       batataHtml = `
     <div style="margin-top:10px;padding:8px 10px;border-radius:6px;border:1px solid ${border};background:${bg};font-size:12px;color:#cbd5e1;line-height:1.4">
-      <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">Batata Pré-frita (stock vs menus)</div>
+      <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">${escapeHtml(batataRow.produto_nome)} (stock vs menus)</div>
       <div>Stock <span style="color:#94a3b8">(enc.+entr.−deix.)</span> <strong>${fmtNum(qtyStock)}</strong> ${batataUm}</div>
       <div style="margin-top:4px">Σ menus com Batata na receita <span style="color:#64748b">(vendas × qtd. na receita)</span> <strong>${fmtNum(qtyMenus)}</strong> ${batataUm}</div>
       <div style="margin-top:4px"><span style="color:#94a3b8">Δ</span> <strong style="color:#fb923c">${diff >= 0 ? '+' : ''}${fmtNum(diff)}</strong> ${batataUm}</div>

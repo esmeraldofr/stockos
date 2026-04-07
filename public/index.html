@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-06-batata-vendido-fisico">
+<html lang="pt" data-stockos-ui="2026-04-06-irreg-batata-stock-vendas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2565,8 +2565,70 @@ async function refreshIrregularidadesEquipaLine(show) {
   }
 }
 
+/** Tolerância kg ao comparar Batata stock vs soma imputável às vendas (ruído float). */
+const KG_BATATA_IRREG_EPS = 0.02;
+
+/** Expansão recursiva de receitas até folhas (alinhado com POST /turnos/:id/vendas). */
+function expandIngredientesMemIrreg(prodId, fator, receitasByProduto) {
+  const rows = receitasByProduto[prodId] || receitasByProduto[String(prodId)] || [];
+  if (!rows.length) {
+    return [{ componente_id: prodId, quantidade: fator }];
+  }
+  const out = [];
+  for (const comp of rows) {
+    out.push(
+      ...expandIngredientesMemIrreg(
+        comp.componente_id,
+        fator * parseFloat(comp.quantidade),
+        receitasByProduto
+      )
+    );
+  }
+  return out;
+}
+
+/** Soma de kg de um `componente_id` (ex. Batata Pré-frita) a partir de todas as linhas em `vendasBuf`. */
+function totalKgComponenteFromVendasIrreg(vm, componenteId, receitasByProduto) {
+  let total = 0;
+  for (const pidStr of Object.keys(vm)) {
+    const pid = parseInt(pidStr, 10);
+    const qty = parseFloat(vm[pidStr]) || 0;
+    if (!Number.isFinite(pid) || qty <= 0) continue;
+    const leaves = expandIngredientesMemIrreg(pid, qty, receitasByProduto);
+    const totais = {};
+    for (const ing of leaves) {
+      const k = ing.componente_id;
+      totais[k] = (totais[k] || 0) + ing.quantidade;
+    }
+    total += totais[componenteId] || 0;
+  }
+  return total;
+}
+
+function receitasByProdutoFromIrregBuf(buf) {
+  const o = {};
+  if (!buf) return o;
+  for (const [k, rows] of Object.entries(buf)) {
+    const pid = parseInt(k, 10);
+    if (!Number.isFinite(pid)) continue;
+    if (!o[pid]) o[pid] = [];
+    for (const r of rows) {
+      o[pid].push({ componente_id: parseInt(r.componente_id, 10), quantidade: parseFloat(r.quantidade) });
+    }
+  }
+  return o;
+}
+
+function vmFromVendasBufIrreg(vb) {
+  const vm = {};
+  for (const [k, v] of Object.entries(vb || {})) {
+    vm[parseInt(k, 10)] = parseFloat(v) || 0;
+  }
+  return vm;
+}
+
 /**
- * Blocos HTML de irregularidades (caixa, stock vs T. anterior, Fino barril).
+ * Blocos HTML de irregularidades (caixa, stock vs T. anterior, Fino barril, Batata stock vs vendas).
  * Fonte única: cartão no turno (`renderIrregularidadesTurno`) e página Irregularidades (lista).
  * @param {object} p
  * @param {object} p.turno — com `stock` e `caixa` (histórico)
@@ -2575,7 +2637,8 @@ async function refreshIrregularidadesEquipaLine(show) {
  * @param {number} p.totalVendasKz — mesma soma que `getTotalVendasTurnoKz` / resumo vendas
  * @param {number} p.totalGeradoKz — TPA+transf+din (turno: inputs caixa; histórico: `turno.caixa`)
  * @param {Array} [p.produtos] — catálogo para resolver Fino 400/1000 (fallback: stock + `S.produtos`)
- * @returns {{ hasAny: boolean, caixaHtml: string, stockHtml: string, finoHtml: string }}
+ * @param {object} [p.receitasIrreg] — mapa `produto_id` → [{ componente_id, quantidade }] (receitas); sem isto não há check Batata
+ * @returns {{ hasAny: boolean, caixaHtml: string, stockHtml: string, finoHtml: string, batataHtml: string }}
  */
 function buildIrregularidadesHtmlParts({
   turno,
@@ -2583,7 +2646,8 @@ function buildIrregularidadesHtmlParts({
   vendasBuf,
   totalVendasKz,
   totalGeradoKz,
-  produtos
+  produtos,
+  receitasIrreg
 }) {
   const stock = turno?.stock || [];
   const prodArr = produtos && produtos.length ? produtos : (S.produtos || []);
@@ -2682,14 +2746,43 @@ function buildIrregularidadesHtmlParts({
     }
   }
 
-  const hasAny = !!(caixaHtml || stockHtml || finoHtml);
-  return { hasAny, caixaHtml, stockHtml, finoHtml };
+  let batataHtml = '';
+  const batataRow = stock.find((s) => prodNomeNorm(s.produto_nome) === 'batata pré-frita');
+  if (batataRow && receitasIrreg && Object.keys(receitasIrreg).length) {
+    const pidB = String(batataRow.produto_id);
+    const b = stockBuf[pidB] || { encontrado: 0, entrada: 0, deixado: 0 };
+    const enc = parseFloat(b.encontrado);
+    const ent = parseFloat(b.entrada);
+    const dei = parseFloat(b.deixado);
+    const encN = Number.isFinite(enc) ? enc : parseFloat(batataRow.encontrado) || 0;
+    const entN = Number.isFinite(ent) ? ent : parseFloat(batataRow.entrada) || 0;
+    const deiN = Number.isFinite(dei) ? dei : parseFloat(batataRow.deixado) || 0;
+    const kgStock = Math.max(0, encN + entN - deiN);
+    const batataId = parseInt(batataRow.produto_id, 10);
+    const rbp = receitasByProdutoFromIrregBuf(receitasIrreg);
+    const kgVendas = totalKgComponenteFromVendasIrreg(vmFromVendasBufIrreg(vendasBuf), batataId, rbp);
+    const diff = kgStock - kgVendas;
+    if (Math.abs(diff) >= KG_BATATA_IRREG_EPS) {
+      const border = 'rgba(251,146,60,0.45)';
+      const bg = 'rgba(251,146,60,0.1)';
+      batataHtml = `
+    <div style="margin-top:10px;padding:8px 10px;border-radius:6px;border:1px solid ${border};background:${bg};font-size:12px;color:#cbd5e1;line-height:1.4">
+      <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">Batata Pré-frita (stock vs vendas)</div>
+      <div>Stock <span style="color:#94a3b8">(enc.+entr.−deix.)</span> <strong>${fmtNum(kgStock)}</strong> kg</div>
+      <div style="margin-top:4px">Imputável às vendas <span style="color:#64748b">(Batata avulsa + menus com receita)</span> <strong>${fmtNum(kgVendas)}</strong> kg</div>
+      <div style="margin-top:4px"><span style="color:#94a3b8">Δ</span> <strong style="color:#fb923c">${diff >= 0 ? '+' : ''}${fmtNum(diff)}</strong> kg</div>
+    </div>`;
+    }
+  }
+
+  const hasAny = !!(caixaHtml || stockHtml || finoHtml || batataHtml);
+  return { hasAny, caixaHtml, stockHtml, finoHtml, batataHtml };
 }
 
 /**
  * Mesma lógica que o cartão Irregularidades no turno (sem DOM): constrói buffers a partir de
  * `vendasRows` + catálogo e delega em `buildIrregularidadesHtmlParts`.
- * @returns {{ hasAny: boolean, caixaHtml: string, stockHtml: string, finoHtml: string }}
+ * @returns {{ hasAny: boolean, caixaHtml: string, stockHtml: string, finoHtml: string, batataHtml: string }}
  */
 function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas) {
   const stock = turno.stock || [];
@@ -2835,7 +2928,8 @@ function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas) {
     vendasBuf: vendasBufL,
     totalVendasKz: tv,
     totalGeradoKz: tg,
-    produtos
+    produtos,
+    receitasIrreg: receitasBufL
   });
 }
 
@@ -2866,9 +2960,10 @@ function renderIrregularidadesTurno() {
     vendasBuf,
     totalVendasKz: getTotalVendasTurnoKz(),
     totalGeradoKz: getTotalGeradoCaixaKz(),
-    produtos: S.produtos || []
+    produtos: S.produtos || [],
+    receitasIrreg: receitasBuf
   });
-  mount.innerHTML = (snap.caixaHtml + snap.stockHtml + snap.finoHtml).trim();
+  mount.innerHTML = (snap.caixaHtml + snap.stockHtml + snap.finoHtml + snap.batataHtml).trim();
   const showCard = snap.hasAny;
   setIrregCardVisible(showCard);
   void refreshIrregularidadesEquipaLine(showCard);
@@ -3644,7 +3739,7 @@ async function drawIrregularidades() {
     <div id="header">
       <div>
         <div style="font-size:18px;font-weight:700;color:#f1f5f9">Irregularidades</div>
-        <div class="header-sub">Turnos com alertas (caixa, stock, Fino)</div>
+        <div class="header-sub">Turnos com alertas (caixa, stock, Batata, Fino)</div>
       </div>
     </div>
     <div id="content">
@@ -3709,7 +3804,7 @@ async function loadIrregularidadesLista() {
     if (!out.length) {
       show(
         'irreg-content',
-        '<div class="card"><p style="color:#94a3b8;margin:0">Nenhuma irregularidade neste período (caixa alinhado, stock e Fino dentro dos critérios).</p></div>'
+        '<div class="card"><p style="color:#94a3b8;margin:0">Nenhuma irregularidade neste período (caixa alinhado, stock, Batata e Fino dentro dos critérios).</p></div>'
       );
       return;
     }
@@ -3726,7 +3821,7 @@ async function loadIrregularidadesLista() {
           </div>
           <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, async () => { await openTurnoFromIrreg('${dataStr}', '${tid}'); })">Abrir turno</button>
         </div>
-        <div>${snap.caixaHtml}${snap.stockHtml}${snap.finoHtml}</div>
+        <div>${snap.caixaHtml}${snap.stockHtml}${snap.finoHtml}${snap.batataHtml}</div>
       </div>`;
       })
       .join('');

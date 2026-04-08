@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-07-irreg-stock-fino-row">
+<html lang="pt" data-stockos-ui="2026-03-31-turno-areas-trabalho">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -84,6 +84,13 @@ button.is-action-busy{cursor:wait!important}
 .turno-card-value{font-size:20px;font-weight:700;color:#f1f5f9}
 .turno-card-label{font-size:11px;color:#64748b}
 .turno-card-abrir{margin-top:10px}
+
+/* Áreas de trabalho (referência por turno) */
+.turno-areas-card{margin-bottom:16px}
+.turno-areas-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:900px){.turno-areas-grid{grid-template-columns:1fr}}
+.turno-area{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;font-size:12px;line-height:1.45;color:#cbd5e1}
+.turno-area-num{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 6px;border-radius:6px;background:rgba(59,130,246,0.22);color:#93c5fd;font-size:11px;font-weight:700}
 
 /* Tabela de stock */
 .table-wrap{overflow-x:auto;overflow-y:auto;max-height:calc(100vh - 180px);-webkit-overflow-scrolling:touch}
@@ -1917,6 +1924,18 @@ function refreshVendasTotal() {
 }
 
 const TURNO_ORDER = ['manha','tarde','noite'];
+
+/** Referência fixa: três áreas de responsabilidade em cada turno (UI apenas). */
+const TURNO_AREAS_TRABALHO_HTML = `
+<div class="card turno-areas-card" style="padding:12px 14px">
+  <div class="card-title" style="font-size:12px;margin-bottom:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em">Áreas de trabalho</div>
+  <div class="turno-areas-grid">
+    <div class="turno-area"><span class="turno-area-num">1</span><span>Caixa, fino, limpeza do passeio</span></div>
+    <div class="turno-area"><span class="turno-area-num">2</span><span>Hambúrguer, limpeza chão da sala, deixar o lixo</span></div>
+    <div class="turno-area"><span class="turno-area-num">3</span><span>Petisco, limpeza do chão da cozinha, lavar a loiça</span></div>
+  </div>
+</div>`;
+
 async function navTurno(dir) {
   const idx = TURNO_ORDER.indexOf(S.turnoData?.nome);
   let nextIdx = idx + dir;
@@ -2065,6 +2084,7 @@ async function loadTurno() {
           <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
           <button type="button" class="turno-tab" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
       </div>
+      ${TURNO_AREAS_TRABALHO_HTML}
 
       <div id="tab-stock" class="turno-tab-panel active">
         <div class="card" style="padding:0;overflow:hidden">

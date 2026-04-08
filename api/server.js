@@ -503,6 +503,8 @@ async function initDB() {
   await qry(`ALTER TABLE turno_faltas ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, [], 'turno_faltas-userid-text');
   await qry(`ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key`, [], 'escala_template-drop-unique-old');
   await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_template_dia_turno_utilizador_key') THEN ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id); END IF; END $$`, [], 'escala_template-add-unique-new');
+  await qry(`ALTER TABLE escala ADD COLUMN IF NOT EXISTS area_trabalho SMALLINT`, [], 'escala-area-trabalho');
+  await qry(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS area_trabalho SMALLINT`, [], 'escala_template-area-trabalho');
   /** API pode servir /dia, escala; o resto (dedup, seed 37 produtos, meta) continua sem bloquear o middleware. */
   markDbReady();
   // Remover duplicados de produtos (manter o de menor id por nome)
@@ -1401,6 +1403,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   await run(`ALTER TABLE turno_faltas ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`, 'turno_faltas-userid-text');
   await run(`ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key`, 'escala-drop-unique-old');
   await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_data_turno_utilizador_key') THEN ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id); END IF; END $$`, 'escala-add-unique-new');
+  await run(`ALTER TABLE escala ADD COLUMN IF NOT EXISTS area_trabalho SMALLINT`, 'escala-area-trabalho');
   res.json({ results });
 });
 
@@ -3171,6 +3174,7 @@ async function ensureEscala() {
   await query(`ALTER TABLE escala ALTER COLUMN utilizador_id TYPE TEXT USING utilizador_id::text`).catch(()=>{});
   await query(`ALTER TABLE escala DROP CONSTRAINT IF EXISTS escala_data_turno_key`).catch(()=>{});
   await query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_data_turno_utilizador_key') THEN ALTER TABLE escala ADD CONSTRAINT escala_data_turno_utilizador_key UNIQUE (data, turno, utilizador_id); END IF; END $$`).catch(()=>{});
+  await query(`ALTER TABLE escala ADD COLUMN IF NOT EXISTS area_trabalho SMALLINT`).catch(()=>{});
 }
 
 /** Uma ida HTTP: escala da semana + template (página Dia). */
@@ -3186,7 +3190,7 @@ app.get('/api/escala/semana', auth, async (req, res) => {
     }
     const [sem, tpl] = await Promise.all([
       query(
-        `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id,
+        `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id, e.area_trabalho,
                 u.nome as utilizador_nome, u.role as utilizador_role
          FROM escala e
          LEFT JOIN utilizadores u ON e.utilizador_id::text = u.id::text
@@ -3195,7 +3199,7 @@ app.get('/api/escala/semana', auth, async (req, res) => {
         [data_inicio, data_fim]
       ),
       query(`
-        SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, u.nome as utilizador_nome
+        SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, et.notas, et.area_trabalho, u.nome as utilizador_nome
         FROM escala_template et
         LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text
         ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
@@ -3230,7 +3234,7 @@ app.get('/api/escala', auth, async (req, res) => {
     const { data_inicio, data_fim } = req.query;
     if (!data_inicio || !data_fim) return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios' });
     const r = await query(
-      `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id,
+      `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id, e.area_trabalho,
               u.nome as utilizador_nome, u.role as utilizador_role
        FROM escala e
        LEFT JOIN utilizadores u ON e.utilizador_id::text = u.id::text
@@ -3246,17 +3250,26 @@ app.get('/api/escala', auth, async (req, res) => {
   }
 });
 
+function parseAreaTrabalhoBody(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || n < 1 || n > 3) return false;
+  return n;
+}
+
 app.put('/api/escala', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
-    const { data, turno, utilizador_id, notas } = req.body;
+    const { data, turno, utilizador_id, notas, area_trabalho } = req.body;
     if (!data || !turno) return res.status(400).json({ erro: 'Data e turno obrigatórios' });
+    const area = parseAreaTrabalhoBody(area_trabalho);
+    if (area === false) return res.status(400).json({ erro: 'area_trabalho deve ser 1, 2 ou 3' });
     if (utilizador_id) {
       const r = await query(
-        `INSERT INTO escala (data, turno, utilizador_id, notas)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (data, turno, utilizador_id) DO UPDATE SET notas=$4
+        `INSERT INTO escala (data, turno, utilizador_id, notas, area_trabalho)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (data, turno, utilizador_id) DO UPDATE SET notas = EXCLUDED.notas, area_trabalho = EXCLUDED.area_trabalho
          RETURNING *`,
-        [data, turno, utilizador_id, notas || '']
+        [data, turno, utilizador_id, notas || '', area]
       );
       clearEscalaSemanaCache();
       res.json(r.rows[0]);
@@ -3287,12 +3300,13 @@ async function ensureEscalaTemplate() {
   await query(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`).catch(()=>{});
   await query(`ALTER TABLE escala_template DROP CONSTRAINT IF EXISTS escala_template_dia_semana_turno_key`).catch(()=>{});
   await query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_template_dia_turno_utilizador_key') THEN ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id); END IF; END $$`).catch(()=>{});
+  await query(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS area_trabalho SMALLINT`).catch(()=>{});
 }
 
 app.get('/api/escala/template', auth, async (req, res) => {
   try {
     const r = await query(`
-      SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, u.nome as utilizador_nome
+      SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, et.notas, et.area_trabalho, u.nome as utilizador_nome
       FROM escala_template et
       LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text
       ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
@@ -3307,17 +3321,19 @@ app.get('/api/escala/template', auth, async (req, res) => {
 
 app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
-    const { dia_semana, turno, utilizador_id, notas } = req.body;
+    const { dia_semana, turno, utilizador_id, notas, area_trabalho } = req.body;
     if (dia_semana === undefined || !turno) return res.status(400).json({ erro: 'dia_semana e turno são obrigatórios' });
     const u = utilizador_id || null;
     if (!u) return res.status(400).json({ erro: 'Seleciona um funcionário' });
     const n = notas || '';
+    const area = parseAreaTrabalhoBody(area_trabalho);
+    if (area === false) return res.status(400).json({ erro: 'area_trabalho deve ser 1, 2 ou 3' });
     const ins = await query(
-      `INSERT INTO escala_template (dia_semana, turno, utilizador_id, notas)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (dia_semana, turno, utilizador_id) DO UPDATE SET notas=EXCLUDED.notas
+      `INSERT INTO escala_template (dia_semana, turno, utilizador_id, notas, area_trabalho)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (dia_semana, turno, utilizador_id) DO UPDATE SET notas=EXCLUDED.notas, area_trabalho=EXCLUDED.area_trabalho
        RETURNING *`,
-      [dia_semana, turno, u, n]
+      [dia_semana, turno, u, n, area]
     );
     clearEscalaSemanaCache();
     res.json(ins.rows[0] || { sucesso: true });
@@ -3334,6 +3350,20 @@ app.delete('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), asy
     clearEscalaSemanaCache();
     res.json({ sucesso: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.patch('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const { area_trabalho } = req.body;
+    const area = parseAreaTrabalhoBody(area_trabalho);
+    if (area === false) return res.status(400).json({ erro: 'area_trabalho deve ser 1, 2 ou 3' });
+    const r = await query(`UPDATE escala_template SET area_trabalho=$1 WHERE id=$2 RETURNING *`, [area, req.params.id]);
+    clearEscalaSemanaCache();
+    if (!r.rows.length) return res.status(404).json({ erro: 'Registo não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 app.get('/api/equipa/pessoas', auth, async (req, res) => {

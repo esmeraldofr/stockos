@@ -235,6 +235,9 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+ALTER TABLE escala ADD COLUMN IF NOT EXISTS area_trabalho SMALLINT;
+ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS area_trabalho SMALLINT;
+
 -- ============================================================
 --  DADOS INICIAIS — UTILIZADORES
 --  Senhas: definidas pelo admin ou password inicial na criação do utilizador

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-07-irreg-stock-chips">
+<html lang="pt" data-stockos-ui="2026-04-07-irreg-stock-fino-row">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2825,6 +2825,16 @@ function buildIrregularidadesHtmlParts({
       ${missing ? '<div style="margin-top:4px;font-size:11px;color:#fbbf24">Faltam Fino 400/1000 no catálogo/stock.</div>' : ''}
     </div>`;
     }
+  }
+
+  if (stockHtml && finoHtml) {
+    const stockInner = stockHtml.replace('margin-bottom:10px', 'margin-bottom:0');
+    const finoInner = finoHtml.replace('margin-top:10px', 'margin-top:0');
+    stockHtml = `<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;width:100%;margin-bottom:10px">
+      <div style="flex:1 1 260px;min-width:0">${stockInner}</div>
+      <div style="flex:1 1 260px;min-width:0">${finoInner}</div>
+    </div>`;
+    finoHtml = '';
   }
 
   let batataHtml = '';

@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS produto_preco_historico (
   preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0,
   qtd_copos_pacote INTEGER NOT NULL DEFAULT 0
 );
+-- BD já criada sem valid_from_turno: CREATE TABLE IF NOT EXISTS não altera tabelas antigas.
+ALTER TABLE produto_preco_historico ADD COLUMN IF NOT EXISTS valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha';
+ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_produto_id_valid_from_key;
 CREATE UNIQUE INDEX IF NOT EXISTS produto_preco_historico_prod_vig_uidx ON produto_preco_historico (produto_id, valid_from, valid_from_turno);
 CREATE INDEX IF NOT EXISTS idx_produto_preco_hist_lookup ON produto_preco_historico (produto_id, valid_from DESC);
 

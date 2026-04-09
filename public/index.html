@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-armazem-inv-autosave">
+<html lang="pt" data-stockos-ui="2026-03-31-stock-fechados-bloq">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -503,7 +503,7 @@ function clearSessionUiState() {
   } catch (_) {}
 }
 
-/** Destaca a linha de stock em edição (foco num dos inputs Encontrado/Deixado/Fechados). */
+/** Destaca a linha de stock em edição (foco nos inputs Encontrado/Deixado). */
 (function stockRowHighlightInit() {
   function clearStockRowHighlight() {
     document.querySelectorAll('#tab-stock tr.stock-row--active').forEach((r) => r.classList.remove('stock-row--active'));
@@ -2080,9 +2080,7 @@ async function loadTurno() {
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockNumberAttr(s.deixado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="deixado" title="Obrigatório" ${inputAttr}/></td>
-            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockNumberAttr(s.fechados)}"
-              onblur="stockNumberInputBlur(this)"
-              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','fechados',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="fechados" title="Obrigatório" ${inputAttr}/></td>
+            <td class="td-calc stock-fechados-bloq" style="color:#94a3b8" title="Coluna bloqueada — valor mantido no registo">${fmtNum(parseFloat(s.fechados) || 0)}</td>
             <td class="td-calc" id="vend-${pid}">${vendTxt}</td>
           </tr>`;
       }).join('');
@@ -2120,7 +2118,7 @@ async function loadTurno() {
                   <th style="text-align:right">Encontrado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Entrada</th>
                   <th style="text-align:right">Deixado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
-                  <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(obr.)</span></th>
+                  <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(bloqueado)</span></th>
                   <th style="text-align:right">Vendido</th>
                 </tr>
               </thead>
@@ -3248,7 +3246,7 @@ async function fecharTurno(ev, id) {
   if (missing.length) {
     missing.forEach((el) => el.classList.add('stock-caixa-required-missing'));
     turnoMsgErr(
-      'Preenche todos os campos obrigatórios: em Stock (Encontrado, Deixado e Fechados de cada produto) e em Caixa (TPA, Transferência e Dinheiro). Podes usar 0 quando for o caso.'
+      'Preenche todos os campos obrigatórios: em Stock (Encontrado e Deixado de cada produto) e em Caixa (TPA, Transferência e Dinheiro). Podes usar 0 quando for o caso.'
     );
     await focusTurnoFieldParaValidacao(missing[0]);
     return;

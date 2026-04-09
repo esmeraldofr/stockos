@@ -515,7 +515,7 @@ async function initDB() {
   await qry(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='escala_template_dia_turno_utilizador_key') THEN ALTER TABLE escala_template ADD CONSTRAINT escala_template_dia_turno_utilizador_key UNIQUE (dia_semana, turno, utilizador_id); END IF; END $$`, [], 'escala_template-add-unique-new');
   await qry(`ALTER TABLE escala ADD COLUMN IF NOT EXISTS area_trabalho SMALLINT`, [], 'escala-area-trabalho');
   await qry(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS area_trabalho SMALLINT`, [], 'escala_template-area-trabalho');
-  /** /dia e queries de preço exigem produto_preco_historico — tem de existir antes de markDbReady (evita race no cold start). */
+  /** /dia e preços: ensurePrecosVendasSnapshots antes de markDbReady; se a tabela não existir, leituras usam só produtos.preco. */
   await ensureRoleEnumCompras();
   await ensurePrecosVendasSnapshots();
   /** Dedup/seed abaixo podem correr em paralelo com tráfego; schema crítico para /dia já está garantido. */
@@ -557,7 +557,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-18-pph-direct-ddl';
+const STOCKOS_API_BUILD = '2026-04-18-pph-fallback-preco';
 
 /** Folha de stock do turno: só Menu, Ingredientes e Bebidas — categoria «outro» não entra. */
 const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
@@ -571,15 +571,123 @@ function sqlWhereHistLteTurno(turnAlias) {
 }
 
 /**
+ * Após init: se a tabela não existir (migração bloqueada no pooler), leituras usam só produtos.preco.
+ */
+let _sqlUsePrecoHistorico = true;
+
+/**
  * Preço unitário vigente para o turno `t` (histórico por calendário + manhã/tarde/noite); fallback `produtos.preco`.
  * Requer JOIN `turnos t ON t.id = ts.turno_id`.
  */
-const SQL_P_PRECO_NA_DATA =
-  `COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+function sqlPPrecoNaData() {
+  if (!_sqlUsePrecoHistorico) return `p.preco::numeric`;
+  return `COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+}
 
 /** Valor de vendas por linha: snapshot ao fecho ou vendido × preço vigente na data/turno. */
-const SQL_TS_VALOR_VENDA_LINHA =
-  `CASE WHEN ts.valor_vendas_reportado_kz IS NOT NULL THEN ts.valor_vendas_reportado_kz::numeric ELSE GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric) * ${SQL_P_PRECO_NA_DATA} END`;
+function sqlTsValorVendaLinha() {
+  if (!_sqlUsePrecoHistorico) {
+    return `CASE WHEN ts.valor_vendas_reportado_kz IS NOT NULL THEN ts.valor_vendas_reportado_kz::numeric ELSE GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric) * p.preco::numeric END`;
+  }
+  return `CASE WHEN ts.valor_vendas_reportado_kz IS NOT NULL THEN ts.valor_vendas_reportado_kz::numeric ELSE GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric) * ${sqlPPrecoNaData()} END`;
+}
+
+function sqlGteStockVendido() {
+  return `GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric)`;
+}
+
+function sqlBackfillTurnoStockValorKz() {
+  const g = sqlGteStockVendido();
+  if (!_sqlUsePrecoHistorico) return `${g} * p.preco::numeric`;
+  return `${g} * COALESCE((
+          SELECT h.preco FROM produto_preco_historico h
+          WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('t')}
+          ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+        ), p.preco)::numeric`;
+}
+
+function sqlBackfillTurnoVendasSnapshotsSet() {
+  if (!_sqlUsePrecoHistorico) {
+    return `preco_unit_snapshot = p.preco,
+          preco_copos_pacote_snapshot = p.preco_copos_pacote,
+          qtd_copos_pacote_snapshot = p.qtd_copos_pacote`;
+  }
+  return `preco_unit_snapshot = COALESCE((
+            SELECT h.preco FROM produto_preco_historico h
+            WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('t')}
+            ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+          ), p.preco),
+          preco_copos_pacote_snapshot = COALESCE((
+            SELECT h.preco_copos_pacote FROM produto_preco_historico h
+            WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('t')}
+            ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+          ), p.preco_copos_pacote),
+          qtd_copos_pacote_snapshot = COALESCE((
+            SELECT h.qtd_copos_pacote FROM produto_preco_historico h
+            WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('t')}
+            ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+          ), p.qtd_copos_pacote)`;
+}
+
+function sqlFechoTurnoStockValorKz() {
+  const g = sqlGteStockVendido();
+  if (!_sqlUsePrecoHistorico) return `${g} * p.preco::numeric`;
+  return `${g} * COALESCE((
+           SELECT h.preco FROM produto_preco_historico h
+           WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('tu')}
+           ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+         ), p.preco)::numeric`;
+}
+
+function sqlFechoTurnoVendasSnapshotsSet() {
+  if (!_sqlUsePrecoHistorico) {
+    return `preco_unit_snapshot = p.preco,
+           preco_copos_pacote_snapshot = p.preco_copos_pacote,
+           qtd_copos_pacote_snapshot = p.qtd_copos_pacote`;
+  }
+  return `preco_unit_snapshot = COALESCE((
+             SELECT h.preco FROM produto_preco_historico h
+             WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('tu')}
+             ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+           ), p.preco),
+           preco_copos_pacote_snapshot = COALESCE((
+             SELECT h.preco_copos_pacote FROM produto_preco_historico h
+             WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('tu')}
+             ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+           ), p.preco_copos_pacote),
+           qtd_copos_pacote_snapshot = COALESCE((
+             SELECT h.qtd_copos_pacote FROM produto_preco_historico h
+             WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('tu')}
+             ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+           ), p.qtd_copos_pacote)`;
+}
+
+function sqlVendaListaPrecoUnit() {
+  if (!_sqlUsePrecoHistorico) return `COALESCE(tv.preco_unit_snapshot, p.preco)::numeric`;
+  return `COALESCE(tv.preco_unit_snapshot, COALESCE((
+                SELECT h.preco FROM produto_preco_historico h
+                WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')}
+                ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+              ), p.preco))::numeric`;
+}
+
+function sqlVendaListaPrecoCopoPacote() {
+  if (!_sqlUsePrecoHistorico) return `COALESCE(tv.preco_copos_pacote_snapshot, p.preco_copos_pacote)::numeric`;
+  return `COALESCE(tv.preco_copos_pacote_snapshot, COALESCE((
+                SELECT h.preco_copos_pacote FROM produto_preco_historico h
+                WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')}
+                ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+              ), p.preco_copos_pacote))::numeric`;
+}
+
+function sqlVendaListaQtdCoposPacote() {
+  if (!_sqlUsePrecoHistorico) return `COALESCE(tv.qtd_copos_pacote_snapshot, p.qtd_copos_pacote)::integer`;
+  return `COALESCE(tv.qtd_copos_pacote_snapshot, COALESCE((
+                SELECT h.qtd_copos_pacote FROM produto_preco_historico h
+                WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')}
+                ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
+              ), p.qtd_copos_pacote))::integer`;
+}
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -904,6 +1012,7 @@ async function produtoPrecoHistoricoTableExists() {
  * Histórico de preços: vigência por (data, turno). Relatórios usam a data do turno e manhã/tarde/noite.
  */
 async function ensureProdutoPrecoHistorico() {
+  try {
   for (let i = 0; i < PPH_DDL_STATEMENTS.length; i++) {
     await qry(PPH_DDL_STATEMENTS[i], [], 'pph');
   }
@@ -965,6 +1074,16 @@ async function ensureProdutoPrecoHistorico() {
       '[ensureProdutoPrecoHistorico] tabela ainda em falta após DDL directa. Verifica logs acima ou aplica o SQL em supabase/stockos_database.sql.'
     );
   }
+  } finally {
+    try {
+      _sqlUsePrecoHistorico = await produtoPrecoHistoricoTableExists();
+      if (!_sqlUsePrecoHistorico) {
+        console.warn('[StockOS] produto_preco_historico ausente — leituras usam só produtos.preco até a tabela existir.');
+      }
+    } catch (_) {
+      _sqlUsePrecoHistorico = false;
+    }
+  }
 }
 
 /**
@@ -980,16 +1099,7 @@ async function ensurePrecosVendasSnapshots() {
   try {
     await query(`
       UPDATE turno_stock ts
-      SET valor_vendas_reportado_kz = (
-        GREATEST(
-          0::numeric,
-          COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric
-        ) * COALESCE((
-          SELECT h.preco FROM produto_preco_historico h
-          WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('t')}
-          ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-        ), p.preco)::numeric
-      )
+      SET valor_vendas_reportado_kz = (${sqlBackfillTurnoStockValorKz()})
       FROM produtos p, turnos t
       WHERE ts.produto_id = p.id AND ts.turno_id = t.id AND t.estado = 'fechado' AND ts.valor_vendas_reportado_kz IS NULL
     `);
@@ -999,21 +1109,7 @@ async function ensurePrecosVendasSnapshots() {
   try {
     await query(`
       UPDATE turno_vendas tv
-      SET preco_unit_snapshot = COALESCE((
-            SELECT h.preco FROM produto_preco_historico h
-            WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('t')}
-            ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-          ), p.preco),
-          preco_copos_pacote_snapshot = COALESCE((
-            SELECT h.preco_copos_pacote FROM produto_preco_historico h
-            WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('t')}
-            ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-          ), p.preco_copos_pacote),
-          qtd_copos_pacote_snapshot = COALESCE((
-            SELECT h.qtd_copos_pacote FROM produto_preco_historico h
-            WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('t')}
-            ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-          ), p.qtd_copos_pacote)
+      SET ${sqlBackfillTurnoVendasSnapshotsSet()}
       FROM produtos p, turnos t
       WHERE tv.produto_id = p.id AND tv.turno_id = t.id AND t.estado = 'fechado' AND tv.preco_unit_snapshot IS NULL
     `);
@@ -1023,6 +1119,7 @@ async function ensurePrecosVendasSnapshots() {
 }
 
 async function recordProdutoPrecoHistoricoIfChanged(produtoId, oldRow, np, ncp, nq, body) {
+  if (!_sqlUsePrecoHistorico) return;
   const op = parseFloat(oldRow.preco) || 0;
   const ocp = parseFloat(oldRow.preco_copos_pacote) || 0;
   const oq = parseInt(oldRow.qtd_copos_pacote, 10) || 0;
@@ -1779,18 +1876,20 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
       ]
     );
     const row = r.rows[0];
-    try {
-      await query(
-        `INSERT INTO produto_preco_historico (produto_id, valid_from, valid_from_turno, preco, preco_copos_pacote, qtd_copos_pacote)
-         VALUES ($1, DATE '2000-01-01', 'manha', $2, $3, $4)
-         ON CONFLICT (produto_id, valid_from, valid_from_turno) DO UPDATE SET
-           preco = EXCLUDED.preco,
-           preco_copos_pacote = EXCLUDED.preco_copos_pacote,
-           qtd_copos_pacote = EXCLUDED.qtd_copos_pacote`,
-        [row.id, preco || 0, pcp, qcp]
-      );
-    } catch (e) {
-      console.warn('[POST produtos hist]', e.message);
+    if (_sqlUsePrecoHistorico) {
+      try {
+        await query(
+          `INSERT INTO produto_preco_historico (produto_id, valid_from, valid_from_turno, preco, preco_copos_pacote, qtd_copos_pacote)
+           VALUES ($1, DATE '2000-01-01', 'manha', $2, $3, $4)
+           ON CONFLICT (produto_id, valid_from, valid_from_turno) DO UPDATE SET
+             preco = EXCLUDED.preco,
+             preco_copos_pacote = EXCLUDED.preco_copos_pacote,
+             qtd_copos_pacote = EXCLUDED.qtd_copos_pacote`,
+          [row.id, preco || 0, pcp, qcp]
+        );
+      } catch (e) {
+        console.warn('[POST produtos hist]', e.message);
+      }
     }
     res.json(row);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -2595,7 +2694,7 @@ app.get('/api/dia', auth, async (req, res) => {
         query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids]),
         query(
           `SELECT ts.turno_id,
-             COALESCE(SUM(${SQL_TS_VALOR_VENDA_LINHA}), 0)::numeric AS total_vendas
+             COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS total_vendas
            FROM turno_stock ts
            INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
            INNER JOIN turnos t ON t.id = ts.turno_id
@@ -2630,7 +2729,7 @@ app.get('/api/dia', auth, async (req, res) => {
     const [stockAll, caixaAll] = await Promise.all([
       query(
         `SELECT ts.*, p.nome as produto_nome,
-                ${SQL_P_PRECO_NA_DATA} AS preco,
+                ${sqlPPrecoNaData()} AS preco,
                 p.categoria, p.ordem, p.tipo_medicao,
                 COALESCE(p.peso_tara_kg, 0)::numeric AS peso_tara_kg
          FROM turno_stock ts
@@ -2814,37 +2913,14 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
     const turnoId = parseInt(req.params.id, 10);
     await client.query(
       `UPDATE turno_stock ts
-       SET valor_vendas_reportado_kz = (
-         GREATEST(
-           0::numeric,
-           COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric
-         ) * COALESCE((
-           SELECT h.preco FROM produto_preco_historico h
-           WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('tu')}
-           ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-         ), p.preco)::numeric
-       )
+       SET valor_vendas_reportado_kz = (${sqlFechoTurnoStockValorKz()})
        FROM produtos p, turnos tu
        WHERE ts.produto_id = p.id AND ts.turno_id = tu.id AND ts.turno_id = $1`,
       [turnoId]
     );
     await client.query(
       `UPDATE turno_vendas tv
-       SET preco_unit_snapshot = COALESCE((
-             SELECT h.preco FROM produto_preco_historico h
-             WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('tu')}
-             ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-           ), p.preco),
-           preco_copos_pacote_snapshot = COALESCE((
-             SELECT h.preco_copos_pacote FROM produto_preco_historico h
-             WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('tu')}
-             ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-           ), p.preco_copos_pacote),
-           qtd_copos_pacote_snapshot = COALESCE((
-             SELECT h.qtd_copos_pacote FROM produto_preco_historico h
-             WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('tu')}
-             ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-           ), p.qtd_copos_pacote)
+       SET ${sqlFechoTurnoVendasSnapshotsSet()}
        FROM produtos p, turnos tu
        WHERE tv.produto_id = p.id AND tv.turno_id = tu.id AND tv.turno_id = $1`,
       [turnoId]
@@ -3349,7 +3425,7 @@ app.get('/api/historico', auth, async (req, res) => {
        LEFT JOIN turno_caixa tc ON tc.turno_id = t.id
        LEFT JOIN (
          SELECT ts.turno_id,
-           COALESCE(SUM(${SQL_TS_VALOR_VENDA_LINHA}), 0)::numeric AS total_vendas
+           COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS total_vendas
          FROM turno_stock ts
          INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
          INNER JOIN turnos t ON t.id = ts.turno_id
@@ -3421,22 +3497,10 @@ app.get('/api/turnos/:id/vendas', auth, async (req, res) => {
       `SELECT tv.id, tv.turno_id, tv.produto_id, tv.quantidade,
               tv.preco_unit_snapshot, tv.preco_copos_pacote_snapshot, tv.qtd_copos_pacote_snapshot,
               p.nome AS produto_nome,
-              COALESCE(tv.preco_unit_snapshot, COALESCE((
-                SELECT h.preco FROM produto_preco_historico h
-                WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')}
-                ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-              ), p.preco))::numeric AS preco,
+              ${sqlVendaListaPrecoUnit()} AS preco,
               p.venda_por_copo, p.kg_por_copo,
-              COALESCE(tv.preco_copos_pacote_snapshot, COALESCE((
-                SELECT h.preco_copos_pacote FROM produto_preco_historico h
-                WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')}
-                ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-              ), p.preco_copos_pacote))::numeric AS preco_copos_pacote,
-              COALESCE(tv.qtd_copos_pacote_snapshot, COALESCE((
-                SELECT h.qtd_copos_pacote FROM produto_preco_historico h
-                WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')}
-                ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-              ), p.qtd_copos_pacote))::integer AS qtd_copos_pacote
+              ${sqlVendaListaPrecoCopoPacote()} AS preco_copos_pacote,
+              ${sqlVendaListaQtdCoposPacote()} AS qtd_copos_pacote
        FROM turno_vendas tv
        JOIN produtos p ON tv.produto_id=p.id
        JOIN turnos tu ON tu.id = tv.turno_id

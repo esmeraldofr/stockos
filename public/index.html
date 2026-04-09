@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-escala-area-trabalho">
+<html lang="pt" data-stockos-ui="2026-03-31-armazem-inventario-diario">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4087,7 +4087,7 @@ async function drawArmazem() {
       <div id="armazem-panel-inventario" class="armazem-tab-panel">
       <div class="card">
         <div class="card-title">📦 Inventário do Armazém</div>
-        <p style="font-size:12px;color:#64748b;margin:0 0 10px">Stock e custo médio <strong>acumulados</strong> (não filtrados por dia).</p>
+        <p style="font-size:12px;color:#64748b;margin:0 0 10px;line-height:1.45">A coluna <strong>Qtd</strong> é o stock acumulado no armazém. Para o <strong>dia seleccionado</strong> acima, podes registar diariamente o <strong>Encontrado</strong> e o <strong>Deixado</strong> da contagem física (guarda linha a linha).</p>
         <div id="armazem-inventario"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
       </div>
       </div>
@@ -4130,12 +4130,52 @@ function applyFxNumeroSugerido(dataDia, faturas) {
   }
 }
 
+async function saveArmazemInventarioDia(btn) {
+  const tr = btn && btn.closest('tr');
+  if (!tr) return;
+  const raw = tr.getAttribute('data-armazem-prod-id');
+  if (!raw) return;
+  let produto_id;
+  try {
+    produto_id = decodeURIComponent(raw);
+  } catch (_) {
+    return;
+  }
+  const dataIso = normalizeIsoDateStr(S.date || new Date().toISOString().split('T')[0]);
+  const encEl = tr.querySelector('.amz-inp-enc');
+  const deixEl = tr.querySelector('.amz-inp-deix');
+  const encRaw = String(encEl?.value ?? '').trim();
+  const deixRaw = String(deixEl?.value ?? '').trim();
+  const encontrado = encRaw === '' ? 0 : parsePtOrIsoNumberString(encRaw);
+  const deixado = deixRaw === '' ? 0 : parsePtOrIsoNumberString(deixRaw);
+  if (!Number.isFinite(encontrado) || encontrado < 0) {
+    return err('armazem-msg', 'Indica um valor válido em «Encontrado».');
+  }
+  if (!Number.isFinite(deixado) || deixado < 0) {
+    return err('armazem-msg', 'Indica um valor válido em «Deixado».');
+  }
+  const prev = btn.textContent;
+  btn.disabled = true;
+  try {
+    show('armazem-msg', '');
+    await api('PUT', '/armazem/inventario-diario', { data: dataIso, produto_id, encontrado, deixado });
+    btn.textContent = '✓';
+    setTimeout(() => {
+      btn.textContent = prev;
+      btn.disabled = false;
+    }, 1000);
+  } catch (e) {
+    btn.disabled = false;
+    err('armazem-msg', e.message);
+  }
+}
+
 async function loadArmazemData() {
   try {
     const dataDia = S.date || new Date().toISOString().split('T')[0];
     const q = encodeURIComponent(dataDia);
     const [inventario, compras, produtos, faturas, fornecedores] = await Promise.all([
-      api('GET', '/armazem/inventario'),
+      api('GET', '/armazem/inventario?data=' + encodeURIComponent(dataDia)),
       api('GET', '/armazem/compras?limit=50&data=' + q),
       api('GET', '/produtos?todos=1'),
       api('GET', '/armazem/faturas?limit=40&data=' + q),
@@ -4147,12 +4187,30 @@ async function loadArmazemData() {
     if (!inventario.length) {
       show('armazem-inventario', '<div style="color:#64748b">Sem produtos no inventário.</div>');
     } else {
-      show('armazem-inventario', `<div class="table-wrap"><table>
-        <thead><tr><th>Produto</th><th style="text-align:right">Qtd</th></tr></thead>
-        <tbody>${inventario.map(i => `<tr>
-          <td>${i.produto_nome} <span style="color:#64748b;font-size:11px">(${medicaoSigla(i.tipo_medicao)})</span></td>
+      const diaLabel = dateLabelWithWeekday(dataDia);
+      show('armazem-inventario', `<div style="font-size:11px;color:#64748b;margin-bottom:8px">Dia: <strong style="color:#cbd5e1">${diaLabel}</strong></div>
+        <div class="table-wrap"><table style="min-width:520px">
+        <thead><tr>
+          <th>Produto</th>
+          <th style="text-align:right">Qtd</th>
+          <th style="text-align:right">Encontrado</th>
+          <th style="text-align:right">Deixado</th>
+          <th style="text-align:center;width:88px"></th>
+        </tr></thead>
+        <tbody>${inventario.map((i) => {
+        const pid = encodeURIComponent(String(i.produto_id));
+        const enc = i.armazem_encontrado != null && i.armazem_encontrado !== '' ? parseFloat(i.armazem_encontrado) : 0;
+        const deix = i.armazem_deixado != null && i.armazem_deixado !== '' ? parseFloat(i.armazem_deixado) : 0;
+        const encStr = Number.isFinite(enc) ? String(enc) : '0';
+        const deixStr = Number.isFinite(deix) ? String(deix) : '0';
+        return `<tr data-armazem-prod-id="${pid}">
+          <td>${escapeHtml(i.produto_nome)} <span style="color:#64748b;font-size:11px">(${medicaoSigla(i.tipo_medicao)})</span></td>
           <td style="text-align:right">${fmtNum(i.quantidade)} ${medicaoSigla(i.tipo_medicao)}</td>
-        </tr>`).join('')}</tbody></table></div>`);
+          <td style="text-align:right"><input type="number" min="0" step="any" class="amz-inp-enc" style="width:88px;text-align:right;padding:6px 8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0" value="${encStr}"/></td>
+          <td style="text-align:right"><input type="number" min="0" step="any" class="amz-inp-deix" style="width:88px;text-align:right;padding:6px 8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0" value="${deixStr}"/></td>
+          <td style="text-align:center"><button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, (ev) => saveArmazemInventarioDia(ev.currentTarget))">Guardar</button></td>
+        </tr>`;
+      }).join('')}</tbody></table></div>`);
     }
 
     if (!faturas.length) {

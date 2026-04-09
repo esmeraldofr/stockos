@@ -443,6 +443,15 @@ async function initDB() {
   )`, [], 'armazem_compras');
   await qry(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0`, [], 'armazem_compras-caixas');
   await qry(`ALTER TABLE armazem_compras ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0`, [], 'armazem_compras-qtd-caixa');
+  await qry(`CREATE TABLE IF NOT EXISTS armazem_inventario_diario (
+    id SERIAL PRIMARY KEY,
+    data DATE NOT NULL,
+    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    encontrado NUMERIC(12,3) NOT NULL DEFAULT 0,
+    deixado NUMERIC(12,3) NOT NULL DEFAULT 0,
+    atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(data, produto_id)
+  )`, [], 'armazem_inventario_diario');
   await qry(`CREATE TABLE IF NOT EXISTS armazem_faturas (
     id SERIAL PRIMARY KEY,
     numero_fatura TEXT NOT NULL DEFAULT '',
@@ -1764,6 +1773,14 @@ async function ensureArmazemTables() {
   if (comprasType.rows.length && comprasType.rows[0].data_type !== pidType) {
     await query(`DROP TABLE IF EXISTS armazem_compras CASCADE`);
   }
+  const invDiaType = await query(
+    `SELECT data_type
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='armazem_inventario_diario' AND column_name='produto_id'`
+  ).catch(() => ({ rows: [] }));
+  if (invDiaType.rows.length && invDiaType.rows[0].data_type !== pidType) {
+    await query(`DROP TABLE IF EXISTS armazem_inventario_diario CASCADE`);
+  }
 
   await query(`CREATE TABLE IF NOT EXISTS armazem_faturas (
     id SERIAL PRIMARY KEY,
@@ -1818,6 +1835,15 @@ async function ensureArmazemTables() {
       FOREIGN KEY (turno_saida_id) REFERENCES turno_saidas(id) ON DELETE SET NULL;
     END IF;
   END $$`).catch(() => {});
+  await query(`CREATE TABLE IF NOT EXISTS armazem_inventario_diario (
+    id SERIAL PRIMARY KEY,
+    data DATE NOT NULL,
+    produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    encontrado NUMERIC(12,3) NOT NULL DEFAULT 0,
+    deixado NUMERIC(12,3) NOT NULL DEFAULT 0,
+    atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(data, produto_id)
+  )`).catch(() => {});
   await ensureFornecedores();
 }
 
@@ -1888,6 +1914,26 @@ app.delete('/api/armazem/libertacoes/:id', auth, requireRole('admin','gestor','c
 app.get('/api/armazem/inventario', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
+    const dataDia = (req.query.data || '').trim();
+    const hasData = /^\d{4}-\d{2}-\d{2}$/.test(dataDia);
+    if (hasData) {
+      const r = await query(
+        `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
+                COALESCE(a.quantidade, 0) as quantidade,
+                COALESCE(a.custo_medio, 0) as custo_medio,
+                a.atualizado_em,
+                COALESCE(d.encontrado, 0) as armazem_encontrado,
+                COALESCE(d.deixado, 0) as armazem_deixado,
+                d.atualizado_em as armazem_diario_atualizado_em
+         FROM produtos p
+         LEFT JOIN armazem_stock a ON a.produto_id = p.id
+         LEFT JOIN armazem_inventario_diario d ON d.produto_id = p.id AND d.data = $1::date
+         WHERE p.ativo=true
+         ORDER BY p.ordem, p.nome`,
+        [dataDia]
+      );
+      return res.json(r.rows);
+    }
     const r = await query(
       `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
               COALESCE(a.quantidade, 0) as quantidade,
@@ -1900,6 +1946,33 @@ app.get('/api/armazem/inventario', auth, requireRole('admin','gestor','compras')
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/armazem/inventario-diario', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemTables();
+    const { data, produto_id, encontrado, deixado } = req.body || {};
+    const d = String(data || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ erro: 'Indica a data (YYYY-MM-DD).' });
+    if (produto_id == null || produto_id === '') return res.status(400).json({ erro: 'produto_id é obrigatório.' });
+    const enc = parseFloat(encontrado);
+    const deix = parseFloat(deixado);
+    if (!Number.isFinite(enc) || enc < 0) return res.status(400).json({ erro: '«Encontrado» inválido.' });
+    if (!Number.isFinite(deix) || deix < 0) return res.status(400).json({ erro: '«Deixado» inválido.' });
+    const r = await query(
+      `INSERT INTO armazem_inventario_diario (data, produto_id, encontrado, deixado)
+       VALUES ($1::date, $2, $3, $4)
+       ON CONFLICT (data, produto_id) DO UPDATE SET
+         encontrado = EXCLUDED.encontrado,
+         deixado = EXCLUDED.deixado,
+         atualizado_em = NOW()
+       RETURNING *`,
+      [d, produto_id, enc, deix]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(400).json({ erro: e.message });
+  }
 });
 
 app.get('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), async (req, res) => {

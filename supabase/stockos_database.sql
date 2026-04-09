@@ -106,6 +106,16 @@ CREATE TABLE IF NOT EXISTS armazem_compras (
   criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS armazem_inventario_diario (
+  id            SERIAL          PRIMARY KEY,
+  data          DATE            NOT NULL,
+  produto_id    INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  encontrado    NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  deixado       NUMERIC(12,3)   NOT NULL DEFAULT 0,
+  atualizado_em TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+  UNIQUE(data, produto_id)
+);
+
 -- ============================================================
 --  MIGRATIONS — add missing columns to existing tables
 -- ============================================================

@@ -551,12 +551,13 @@ initDB()
     return ensureStockosPerfIndexes();
   })
   .catch((e) => {
+    console.error('[initDB] fatal', e && e.message, e && e.stack);
     if (!loginReadyResolved) rejectLoginReady(e);
     if (!dbReadyResolved) rejectDbReady(e);
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-09-pph-init-order';
+const STOCKOS_API_BUILD = '2026-04-18-pph-qry-ddl';
 
 /** Folha de stock do turno: só Menu, Ingredientes e Bebidas — categoria «outro» não entra. */
 const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
@@ -846,8 +847,8 @@ async function ensureRoleEnumCompras() {
  * Histórico de preços: vigência por (data, turno). Relatórios usam a data do turno e manhã/tarde/noite.
  */
 async function ensureProdutoPrecoHistorico() {
-  /** Usar query (não qry): falhas de DDL não podem ficar silenciosas — senão /dia rebenta com «relation does not exist». */
-  await query(
+  /** DDL com qry(): em alguns hosts (PgBouncer transacção) query() falha e rebenta initDB → «DB não disponível». */
+  await qry(
     `CREATE TABLE IF NOT EXISTS produto_preco_historico (
       id SERIAL PRIMARY KEY,
       produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
@@ -856,20 +857,34 @@ async function ensureProdutoPrecoHistorico() {
       preco NUMERIC(15,2) NOT NULL DEFAULT 0,
       preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0,
       qtd_copos_pacote INTEGER NOT NULL DEFAULT 0
-    )`
+    )`,
+    [],
+    'produto_preco_hist'
   );
-  await query(
-    `ALTER TABLE produto_preco_historico ADD COLUMN IF NOT EXISTS valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha'`
+  await qry(
+    `ALTER TABLE produto_preco_historico ADD COLUMN IF NOT EXISTS valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha'`,
+    [],
+    'pph-turno-col'
   );
-  await query(
-    `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_produto_id_valid_from_key`
+  await qry(
+    `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_produto_id_valid_from_key`,
+    [],
+    'pph-drop-u-old'
   );
-  await query(`ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_prod_vig_key`);
-  await query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS produto_preco_historico_prod_vig_uidx ON produto_preco_historico (produto_id, valid_from, valid_from_turno)`
+  await qry(
+    `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_prod_vig_key`,
+    [],
+    'pph-drop-u-new'
   );
-  await query(
-    `CREATE INDEX IF NOT EXISTS idx_produto_preco_hist_lookup ON produto_preco_historico (produto_id, valid_from DESC)`
+  await qry(
+    `CREATE UNIQUE INDEX IF NOT EXISTS produto_preco_historico_prod_vig_uidx ON produto_preco_historico (produto_id, valid_from, valid_from_turno)`,
+    [],
+    'pph-uidx'
+  );
+  await qry(
+    `CREATE INDEX IF NOT EXISTS idx_produto_preco_hist_lookup ON produto_preco_historico (produto_id, valid_from DESC)`,
+    [],
+    'idx-preco-hist'
   );
   try {
     await query(`

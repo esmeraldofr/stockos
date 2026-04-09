@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-precos-snapshot-vendas">
+<html lang="pt" data-stockos-ui="2026-03-31-fix-session-parse">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -406,9 +406,25 @@ input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-
 
 <script>
 // ── STATE ─────────────────────────────────────────────────────
+function _lsGet(k) {
+  try {
+    return localStorage.getItem(k);
+  } catch (_) {
+    return null;
+  }
+}
+function _parseUserLs() {
+  try {
+    const raw = _lsGet('user');
+    if (!raw || raw === 'null') return null;
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
 const S = {
-  token: localStorage.getItem('token') || null,
-  user: JSON.parse(localStorage.getItem('user') || 'null'),
+  token: _lsGet('token') || null,
+  user: _parseUserLs(),
   page: 'dia',
   date: new Date().toISOString().split('T')[0],
   turnoId: null,

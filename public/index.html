@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-armazem-inventario-diario">
+<html lang="pt" data-stockos-ui="2026-03-31-armazem-inv-autosave">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4087,7 +4087,7 @@ async function drawArmazem() {
       <div id="armazem-panel-inventario" class="armazem-tab-panel">
       <div class="card">
         <div class="card-title">📦 Inventário do Armazém</div>
-        <p style="font-size:12px;color:#64748b;margin:0 0 10px;line-height:1.45">A coluna <strong>Qtd</strong> é o stock acumulado no armazém. Para o <strong>dia seleccionado</strong> acima, podes registar diariamente o <strong>Encontrado</strong> e o <strong>Deixado</strong> da contagem física (guarda linha a linha).</p>
+        <p style="font-size:12px;color:#64748b;margin:0 0 10px;line-height:1.45">A coluna <strong>Qtd</strong> é o stock acumulado no armazém. Para o <strong>dia seleccionado</strong>, preenche <strong>Encontrado</strong> e <strong>Deixado</strong>; a gravação é <strong>automática</strong> (pouco depois de editares ou ao sair do campo).</p>
         <div id="armazem-inventario"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
       </div>
       </div>
@@ -4130,8 +4130,57 @@ function applyFxNumeroSugerido(dataDia, faturas) {
   }
 }
 
-async function saveArmazemInventarioDia(btn) {
-  const tr = btn && btn.closest('tr');
+const armazemInvSaveTimers = Object.create(null);
+
+function armazemInvInputDelegated(e) {
+  const t = e.target;
+  if (!t || (!t.classList.contains('amz-inp-enc') && !t.classList.contains('amz-inp-deix'))) return;
+  scheduleArmazemInventarioSave(t.closest('tr'));
+}
+
+function armazemInvBlurDelegated(e) {
+  const t = e.target;
+  if (!t || (!t.classList.contains('amz-inp-enc') && !t.classList.contains('amz-inp-deix'))) return;
+  flushArmazemInventarioSave(t.closest('tr'));
+}
+
+function scheduleArmazemInventarioSave(tr) {
+  if (!tr) return;
+  const raw = tr.getAttribute('data-armazem-prod-id');
+  if (!raw) return;
+  clearTimeout(armazemInvSaveTimers[raw]);
+  const statusEl = tr.querySelector('.amz-save-status');
+  if (statusEl) {
+    statusEl.textContent = '…';
+    statusEl.style.color = '#94a3b8';
+  }
+  armazemInvSaveTimers[raw] = setTimeout(() => {
+    delete armazemInvSaveTimers[raw];
+    saveArmazemInventarioDiaFromRow(tr);
+  }, 550);
+}
+
+function flushArmazemInventarioSave(tr) {
+  if (!tr) return;
+  const raw = tr.getAttribute('data-armazem-prod-id');
+  if (!raw) return;
+  if (armazemInvSaveTimers[raw]) {
+    clearTimeout(armazemInvSaveTimers[raw]);
+    delete armazemInvSaveTimers[raw];
+  }
+  saveArmazemInventarioDiaFromRow(tr);
+}
+
+function wireArmazemInventarioAutoSaveOnce() {
+  if (S._armazemInvAutoSaveWired) return;
+  const invRoot = document.getElementById('armazem-inventario');
+  if (!invRoot) return;
+  S._armazemInvAutoSaveWired = true;
+  invRoot.addEventListener('input', armazemInvInputDelegated);
+  invRoot.addEventListener('blur', armazemInvBlurDelegated, true);
+}
+
+async function saveArmazemInventarioDiaFromRow(tr) {
   if (!tr) return;
   const raw = tr.getAttribute('data-armazem-prod-id');
   if (!raw) return;
@@ -4154,24 +4203,32 @@ async function saveArmazemInventarioDia(btn) {
   if (!Number.isFinite(deixado) || deixado < 0) {
     return err('armazem-msg', 'Indica um valor válido em «Deixado».');
   }
-  const prev = btn.textContent;
-  btn.disabled = true;
+  const statusEl = tr.querySelector('.amz-save-status');
   try {
     show('armazem-msg', '');
     await api('PUT', '/armazem/inventario-diario', { data: dataIso, produto_id, encontrado, deixado });
-    btn.textContent = '✓';
-    setTimeout(() => {
-      btn.textContent = prev;
-      btn.disabled = false;
-    }, 1000);
+    if (statusEl) {
+      statusEl.textContent = '✓';
+      statusEl.style.color = '#4ade80';
+      setTimeout(() => {
+        if (statusEl && statusEl.textContent === '✓') statusEl.textContent = '';
+      }, 1600);
+    }
   } catch (e) {
-    btn.disabled = false;
+    if (statusEl) {
+      statusEl.textContent = '!';
+      statusEl.style.color = '#f87171';
+    }
     err('armazem-msg', e.message);
   }
 }
 
 async function loadArmazemData() {
   try {
+    for (const k of Object.keys(armazemInvSaveTimers)) {
+      clearTimeout(armazemInvSaveTimers[k]);
+      delete armazemInvSaveTimers[k];
+    }
     const dataDia = S.date || new Date().toISOString().split('T')[0];
     const q = encodeURIComponent(dataDia);
     const [inventario, compras, produtos, faturas, fornecedores] = await Promise.all([
@@ -4195,7 +4252,7 @@ async function loadArmazemData() {
           <th style="text-align:right">Qtd</th>
           <th style="text-align:right">Encontrado</th>
           <th style="text-align:right">Deixado</th>
-          <th style="text-align:center;width:88px"></th>
+          <th style="width:28px" title="Gravação automática"></th>
         </tr></thead>
         <tbody>${inventario.map((i) => {
         const pid = encodeURIComponent(String(i.produto_id));
@@ -4208,9 +4265,10 @@ async function loadArmazemData() {
           <td style="text-align:right">${fmtNum(i.quantidade)} ${medicaoSigla(i.tipo_medicao)}</td>
           <td style="text-align:right"><input type="number" min="0" step="any" class="amz-inp-enc" style="width:88px;text-align:right;padding:6px 8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0" value="${encStr}"/></td>
           <td style="text-align:right"><input type="number" min="0" step="any" class="amz-inp-deix" style="width:88px;text-align:right;padding:6px 8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0" value="${deixStr}"/></td>
-          <td style="text-align:center"><button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, (ev) => saveArmazemInventarioDia(ev.currentTarget))">Guardar</button></td>
+          <td class="amz-save-status" style="font-size:12px;text-align:center;vertical-align:middle;color:#64748b" aria-live="polite"></td>
         </tr>`;
       }).join('')}</tbody></table></div>`);
+      wireArmazemInventarioAutoSaveOnce();
     }
 
     if (!faturas.length) {

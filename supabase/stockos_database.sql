@@ -30,6 +30,21 @@ CREATE TABLE IF NOT EXISTS produtos (
 );
 
 -- ============================================================
+--  PRODUTO_PRECO_HISTORICO — vigência por (data, turno). Relatórios: última linha ≤ (data turno, nome turno).
+-- ============================================================
+CREATE TABLE IF NOT EXISTS produto_preco_historico (
+  id SERIAL PRIMARY KEY,
+  produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  valid_from DATE NOT NULL,
+  valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha' CHECK (valid_from_turno IN ('manha','tarde','noite')),
+  preco NUMERIC(15,2) NOT NULL DEFAULT 0,
+  preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0,
+  qtd_copos_pacote INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS produto_preco_historico_prod_vig_uidx ON produto_preco_historico (produto_id, valid_from, valid_from_turno);
+CREATE INDEX IF NOT EXISTS idx_produto_preco_hist_lookup ON produto_preco_historico (produto_id, valid_from DESC);
+
+-- ============================================================
 --  TURNOS (um por turno por dia)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS turnos (
@@ -56,6 +71,9 @@ CREATE TABLE IF NOT EXISTS turno_stock (
   deixado     NUMERIC(10,3)   NOT NULL DEFAULT 0,
   UNIQUE(turno_id, produto_id)
 );
+ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS fechados NUMERIC(10,3) NOT NULL DEFAULT 0;
+-- Valor de vendas (stock×preço) congelado ao fechar o turno; NULL = usar preço actual do produto (turno aberto ou legado).
+ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS valor_vendas_reportado_kz NUMERIC(15,2);
 
 -- ============================================================
 --  TURNO_CAIXA (caixa por turno)
@@ -413,3 +431,6 @@ CREATE TABLE IF NOT EXISTS turno_vendas (
   quantidade  NUMERIC(10,3)   NOT NULL DEFAULT 0,
   UNIQUE(turno_id, produto_id)
 );
+ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2);
+ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2);
+ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTEGER;

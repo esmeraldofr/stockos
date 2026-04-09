@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-stock-fechados-bloq">
+<html lang="pt" data-stockos-ui="2026-03-31-precos-snapshot-vendas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1848,7 +1848,8 @@ function forEachBebidaUnidadeVendidaLinha(cb) {
     const nome = s.produto_nome || vendasProdNomes[pid] || 'Bebida';
     let unit = parseFloat(s.preco) || 0;
     if (!unit) unit = parseFloat(vendasProdPrecos[pid]) || parseFloat(vendasProdPrecos[s.produto_id]) || 0;
-    const sub = vend * unit;
+    const valSnap = s.valor != null && s.valor !== '' ? parseFloat(s.valor) : NaN;
+    const sub = !Number.isNaN(valSnap) ? valSnap : vend * unit;
     cb({ pid, s, vend, nome, unit, sub });
   }
 }
@@ -2274,16 +2275,24 @@ async function loadVendasMenu(turnoId, canEdit) {
     [...menuProds, ...avulsoProds, ...bebidaProds].forEach(p => {
       vendasProdPrecos[p.id] = parseFloat(p.preco) || 0;
     });
+    vendas.forEach((v) => {
+      const pid = prodIdKey(v.produto_id);
+      if (!pid || v.preco == null || v.preco === '') return;
+      const u = parseFloat(v.preco) || 0;
+      vendasProdPrecos[pid] = u;
+      vendasProdPrecos[v.produto_id] = u;
+    });
 
     menuProdIds = menuProds.map(p => p.id);
     const menuRows = menuProds.map(p => {
       const qty = vendasBuf[prodIdKey(p.id)] || 0;
+      const precoEf = vendasProdPrecos[prodIdKey(p.id)] ?? parseFloat(p.preco) || 0;
       const qtyCtrl = canEdit
         ? `<input type="number" min="0" step="1" inputmode="numeric" autocomplete="off" class="venda-qty-input" id="venda-qty-${p.id}" data-venda-pid="${p.id}" data-venda-turno="${turnoId}" value="${qty}" onblur="vendaQtyInputBlur(this)"/>`
         : `<span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${qty}</span>`;
       return `<div class="produto-row">
         <div class="produto-info"><div class="produto-nome">${p.nome}</div>
-          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)}</div>` : ''}
+          ${precoEf > 0 ? `<div class="produto-meta">${fmt(precoEf)}</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">${qtyCtrl}</div>
       </div>`;
@@ -2305,7 +2314,7 @@ async function loadVendasMenu(turnoId, canEdit) {
         precoPacote: parseFloat(p.preco_copos_pacote) || 0
       };
     });
-    /** Vendas por copo em produtos inactivos ou fora do GET /produtos — alinhar totais e inputs. */
+    /** Copos: preços efectivos da API (snapshot em turno fechado) para totais e linha. */
     for (const v of vendas) {
       const isCopo = !!v.venda_por_copo && parseFloat(v.kg_por_copo) > 0;
       if (!isCopo) continue;
@@ -2316,11 +2325,14 @@ async function loadVendasMenu(turnoId, canEdit) {
         bebidaCopoCfg[pid] = {
           nome: nomeVendaBebidaLegivel(pid, v.produto_nome),
           kgPorCopo: parseFloat(v.kg_por_copo) || 0,
-          preco: parseFloat(v.preco) || 0,
-          qtdPacote: parseInt(v.qtd_copos_pacote, 10) || 0,
-          precoPacote: parseFloat(v.preco_copos_pacote) || 0
+          preco: 0,
+          qtdPacote: 0,
+          precoPacote: 0
         };
       }
+      bebidaCopoCfg[pid].preco = parseFloat(v.preco) || 0;
+      bebidaCopoCfg[pid].qtdPacote = parseInt(v.qtd_copos_pacote, 10) || 0;
+      bebidaCopoCfg[pid].precoPacote = parseFloat(v.preco_copos_pacote) || 0;
       if (!bebidaCopoProdIds.includes(pid)) bebidaCopoProdIds.push(pid);
     }
     bebidaProdIds = bebidaOutras.map((p) => p.id);
@@ -2955,6 +2967,13 @@ function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas) {
   [...menuProds, ...avulsoProds, ...bebidaProds].forEach((p) => {
     vendasProdPrecosL[p.id] = parseFloat(p.preco) || 0;
   });
+  (vendasRows || []).forEach((v) => {
+    const pid = prodIdKey(v.produto_id);
+    if (!pid || v.preco == null || v.preco === '') return;
+    const u = parseFloat(v.preco) || 0;
+    vendasProdPrecosL[pid] = u;
+    vendasProdPrecosL[v.produto_id] = u;
+  });
   const bebidaCopoProds = bebidaProds.filter((p) => p.venda_por_copo && parseFloat(p.kg_por_copo) > 0);
   const bebidaOutras = bebidaProds.filter((p) => !p.venda_por_copo || !(parseFloat(p.kg_por_copo) > 0));
   const bebidaCopoProdIdsL = bebidaCopoProds.map((p) => prodIdKey(p.id)).filter(Boolean);
@@ -2981,11 +3000,14 @@ function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas) {
       bebidaCopoCfgL[pid] = {
         nome: nomeVendaBebidaLegivel(pid, v.produto_nome),
         kgPorCopo: parseFloat(v.kg_por_copo) || 0,
-        preco: parseFloat(v.preco) || 0,
-        qtdPacote: parseInt(v.qtd_copos_pacote, 10) || 0,
-        precoPacote: parseFloat(v.preco_copos_pacote) || 0
+        preco: 0,
+        qtdPacote: 0,
+        precoPacote: 0
       };
     }
+    bebidaCopoCfgL[pid].preco = parseFloat(v.preco) || 0;
+    bebidaCopoCfgL[pid].qtdPacote = parseInt(v.qtd_copos_pacote, 10) || 0;
+    bebidaCopoCfgL[pid].precoPacote = parseFloat(v.preco_copos_pacote) || 0;
     if (!bebidaCopoProdIdsL.includes(pid)) bebidaCopoProdIdsL.push(pid);
   }
   const bebidaCopoProdIdSet = new Set(bebidaCopoProdIdsL);
@@ -3052,9 +3074,14 @@ function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas) {
       let vend = Math.max(0, b.encontrado + b.entrada - b.deixado);
       if (vend <= 0 && parseFloat(s.vendido) > 0) vend = Math.max(0, parseFloat(s.vendido));
       if (vend <= 0) continue;
-      let unit = parseFloat(s.preco) || 0;
-      if (!unit) unit = parseFloat(vendasProdPrecosL[s.produto_id]) || parseFloat(vendasProdPrecosL[pid]) || 0;
-      total += vend * unit;
+      const valSnap = s.valor != null && s.valor !== '' ? parseFloat(s.valor) : NaN;
+      if (!Number.isNaN(valSnap)) {
+        total += valSnap;
+      } else {
+        let unit = parseFloat(s.preco) || 0;
+        if (!unit) unit = parseFloat(vendasProdPrecosL[s.produto_id]) || parseFloat(vendasProdPrecosL[pid]) || 0;
+        total += vend * unit;
+      }
     }
     return total;
   }

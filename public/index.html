@@ -1813,6 +1813,16 @@ async function drawTurno() {
 
 // Stock buffer for edits
 let stockBuf = {};
+/** Evita aplicar resposta GET /dia antiga após mudar de turno rapidamente. */
+let loadTurnoSeq = 0;
+let autoSaveTimer = null;
+let autoSaveCaixaTimer = null;
+function clearTurnoAutosaveTimers() {
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = null;
+  clearTimeout(autoSaveCaixaTimer);
+  autoSaveCaixaTimer = null;
+}
 let caixaBuf = {};
 let receitasBuf = {}; // { produto_id: [{componente_id, quantidade}] }
 let menuProdIds   = []; // ids dos produtos de menu (inserção manual)
@@ -2004,9 +2014,14 @@ async function navTurno(dir) {
 }
 
 async function loadTurno() {
+  clearTurnoAutosaveTimers();
+  const mySeq = ++loadTurnoSeq;
+  const myTurnoId = S.turnoId;
+  const myDate = S.date;
   try {
-    const turnos = await api('GET', `/dia?data=${S.date}&turno_id=${encodeURIComponent(S.turnoId)}`);
-    const turno = turnos.find(t => String(t.id) === String(S.turnoId));
+    const turnos = await api('GET', `/dia?data=${myDate}&turno_id=${encodeURIComponent(myTurnoId)}`);
+    if (mySeq !== loadTurnoSeq) return;
+    const turno = turnos.find(t => String(t.id) === String(myTurnoId));
     if (!turno) { show('turno-content','<div class="alert alert-error">Turno não encontrado</div>'); return; }
 
     S.turnoData = turno;
@@ -3151,7 +3166,6 @@ function renderIrregularidadesTurno() {
   void refreshIrregularidadesEquipaLine(showCard);
 }
 
-let autoSaveTimer = null;
 function autoSaveSchedule() {
   const turnoId = S.turnoData?.id;
   if (!turnoId) return;
@@ -3162,6 +3176,7 @@ function autoSaveSchedule() {
 
 async function guardarStock(turnoId) {
   try {
+    if (String(turnoId) !== String(S.turnoData?.id)) return;
     turnoMsgPending('A guardar…');
     const proms = Object.entries(stockBuf).map(([pid, v]) =>
       api('PUT', `/turnos/${turnoId}/stock`, {
@@ -3177,7 +3192,6 @@ async function guardarStock(turnoId) {
   } catch(e) { turnoMsgErr(e.message); }
 }
 
-let autoSaveCaixaTimer = null;
 function calcCaixa() {
   const tpa   = parseFloat(document.getElementById('c-tpa')?.value)||0;
   const transf= parseFloat(document.getElementById('c-transf')?.value)||0;
@@ -3261,6 +3275,7 @@ async function focusTurnoFieldParaValidacao(el) {
 
 async function guardarCaixa(turnoId) {
   try {
+    if (String(turnoId) !== String(S.turnoData?.id)) return;
     turnoMsgPending('A guardar…');
     await api('PUT', `/turnos/${turnoId}/caixa`, {
       tpa:          parseFloat(document.getElementById('c-tpa')?.value)||0,

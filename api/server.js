@@ -2421,18 +2421,10 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
       `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`
     );
     for (const p of produtos.rows) {
-      // Pré-preencher "encontrado" com o "deixado" do turno anterior
-      const prev = prevTurno(nome, data);
-      const prevRow = await client.query(
-        `SELECT ts.deixado FROM turno_stock ts
-         JOIN turnos t ON ts.turno_id=t.id
-         WHERE t.data=$1 AND t.nome=$2 AND ts.produto_id=$3`,
-        [prev.data, prev.nome, p.id]
-      );
-      const encontrado = prevRow.rows.length ? prevRow.rows[0].deixado : 0;
+      // «Encontrado» começa em 0; a referência ao turno anterior é só a coluna T. Anterior (prev_deixado no GET /dia).
       await client.query(
-        'INSERT INTO turno_stock (turno_id, produto_id, encontrado) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
-        [turnoId, p.id, encontrado]
+        'INSERT INTO turno_stock (turno_id, produto_id, encontrado) VALUES ($1,$2,0) ON CONFLICT DO NOTHING',
+        [turnoId, p.id]
       );
     }
 

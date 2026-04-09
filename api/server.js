@@ -557,7 +557,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-18-pph-qry-ddl';
+const STOCKOS_API_BUILD = '2026-04-18-pph-direct-ddl';
 
 /** Folha de stock do turno: só Menu, Ingredientes e Bebidas — categoria «outro» não entra. */
 const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
@@ -844,12 +844,38 @@ async function ensureRoleEnumCompras() {
 }
 
 /**
- * Histórico de preços: vigência por (data, turno). Relatórios usam a data do turno e manhã/tarde/noite.
+ * URI directa ao Postgres (Supabase db.<ref>.supabase.co:5432). O pooler :6543 em modo transacção
+ * pode ignorar DDL com qry() sem erro visível → tabela nunca criada.
  */
-async function ensureProdutoPrecoHistorico() {
-  /** DDL com qry(): em alguns hosts (PgBouncer transacção) query() falha e rebenta initDB → «DB não disponível». */
-  await qry(
-    `CREATE TABLE IF NOT EXISTS produto_preco_historico (
+function getDirectSupabasePostgresUrl() {
+  const env = (process.env.DATABASE_URL_DIRECT || process.env.STOCKOS_DATABASE_URL_DIRECT || '').trim();
+  if (env) return env;
+  try {
+    const u = new URL(_dbUrlRaw);
+    const host = (u.hostname || '').toLowerCase();
+    let ref = (process.env.SUPABASE_PROJECT_REF || '').replace(/[^a-z0-9]/gi, '');
+    if (!ref) {
+      const user = decodeURIComponent((u.username || '').replace(/\+/g, ' '));
+      const m = user.match(/^postgres\.([a-z0-9]+)$/i);
+      if (m) ref = m[1];
+    }
+    if (!ref) return null;
+    if (host.includes('pooler.supabase.com')) {
+      const d = new URL(u.toString());
+      d.hostname = `db.${ref}.supabase.co`;
+      d.port = '5432';
+      d.searchParams.delete('pgbouncer');
+      if (!d.searchParams.get('sslmode')) d.searchParams.set('sslmode', 'require');
+      /** Direct session: user é «postgres», não «postgres.<ref>» (pooler). A password mantém-se. */
+      d.username = 'postgres';
+      return d.toString();
+    }
+  } catch (_) {}
+  return null;
+}
+
+const PPH_DDL_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS produto_preco_historico (
       id SERIAL PRIMARY KEY,
       produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
       valid_from DATE NOT NULL,
@@ -858,42 +884,84 @@ async function ensureProdutoPrecoHistorico() {
       preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0,
       qtd_copos_pacote INTEGER NOT NULL DEFAULT 0
     )`,
-    [],
-    'produto_preco_hist'
-  );
-  await qry(
-    `ALTER TABLE produto_preco_historico ADD COLUMN IF NOT EXISTS valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha'`,
-    [],
-    'pph-turno-col'
-  );
-  await qry(
-    `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_produto_id_valid_from_key`,
-    [],
-    'pph-drop-u-old'
-  );
-  await qry(
-    `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_prod_vig_key`,
-    [],
-    'pph-drop-u-new'
-  );
-  await qry(
-    `CREATE UNIQUE INDEX IF NOT EXISTS produto_preco_historico_prod_vig_uidx ON produto_preco_historico (produto_id, valid_from, valid_from_turno)`,
-    [],
-    'pph-uidx'
-  );
-  await qry(
-    `CREATE INDEX IF NOT EXISTS idx_produto_preco_hist_lookup ON produto_preco_historico (produto_id, valid_from DESC)`,
-    [],
-    'idx-preco-hist'
-  );
+  `ALTER TABLE produto_preco_historico ADD COLUMN IF NOT EXISTS valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha'`,
+  `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_produto_id_valid_from_key`,
+  `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_prod_vig_key`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS produto_preco_historico_prod_vig_uidx ON produto_preco_historico (produto_id, valid_from, valid_from_turno)`,
+  `CREATE INDEX IF NOT EXISTS idx_produto_preco_hist_lookup ON produto_preco_historico (produto_id, valid_from DESC)`
+];
+
+async function produtoPrecoHistoricoTableExists() {
   try {
-    await query(`
-      INSERT INTO produto_preco_historico (produto_id, valid_from, valid_from_turno, preco, preco_copos_pacote, qtd_copos_pacote)
-      SELECT id, DATE '2000-01-01', 'manha', preco, preco_copos_pacote, qtd_copos_pacote FROM produtos
-      ON CONFLICT (produto_id, valid_from, valid_from_turno) DO NOTHING
-    `);
+    await query(`SELECT 1 FROM produto_preco_historico LIMIT 1`);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Histórico de preços: vigência por (data, turno). Relatórios usam a data do turno e manhã/tarde/noite.
+ */
+async function ensureProdutoPrecoHistorico() {
+  for (let i = 0; i < PPH_DDL_STATEMENTS.length; i++) {
+    await qry(PPH_DDL_STATEMENTS[i], [], 'pph');
+  }
+
+  async function seedBase() {
+    try {
+      await query(`
+        INSERT INTO produto_preco_historico (produto_id, valid_from, valid_from_turno, preco, preco_copos_pacote, qtd_copos_pacote)
+        SELECT id, DATE '2000-01-01', 'manha', preco, preco_copos_pacote, qtd_copos_pacote FROM produtos
+        ON CONFLICT (produto_id, valid_from, valid_from_turno) DO NOTHING
+      `);
+    } catch (e) {
+      console.warn('[ensureProdutoPrecoHistorico seed]', e.message);
+    }
+  }
+
+  if (await produtoPrecoHistoricoTableExists()) {
+    await seedBase();
+    return;
+  }
+
+  console.warn('[ensureProdutoPrecoHistorico] tabela ausente após qry DDL — a repetir com query() no pool principal');
+  try {
+    for (let i = 0; i < PPH_DDL_STATEMENTS.length; i++) {
+      await query(PPH_DDL_STATEMENTS[i]);
+    }
   } catch (e) {
-    console.warn('[ensureProdutoPrecoHistorico seed]', e.message);
+    console.warn('[ensureProdutoPrecoHistorico] query() no pooler:', e && e.message);
+  }
+  if (await produtoPrecoHistoricoTableExists()) {
+    await seedBase();
+    return;
+  }
+
+  const directUrl = getDirectSupabasePostgresUrl();
+  if (!directUrl) {
+    console.error(
+      '[ensureProdutoPrecoHistorico] sem tabela. Define DATABASE_URL_DIRECT (postgresql://...@db.<ref>.supabase.co:5432/postgres) ou SUPABASE_PROJECT_REF para derivar a URI directa a partir do pooler.'
+    );
+    throw new Error('Migração produto_preco_historico falhou (DDL no pooler; falta URI directa ou ref).');
+  }
+
+  console.warn('[ensureProdutoPrecoHistorico] a repetir DDL na ligação directa Supabase (porta 5432)');
+  const sqlDirect = postgres(directUrl, { ..._sqlOpts, max: 1 });
+  try {
+    for (let i = 0; i < PPH_DDL_STATEMENTS.length; i++) {
+      await sqlDirect.unsafe(PPH_DDL_STATEMENTS[i]);
+    }
+  } catch (e) {
+    console.error('[ensureProdutoPrecoHistorico] DDL directa:', e && e.message);
+    throw e;
+  } finally {
+    await sqlDirect.end({ timeout: 5 }).catch(() => {});
+  }
+
+  await seedBase();
+  if (!(await produtoPrecoHistoricoTableExists())) {
+    throw new Error('produto_preco_historico continua em falta após DDL na URI directa.');
   }
 }
 

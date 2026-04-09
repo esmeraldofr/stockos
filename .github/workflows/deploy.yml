@@ -18,11 +18,14 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Exigir DATABASE_URL (produção)
+      - name: DATABASE_URL (GitHub secret)
+        id: db
         run: |
-          if [ -z "${DATABASE_URL_PROD}" ]; then
-            echo "::error::Secret DATABASE_URL em falta para deploy de produção."
-            exit 1
+          if [ -n "${DATABASE_URL_PROD}" ]; then
+            echo "has_url=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Secret DATABASE_URL em falta: o job não corre sync/deploy por CLI (a Vercel pode continuar a fazer deploy pela integração Git). Define DATABASE_URL no repositório para sincronizar/enviar a URI na build."
+            echo "has_url=0" >> "$GITHUB_OUTPUT"
           fi
         env:
           DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
@@ -40,7 +43,7 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
       - name: Sincronizar DATABASE_URL (Production) na Vercel
-        if: steps.vercel.outputs.ready == '1'
+        if: steps.vercel.outputs.ready == '1' && steps.db.outputs.has_url == '1'
         run: |
           set -euo pipefail
           export VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID}"
@@ -55,7 +58,7 @@ jobs:
           DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
 
       - name: Deploy to Vercel
-        if: steps.vercel.outputs.ready == '1'
+        if: steps.vercel.outputs.ready == '1' && steps.db.outputs.has_url == '1'
         run: |
           npx vercel@latest --prod --yes --no-clipboard --token "$VERCEL_TOKEN" \
             --build-env NODE_ENV=production \

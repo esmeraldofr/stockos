@@ -27,6 +27,9 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/stockos_database.sql
           echo "Done."
 
+      - name: Extensão pgcrypto (digest no passo seguinte)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+
       - name: Set admin password
         run: |
           psql "$DATABASE_URL" -c "

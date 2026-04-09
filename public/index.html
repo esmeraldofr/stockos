@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-fix-session-parse">
+<html lang="pt" data-stockos-ui="2026-03-31-fix-nullish-or">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2302,7 +2302,7 @@ async function loadVendasMenu(turnoId, canEdit) {
     menuProdIds = menuProds.map(p => p.id);
     const menuRows = menuProds.map(p => {
       const qty = vendasBuf[prodIdKey(p.id)] || 0;
-      const precoEf = vendasProdPrecos[prodIdKey(p.id)] ?? parseFloat(p.preco) || 0;
+      const precoEf = (vendasProdPrecos[prodIdKey(p.id)] ?? parseFloat(p.preco)) || 0;
       const qtyCtrl = canEdit
         ? `<input type="number" min="0" step="1" inputmode="numeric" autocomplete="off" class="venda-qty-input" id="venda-qty-${p.id}" data-venda-pid="${p.id}" data-venda-turno="${turnoId}" value="${qty}" onblur="vendaQtyInputBlur(this)"/>`
         : `<span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${qty}</span>`;

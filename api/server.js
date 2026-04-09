@@ -941,9 +941,9 @@ async function ensureProdutoPrecoHistorico() {
   const directUrl = getDirectSupabasePostgresUrl();
   if (!directUrl) {
     console.error(
-      '[ensureProdutoPrecoHistorico] sem tabela. Define DATABASE_URL_DIRECT (postgresql://...@db.<ref>.supabase.co:5432/postgres) ou SUPABASE_PROJECT_REF para derivar a URI directa a partir do pooler.'
+      '[ensureProdutoPrecoHistorico] sem tabela após pooler. Define DATABASE_URL_DIRECT ou SUPABASE_PROJECT_REF; ou corre supabase/stockos_database.sql no Supabase SQL Editor.'
     );
-    throw new Error('Migração produto_preco_historico falhou (DDL no pooler; falta URI directa ou ref).');
+    return;
   }
 
   console.warn('[ensureProdutoPrecoHistorico] a repetir DDL na ligação directa Supabase (porta 5432)');
@@ -954,14 +954,16 @@ async function ensureProdutoPrecoHistorico() {
     }
   } catch (e) {
     console.error('[ensureProdutoPrecoHistorico] DDL directa:', e && e.message);
-    throw e;
+    return;
   } finally {
     await sqlDirect.end({ timeout: 5 }).catch(() => {});
   }
 
   await seedBase();
   if (!(await produtoPrecoHistoricoTableExists())) {
-    throw new Error('produto_preco_historico continua em falta após DDL na URI directa.');
+    console.error(
+      '[ensureProdutoPrecoHistorico] tabela ainda em falta após DDL directa. Verifica logs acima ou aplica o SQL em supabase/stockos_database.sql.'
+    );
   }
 }
 

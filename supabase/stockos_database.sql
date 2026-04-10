@@ -73,12 +73,14 @@ CREATE TABLE IF NOT EXISTS turno_stock (
   produto_id  INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
   encontrado  NUMERIC(10,3),
   entrada     NUMERIC(10,3)   NOT NULL DEFAULT 0,
-  deixado     NUMERIC(10,3)   NOT NULL DEFAULT 0,
+  deixado     NUMERIC(10,3),
   UNIQUE(turno_id, produto_id)
 );
 ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS fechados NUMERIC(10,3) NOT NULL DEFAULT 0;
 ALTER TABLE turno_stock ALTER COLUMN encontrado DROP DEFAULT;
 ALTER TABLE turno_stock ALTER COLUMN encontrado DROP NOT NULL;
+ALTER TABLE turno_stock ALTER COLUMN deixado DROP DEFAULT;
+ALTER TABLE turno_stock ALTER COLUMN deixado DROP NOT NULL;
 -- Valor de vendas (stock×preço) congelado ao fechar o turno; NULL = usar preço actual do produto (turno aberto ou legado).
 ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS valor_vendas_reportado_kz NUMERIC(15,2);
 
@@ -88,11 +90,17 @@ ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS valor_vendas_reportado_kz NUMER
 CREATE TABLE IF NOT EXISTS turno_caixa (
   id            SERIAL          PRIMARY KEY,
   turno_id      INTEGER         NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
-  tpa           NUMERIC(15,2)   NOT NULL DEFAULT 0,
-  transferencia NUMERIC(15,2)   NOT NULL DEFAULT 0,
-  dinheiro      NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  tpa           NUMERIC(15,2),
+  transferencia NUMERIC(15,2),
+  dinheiro      NUMERIC(15,2),
   saida         NUMERIC(15,2)   NOT NULL DEFAULT 0
 );
+ALTER TABLE turno_caixa ALTER COLUMN tpa DROP DEFAULT;
+ALTER TABLE turno_caixa ALTER COLUMN tpa DROP NOT NULL;
+ALTER TABLE turno_caixa ALTER COLUMN transferencia DROP DEFAULT;
+ALTER TABLE turno_caixa ALTER COLUMN transferencia DROP NOT NULL;
+ALTER TABLE turno_caixa ALTER COLUMN dinheiro DROP DEFAULT;
+ALTER TABLE turno_caixa ALTER COLUMN dinheiro DROP NOT NULL;
 
 -- ============================================================
 --  ARMAZÉM (inventário e compras)

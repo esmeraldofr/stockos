@@ -326,13 +326,13 @@ async function initDB() {
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
     produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
     encontrado NUMERIC(10,3), entrada NUMERIC(10,3) NOT NULL DEFAULT 0,
-    deixado NUMERIC(10,3) NOT NULL DEFAULT 0, fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id)
+    deixado NUMERIC(10,3), fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id)
   )`, [], 'turno_stock');
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS fechados NUMERIC(10,3) NOT NULL DEFAULT 0`, [], 'turno_stock-fechados');
   await qry(`CREATE TABLE IF NOT EXISTS turno_caixa (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
-    tpa NUMERIC(15,2) NOT NULL DEFAULT 0, transferencia NUMERIC(15,2) NOT NULL DEFAULT 0,
-    dinheiro NUMERIC(15,2) NOT NULL DEFAULT 0, saida NUMERIC(15,2) NOT NULL DEFAULT 0
+    tpa NUMERIC(15,2), transferencia NUMERIC(15,2), dinheiro NUMERIC(15,2),
+    saida NUMERIC(15,2) NOT NULL DEFAULT 0
   )`, [], 'turno_caixa');
   await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_avulso BOOLEAN NOT NULL DEFAULT FALSE`, [], 'alter-venda-avulso');
   await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_medicao VARCHAR(10) NOT NULL DEFAULT 'unidade'`, [], 'alter-tipo-medicao');
@@ -1112,9 +1112,49 @@ async function ensureTurnoStockEncontradoNullable() {
   }
 }
 
+/** «Deixado» sem 0 por defeito (NULL até preencher). */
+async function ensureTurnoStockDeixadoNullable() {
+  try {
+    await qry(`ALTER TABLE turno_stock ALTER COLUMN deixado DROP DEFAULT`, [], 'turno_stock-deixado-drop-default');
+  } catch (e) {
+    console.warn('[ensureTurnoStockDeixadoNullable] drop default:', e && e.message);
+  }
+  try {
+    await qry(`ALTER TABLE turno_stock ALTER COLUMN deixado DROP NOT NULL`, [], 'turno_stock-deixado-null');
+  } catch (e) {
+    console.warn('[ensureTurnoStockDeixadoNullable] drop not null:', e && e.message);
+  }
+}
+
+/** TPA / Transferência / Dinheiro sem 0 por defeito na linha de caixa. */
+async function ensureTurnoCaixaEntradasNullable() {
+  for (const col of ['tpa', 'transferencia', 'dinheiro']) {
+    try {
+      await qry(
+        `ALTER TABLE turno_caixa ALTER COLUMN ${col} DROP DEFAULT`,
+        [],
+        `turno_caixa-${col}-drop-default`
+      );
+    } catch (e) {
+      console.warn(`[ensureTurnoCaixaEntradasNullable] ${col} drop default:`, e && e.message);
+    }
+    try {
+      await qry(
+        `ALTER TABLE turno_caixa ALTER COLUMN ${col} DROP NOT NULL`,
+        [],
+        `turno_caixa-${col}-null`
+      );
+    } catch (e) {
+      console.warn(`[ensureTurnoCaixaEntradasNullable] ${col} drop not null:`, e && e.message);
+    }
+  }
+}
+
 async function ensurePrecosVendasSnapshots() {
   await ensureProdutoPrecoHistorico();
   await ensureTurnoStockEncontradoNullable();
+  await ensureTurnoStockDeixadoNullable();
+  await ensureTurnoCaixaEntradasNullable();
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS valor_vendas_reportado_kz NUMERIC(15,2)`, [], 'turno_stock-valor-snap');
   await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2)`, [], 'turno_vendas-precio-snap');
   await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2)`, [], 'turno_vendas-preco-copo-snap');
@@ -1705,11 +1745,11 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
     produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
     encontrado NUMERIC(10,3), entrada NUMERIC(10,3) NOT NULL DEFAULT 0,
-    deixado NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id))`, 'turno_stock');
+    deixado NUMERIC(10,3), UNIQUE(turno_id, produto_id))`, 'turno_stock');
   await run(`CREATE TABLE IF NOT EXISTS turno_caixa (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
-    tpa NUMERIC(15,2) NOT NULL DEFAULT 0, transferencia NUMERIC(15,2) NOT NULL DEFAULT 0,
-    dinheiro NUMERIC(15,2) NOT NULL DEFAULT 0, saida NUMERIC(15,2) NOT NULL DEFAULT 0)`, 'turno_caixa');
+    tpa NUMERIC(15,2), transferencia NUMERIC(15,2), dinheiro NUMERIC(15,2),
+    saida NUMERIC(15,2) NOT NULL DEFAULT 0)`, 'turno_caixa');
   // Detect produtos.id type to align all FK columns
   const _pidCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`).catch(e=>({rows:[]}));
   const _pidType = _pidCheck.rows.length > 0 ? _pidCheck.rows[0].data_type : 'integer';
@@ -1737,7 +1777,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   results.push({ label: 'turno_stock-type-check', ok: true, type: _tsType });
   if (_tsType !== _pidType) {
     await run(`DROP TABLE IF EXISTS turno_stock CASCADE`, 'turno_stock-drop');
-    await run(`CREATE TABLE turno_stock (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, encontrado NUMERIC(10,3), entrada NUMERIC(10,3) NOT NULL DEFAULT 0, deixado NUMERIC(10,3) NOT NULL DEFAULT 0, fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_stock-create');
+    await run(`CREATE TABLE turno_stock (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, encontrado NUMERIC(10,3), entrada NUMERIC(10,3) NOT NULL DEFAULT 0, deixado NUMERIC(10,3), fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_stock-create');
   }
   await run(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, 'produtos-dedup');
   await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='produtos_nome_key') THEN ALTER TABLE produtos ADD CONSTRAINT produtos_nome_key UNIQUE (nome); END IF; END $$`, 'produtos-unique');
@@ -2736,9 +2776,10 @@ app.get('/api/dia', auth, async (req, res) => {
       }
       const result = [];
       for (const turno of turnos.rows) {
-        const c = caixaByTurno[turno.id] || { tpa: 0, transferencia: 0, dinheiro: 0, saida: 0 };
-        const totalGerado = parseFloat(c.tpa || 0) + parseFloat(c.transferencia || 0) + parseFloat(c.dinheiro || 0);
-        const totalFinal = totalGerado - parseFloat(c.saida || 0);
+        const c = caixaByTurno[turno.id] || { tpa: null, transferencia: null, dinheiro: null, saida: 0 };
+        const totalGerado = sumCaixaGeradoRow(c);
+        const totalFinal =
+          totalGerado === null ? null : totalGerado - parseFloat(c.saida || 0);
         result.push({
           ...turno,
           stock: [],
@@ -2815,10 +2856,11 @@ app.get('/api/dia', auth, async (req, res) => {
         const enc =
           s.encontrado != null && s.encontrado !== '' ? parseFloat(s.encontrado) : NaN;
         const ent = parseFloat(s.entrada);
-        const dei = parseFloat(s.deixado);
-        const vend = Number.isFinite(enc)
-          ? Math.max(0, enc + (Number.isFinite(ent) ? ent : 0) - (Number.isFinite(dei) ? dei : 0))
-          : null;
+        const dei = s.deixado != null && s.deixado !== '' ? parseFloat(s.deixado) : NaN;
+        const vend =
+          Number.isFinite(enc) && Number.isFinite(dei)
+            ? Math.max(0, enc + (Number.isFinite(ent) ? ent : 0) - dei)
+            : null;
         const snap = s.valor_vendas_reportado_kz;
         const val =
           snap != null && snap !== '' && !Number.isNaN(parseFloat(snap))
@@ -2838,9 +2880,10 @@ app.get('/api/dia', auth, async (req, res) => {
         return { ...s, vendido: vend, valor: val, comparacao, prev_deixado: prevDeixado };
       });
 
-      const c = caixaByTurno[turno.id] || { tpa: 0, transferencia: 0, dinheiro: 0, saida: 0 };
-      const totalGerado = parseFloat(c.tpa || 0) + parseFloat(c.transferencia || 0) + parseFloat(c.dinheiro || 0);
-      const totalFinal = totalGerado - parseFloat(c.saida || 0);
+      const c = caixaByTurno[turno.id] || { tpa: null, transferencia: null, dinheiro: null, saida: 0 };
+      const totalGerado = sumCaixaGeradoRow(c);
+      const totalFinal =
+        totalGerado === null ? null : totalGerado - parseFloat(c.saida || 0);
       const totalVendas = stockFinal.reduce(
         (sum, s) => sum + (typeof s.valor === 'number' && Number.isFinite(s.valor) ? s.valor : 0),
         0
@@ -2998,11 +3041,21 @@ app.post('/api/turnos/:id/reabrir', auth, requireRole('admin'), async (req, res)
   }
 });
 
-function parseTurnoStockEncontradoBody(v) {
+function parseOptionalNumericBody(v) {
   if (v === null || v === undefined) return null;
   if (typeof v === 'string' && v.trim() === '') return null;
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/** Soma TPA+transf+din só quando os três têm valor; senão null. */
+function sumCaixaGeradoRow(row) {
+  if (!row) return null;
+  const t = parseOptionalNumericBody(row.tpa);
+  const tr = parseOptionalNumericBody(row.transferencia);
+  const d = parseOptionalNumericBody(row.dinheiro);
+  if (t === null || tr === null || d === null) return null;
+  return t + tr + d;
 }
 
 app.put('/api/turnos/:id/stock', auth, async (req, res) => {
@@ -3017,14 +3070,15 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
         erro: 'Este produto não está incluído na folha de stock do turno. Activa «Stock no turno» em Produtos.'
       });
     }
-    const enc = parseTurnoStockEncontradoBody(encontrado);
+    const enc = parseOptionalNumericBody(encontrado);
+    const deix = parseOptionalNumericBody(deixado);
     const r = await query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados)
        VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (turno_id, produto_id)
        DO UPDATE SET encontrado=$3, deixado=$4, fechados=$5
        RETURNING *`,
-      [req.params.id, produto_id, enc, deixado || 0, fechados || 0]
+      [req.params.id, produto_id, enc, deix, fechados || 0]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -3142,17 +3196,21 @@ app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
   try {
     const { tpa, transferencia, dinheiro } = req.body;
     const saida = await calcSaidaTotal(req.params.id, null);
+    const tpaV = parseOptionalNumericBody(tpa);
+    const trV = parseOptionalNumericBody(transferencia);
+    const diV = parseOptionalNumericBody(dinheiro);
     const r = await query(
       `INSERT INTO turno_caixa (turno_id, tpa, transferencia, dinheiro, saida)
        VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (turno_id)
        DO UPDATE SET tpa=$2, transferencia=$3, dinheiro=$4, saida=$5
        RETURNING *`,
-      [req.params.id, tpa||0, transferencia||0, dinheiro||0, saida]
+      [req.params.id, tpaV, trV, diV, saida]
     );
     const c = r.rows[0];
-    c.total_gerado = parseFloat(c.tpa) + parseFloat(c.transferencia) + parseFloat(c.dinheiro);
-    c.total_final  = c.total_gerado - parseFloat(c.saida);
+    const tg = sumCaixaGeradoRow(c);
+    c.total_gerado = tg;
+    c.total_final = tg === null ? null : tg - parseFloat(c.saida || 0);
     res.json(c);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -3584,7 +3642,7 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
       if (isCopo) {
         const kg = delta * parseFloat(prow.kg_por_copo);
         await client.query(
-          `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
+          `UPDATE turno_stock SET deixado=GREATEST(0, COALESCE(deixado,0) - $1)
            WHERE turno_id=$2 AND produto_id=$3`,
           [kg, turnoId, produto_id]
         );
@@ -3618,7 +3676,7 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
       }
       for (const [compId, qtd] of Object.entries(totais)) {
         await client.query(
-          `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
+          `UPDATE turno_stock SET deixado=GREATEST(0, COALESCE(deixado,0) - $1)
            WHERE turno_id=$2 AND produto_id=$3`,
           [qtd, turnoId, compId]
         );

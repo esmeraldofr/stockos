@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-turno-sticky-clear">
+<html lang="pt" data-stockos-ui="2026-03-31-fatura-vendas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2334,8 +2334,130 @@ async function loadTurno() {
 }
 
 let vendasBuf = {};
+/** Última resposta GET /turnos/:id/vendas — necessário para linhas de copos na fatura. */
+let lastVendasApiRows = [];
 /** HTML do card «Resumo de vendas» (só na aba Registos; não duplicar em Vendas). */
 let lastResumoVendasCardHtml = '';
+
+/**
+ * Linhas de fatura alinhadas ao resumo de vendas / total do turno.
+ * @returns {{ lines: Array<{ desc: string, detalhe: string, subFmt: string }>, total: number }}
+ */
+function collectFaturaVendasLinhas() {
+  const lines = [];
+  let total = 0;
+  for (const prodId of menuProdIds) {
+    const k = prodIdKey(prodId);
+    const qty = vendasBuf[k] || 0;
+    if (qty <= 0) continue;
+    const unit = parseFloat(vendasProdPrecos[prodIdKey(prodId)] ?? vendasProdPrecos[prodId]) || 0;
+    const nome = vendasProdNomes[k] || 'Menu';
+    const sub = qty * unit;
+    total += sub;
+    lines.push({
+      desc: nome,
+      detalhe: unit > 0 ? `${fmtNum(qty)} × ${fmt(unit)}` : `${fmtNum(qty)}`,
+      subFmt: fmt(sub)
+    });
+  }
+  for (const v of lastVendasApiRows) {
+    const isCopo = !!v.venda_por_copo && parseFloat(v.kg_por_copo) > 0;
+    if (!isCopo) continue;
+    if (isFinoBarrilNome(v.produto_nome)) continue;
+    const pid = prodIdKey(v.produto_id);
+    if (!pid) continue;
+    const copos = parseFloat(v.quantidade) || 0;
+    if (copos <= 0) continue;
+    const cfgBase = bebidaCopoCfg[pid];
+    const preco = cfgBase ? cfgBase.preco : parseFloat(v.preco) || 0;
+    const qtdPacote = cfgBase ? cfgBase.qtdPacote : parseInt(v.qtd_copos_pacote, 10) || 0;
+    const precoPacote = cfgBase ? cfgBase.precoPacote : parseFloat(v.preco_copos_pacote) || 0;
+    const sub = precoVendaCopos(copos, preco, qtdPacote, precoPacote);
+    total += sub;
+    const nomeLinha = cfgBase ? cfgBase.nome : nomeVendaBebidaLegivel(pid, v.produto_nome);
+    lines.push({
+      desc: `${nomeLinha} (copos)`,
+      detalhe: `${fmtNum(copos)} copos`,
+      subFmt: fmt(sub)
+    });
+  }
+  for (const prodId of avulsoProdIds) {
+    const qty = calcStandaloneQty(prodId);
+    if (qty <= 0) continue;
+    const unit = parseFloat(vendasProdPrecos[prodIdKey(prodId)] ?? vendasProdPrecos[prodId]) || 0;
+    const k = prodIdKey(prodId);
+    const nome = vendasProdNomes[k] || 'Produto';
+    const sub = qty * unit;
+    total += sub;
+    lines.push({
+      desc: nome,
+      detalhe: unit > 0 ? `${fmtNum(qty)} × ${fmt(unit)}` : `${fmtNum(qty)}`,
+      subFmt: fmt(sub)
+    });
+  }
+  forEachBebidaUnidadeVendidaLinha(({ vend, nome, unit, sub }) => {
+    total += sub;
+    const mid = unit > 0 ? `${fmtNum(vend)} × ${fmt(unit)}` : `${fmtNum(vend)}`;
+    lines.push({
+      desc: nome,
+      detalhe: mid,
+      subFmt: fmt(sub)
+    });
+  });
+  return { lines, total };
+}
+
+async function imprimirFaturaVendas() {
+  const tid = S.turnoData?.id;
+  if (!tid) return;
+  await loadVendasMenu(tid, !!S.turnoCanEdit);
+  const { lines, total } = collectFaturaVendasLinhas();
+  if (!lines.length) {
+    alert('Não há vendas registadas para este turno.');
+    return;
+  }
+  const docRef = `V-${String(S.date || '').replace(/-/g, '')}-${S.turnoData.nome}-${tid}`;
+  const w = window.open('', '_blank', 'noopener');
+  if (!w) {
+    alert('Permita janelas emergentes para ver e imprimir a fatura.');
+    return;
+  }
+  const rowsHtml = lines
+    .map(
+      (l) =>
+        `<tr><td>${escapeHtml(l.desc)}</td><td class="t-r">${escapeHtml(l.detalhe)}</td><td class="t-r">${escapeHtml(
+          l.subFmt
+        )}</td></tr>`
+    )
+    .join('');
+  const headTitle = `Fatura ${docRef}`;
+  w.document.write(`<!DOCTYPE html><html lang="pt"><head><meta charset="utf-8"/><title>${escapeHtml(headTitle)}</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;padding:24px;max-width:720px;margin:0 auto;color:#111;background:#fff}
+h1{font-size:1.25rem;margin:0 0 4px;font-weight:700}
+.meta{color:#444;font-size:13px;margin-bottom:20px;line-height:1.5}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{border-bottom:1px solid #ddd;padding:8px 6px;text-align:left}
+th{background:#f5f5f5;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#333}
+.t-r{text-align:right;font-variant-numeric:tabular-nums}
+.tot{margin-top:18px;text-align:right;font-size:1.15rem;font-weight:700}
+.foot{margin-top:28px;font-size:11px;color:#666;line-height:1.45}
+@media print{body{padding:12px}.no-print{display:none!important}}
+</style></head><body>
+<h1>Documento de venda</h1>
+<div class="meta">StockOS · Ref. <strong>${escapeHtml(docRef)}</strong><br/>
+${escapeHtml(dateLabelWithWeekday(S.date))} · ${escapeHtml(turnoLabel(S.turnoData.nome))}</div>
+<table>
+<thead><tr><th>Descrição</th><th class="t-r">Quantidade / preço</th><th class="t-r">Total</th></tr></thead>
+<tbody>${rowsHtml}</tbody>
+</table>
+<div class="tot">Total: ${escapeHtml(fmt(total))}</div>
+<p class="foot">Documento de conferência interna — valores conforme o registo de vendas do turno no StockOS. Não substitui fatura fiscal regulamentada.</p>
+<p class="no-print" style="margin-top:20px"><button type="button" style="padding:10px 20px;font-size:14px;cursor:pointer;border-radius:8px;border:1px solid #ccc;background:#f8f8f8" onclick="window.print()">Imprimir</button></p>
+</body></html>`);
+  w.document.close();
+  w.focus();
+}
 
 async function loadVendasMenu(turnoId, canEdit) {
   try {
@@ -2344,6 +2466,7 @@ async function loadVendasMenu(turnoId, canEdit) {
       api('GET', `/turnos/${turnoId}/vendas`),
       api('GET', '/receitas')
     ]);
+    lastVendasApiRows = Array.isArray(vendas) ? vendas : [];
     const menuProds   = prods.filter(p => p.categoria === 'menu');
     const bebidaProds = prods.filter(p => p.categoria === 'bebida').filter((p) => !isFinoBarrilNome(p.nome));
     const avulsoProds = prods.filter(p => p.venda_avulso && p.categoria !== 'menu' && p.categoria !== 'bebida');
@@ -2574,12 +2697,18 @@ async function loadVendasMenu(turnoId, canEdit) {
           <span style="font-weight:600;color:#94a3b8;font-size:0.85rem;text-transform:uppercase;letter-spacing:.05em">Total vendas</span>
           <span style="font-weight:700;font-size:1.1rem;color:#4ade80">${fmt(resumoSoma)}</span>
         </div>
+        <div style="margin-top:12px">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, async () => { await imprimirFaturaVendas(); })">🧾 Fatura / imprimir</button>
+        </div>
       </div>`
         : '';
 
-    const totalRow = `<div style="margin-top:14px;padding:10px 12px;background:#1e293b;border-radius:8px;display:flex;justify-content:space-between;align-items:center">
-        <span style="font-weight:600;color:#94a3b8;font-size:0.85rem;text-transform:uppercase;letter-spacing:.05em">Total Vendas</span>
-        <span id="vendas-total-geral" style="font-weight:700;font-size:1.1rem;color:#4ade80">—</span>
+    const totalRow = `<div style="margin-top:14px;padding:10px 12px;background:#1e293b;border-radius:8px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;flex:1;min-width:0">
+          <span style="font-weight:600;color:#94a3b8;font-size:0.85rem;text-transform:uppercase;letter-spacing:.05em">Total Vendas</span>
+          <span id="vendas-total-geral" style="font-weight:700;font-size:1.1rem;color:#4ade80">—</span>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, async () => { await imprimirFaturaVendas(); })">🧾 Fatura / imprimir</button>
       </div>`;
     const html =
       (menuProds.length ? groupHeader('🍽️ Menu') + toGrid(menuRows) : '')
@@ -2590,6 +2719,7 @@ async function loadVendasMenu(turnoId, canEdit) {
     show('vendas-menu-list', html);
     refreshVendasTotal();
   } catch(e) {
+    lastVendasApiRows = [];
     lastResumoVendasCardHtml = '';
     show('vendas-menu-list', `<span style="color:#ef4444">${e.message}</span>`);
   }

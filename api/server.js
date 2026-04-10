@@ -2984,6 +2984,17 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
       return res.status(400).json({ erro: 'Turno não encontrado ou já fechado' });
     }
     const turnoId = parseInt(req.params.id, 10);
+    const eqReal = await client.query(
+      'SELECT 1 FROM turno_equipa_real WHERE turno_id=$1 LIMIT 1',
+      [turnoId]
+    );
+    if (!eqReal.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        erro:
+          'Regista pelo menos uma pessoa em «Quem realmente trabalhou» (separador Escala) antes de fechar o turno.'
+      });
+    }
     await client.query(
       `UPDATE turno_stock ts
        SET valor_vendas_reportado_kz = (${sqlFechoTurnoStockValorKz()})

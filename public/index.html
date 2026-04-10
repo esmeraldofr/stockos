@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-deixado-caixa-sem-default">
+<html lang="pt" data-stockos-ui="2026-03-31-fechar-equipa-real">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -279,6 +279,7 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .turno-tab-panel{display:none}.turno-tab-panel.active{display:block}
 #content > .armazem-tab-panel{display:none}#content > .armazem-tab-panel.active{display:block}
 input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-color:#f87171!important;box-shadow:0 0 0 1px rgba(248,113,113,.5)}
+#turno-equipa-real-section.stock-caixa-required-missing{outline:2px solid rgba(248,113,113,.55);border-radius:8px;padding:8px;margin:8px -8px 0}
 
 /* Escala da semana (página Dia) — grelha turnos × dias */
 .dia-escala-intro{font-size:12px;color:#94a3b8;margin:0 0 14px;line-height:1.45}
@@ -3396,6 +3397,28 @@ async function fecharTurno(ev, id) {
     await focusTurnoFieldParaValidacao(missing[0]);
     return;
   }
+  let equipaReal = [];
+  try {
+    equipaReal = await api('GET', `/turnos/${id}/equipa-real`);
+  } catch (e) {
+    turnoMsgErr(e.message || 'Não foi possível verificar a equipa do turno.');
+    return;
+  }
+  if (!Array.isArray(equipaReal) || equipaReal.length === 0) {
+    turnoMsgErr(
+      'Regista pelo menos uma pessoa em «Quem realmente trabalhou» (separador Escala) antes de fechar o turno.'
+    );
+    const btnEscala = document.querySelector('.turno-tab[data-turno-tab="escala"]');
+    if (btnEscala) await switchTurnoTab('escala', btnEscala);
+    requestAnimationFrame(() => {
+      const sec = document.getElementById('turno-equipa-real-section');
+      if (sec) {
+        sec.classList.add('stock-caixa-required-missing');
+        sec.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    });
+    return;
+  }
   if (!confirm('Fechar este turno? Não poderá ser editado depois.')) return;
   await runAction(ev, async () => {
     try {
@@ -3783,8 +3806,10 @@ async function loadEscalaTurno() {
       ${info}
       <div class="card-title" style="margin-bottom:6px">📅 Escalados</div>
       ${escaladosHtml}
-      <div class="card-title" style="margin:16px 0 6px">✅ Quem realmente trabalhou</div>
-      ${reaisHtml}
+      <div id="turno-equipa-real-section">
+        <div class="card-title" style="margin:16px 0 6px">✅ Quem realmente trabalhou</div>
+        ${reaisHtml}
+      </div>
       ${alertaHtml}
       ${addForm}
     `;

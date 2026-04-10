@@ -325,7 +325,7 @@ async function initDB() {
   await qry(`CREATE TABLE IF NOT EXISTS turno_stock (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
     produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
-    encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0,
+    encontrado NUMERIC(10,3), entrada NUMERIC(10,3) NOT NULL DEFAULT 0,
     deixado NUMERIC(10,3) NOT NULL DEFAULT 0, fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id)
   )`, [], 'turno_stock');
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS fechados NUMERIC(10,3) NOT NULL DEFAULT 0`, [], 'turno_stock-fechados');
@@ -1090,8 +1090,31 @@ async function ensureProdutoPrecoHistorico() {
  * Snapshot de valores ao fecho: alterar produtos.preco não muda relatórios de turnos já fechados.
  * Backfill: só turnos fechados sem snapshot (turnos reabertos ficam com NULL até novo fecho).
  */
+/** «Encontrado» sem valor por defeito: NULL até o operador preencher (abrir turno não insere 0). */
+async function ensureTurnoStockEncontradoNullable() {
+  try {
+    await qry(
+      `ALTER TABLE turno_stock ALTER COLUMN encontrado DROP DEFAULT`,
+      [],
+      'turno_stock-encontrado-drop-default'
+    );
+  } catch (e) {
+    console.warn('[ensureTurnoStockEncontradoNullable] drop default:', e && e.message);
+  }
+  try {
+    await qry(
+      `ALTER TABLE turno_stock ALTER COLUMN encontrado DROP NOT NULL`,
+      [],
+      'turno_stock-encontrado-null'
+    );
+  } catch (e) {
+    console.warn('[ensureTurnoStockEncontradoNullable] drop not null:', e && e.message);
+  }
+}
+
 async function ensurePrecosVendasSnapshots() {
   await ensureProdutoPrecoHistorico();
+  await ensureTurnoStockEncontradoNullable();
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS valor_vendas_reportado_kz NUMERIC(15,2)`, [], 'turno_stock-valor-snap');
   await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2)`, [], 'turno_vendas-precio-snap');
   await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2)`, [], 'turno_vendas-preco-copo-snap');
@@ -1681,7 +1704,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   await run(`CREATE TABLE IF NOT EXISTS turno_stock (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
     produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
-    encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0,
+    encontrado NUMERIC(10,3), entrada NUMERIC(10,3) NOT NULL DEFAULT 0,
     deixado NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id))`, 'turno_stock');
   await run(`CREATE TABLE IF NOT EXISTS turno_caixa (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
@@ -1714,7 +1737,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   results.push({ label: 'turno_stock-type-check', ok: true, type: _tsType });
   if (_tsType !== _pidType) {
     await run(`DROP TABLE IF EXISTS turno_stock CASCADE`, 'turno_stock-drop');
-    await run(`CREATE TABLE turno_stock (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, encontrado NUMERIC(10,3) NOT NULL DEFAULT 0, entrada NUMERIC(10,3) NOT NULL DEFAULT 0, deixado NUMERIC(10,3) NOT NULL DEFAULT 0, fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_stock-create');
+    await run(`CREATE TABLE turno_stock (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, encontrado NUMERIC(10,3), entrada NUMERIC(10,3) NOT NULL DEFAULT 0, deixado NUMERIC(10,3) NOT NULL DEFAULT 0, fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_stock-create');
   }
   await run(`DELETE FROM produtos WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY nome ORDER BY id::text) AS rn FROM produtos) sub WHERE rn > 1)`, 'produtos-dedup');
   await run(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='produtos_nome_key') THEN ALTER TABLE produtos ADD CONSTRAINT produtos_nome_key UNIQUE (nome); END IF; END $$`, 'produtos-unique');
@@ -2789,18 +2812,23 @@ app.get('/api/dia', auth, async (req, res) => {
       const prevMap = prevMapByDN[`${normDataPostgres(prev.data)}|${prev.nome}`] || {};
 
       const stockFinal = stock.map((s) => {
-        const enc = parseFloat(s.encontrado);
+        const enc =
+          s.encontrado != null && s.encontrado !== '' ? parseFloat(s.encontrado) : NaN;
         const ent = parseFloat(s.entrada);
         const dei = parseFloat(s.deixado);
-        const vend = Math.max(0, enc + ent - dei);
+        const vend = Number.isFinite(enc)
+          ? Math.max(0, enc + (Number.isFinite(ent) ? ent : 0) - (Number.isFinite(dei) ? dei : 0))
+          : null;
         const snap = s.valor_vendas_reportado_kz;
         const val =
           snap != null && snap !== '' && !Number.isNaN(parseFloat(snap))
             ? parseFloat(snap)
-            : vend * parseFloat(s.preco);
+            : vend === null
+              ? null
+              : vend * parseFloat(s.preco);
 
         let comparacao = null;
-        if (prevMap[s.produto_id] !== undefined) {
+        if (prevMap[s.produto_id] !== undefined && Number.isFinite(enc)) {
           const diff = enc - prevMap[s.produto_id];
           if (Math.abs(diff) < 0.001) comparacao = 'igual';
           else if (diff < 0) comparacao = `falta ${Math.abs(diff)}`;
@@ -2813,7 +2841,10 @@ app.get('/api/dia', auth, async (req, res) => {
       const c = caixaByTurno[turno.id] || { tpa: 0, transferencia: 0, dinheiro: 0, saida: 0 };
       const totalGerado = parseFloat(c.tpa || 0) + parseFloat(c.transferencia || 0) + parseFloat(c.dinheiro || 0);
       const totalFinal = totalGerado - parseFloat(c.saida || 0);
-      const totalVendas = stockFinal.reduce((sum, s) => sum + s.valor, 0);
+      const totalVendas = stockFinal.reduce(
+        (sum, s) => sum + (typeof s.valor === 'number' && Number.isFinite(s.valor) ? s.valor : 0),
+        0
+      );
 
       result.push({
         ...turno,
@@ -2880,9 +2911,8 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
       `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`
     );
     for (const p of produtos.rows) {
-      // «Encontrado» começa em 0; a referência ao turno anterior é só a coluna T. Anterior (prev_deixado no GET /dia).
       await client.query(
-        'INSERT INTO turno_stock (turno_id, produto_id, encontrado) VALUES ($1,$2,0) ON CONFLICT DO NOTHING',
+        'INSERT INTO turno_stock (turno_id, produto_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
         [turnoId, p.id]
       );
     }
@@ -2968,6 +2998,13 @@ app.post('/api/turnos/:id/reabrir', auth, requireRole('admin'), async (req, res)
   }
 });
 
+function parseTurnoStockEncontradoBody(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'string' && v.trim() === '') return null;
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   try {
     const { produto_id, encontrado, deixado, fechados } = req.body;
@@ -2980,13 +3017,14 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
         erro: 'Este produto não está incluído na folha de stock do turno. Activa «Stock no turno» em Produtos.'
       });
     }
+    const enc = parseTurnoStockEncontradoBody(encontrado);
     const r = await query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados)
        VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (turno_id, produto_id)
        DO UPDATE SET encontrado=$3, deixado=$4, fechados=$5
        RETURNING *`,
-      [req.params.id, produto_id, encontrado||0, deixado||0, fechados||0]
+      [req.params.id, produto_id, enc, deixado || 0, fechados || 0]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }

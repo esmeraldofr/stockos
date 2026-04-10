@@ -665,12 +665,37 @@ function fmtStockNumberAttr(v) {
   const r = Math.round(n * 1000) / 1000;
   return String(r);
 }
+/** «Encontrado»: vazio até o operador preencher (null na API, não 0 por defeito). */
+function parseEncontradoFromRow(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+function fmtStockEncontradoAttr(v) {
+  if (v === '' || v === null || v === undefined) return '';
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : parsePtOrIsoNumberString(String(v));
+  if (!Number.isFinite(n)) return '';
+  const r = Math.round(n * 1000) / 1000;
+  return String(r);
+}
+/** enc+entrada−deixado; NaN se «encontrado» ainda não definido. */
+function vendidoQtyFromStockParts(enc, ent, dei) {
+  const e = enc === null || enc === undefined || enc === '' ? NaN : parseFloat(enc);
+  if (!Number.isFinite(e)) return NaN;
+  return Math.max(0, e + (parseFloat(ent) || 0) - (parseFloat(dei) || 0));
+}
 /** type=number: ao sair, vazio ou inválido → 0 visível (evita desaparecer o zero). */
 function stockNumberInputBlur(el) {
   const pid = el.getAttribute('data-stock-pid');
   const field = el.getAttribute('data-stock-field');
   if (!pid || !field) return;
   const raw = String(el.value ?? '').trim();
+  if (field === 'encontrado' && raw === '') {
+    el.value = '';
+    el.classList.remove('stock-caixa-required-missing');
+    updateStock(pid, 'encontrado', '');
+    return;
+  }
   let n = parseFloat(raw);
   if (!Number.isFinite(n) || raw === '') n = 0;
   const row = S.turnoData?.stock?.find((s) => prodIdKey(s.produto_id) === prodIdKey(pid));
@@ -1843,18 +1868,18 @@ function isFinoBarrilNome(nome) {
 /** Linha de stock do turno para um produto: `stockBuf` (editável) ou fallback a `S.turnoData.stock`. */
 function getStockLineForProduto(pid) {
   const k = prodIdKey(pid);
-  if (!k) return { encontrado: 0, entrada: 0, deixado: 0, fechados: 0 };
+  if (!k) return { encontrado: null, entrada: 0, deixado: 0, fechados: 0 };
   if (stockBuf[k] != null) return stockBuf[k];
   const row = (S.turnoData?.stock || []).find(s => prodIdKey(s.produto_id) === k);
   if (row) {
     return {
-      encontrado: parseFloat(row.encontrado) || 0,
+      encontrado: parseEncontradoFromRow(row.encontrado),
       entrada: parseFloat(row.entrada) || 0,
       deixado: parseFloat(row.deixado) || 0,
       fechados: parseFloat(row.fechados) || 0
     };
   }
-  return { encontrado: 0, entrada: 0, deixado: 0, fechados: 0 };
+  return { encontrado: null, entrada: 0, deixado: 0, fechados: 0 };
 }
 
 /** Bebidas por unidade: linhas a partir do stock do turno (API), não só do catálogo /produtos. */
@@ -1868,7 +1893,8 @@ function forEachBebidaUnidadeVendidaLinha(cb) {
     if (isFinoBarrilNome(vendasProdNomes[pid])) continue;
     if (copo.has(pid)) continue;
     const b = getStockLineForProduto(pid);
-    let vend = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    let vend = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+    if (!Number.isFinite(vend)) continue;
     if (vend <= 0 && parseFloat(s.vendido) > 0) vend = Math.max(0, parseFloat(s.vendido));
     if (vend <= 0) continue;
     const nome = s.produto_nome || vendasProdNomes[pid] || 'Bebida';
@@ -1885,8 +1911,9 @@ function calcMenuQty(prodId) {
   if (!recipe.length) return null;
   let min = Infinity;
   for (const comp of recipe) {
-    const b = stockBuf[prodIdKey(comp.componente_id)] || { encontrado:0, entrada:0, deixado:0 };
-    const vendido = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    const b = stockBuf[prodIdKey(comp.componente_id)] || { encontrado: null, entrada: 0, deixado: 0 };
+    const vendido = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+    if (!Number.isFinite(vendido)) return null;
     min = Math.min(min, vendido / parseFloat(comp.quantidade));
   }
   return min === Infinity ? 0 : Math.floor(min);
@@ -1894,14 +1921,16 @@ function calcMenuQty(prodId) {
 
 function calcStandaloneQty(prodId) {
   const pk = prodIdKey(prodId);
-  const b = stockBuf[pk] || { encontrado:0, entrada:0, deixado:0 };
-  const total = Math.max(0, b.encontrado + b.entrada - b.deixado);
+  const b = stockBuf[pk] || { encontrado: null, entrada: 0, deixado: 0 };
+  const total = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+  if (!Number.isFinite(total)) return 0;
+  const totalN = Math.max(0, total);
   let comboUsage = 0;
   for (const [menuProdId, recipe] of Object.entries(receitasBuf)) {
     const comp = recipe.find((r) => prodIdKey(r.componente_id) === pk);
     if (comp) comboUsage += (calcMenuQty(menuProdId) || 0) * comp.quantidade;
   }
-  return Math.max(0, total - comboUsage);
+  return Math.max(0, totalN - comboUsage);
 }
 
 function refreshMenuQtys() {
@@ -1923,7 +1952,9 @@ function refreshMenuQtys() {
     const el = document.getElementById(`venda-qty-${prodId}`);
     const pid = String(prodId);
     const b = getStockLineForProduto(prodId);
-    let qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    let qty = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+    if (!Number.isFinite(qty)) qty = 0;
+    else qty = Math.max(0, qty);
     const rowSt = (S.turnoData?.stock || []).find(r => String(r.produto_id) === pid);
     if (qty <= 0 && rowSt && parseFloat(rowSt.vendido) > 0) qty = Math.max(0, parseFloat(rowSt.vendido));
     if (el) el.textContent = fmtNum(qty);
@@ -2030,7 +2061,7 @@ async function loadTurno() {
       const sid = prodIdKey(s.produto_id);
       if (!sid) return;
       stockBuf[sid] = {
-        encontrado: parseFloat(s.encontrado)||0,
+        encontrado: parseEncontradoFromRow(s.encontrado),
         entrada: parseFloat(s.entrada)||0,
         deixado: parseFloat(s.deixado)||0,
         fechados: parseFloat(s.fechados)||0
@@ -2089,8 +2120,13 @@ async function loadTurno() {
       return items.map((s) => {
         const pid = prodIdKey(s.produto_id);
         if (!pid) return '';
-        const vend = Math.max(0, (stockBuf[pid]?.encontrado||0) + (stockBuf[pid]?.entrada||0) - (stockBuf[pid]?.deixado||0));
-        const vendTxt = vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}` : '';
+        const vend = vendidoQtyFromStockParts(
+          stockBuf[pid]?.encontrado,
+          stockBuf[pid]?.entrada,
+          stockBuf[pid]?.deixado
+        );
+        const vendTxt =
+          Number.isFinite(vend) && vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}` : '';
         /* Comparação: só falta/sobra visíveis; sem ✓ verde quando enc. = T. anterior (não «mencionar» o normal). */
         let compHtml = '<span class="comp-null">—</span>';
         if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
@@ -2105,7 +2141,7 @@ async function loadTurno() {
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div></td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
-            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockNumberAttr(s.encontrado)}"
+            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="encontrado" title="Obrigatório" ${inputAttr}/></td>
             <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
@@ -2373,7 +2409,8 @@ async function loadVendasMenu(turnoId, canEdit) {
       const cfg = bebidaCopoCfg[pid];
       const copos = vendasBuf[pid] || 0;
       const b = getStockLineForProduto(p.id);
-      const kgStock = Math.max(0, b.encontrado + b.entrada - b.deixado);
+      const kgStockRaw = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+      const kgStock = Number.isFinite(kgStockRaw) ? Math.max(0, kgStockRaw) : 0;
       const precoLinha =
         cfg.qtdPacote >= 2 && cfg.precoPacote > 0
           ? `${fmt(cfg.preco)}/copo · ${cfg.qtdPacote} copos ${fmt(cfg.precoPacote)}`
@@ -2393,7 +2430,9 @@ async function loadVendasMenu(turnoId, canEdit) {
       bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
       const pid = prodIdKey(p.id);
       const b = getStockLineForProduto(p.id);
-      let qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
+      let qty = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+      if (!Number.isFinite(qty)) qty = 0;
+      else qty = Math.max(0, qty);
       const rowSt = (S.turnoData.stock || []).find((r) => prodIdKey(r.produto_id) === pid);
       if (qty <= 0 && rowSt && parseFloat(rowSt.vendido) > 0) qty = Math.max(0, parseFloat(rowSt.vendido));
       return `<div class="produto-row">
@@ -2564,7 +2603,7 @@ async function vendaQtyInputBlur(el) {
     const cfg = bebidaCopoCfg[prodId];
     if (cfg && cfg.kgPorCopo > 0) {
       const delta = q - prev;
-      if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
+      if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado: null, entrada: 0, deixado: 0, fechados: 0 };
       stockBuf[prodId].deixado = Math.max(0, (parseFloat(stockBuf[prodId].deixado) || 0) - delta * cfg.kgPorCopo);
       updateStock(prodIdRaw, 'deixado', fmtStockNumberAttr(stockBuf[prodId].deixado));
     } else {
@@ -2581,19 +2620,24 @@ async function vendaQtyInputBlur(el) {
 function updateStock(pid, field, value) {
   const k = prodIdKey(pid);
   if (!k) return;
-  if (!stockBuf[k]) stockBuf[k] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
-  stockBuf[k][field] = parseRaw(value);
+  if (!stockBuf[k]) stockBuf[k] = { encontrado: null, entrada: 0, deixado: 0, fechados: 0 };
+  if (field === 'encontrado') {
+    const t = String(value ?? '').trim();
+    stockBuf[k].encontrado = t === '' ? null : parseRaw(value);
+  } else {
+    stockBuf[k][field] = parseRaw(value);
+  }
   const inp = document.querySelector(`input[type="number"][data-stock-pid="${k}"][data-stock-field="${field}"]`);
   if (inp && document.activeElement !== inp) {
     const n = stockBuf[k][field];
-    inp.value = fmtStockNumberAttr(n);
+    inp.value = field === 'encontrado' ? fmtStockEncontradoAttr(n) : fmtStockNumberAttr(n);
   }
-  const { encontrado:enc, entrada:ent, deixado:dei } = stockBuf[k];
+  const { encontrado: enc, entrada: ent, deixado: dei } = stockBuf[k];
   const prod = S.turnoData?.stock?.find((s) => prodIdKey(s.produto_id) === k);
-  const vend = Math.max(0, enc + ent - dei);
+  const vend = vendidoQtyFromStockParts(enc, ent, dei);
   const ve = document.getElementById(`vend-${k}`);
   const tipoM = prod?.tipo_medicao || 'unidade';
-  if (ve) ve.textContent = vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(tipoM)}` : '';
+  if (ve) ve.textContent = Number.isFinite(vend) && vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(tipoM)}` : '';
   refreshMenuQtys();
   renderIrregularidadesTurno();
   // Auto-save
@@ -2616,7 +2660,9 @@ function getVendidoRegistadoEmVendas(s) {
     return calcStandaloneQty(pid);
   }
   const b = getStockLineForProduto(pid);
-  let vend = Math.max(0, b.encontrado + b.entrada - b.deixado);
+  let vend = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+  if (!Number.isFinite(vend)) return 0;
+  vend = Math.max(0, vend);
   if (vend <= 0 && parseFloat(s.vendido) > 0) vend = Math.max(0, parseFloat(s.vendido));
   return vend;
 }
@@ -2675,7 +2721,8 @@ function aplicarFinoBarrilZeroParaRecipienteKg(turno, canEdit) {
   const sid = prodIdKey(row.produto_id);
   if (!sid || !stockBuf[sid]) return false;
   let ch = false;
-  if (parseFloat(stockBuf[sid].encontrado) === 0) {
+  const encB = stockBuf[sid].encontrado;
+  if (encB == null || encB === '' || parseFloat(encB) === 0) {
     stockBuf[sid].encontrado = kg;
     ch = true;
   }
@@ -2744,14 +2791,12 @@ function totalQtyComponenteFromMenusReceitaDirecta(vm, componenteProdId, receita
  */
 function buildIrregStockVsMenusHtml({ stockRow, stockBuf, vendasBuf, receitasIrreg, prodArr, receitaLabel }) {
   const pidB = prodIdKey(stockRow.produto_id);
-  const b = stockBuf[pidB] || { encontrado: 0, entrada: 0, deixado: 0 };
-  const enc = parseFloat(b.encontrado);
-  const ent = parseFloat(b.entrada);
-  const dei = parseFloat(b.deixado);
-  const encN = Number.isFinite(enc) ? enc : parseFloat(stockRow.encontrado) || 0;
-  const entN = Number.isFinite(ent) ? ent : parseFloat(stockRow.entrada) || 0;
-  const deiN = Number.isFinite(dei) ? dei : parseFloat(stockRow.deixado) || 0;
-  const qtyStock = Math.max(0, encN + entN - deiN);
+  const b = stockBuf[pidB] || {};
+  const enc = b.encontrado != null && b.encontrado !== '' ? b.encontrado : parseEncontradoFromRow(stockRow.encontrado);
+  const ent = Number.isFinite(parseFloat(b.entrada)) ? parseFloat(b.entrada) : parseFloat(stockRow.entrada) || 0;
+  const dei = Number.isFinite(parseFloat(b.deixado)) ? parseFloat(b.deixado) : parseFloat(stockRow.deixado) || 0;
+  const qtyRaw = vendidoQtyFromStockParts(enc, ent, dei);
+  const qtyStock = Number.isFinite(qtyRaw) ? Math.max(0, qtyRaw) : 0;
   const rbp = receitasByProdutoFromIrregBuf(receitasIrreg);
   const vm = vmFromVendasBufIrreg(vendasBuf);
   const qtyMenus = totalQtyComponenteFromMenusReceitaDirecta(vm, stockRow.produto_id, rbp, prodArr);
@@ -2837,15 +2882,22 @@ function buildIrregularidadesHtmlParts({
       const prev = s.prev_deixado;
       if (prev !== null && prev !== undefined) temPrev = true;
       const sid = prodIdKey(s.produto_id);
-      const b = stockBuf[sid] || { encontrado: 0, entrada: 0, deixado: 0, fechados: 0 };
-      const enc = parseFloat(b.encontrado);
-      const encN = Number.isFinite(enc) ? enc : parseFloat(s.encontrado) || 0;
+      const b = stockBuf[sid] || { encontrado: null, entrada: 0, deixado: 0, fechados: 0 };
+      const encBuf = b.encontrado;
+      let encN;
+      if (encBuf != null && encBuf !== '' && Number.isFinite(parseFloat(encBuf))) {
+        encN = parseFloat(encBuf);
+      } else if (s.encontrado != null && s.encontrado !== '' && Number.isFinite(parseFloat(s.encontrado))) {
+        encN = parseFloat(s.encontrado);
+      } else {
+        encN = NaN;
+      }
       const med = medicaoSigla(s.tipo_medicao || 'unidade');
       let alertEnc = false;
       let prevNum = null;
-      if (prev !== null && prev !== undefined) {
+      if (prev !== null && prev !== undefined && Number.isFinite(encN)) {
         prevNum = parseFloat(prev);
-        if (Math.abs(encN - prevNum) >= 0.001) alertEnc = true;
+        if (Number.isFinite(prevNum) && Math.abs(encN - prevNum) >= 0.001) alertEnc = true;
       }
       rowsL.push({ s, encN, med, alertEnc, prevNum });
     }
@@ -2875,15 +2927,9 @@ function buildIrregularidadesHtmlParts({
   const barrilRow = stock.find((s) => prodNomeNorm(s.produto_nome) === 'fino barril');
   if (barrilRow) {
     const pidB = prodIdKey(barrilRow.produto_id);
-    const b = stockBuf[pidB] || { encontrado: 0, entrada: 0, deixado: 0 };
-    const enc = parseFloat(b.encontrado);
-    const ent = parseFloat(b.entrada);
-    const dei = parseFloat(b.deixado);
-    const encN = Number.isFinite(enc) ? enc : parseFloat(barrilRow.encontrado) || 0;
-    const entN = Number.isFinite(ent) ? ent : parseFloat(barrilRow.entrada) || 0;
-    const deiN = Number.isFinite(dei) ? dei : parseFloat(barrilRow.deixado) || 0;
-    const kgVend = Math.max(0, encN + entN - deiN);
-    const coposStock = kgVend / KG_FINO_COPO;
+    const b = stockBuf[pidB] || { encontrado: null, entrada: 0, deixado: 0 };
+    const kgVend = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+    const coposStock = Number.isFinite(kgVend) ? kgVend / KG_FINO_COPO : NaN;
     const id400 = resolveProdutoIdPorNomeFromLists(stock, prodArr, 'fino 400');
     const id1000 = resolveProdutoIdPorNomeFromLists(stock, prodArr, 'fino 1000');
     let v400 = 0;
@@ -2891,8 +2937,8 @@ function buildIrregularidadesHtmlParts({
     if (id400) v400 = parseFloat(vendasBuf[prodIdKey(id400)]) || 0;
     if (id1000) v1000 = parseFloat(vendasBuf[prodIdKey(id1000)]) || 0;
     const coposVendas = v400 + v1000;
-    const diff = coposStock - coposVendas;
-    const ok = Math.abs(diff) < 0.06;
+    const diff = Number.isFinite(coposStock) ? coposStock - coposVendas : NaN;
+    const ok = Number.isFinite(diff) && Math.abs(diff) < 0.06;
     const missing = !id400 || !id1000;
     if (!ok || missing) {
       const border = 'rgba(251,146,60,0.45)';
@@ -2902,9 +2948,9 @@ function buildIrregularidadesHtmlParts({
       finoHtml = `
     <div style="margin-top:10px;padding:8px 10px;border-radius:6px;border:1px solid ${border};background:${bg};font-size:12px;color:#cbd5e1;line-height:1.4">
       <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">Fino barril ↔ 400+1000</div>
-      <div><span style="color:#64748b">${fmtNum(kgVend)} kg</span> → <strong>${fmtNum(coposStock)}</strong> copos <span style="color:#475569">/ ${fmtNum(KG_FINO_COPO)}</span></div>
+      <div><span style="color:#64748b">${Number.isFinite(kgVend) ? fmtNum(kgVend) : '—'} kg</span> → <strong>${Number.isFinite(coposStock) ? fmtNum(coposStock) : '—'}</strong> copos <span style="color:#475569">/ ${fmtNum(KG_FINO_COPO)}</span></div>
       <div style="margin-top:4px;font-size:11px">400: ${lin400} · 1000: ${lin1000}</div>
-      <div style="margin-top:4px">Σ vendas <strong>${fmtNum(coposVendas)}</strong> copos · <span style="color:#94a3b8">Δ</span> <strong style="color:#fb923c">${diff >= 0 ? '+' : ''}${fmtNum(diff)}</strong></div>
+      <div style="margin-top:4px">Σ vendas <strong>${fmtNum(coposVendas)}</strong> copos · <span style="color:#94a3b8">Δ</span> <strong style="color:#fb923c">${Number.isFinite(diff) ? `${diff >= 0 ? '+' : ''}${fmtNum(diff)}` : '—'}</strong></div>
       ${missing ? '<div style="margin-top:4px;font-size:11px;color:#fbbf24">Faltam Fino 400/1000 no catálogo/stock.</div>' : ''}
     </div>`;
     }
@@ -2964,7 +3010,7 @@ function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas) {
     const sid = prodIdKey(s.produto_id);
     if (!sid) return;
     stockBufL[sid] = {
-      encontrado: parseFloat(s.encontrado) || 0,
+      encontrado: parseEncontradoFromRow(s.encontrado),
       entrada: parseFloat(s.entrada) || 0,
       deixado: parseFloat(s.deixado) || 0,
       fechados: parseFloat(s.fechados) || 0
@@ -3044,40 +3090,43 @@ function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas) {
   const bebidaCopoProdIdSet = new Set(bebidaCopoProdIdsL);
   function getStockLineL(pid) {
     const k = prodIdKey(pid);
-    if (!k) return { encontrado: 0, entrada: 0, deixado: 0, fechados: 0 };
+    if (!k) return { encontrado: null, entrada: 0, deixado: 0, fechados: 0 };
     if (stockBufL[k] != null) return stockBufL[k];
     const row = stock.find((s) => prodIdKey(s.produto_id) === k);
     if (row) {
       return {
-        encontrado: parseFloat(row.encontrado) || 0,
+        encontrado: parseEncontradoFromRow(row.encontrado),
         entrada: parseFloat(row.entrada) || 0,
         deixado: parseFloat(row.deixado) || 0,
         fechados: parseFloat(row.fechados) || 0
       };
     }
-    return { encontrado: 0, entrada: 0, deixado: 0, fechados: 0 };
+    return { encontrado: null, entrada: 0, deixado: 0, fechados: 0 };
   }
   function calcMenuQtyL(prodId) {
     const recipe = receitasBufL[prodIdKey(prodId)] || [];
     if (!recipe.length) return null;
     let min = Infinity;
     for (const comp of recipe) {
-      const b = stockBufL[prodIdKey(comp.componente_id)] || { encontrado: 0, entrada: 0, deixado: 0 };
-      const vendido = Math.max(0, b.encontrado + b.entrada - b.deixado);
+      const b = stockBufL[prodIdKey(comp.componente_id)] || { encontrado: null, entrada: 0, deixado: 0 };
+      const vendido = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+      if (!Number.isFinite(vendido)) return null;
       min = Math.min(min, vendido / parseFloat(comp.quantidade));
     }
     return min === Infinity ? 0 : Math.floor(min);
   }
   function calcStandaloneQtyL(prodId) {
     const pk = prodIdKey(prodId);
-    const b = stockBufL[pk] || { encontrado: 0, entrada: 0, deixado: 0 };
-    const total = Math.max(0, b.encontrado + b.entrada - b.deixado);
+    const b = stockBufL[pk] || { encontrado: null, entrada: 0, deixado: 0 };
+    const total = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+    if (!Number.isFinite(total)) return 0;
+    const totalN = Math.max(0, total);
     let comboUsage = 0;
     for (const [menuProdId, recipe] of Object.entries(receitasBufL)) {
       const comp = recipe.find((r) => prodIdKey(r.componente_id) === pk);
       if (comp) comboUsage += (calcMenuQtyL(menuProdId) || 0) * comp.quantidade;
     }
-    return Math.max(0, total - comboUsage);
+    return Math.max(0, totalN - comboUsage);
   }
   function totalVendasKzL() {
     let total = 0;
@@ -3102,7 +3151,9 @@ function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas) {
       if (isFinoBarrilNome(vendasProdNomesL[pid])) continue;
       if (bebidaCopoProdIdSet.has(pid)) continue;
       const b = getStockLineL(pid);
-      let vend = Math.max(0, b.encontrado + b.entrada - b.deixado);
+      let vend = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
+      if (!Number.isFinite(vend)) continue;
+      vend = Math.max(0, vend);
       if (vend <= 0 && parseFloat(s.vendido) > 0) vend = Math.max(0, parseFloat(s.vendido));
       if (vend <= 0) continue;
       const valSnap = s.valor != null && s.valor !== '' ? parseFloat(s.valor) : NaN;
@@ -3495,7 +3546,7 @@ async function submitEntrada(turnoId) {
                             .reduce((s, e) => s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1), 0);
     const cell = document.getElementById(`entrada-${pid}`);
     if (cell) cell.textContent = fmtQtyInput(soma);
-    if (!stockBuf[pid]) stockBuf[pid] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
+    if (!stockBuf[pid]) stockBuf[pid] = { encontrado: null, entrada: 0, deixado: 0, fechados: 0 };
     stockBuf[pid].entrada = soma;
     updateStock(pidRaw, 'entrada', soma);
     const stocks = S.turnoData?.stock || [];

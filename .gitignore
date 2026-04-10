@@ -27,3 +27,7 @@ build/
 # Editor
 .vscode/
 .idea/
+
+# Python (scripts/ci)
+**/__pycache__/
+*.pyc

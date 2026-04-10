@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-fechar-equipa-real">
+<html lang="pt" data-stockos-ui="2026-03-31-turno-sticky-clear">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -923,24 +923,34 @@ function suc(id, msg) { const el = document.getElementById(id); if (el) el.inner
 function turnoMsgIdle() {
   const el = document.getElementById('turno-msg');
   if (!el) return;
+  if (turnoMsgStickyErr) {
+    el.className = 'turno-msg turno-msg-errbox';
+    el.textContent = turnoMsgStickyErr;
+    return;
+  }
   el.className = 'turno-msg';
   el.innerHTML = '<span class="turno-msg-spacer">&nbsp;</span>';
 }
 function turnoMsgPending(t) {
+  if (turnoMsgStickyErr) return;
   const el = document.getElementById('turno-msg');
   if (!el) return;
   el.className = 'turno-msg turno-msg-pending';
   el.textContent = t || 'A guardar…';
 }
 function turnoMsgOk(t) {
+  if (turnoMsgStickyErr) return;
   const el = document.getElementById('turno-msg');
   if (!el) return;
   el.className = 'turno-msg turno-msg-ok';
   el.textContent = t || 'Guardado';
 }
-function turnoMsgErr(msg) {
+/** @param {boolean} [sticky] true = aviso de validação ao fechar; não é apagado pelo auto-guardar */
+function turnoMsgErr(msg, sticky) {
   const el = document.getElementById('turno-msg');
   if (!el) return;
+  if (sticky === true) turnoMsgStickyErr = String(msg || '');
+  else turnoMsgStickyErr = null;
   el.className = 'turno-msg turno-msg-errbox';
   el.textContent = String(msg || 'Erro');
 }
@@ -1872,6 +1882,8 @@ function clearTurnoAutosaveTimers() {
   clearTimeout(autoSaveCaixaTimer);
   autoSaveCaixaTimer = null;
 }
+/** Erro de validação ao fechar — não substituir por «A guardar…» / «Guardado». */
+let turnoMsgStickyErr = null;
 let caixaBuf = {};
 let receitasBuf = {}; // { produto_id: [{componente_id, quantidade}] }
 let menuProdIds   = []; // ids dos produtos de menu (inserção manual)
@@ -2067,6 +2079,7 @@ async function navTurno(dir) {
 
 async function loadTurno() {
   clearTurnoAutosaveTimers();
+  turnoMsgStickyErr = null;
   const mySeq = ++loadTurnoSeq;
   const myTurnoId = S.turnoId;
   const myDate = S.date;
@@ -2106,6 +2119,7 @@ async function loadTurno() {
         turnoMsgEl.innerHTML = `<div class="alert alert-warn" style="margin:0 0 10px;font-size:12px">Este turno foi aberto antes do horário oficial (início às ${hi} em Angola). Fecha o turno e volta a abrir após essa hora, ou contacta a gerência.</div>`;
       } else {
         turnoMsgEl.innerHTML = '<span class="turno-msg-spacer">&nbsp;</span>';
+        turnoMsgEl.className = 'turno-msg';
       }
     }
 
@@ -2668,6 +2682,7 @@ function updateStock(pid, field, value) {
   if (ve) ve.textContent = Number.isFinite(vend) && vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(tipoM)}` : '';
   refreshMenuQtys();
   renderIrregularidadesTurno();
+  maybeClearTurnoStickyAfterStockCaixaOk();
   // Auto-save
   autoSaveSchedule();
 }
@@ -3289,6 +3304,7 @@ function calcCaixa() {
   if (elTG) elTG.textContent = Number.isFinite(tg) ? fmtKzOrEmpty(tg) : '—';
   if (elTF) elTF.textContent = Number.isFinite(tf) ? fmtKzOrEmpty(tf) : '—';
   renderIrregularidadesTurno();
+  maybeClearTurnoStickyAfterStockCaixaOk();
   // Auto-save
   const turnoId = S.turnoData?.id;
   if (!turnoId) return;
@@ -3322,9 +3338,27 @@ async function switchTurnoTab(name, btn) {
 }
 
 function clearStockCaixaValidationHighlight() {
+  turnoMsgStickyErr = null;
   document.querySelectorAll('.stock-caixa-required-missing').forEach((el) =>
     el.classList.remove('stock-caixa-required-missing')
   );
+}
+
+/** Se o aviso fixo era só stock/caixa e já está tudo preenchido, remove destaque e mensagem. */
+function maybeClearTurnoStickyAfterStockCaixaOk() {
+  if (!turnoMsgStickyErr) return;
+  if (
+    turnoMsgStickyErr.includes('Quem realmente trabalhou') ||
+    turnoMsgStickyErr.includes('«Quem realmente trabalhou»')
+  ) {
+    return;
+  }
+  if (collectMissingStockCaixaObrigatorio().length > 0) return;
+  document.querySelectorAll('.stock-caixa-required-missing').forEach((el) =>
+    el.classList.remove('stock-caixa-required-missing')
+  );
+  turnoMsgStickyErr = null;
+  turnoMsgIdle();
 }
 
 function collectMissingStockCaixaObrigatorio() {
@@ -3392,7 +3426,8 @@ async function fecharTurno(ev, id) {
   if (missing.length) {
     missing.forEach((el) => el.classList.add('stock-caixa-required-missing'));
     turnoMsgErr(
-      'Preenche todos os campos obrigatórios: em Stock (Encontrado e Deixado de cada produto) e em Caixa (TPA, Transferência e Dinheiro).'
+      'Preenche todos os campos obrigatórios: em Stock (Encontrado e Deixado de cada produto) e em Caixa (TPA, Transferência e Dinheiro).',
+      true
     );
     await focusTurnoFieldParaValidacao(missing[0]);
     return;
@@ -3406,7 +3441,8 @@ async function fecharTurno(ev, id) {
   }
   if (!Array.isArray(equipaReal) || equipaReal.length === 0) {
     turnoMsgErr(
-      'Regista pelo menos uma pessoa em «Quem realmente trabalhou» (separador Escala) antes de fechar o turno.'
+      'Regista pelo menos uma pessoa em «Quem realmente trabalhou» (separador Escala) antes de fechar o turno.',
+      true
     );
     const btnEscala = document.querySelector('.turno-tab[data-turno-tab="escala"]');
     if (btnEscala) await switchTurnoTab('escala', btnEscala);

@@ -452,6 +452,8 @@ ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTE
 
 -- ============================================================
 --  TURNO_PEDIDOS — pedidos ao balcão (uma fatura por pedido)
+--  produto_id: o mesmo tipo que produtos.id (INTEGER por omissão; se id for UUID,
+--  criar via API ensureTurnoPedidos ou ALTER COLUMN para UUID + FK).
 -- ============================================================
 CREATE TABLE IF NOT EXISTS turno_pedidos (
   id            SERIAL          PRIMARY KEY,

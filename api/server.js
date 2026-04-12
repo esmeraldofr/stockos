@@ -580,7 +580,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-01-dbready-never-reject';
+const STOCKOS_API_BUILD = '2026-04-01-pedidos-fk-produto-type';
 
 /** Folha de stock do turno: só Menu, Ingredientes e Bebidas — categoria «outro» não entra. */
 const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
@@ -1205,6 +1205,29 @@ async function ensurePrecosVendasSnapshots() {
 }
 
 async function ensureTurnoPedidos() {
+  /** Alinhar produto_id ao tipo de produtos.id (INTEGER vs UUID — FK falha se diferir). */
+  const _pidCheck = await query(
+    `SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
+  ).catch(() => ({ rows: [] }));
+  const _pidType = _pidCheck.rows.length > 0 ? String(_pidCheck.rows[0].data_type).toLowerCase() : 'integer';
+  const pidSql =
+    _pidType === 'uuid'
+      ? 'UUID'
+      : _pidType === 'bigint'
+        ? 'BIGINT'
+        : 'INTEGER';
+
+  const _tplCheck = await query(
+    `SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='turno_pedido_linhas' AND column_name='produto_id'`
+  ).catch(() => ({ rows: [] }));
+  if (_tplCheck.rows.length > 0) {
+    const cur = String(_tplCheck.rows[0].data_type).toLowerCase();
+    if (cur !== _pidType) {
+      await query(`DROP TABLE IF EXISTS turno_pedido_linhas CASCADE`);
+      await query(`DROP TABLE IF EXISTS turno_pedidos CASCADE`);
+    }
+  }
+
   /** Usar query() — qry() engolia falhas e as tabelas nunca eram criadas. */
   await query(
     `CREATE TABLE IF NOT EXISTS turno_pedidos (
@@ -1218,7 +1241,7 @@ async function ensureTurnoPedidos() {
     `CREATE TABLE IF NOT EXISTS turno_pedido_linhas (
       id SERIAL PRIMARY KEY,
       pedido_id INTEGER NOT NULL REFERENCES turno_pedidos(id) ON DELETE CASCADE,
-      produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+      produto_id ${pidSql} NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
       quantidade NUMERIC(10,3) NOT NULL DEFAULT 0
     )`
   );

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-pedidos-balcao">
+<html lang="pt" data-stockos-ui="2026-03-31-pedidos-aba">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2208,6 +2208,7 @@ async function loadTurno() {
       <div class="turno-tabs">
           <button type="button" class="turno-tab active" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
           <button type="button" class="turno-tab" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
+          <button type="button" class="turno-tab" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
           <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
           <button type="button" class="turno-tab" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
       </div>
@@ -2250,14 +2251,17 @@ async function loadTurno() {
       </div>
 
       <div id="tab-vendas" class="turno-tab-panel">
+        <div class="card" id="vendas-menu-card">
+          <div class="card-title">🍽️ Vendas de Menu</div>
+          <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
+        </div>
+      </div>
+
+      <div id="tab-pedidos" class="turno-tab-panel">
         <div class="card" id="pedidos-balcao-card" style="margin-bottom:12px">
           <div class="card-title">Pedidos ao balcão</div>
           <p style="font-size:12px;color:#64748b;margin:-4px 0 10px;line-height:1.45">Um pedido por cliente ou mesa. Cada pedido tem a sua fatura; as quantidades somam nas vendas do turno.</p>
           <div id="pedidos-balcao-mount"><span style="color:#64748b">A carregar…</span></div>
-        </div>
-        <div class="card" id="vendas-menu-card">
-          <div class="card-title">🍽️ Vendas de Menu</div>
-          <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
         </div>
       </div>
 
@@ -2991,7 +2995,7 @@ async function loadTurnoResumoTab(turnoId) {
 
   let resumoVendasHtml = lastResumoVendasCardHtml
     ? lastResumoVendasCardHtml.replace(/\bid="vendas-total-geral"/g, 'id="resumo-tab-total-vendas"')
-    : '<div class="card"><div class="card-title">Resumo de vendas</div><span style="color:#64748b">Sem linhas de resumo (regista vendas na aba Vendas).</span></div>';
+    : '<div class="card"><div class="card-title">Resumo de vendas</div><span style="color:#64748b">Sem linhas de resumo (regista vendas na aba Vendas ou pedidos na aba Pedidos ao balcão).</span></div>';
 
   mount.innerHTML = resumoVendasHtml;
 }
@@ -3703,7 +3707,7 @@ async function switchTurnoTab(name, btn) {
     const stock = S.turnoData?.stock || [];
     if (tid) await loadRegistosMovimentosSection(tid, stock, !!S.turnoCanEdit);
   }
-  if (name === 'vendas') {
+  if (name === 'vendas' || name === 'pedidos') {
     const tid = S.turnoData?.id;
     if (tid) await loadVendasMenu(tid, !!S.turnoCanEdit);
   }

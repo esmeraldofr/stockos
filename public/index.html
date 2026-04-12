@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-fix-nullish-or">
+<html lang="pt" data-stockos-ui="2026-03-31-pedido-tipo-pagamento">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2655,6 +2655,8 @@ function buildFaturaPedidoDocumentHtml(docRef, pedido) {
   const extraMeta = cliente
     ? `<br/>Cliente / referência: <strong>${escapeHtml(cliente)}</strong>`
     : '';
+  const tpLabel = pedidoTipoPagamentoLabel(pedido.tipo_pagamento);
+  const payMeta = `<br/>Pagamento: <strong>${escapeHtml(tpLabel)}</strong>`;
   const when = pedido.criado_em ? dateTimeLabel(pedido.criado_em) : '';
   return `<!DOCTYPE html><html lang="pt"><head><meta charset="utf-8"/><title>${escapeHtml(headTitle)}</title>
 <style>
@@ -2670,7 +2672,7 @@ th{background:#f5f5f5;font-size:11px;text-transform:uppercase;letter-spacing:.04
 @media print{body{padding:12px}.no-print{display:none!important}}
 </style></head><body>
 <h1>Fatura de pedido</h1>
-<div class="meta">StockOS · Ref. <strong>${escapeHtml(docRef)}</strong>${extraMeta}<br/>
+<div class="meta">StockOS · Ref. <strong>${escapeHtml(docRef)}</strong>${extraMeta}${payMeta}<br/>
 ${escapeHtml(dateLabelWithWeekday(S.date))} · ${escapeHtml(turnoLabel(S.turnoData.nome))}${when ? ` · ${escapeHtml(when)}` : ''}</div>
 <table>
 <thead><tr><th>Descrição</th><th class="t-r">Quantidade / preço</th><th class="t-r">Total</th></tr></thead>
@@ -2710,6 +2712,17 @@ function pedidoEmojiGrupo(grupo) {
   if (grupo === 'Avulso') return '🛒';
   if (grupo === 'Bebida') return '🥤';
   return '📦';
+}
+
+function pedidoTipoPagamentoLabel(cod) {
+  const m = {
+    dinheiro: 'Dinheiro',
+    tpa: 'TPA / cartão',
+    transferencia: 'Transferência',
+    mbway: 'MB WAY',
+    outro: 'Outro'
+  };
+  return m[cod] || m.dinheiro;
 }
 
 function pedidoBalcaoInitDraftForTurno(turnoId) {
@@ -2877,8 +2890,14 @@ async function registarPedidoBalcao(turnoId) {
     return;
   }
   const cliente = document.getElementById('pedido-cliente-nome')?.value || '';
+  const tipoPag =
+    document.getElementById('pedido-tipo-pagamento')?.value || 'dinheiro';
   const tid = String(turnoId);
-  await api('POST', `/turnos/${tid}/pedidos`, { cliente_nome: cliente, linhas });
+  await api('POST', `/turnos/${tid}/pedidos`, {
+    cliente_nome: cliente,
+    tipo_pagamento: tipoPag,
+    linhas
+  });
   window.__pedidoBalcaoDraft = {};
   window.__pedidoBalcaoDraftTurnoId = tid;
   await loadVendasMenu(tid, !!S.turnoCanEdit);
@@ -2948,6 +2967,17 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <input type="text" id="pedido-cliente-nome" maxlength="200" placeholder="Ex.: Mesa 2"
             style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px"/>
         </div>
+        <div class="field" style="margin-bottom:8px">
+          <label style="font-size:11px;color:#94a3b8">Tipo de pagamento</label>
+          <select id="pedido-tipo-pagamento"
+            style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px;cursor:pointer">
+            <option value="dinheiro">Dinheiro</option>
+            <option value="tpa">TPA / cartão</option>
+            <option value="transferencia">Transferência</option>
+            <option value="mbway">MB WAY</option>
+            <option value="outro">Outro</option>
+          </select>
+        </div>
         <div class="pedido-side-title" style="margin-top:4px">Teclado</div>
         <div class="pedido-keypad">
           <button type="button" class="pedido-kp-act" onclick="pedidoBalcaoKeypad('bs')">← Apagar</button>
@@ -2976,10 +3006,12 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             const tot = fmt(p.total_kz || 0);
             const when = p.criado_em ? dateTimeLabel(p.criado_em) : '';
             const cli = p.cliente_nome ? escapeHtml(p.cliente_nome) : '—';
+            const tp = escapeHtml(pedidoTipoPagamentoLabel(p.tipo_pagamento));
             return `<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #334155">
       <div>
         <div style="font-weight:600;color:#e2e8f0">Pedido #${p.id}</div>
         <div style="font-size:12px;color:#64748b">${escapeHtml(when)} · ${cli}</div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:2px">Pagamento: <strong style="color:#cbd5e1">${tp}</strong></div>
         <div style="font-size:13px;color:#94a3b8;margin-top:4px">Total <strong style="color:#4ade80">${tot}</strong></div>
       </div>
       <button type="button" class="btn btn-ghost btn-sm" onclick="imprimirFaturaPedidoPorId(${p.id})">Fatura</button>

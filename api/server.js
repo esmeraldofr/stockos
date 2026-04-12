@@ -1234,8 +1234,13 @@ async function ensureTurnoPedidos() {
       id SERIAL PRIMARY KEY,
       turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
       cliente_nome TEXT NOT NULL DEFAULT '',
+      tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro',
       criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`
+  );
+  await query(
+    `ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro'`,
+    []
   );
   await query(
     `CREATE TABLE IF NOT EXISTS turno_pedido_linhas (
@@ -3780,12 +3785,14 @@ async function produtoPermitePedidoVenda(client, produto_id) {
   return { ok: false, msg: 'Este produto não pode ser vendido em pedido ao balcão' };
 }
 
+const TIPOS_PAGAMENTO_PEDIDO = ['dinheiro', 'tpa', 'transferencia', 'mbway', 'outro'];
+
 app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
   try {
     await ensureTurnoPedidos();
     const turnoId = req.params.id;
     const r = await query(
-      `SELECT tp.id, tp.turno_id, tp.cliente_nome, tp.criado_em,
+      `SELECT tp.id, tp.turno_id, tp.cliente_nome, tp.tipo_pagamento, tp.criado_em,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
               p.preco_copos_pacote, p.qtd_copos_pacote
@@ -3803,6 +3810,7 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
           id: row.id,
           turno_id: row.turno_id,
           cliente_nome: row.cliente_nome,
+          tipo_pagamento: row.tipo_pagamento || 'dinheiro',
           criado_em: row.criado_em,
           linhas: []
         });
@@ -3849,7 +3857,7 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
     await ensureTurnoPedidos();
     await client.query('BEGIN');
     const turnoId = parseInt(req.params.id, 10);
-    const { cliente_nome, linhas } = req.body;
+    const { cliente_nome, linhas, tipo_pagamento } = req.body;
     const tCheck = await client.query(`SELECT id, estado FROM turnos WHERE id=$1`, [turnoId]);
     if (!tCheck.rows.length) {
       await client.query('ROLLBACK');
@@ -3885,9 +3893,14 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(400).json({ erro: 'Nenhuma linha válida (quantidade > 0).' });
     }
+    let tpag = String(tipo_pagamento || 'dinheiro')
+      .trim()
+      .toLowerCase()
+      .slice(0, 24);
+    if (!TIPOS_PAGAMENTO_PEDIDO.includes(tpag)) tpag = 'dinheiro';
     const pedidoIns = await client.query(
-      `INSERT INTO turno_pedidos (turno_id, cliente_nome) VALUES ($1, $2) RETURNING id, criado_em`,
-      [turnoId, String(cliente_nome || '').trim().slice(0, 200)]
+      `INSERT INTO turno_pedidos (turno_id, cliente_nome, tipo_pagamento) VALUES ($1, $2, $3) RETURNING id, criado_em`,
+      [turnoId, String(cliente_nome || '').trim().slice(0, 200), tpag]
     );
     const pedidoId = pedidoIns.rows[0].id;
     for (const line of normalized) {

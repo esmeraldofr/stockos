@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-pedido-bebida-unidade">
+<html lang="pt" data-stockos-ui="2026-03-31-conta-corrente-precos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2753,6 +2753,30 @@ function pedidoBalcaoTileClick(pid) {
   pedidoBalcaoSyncDraftUI();
 }
 
+/** Valor da linha e HTML do preço unitário na conta corrente (copos: pacote + resto). */
+function pedidoBalcaoValorLinha(o, q) {
+  const qty = parseFloat(q);
+  if (!o || !Number.isFinite(qty) || qty <= 0) return { line: 0, unitHtml: '—' };
+  if (o.grupo === 'BebidaCopo') {
+    const u = parseFloat(o.preco) || 0;
+    const n = parseInt(o.qtd_copos_pacote, 10) || 0;
+    const pp = parseFloat(o.preco_copos_pacote) || 0;
+    const line = precoVendaCopos(qty, u, n, pp);
+    let unitHtml =
+      `<span style="font-weight:600;color:#e2e8f0">${escapeHtml(fmt(u))}</span> <span style="font-size:10px;color:#64748b">/ copo</span>`;
+    if (n >= 2 && pp > 0) {
+      unitHtml += `<div style="font-size:10px;color:#64748b;margin-top:3px;line-height:1.25">Pacote ${n} copos ${escapeHtml(
+        fmt(pp)
+      )}</div>`;
+    }
+    return { line, unitHtml };
+  }
+  const preco = parseFloat(o.preco) || 0;
+  const line = preco * qty;
+  const unitHtml = `<span style="font-weight:600;color:#e2e8f0">${escapeHtml(fmt(preco))}</span> <span style="font-size:10px;color:#64748b">/ un.</span>`;
+  return { line, unitHtml };
+}
+
 function pedidoBalcaoSetFilter(btn) {
   if (!btn || !btn.getAttribute) return;
   const grupo = btn.getAttribute('data-grupo');
@@ -2765,7 +2789,9 @@ function pedidoBalcaoSetFilter(btn) {
   });
 }
 
-function pedidoBalcaoRecalcDraftTotal() {
+function pedidoBalcaoRefreshDraftLineTotals() {
+  const tbody = document.getElementById('pedido-draft-tbody');
+  if (!tbody) return;
   const catalog = window.__pedidoProdutosOpts || [];
   const map = {};
   catalog.forEach((o) => {
@@ -2773,14 +2799,22 @@ function pedidoBalcaoRecalcDraftTotal() {
   });
   const draft = window.__pedidoBalcaoDraft || {};
   let sum = 0;
-  for (const [pid, qty] of Object.entries(draft)) {
-    const q = parseFloat(qty);
-    if (!Number.isFinite(q) || q <= 0) continue;
-    const preco = parseFloat(map[pid]?.preco) || 0;
-    sum += preco * q;
-  }
+  tbody.querySelectorAll('tr[data-pid]').forEach((tr) => {
+    const pid = tr.getAttribute('data-pid');
+    const o = map[pid];
+    const q = parseFloat(draft[pid]);
+    if (!o || !Number.isFinite(q) || q <= 0) return;
+    const { line } = pedidoBalcaoValorLinha(o, q);
+    sum += line;
+    const td = tr.querySelector('.pedido-line-total');
+    if (td) td.textContent = fmt(line);
+  });
   const totalEl = document.getElementById('pedido-draft-total');
   if (totalEl) totalEl.textContent = fmt(sum);
+}
+
+function pedidoBalcaoRecalcDraftTotal() {
+  pedidoBalcaoRefreshDraftLineTotals();
 }
 
 function pedidoBalcaoDraftQtyInput(inp) {
@@ -2831,8 +2865,7 @@ function pedidoBalcaoSyncDraftUI() {
     const o = map[pid];
     if (!o) continue;
     const q = parseFloat(qty);
-    const preco = parseFloat(o.preco) || 0;
-    const line = preco * q;
+    const { line, unitHtml } = pedidoBalcaoValorLinha(o, q);
     sum += line;
     const pidAttr = escapeHtml(String(pid));
     rows += `<tr data-pid="${pidAttr}">
@@ -2841,8 +2874,10 @@ function pedidoBalcaoSyncDraftUI() {
           oninput="pedidoBalcaoDraftQtyInput(this)" onchange="pedidoBalcaoDraftQtyFromInput(this)"/>
       </td>
       <td style="vertical-align:middle;color:#e2e8f0">${escapeHtml(o.nome)}</td>
-      <td style="text-align:right;vertical-align:middle;color:#94a3b8;white-space:nowrap">${fmt(preco)}</td>
-      <td style="text-align:right;vertical-align:middle;color:#4ade80;white-space:nowrap">${fmt(line)}</td>
+      <td class="pedido-line-unit" style="text-align:right;vertical-align:middle;max-width:140px">${unitHtml}</td>
+      <td class="pedido-line-total" data-pid="${pidAttr}" style="text-align:right;vertical-align:middle;color:#4ade80;white-space:nowrap;font-weight:700">${escapeHtml(
+        fmt(line)
+      )}</td>
       <td style="vertical-align:middle">
         <button type="button" class="btn btn-ghost btn-sm" data-pid="${pidAttr}" onclick="pedidoBalcaoRemoveLine(this.getAttribute('data-pid'))" title="Remover">×</button>
       </td>
@@ -2967,8 +3002,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
               <tr>
                 <th style="width:56px">Qtd</th>
                 <th>Artigos</th>
-                <th style="text-align:right;white-space:nowrap">P/UN</th>
-                <th style="text-align:right;white-space:nowrap">Total</th>
+                <th style="text-align:right;max-width:140px" title="Preço por unidade (copo ou unidade)">Preço unit.</th>
+                <th style="text-align:right;white-space:nowrap" title="Total desta linha (qtd × preço)">Total linha</th>
                 <th></th>
               </tr>
             </thead>
@@ -3386,7 +3421,9 @@ async function loadVendasMenu(turnoId, canEdit) {
         id: p.id,
         nome: `${p.nome} (copos)`,
         grupo: 'BebidaCopo',
-        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0
+        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0,
+        qtd_copos_pacote: parseInt(p.qtd_copos_pacote, 10) || 0,
+        preco_copos_pacote: parseFloat(p.preco_copos_pacote) || 0
       });
     }
     for (const p of bebidaOutras) {

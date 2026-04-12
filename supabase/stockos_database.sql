@@ -460,9 +460,11 @@ CREATE TABLE IF NOT EXISTS turno_pedidos (
   turno_id      INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
   cliente_nome  TEXT            NOT NULL DEFAULT '',
   tipo_pagamento VARCHAR(24)    NOT NULL DEFAULT 'dinheiro',
+  com_entrega   BOOLEAN         NOT NULL DEFAULT FALSE,
   criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro';
+ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS com_entrega BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS turno_pedido_linhas (
   id            SERIAL          PRIMARY KEY,
   pedido_id     INTEGER         NOT NULL REFERENCES turno_pedidos(id) ON DELETE CASCADE,

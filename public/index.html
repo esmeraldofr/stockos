@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-fatura-pedido-precos">
+<html lang="pt" data-stockos-ui="2026-03-31-pedido-entrega">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2677,6 +2677,8 @@ function buildFaturaPedidoDocumentHtml(docRef, pedido) {
     : '';
   const tpLabel = pedidoTipoPagamentoLabel(pedido.tipo_pagamento);
   const payMeta = `<br/>Pagamento: <strong>${escapeHtml(tpLabel)}</strong>`;
+  const entLabel = pedidoEntregaLabel(!!pedido.com_entrega);
+  const entMeta = `<br/>Entrega: <strong>${escapeHtml(entLabel)}</strong>`;
   const when = pedido.criado_em ? dateTimeLabel(pedido.criado_em) : '';
   return `<!DOCTYPE html><html lang="pt"><head><meta charset="utf-8"/><title>${escapeHtml(headTitle)}</title>
 <style>
@@ -2692,7 +2694,7 @@ th{background:#f5f5f5;font-size:11px;text-transform:uppercase;letter-spacing:.04
 @media print{body{padding:12px}.no-print{display:none!important}}
 </style></head><body>
 <h1>Fatura de pedido</h1>
-<div class="meta">StockOS · Ref. <strong>${escapeHtml(docRef)}</strong>${extraMeta}${payMeta}<br/>
+<div class="meta">StockOS · Ref. <strong>${escapeHtml(docRef)}</strong>${extraMeta}${payMeta}${entMeta}<br/>
 ${escapeHtml(dateLabelWithWeekday(S.date))} · ${escapeHtml(turnoLabel(S.turnoData.nome))}${when ? ` · ${escapeHtml(when)}` : ''}</div>
 <table>
 <thead><tr><th>Descrição</th><th class="t-r">Qtd</th><th class="t-r">Preço unit.</th><th class="t-r">Total linha</th></tr></thead>
@@ -2743,6 +2745,10 @@ function pedidoTipoPagamentoLabel(cod) {
     outro: 'Outro'
   };
   return m[cod] || m.dinheiro;
+}
+
+function pedidoEntregaLabel(comEntrega) {
+  return comEntrega ? 'Com entrega' : 'Sem entrega (balcão)';
 }
 
 function pedidoBalcaoInitDraftForTurno(turnoId) {
@@ -2947,10 +2953,12 @@ async function registarPedidoBalcao(turnoId) {
   const cliente = document.getElementById('pedido-cliente-nome')?.value || '';
   const tipoPag =
     document.getElementById('pedido-tipo-pagamento')?.value || 'dinheiro';
+  const comEntrega = !!document.getElementById('pedido-com-entrega')?.checked;
   const tid = String(turnoId);
   await api('POST', `/turnos/${tid}/pedidos`, {
     cliente_nome: cliente,
     tipo_pagamento: tipoPag,
+    com_entrega: comEntrega,
     linhas
   });
   window.__pedidoBalcaoDraft = {};
@@ -3034,6 +3042,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             <option value="outro">Outro</option>
           </select>
         </div>
+        <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer;font-size:13px;color:#e2e8f0;user-select:none">
+          <input type="checkbox" id="pedido-com-entrega" style="width:18px;height:18px;accent-color:#0ea5e9;cursor:pointer"/>
+          <span>Entrega ao domicílio / fora do balcão</span>
+        </label>
         <div class="pedido-side-title" style="margin-top:4px">Teclado</div>
         <div class="pedido-keypad">
           <button type="button" class="pedido-kp-act" onclick="pedidoBalcaoKeypad('bs')">← Apagar</button>
@@ -3063,11 +3075,13 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             const when = p.criado_em ? dateTimeLabel(p.criado_em) : '';
             const cli = p.cliente_nome ? escapeHtml(p.cliente_nome) : '—';
             const tp = escapeHtml(pedidoTipoPagamentoLabel(p.tipo_pagamento));
+            const ent = escapeHtml(pedidoEntregaLabel(!!p.com_entrega));
             return `<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #334155">
       <div>
         <div style="font-weight:600;color:#e2e8f0">Pedido #${p.id}</div>
         <div style="font-size:12px;color:#64748b">${escapeHtml(when)} · ${cli}</div>
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">Pagamento: <strong style="color:#cbd5e1">${tp}</strong></div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:2px">Entrega: <strong style="color:#cbd5e1">${ent}</strong></div>
         <div style="font-size:13px;color:#94a3b8;margin-top:4px">Total <strong style="color:#4ade80">${tot}</strong></div>
       </div>
       <button type="button" class="btn btn-ghost btn-sm" onclick="imprimirFaturaPedidoPorId(${p.id})">Fatura</button>

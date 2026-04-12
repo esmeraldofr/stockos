@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-pedidos-aba">
+<html lang="pt" data-stockos-ui="2026-03-31-pedidos-pos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -191,6 +191,163 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 @media(max-width:540px){
   .vendas-menu-2col{grid-template-columns:1fr}
 }
+
+/* Pedidos ao balcão — layout tipo POS (grelha + painel lateral) */
+.pedidos-balcao-pos{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(260px,300px);
+  gap:14px;
+  align-items:start;
+  width:100%;
+  max-width:min(1180px,100%);
+}
+@media(max-width:900px){
+  .pedidos-balcao-pos{grid-template-columns:1fr}
+}
+.pedidos-balcao-tiles-wrap{
+  background:linear-gradient(165deg,#0a1628 0%,#1a3a5c 42%,#0f172a 100%);
+  border-radius:12px;
+  padding:12px 10px 14px;
+  border:1px solid #1e3a5f;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
+}
+.pedidos-balcao-filters{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin-bottom:12px;
+}
+.pedidos-balcao-filters button{
+  padding:6px 12px;
+  border-radius:8px;
+  border:1px solid #334155;
+  background:#0f172a;
+  color:#cbd5e1;
+  font-size:12px;
+  font-weight:600;
+  cursor:pointer;
+  transition:background .15s,border-color .15s,color .15s;
+}
+.pedidos-balcao-filters button:hover{border-color:#475569;background:#1e293b}
+.pedidos-balcao-filters button.pedido-filter--on{
+  background:#0ea5e9;
+  border-color:#38bdf8;
+  color:#0f172a;
+}
+.pedidos-balcao-tiles{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:8px;
+}
+@media(max-width:720px){
+  .pedidos-balcao-tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media(max-width:400px){
+  .pedidos-balcao-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+.pedido-prod-tile{
+  min-height:92px;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,.1);
+  background:linear-gradient(180deg,rgba(30,64,120,.55) 0%,rgba(15,23,42,.92) 100%);
+  padding:8px 5px 10px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:flex-end;
+  text-align:center;
+  cursor:pointer;
+  transition:transform .1s,border-color .12s,box-shadow .12s;
+  user-select:none;
+  -webkit-tap-highlight-color:transparent;
+}
+.pedido-prod-tile:hover{
+  transform:translateY(-1px);
+  border-color:rgba(56,189,248,.65);
+  box-shadow:0 4px 14px rgba(0,0,0,.25);
+}
+.pedido-prod-tile:active{transform:translateY(0)}
+.pedido-prod-tile.pedido-tile--hidden{display:none}
+.pedido-prod-tile__emoji{font-size:26px;line-height:1;margin-bottom:5px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))}
+.pedido-prod-tile__nome{
+  font-size:11px;
+  font-weight:600;
+  color:#f8fafc;
+  line-height:1.2;
+  max-height:3.6em;
+  overflow:hidden;
+  display:-webkit-box;
+  -webkit-line-clamp:3;
+  -webkit-box-orient:vertical;
+}
+.pedido-prod-tile__preco{font-size:10px;color:#94a3b8;margin-top:5px;font-weight:500}
+.pedidos-balcao-side{
+  background:#0f172a;
+  border:1px solid #334155;
+  border-radius:12px;
+  padding:12px;
+  position:sticky;
+  top:6px;
+}
+.pedidos-balcao-side .pedido-side-title{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+.pedido-draft-table-wrap{
+  max-height:min(42vh,320px);
+  overflow:auto;
+  border:1px solid #334155;
+  border-radius:8px;
+  margin-bottom:10px;
+}
+.pedido-draft-table-wrap table{width:100%;border-collapse:collapse;font-size:12px}
+.pedido-draft-table-wrap th,.pedido-draft-table-wrap td{padding:6px 8px;border-bottom:1px solid #1e293b;text-align:left}
+.pedido-draft-table-wrap th{background:#1e293b;color:#94a3b8;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+.pedido-draft-table-wrap td:last-child,.pedido-draft-table-wrap th:last-child{text-align:center;width:36px}
+.pedido-draft-qty{
+  width:52px;
+  text-align:right;
+  padding:4px 6px;
+  border-radius:6px;
+  border:1px solid #334155;
+  background:#0f172a;
+  color:#e2e8f0;
+  font-size:12px;
+  font-weight:600;
+}
+.pedido-total-bar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:10px 12px;
+  background:linear-gradient(90deg,#0369a1,#0ea5e9);
+  border-radius:8px;
+  margin-bottom:10px;
+  font-weight:800;
+  font-size:15px;
+  color:#fff;
+  letter-spacing:.02em;
+}
+.pedido-keypad{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:5px;
+  margin-top:8px;
+}
+.pedido-keypad button{
+  padding:9px 0;
+  font-size:15px;
+  font-weight:700;
+  border-radius:8px;
+  border:1px solid #0284c7;
+  background:#0ea5e9;
+  color:#fff;
+  cursor:pointer;
+  transition:filter .1s;
+}
+.pedido-keypad button:hover{filter:brightness(1.08)}
+.pedido-keypad button:active{filter:brightness(.92)}
+.pedido-keypad .pedido-kp-act{font-size:11px;font-weight:600;padding:8px 4px;line-height:1.2}
+.pedido-keypad .pedido-kp-wide{grid-column:span 2}
+.pedidos-balcao-lista-turno{margin-top:16px;padding-top:14px;border-top:1px solid #334155}
+
 .venda-qty-input{
   width:56px;
   text-align:center;
@@ -2548,6 +2705,149 @@ function imprimirFaturaPedidoPorId(pedidoId) {
   if (p) imprimirFaturaPedido(p);
 }
 
+function pedidoEmojiGrupo(grupo) {
+  if (grupo === 'Menu') return '🍽️';
+  if (grupo === 'Avulso') return '🛒';
+  if (grupo === 'Bebida') return '🥤';
+  return '📦';
+}
+
+function pedidoBalcaoInitDraftForTurno(turnoId) {
+  if (String(window.__pedidoBalcaoDraftTurnoId || '') !== String(turnoId)) {
+    window.__pedidoBalcaoDraft = {};
+    window.__pedidoBalcaoDraftTurnoId = String(turnoId);
+  }
+}
+
+function pedidoBalcaoTileClick(pid) {
+  if (!pid) return;
+  if (!window.__pedidoBalcaoDraft) window.__pedidoBalcaoDraft = {};
+  const k = String(pid);
+  window.__pedidoBalcaoDraft[k] = (parseFloat(window.__pedidoBalcaoDraft[k]) || 0) + 1;
+  pedidoBalcaoSyncDraftUI();
+}
+
+function pedidoBalcaoSetFilter(btn) {
+  if (!btn || !btn.getAttribute) return;
+  const grupo = btn.getAttribute('data-grupo');
+  const wrap = btn.closest('.pedidos-balcao-filters');
+  if (wrap) wrap.querySelectorAll('button').forEach((b) => b.classList.toggle('pedido-filter--on', b === btn));
+  document.querySelectorAll('#pedidos-balcao-mount .pedido-prod-tile').forEach((t) => {
+    const g = t.getAttribute('data-grupo');
+    const show = grupo === 'all' || g === grupo;
+    t.classList.toggle('pedido-tile--hidden', !show);
+  });
+}
+
+function pedidoBalcaoRecalcDraftTotal() {
+  const catalog = window.__pedidoProdutosOpts || [];
+  const map = {};
+  catalog.forEach((o) => {
+    map[String(o.id)] = o;
+  });
+  const draft = window.__pedidoBalcaoDraft || {};
+  let sum = 0;
+  for (const [pid, qty] of Object.entries(draft)) {
+    const q = parseFloat(qty);
+    if (!Number.isFinite(q) || q <= 0) continue;
+    const preco = parseFloat(map[pid]?.preco) || 0;
+    sum += preco * q;
+  }
+  const totalEl = document.getElementById('pedido-draft-total');
+  if (totalEl) totalEl.textContent = fmt(sum);
+}
+
+function pedidoBalcaoDraftQtyInput(inp) {
+  if (!inp) return;
+  const pid = inp.getAttribute('data-pid');
+  let q = parseFloat(inp.value);
+  if (!window.__pedidoBalcaoDraft) window.__pedidoBalcaoDraft = {};
+  if (Number.isFinite(q) && q > 0) window.__pedidoBalcaoDraft[pid] = q;
+  pedidoBalcaoRecalcDraftTotal();
+}
+
+function pedidoBalcaoDraftQtyFromInput(inp) {
+  if (!inp) return;
+  const pid = inp.getAttribute('data-pid');
+  let q = parseFloat(inp.value);
+  if (!Number.isFinite(q) || q <= 0) {
+    if (window.__pedidoBalcaoDraft && pid) delete window.__pedidoBalcaoDraft[pid];
+    pedidoBalcaoSyncDraftUI();
+    return;
+  }
+  if (!window.__pedidoBalcaoDraft) window.__pedidoBalcaoDraft = {};
+  window.__pedidoBalcaoDraft[pid] = q;
+  pedidoBalcaoRecalcDraftTotal();
+}
+
+function pedidoBalcaoRemoveLine(pid) {
+  if (window.__pedidoBalcaoDraft && pid) delete window.__pedidoBalcaoDraft[String(pid)];
+  pedidoBalcaoSyncDraftUI();
+}
+
+function pedidoBalcaoSyncDraftUI() {
+  const catalog = window.__pedidoProdutosOpts || [];
+  const map = {};
+  catalog.forEach((o) => {
+    map[String(o.id)] = o;
+  });
+  const tbody = document.getElementById('pedido-draft-tbody');
+  const totalEl = document.getElementById('pedido-draft-total');
+  if (!tbody) return;
+  const draft = window.__pedidoBalcaoDraft || {};
+  const entries = Object.entries(draft).filter(([, qty]) => {
+    const q = parseFloat(qty);
+    return Number.isFinite(q) && q > 0;
+  });
+  let rows = '';
+  let sum = 0;
+  for (const [pid, qty] of entries) {
+    const o = map[pid];
+    if (!o) continue;
+    const q = parseFloat(qty);
+    const preco = parseFloat(o.preco) || 0;
+    const line = preco * q;
+    sum += line;
+    const pidAttr = escapeHtml(String(pid));
+    rows += `<tr data-pid="${pidAttr}">
+      <td style="text-align:right;vertical-align:middle">
+        <input type="number" min="0.001" step="any" class="pedido-draft-qty" data-pid="${pidAttr}" value="${escapeHtml(String(q))}"
+          oninput="pedidoBalcaoDraftQtyInput(this)" onchange="pedidoBalcaoDraftQtyFromInput(this)"/>
+      </td>
+      <td style="vertical-align:middle;color:#e2e8f0">${escapeHtml(o.nome)}</td>
+      <td style="text-align:right;vertical-align:middle;color:#94a3b8;white-space:nowrap">${fmt(preco)}</td>
+      <td style="text-align:right;vertical-align:middle;color:#4ade80;white-space:nowrap">${fmt(line)}</td>
+      <td style="vertical-align:middle">
+        <button type="button" class="btn btn-ghost btn-sm" data-pid="${pidAttr}" onclick="pedidoBalcaoRemoveLine(this.getAttribute('data-pid'))" title="Remover">×</button>
+      </td>
+    </tr>`;
+  }
+  if (!rows) {
+    rows =
+      '<tr><td colspan="5" style="color:#64748b;font-size:13px;padding:10px 8px">Toque num artigo na grelha para adicionar.</td></tr>';
+  }
+  tbody.innerHTML = rows;
+  if (totalEl) totalEl.textContent = fmt(sum);
+}
+
+function pedidoBalcaoKeypad(v) {
+  let inp = document.activeElement;
+  if (!inp || !inp.classList || !inp.classList.contains('pedido-draft-qty')) {
+    const last = document.querySelector('#pedido-draft-tbody .pedido-draft-qty:last-of-type');
+    if (last) {
+      last.focus();
+      inp = last;
+    }
+  }
+  if (!inp || !inp.classList.contains('pedido-draft-qty')) return;
+  if (v === 'bs') inp.value = String(inp.value || '').slice(0, -1);
+  else if (v === 'clr') inp.value = '';
+  else inp.value = String(inp.value || '') + v;
+  pedidoBalcaoDraftQtyInput(inp);
+  pedidoBalcaoDraftQtyFromInput(inp);
+}
+
+/** Legado: lista por dropdown (não usado no layout POS). */
 function pedidoBalcaoAddLinha() {
   const wrap = document.getElementById('pedido-linhas-wrap');
   if (!wrap) return;
@@ -2565,23 +2865,22 @@ function pedidoBalcaoAddLinha() {
 }
 
 async function registarPedidoBalcao(turnoId) {
-  const wrap = document.getElementById('pedido-linhas-wrap');
-  if (!wrap) return;
+  const draft = window.__pedidoBalcaoDraft || {};
   const linhas = [];
-  wrap.querySelectorAll('.pedido-linha-row').forEach((row) => {
-    const pid = row.querySelector('.pedido-linha-prod')?.value;
-    const qty = parseFloat(row.querySelector('.pedido-linha-qty')?.value);
-    if (!pid) return;
-    if (!Number.isFinite(qty) || qty <= 0) return;
-    linhas.push({ produto_id: pid, quantidade: qty });
-  });
+  for (const [pid, qty] of Object.entries(draft)) {
+    const q = parseFloat(qty);
+    if (!Number.isFinite(q) || q <= 0) continue;
+    linhas.push({ produto_id: pid, quantidade: q });
+  }
   if (!linhas.length) {
-    alert('Indique pelo menos uma linha com quantidade maior que zero.');
+    alert('Adicione pelo menos um artigo com quantidade maior que zero.');
     return;
   }
   const cliente = document.getElementById('pedido-cliente-nome')?.value || '';
   const tid = String(turnoId);
   await api('POST', `/turnos/${tid}/pedidos`, { cliente_nome: cliente, linhas });
+  window.__pedidoBalcaoDraft = {};
+  window.__pedidoBalcaoDraftTurnoId = tid;
   await loadVendasMenu(tid, !!S.turnoCanEdit);
 }
 
@@ -2594,6 +2893,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       '<span style="color:#64748b">Sem artigos para pedido ao balcão. Configure produtos Menu, avulso ou bebida por copo.</span>';
     return;
   }
+  pedidoBalcaoInitDraftForTurno(turnoId);
   let pedidos = [];
   try {
     pedidos = await api('GET', `/turnos/${encodeURIComponent(turnoId)}/pedidos`);
@@ -2602,22 +2902,71 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     return;
   }
   window.__stockosPedidosBalcao = pedidos;
-  const opts = produtosParaPedido
-    .map((o) => `<option value="${o.id}">${escapeHtml(o.grupo)} — ${escapeHtml(o.nome)}</option>`)
+  const tilesHtml = produtosParaPedido
+    .map((o) => {
+      const pid = String(o.id);
+      const em = pedidoEmojiGrupo(o.grupo);
+      const preco = parseFloat(o.preco) || 0;
+      return `<button type="button" class="pedido-prod-tile" data-grupo="${escapeHtml(o.grupo)}" data-pid="${escapeHtml(pid)}" onclick="pedidoBalcaoTileClick(this.getAttribute('data-pid'))">
+        <span class="pedido-prod-tile__emoji" aria-hidden="true">${em}</span>
+        <span class="pedido-prod-tile__nome">${escapeHtml(o.nome)}</span>
+        <span class="pedido-prod-tile__preco">${fmt(preco)}</span>
+      </button>`;
+    })
     .join('');
+  const tidJs = JSON.stringify(String(turnoId));
   const formHtml = canEdit
-    ? `<div style="margin-bottom:14px;padding:12px;background:#0f172a;border-radius:8px;border:1px solid #334155">
-      <div class="field" style="margin-bottom:8px"><label>Cliente ou referência (opcional)</label>
-        <input type="text" id="pedido-cliente-nome" maxlength="200" placeholder="Ex.: Mesa 2, nome do cliente" style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box"/>
-      </div>
-      <div id="pedido-linhas-wrap" style="display:flex;flex-direction:column;gap:8px">
-        <div class="pedido-linha-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-          <select class="pedido-linha-prod" style="flex:1;min-width:160px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px;color:#f1f5f9;font-size:14px">${opts}</select>
-          <input type="number" min="0.001" step="any" class="pedido-linha-qty" placeholder="Qtd" style="width:96px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px;color:#f1f5f9;text-align:right;font-size:14px"/>
+    ? `<div class="pedidos-balcao-pos" style="margin-bottom:14px">
+      <div class="pedidos-balcao-tiles-wrap">
+        <div class="pedidos-balcao-filters">
+          <button type="button" class="pedido-filter--on" data-grupo="all" onclick="pedidoBalcaoSetFilter(this)">Todos</button>
+          <button type="button" data-grupo="Menu" onclick="pedidoBalcaoSetFilter(this)">Menu</button>
+          <button type="button" data-grupo="Avulso" onclick="pedidoBalcaoSetFilter(this)">Avulso</button>
+          <button type="button" data-grupo="Bebida" onclick="pedidoBalcaoSetFilter(this)">Bebida (copos)</button>
         </div>
+        <div class="pedidos-balcao-tiles">${tilesHtml}</div>
       </div>
-      <button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="pedidoBalcaoAddLinha()">+ Linha</button>
-      <button type="button" class="btn btn-success btn-sm" style="margin-top:12px" onclick="runAction(event, async () => { await registarPedidoBalcao('${String(turnoId)}'); })">Registar pedido</button>
+      <div class="pedidos-balcao-side">
+        <div class="pedido-side-title">Conta corrente</div>
+        <div class="pedido-draft-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:56px">Qtd</th>
+                <th>Artigos</th>
+                <th style="text-align:right;white-space:nowrap">P/UN</th>
+                <th style="text-align:right;white-space:nowrap">Total</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="pedido-draft-tbody"></tbody>
+          </table>
+        </div>
+        <div class="pedido-total-bar"><span>Total</span><span id="pedido-draft-total">0 Kz</span></div>
+        <div class="field" style="margin-bottom:8px">
+          <label style="font-size:11px;color:#94a3b8">Mesa / cliente (opcional)</label>
+          <input type="text" id="pedido-cliente-nome" maxlength="200" placeholder="Ex.: Mesa 2"
+            style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px"/>
+        </div>
+        <div class="pedido-side-title" style="margin-top:4px">Teclado</div>
+        <div class="pedido-keypad">
+          <button type="button" class="pedido-kp-act" onclick="pedidoBalcaoKeypad('bs')">← Apagar</button>
+          <button type="button" class="pedido-kp-act pedido-kp-wide" onclick="pedidoBalcaoKeypad('clr')">Limpar</button>
+          <button type="button" onclick="pedidoBalcaoKeypad('7')">7</button>
+          <button type="button" onclick="pedidoBalcaoKeypad('8')">8</button>
+          <button type="button" onclick="pedidoBalcaoKeypad('9')">9</button>
+          <button type="button" onclick="pedidoBalcaoKeypad('4')">4</button>
+          <button type="button" onclick="pedidoBalcaoKeypad('5')">5</button>
+          <button type="button" onclick="pedidoBalcaoKeypad('6')">6</button>
+          <button type="button" onclick="pedidoBalcaoKeypad('1')">1</button>
+          <button type="button" onclick="pedidoBalcaoKeypad('2')">2</button>
+          <button type="button" onclick="pedidoBalcaoKeypad('3')">3</button>
+          <button type="button" class="pedido-kp-wide" onclick="pedidoBalcaoKeypad('0')">0</button>
+          <button type="button" onclick="pedidoBalcaoKeypad('.')">.</button>
+        </div>
+        <button type="button" class="btn btn-success" style="width:100%;margin-top:12px;padding:12px;font-weight:700"
+          onclick='runAction(event, async () => { await registarPedidoBalcao(${tidJs}); })'>Registar pedido</button>
+      </div>
     </div>`
     : '';
   const listHtml =
@@ -2638,7 +2987,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           })
           .join('')
       : '<span style="color:#64748b">Nenhum pedido registado neste turno.</span>';
-  mount.innerHTML = formHtml + `<div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:8px 0 6px">Pedidos do turno</div>${listHtml}`;
+  mount.innerHTML =
+    formHtml +
+    `<div class="pedidos-balcao-lista-turno"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px">Pedidos do turno</div>${listHtml}</div>`;
+  pedidoBalcaoSyncDraftUI();
 }
 
 function closeFaturaVendaModal() {
@@ -2962,9 +3314,30 @@ async function loadVendasMenu(turnoId, canEdit) {
     show('vendas-menu-list', html);
     refreshVendasTotal();
     const pedidoCatalog = [];
-    for (const p of menuProds) pedidoCatalog.push({ id: p.id, nome: p.nome, grupo: 'Menu' });
-    for (const p of avulsoProds) pedidoCatalog.push({ id: p.id, nome: p.nome, grupo: 'Avulso' });
-    for (const p of bebidaCopoProds) pedidoCatalog.push({ id: p.id, nome: `${p.nome} (copos)`, grupo: 'Bebida' });
+    for (const p of menuProds) {
+      pedidoCatalog.push({
+        id: p.id,
+        nome: p.nome,
+        grupo: 'Menu',
+        preco: vendasProdPrecos[p.id] ?? parseFloat(p.preco) || 0
+      });
+    }
+    for (const p of avulsoProds) {
+      pedidoCatalog.push({
+        id: p.id,
+        nome: p.nome,
+        grupo: 'Avulso',
+        preco: vendasProdPrecos[p.id] ?? parseFloat(p.preco) || 0
+      });
+    }
+    for (const p of bebidaCopoProds) {
+      pedidoCatalog.push({
+        id: p.id,
+        nome: `${p.nome} (copos)`,
+        grupo: 'Bebida',
+        preco: vendasProdPrecos[p.id] ?? parseFloat(p.preco) || 0
+      });
+    }
     pedidoCatalog.sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
     await renderPedidosBalcao(turnoId, canEdit, pedidoCatalog);
   } catch(e) {

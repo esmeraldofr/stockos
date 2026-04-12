@@ -449,3 +449,21 @@ CREATE TABLE IF NOT EXISTS turno_vendas (
 ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2);
 ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2);
 ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTEGER;
+
+-- ============================================================
+--  TURNO_PEDIDOS — pedidos ao balcão (uma fatura por pedido)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS turno_pedidos (
+  id            SERIAL          PRIMARY KEY,
+  turno_id      INTEGER         NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+  cliente_nome  TEXT            NOT NULL DEFAULT '',
+  criado_em     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS turno_pedido_linhas (
+  id            SERIAL          PRIMARY KEY,
+  pedido_id     INTEGER         NOT NULL REFERENCES turno_pedidos(id) ON DELETE CASCADE,
+  produto_id    INTEGER         NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+  quantidade    NUMERIC(10,3)   NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_turno_pedidos_turno ON turno_pedidos(turno_id);
+CREATE INDEX IF NOT EXISTS idx_turno_pedido_linhas_pedido ON turno_pedido_linhas(pedido_id);

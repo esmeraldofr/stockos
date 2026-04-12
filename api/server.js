@@ -281,7 +281,7 @@ function markDbReady() {
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
  */
-const STOCKOS_BOOTSTRAP_VERSION = '2026-03-31-init-fast';
+const STOCKOS_BOOTSTRAP_VERSION = '2026-04-01-pedidos-tbl';
 
 async function initDB() {
   await qry(`CREATE TABLE IF NOT EXISTS stockos_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`, [], 'stockos_meta');
@@ -552,6 +552,13 @@ initDB()
     markDbReady();
     return ensureStockosPerfIndexes();
   })
+  .then(async () => {
+    try {
+      await ensureTurnoPedidos();
+    } catch (e) {
+      console.error('[ensureTurnoPedidos post-init]', e && e.message, e && e.stack);
+    }
+  })
   .catch((e) => {
     console.error('[initDB] fatal', e && e.message, e && e.stack);
     if (!loginReadyResolved) rejectLoginReady(e);
@@ -559,7 +566,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-03-31-turno-pedidos';
+const STOCKOS_API_BUILD = '2026-04-01-pedidos-ddl-query';
 
 /** Folha de stock do turno: só Menu, Ingredientes e Bebidas — categoria «outro» não entra. */
 const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
@@ -1184,35 +1191,28 @@ async function ensurePrecosVendasSnapshots() {
 }
 
 async function ensureTurnoPedidos() {
-  await qry(
+  /** Usar query() — qry() engolia falhas e as tabelas nunca eram criadas. */
+  await query(
     `CREATE TABLE IF NOT EXISTS turno_pedidos (
       id SERIAL PRIMARY KEY,
       turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
       cliente_nome TEXT NOT NULL DEFAULT '',
       criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`,
-    [],
-    'turno_pedidos'
+    )`
   );
-  await qry(
+  await query(
     `CREATE TABLE IF NOT EXISTS turno_pedido_linhas (
       id SERIAL PRIMARY KEY,
       pedido_id INTEGER NOT NULL REFERENCES turno_pedidos(id) ON DELETE CASCADE,
       produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
       quantidade NUMERIC(10,3) NOT NULL DEFAULT 0
-    )`,
-    [],
-    'turno_pedido_linhas'
+    )`
   );
-  await qry(
-    `CREATE INDEX IF NOT EXISTS idx_turno_pedidos_turno ON turno_pedidos(turno_id)`,
-    [],
-    'idx_turno_pedidos_turno'
+  await query(
+    `CREATE INDEX IF NOT EXISTS idx_turno_pedidos_turno ON turno_pedidos(turno_id)`
   );
-  await qry(
-    `CREATE INDEX IF NOT EXISTS idx_turno_pedido_linhas_pedido ON turno_pedido_linhas(pedido_id)`,
-    [],
-    'idx_turno_pedido_linhas_pedido'
+  await query(
+    `CREATE INDEX IF NOT EXISTS idx_turno_pedido_linhas_pedido ON turno_pedido_linhas(pedido_id)`
   );
 }
 

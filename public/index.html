@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-fatura-vendas">
+<html lang="pt" data-stockos-ui="2026-03-31-fatura-iframe-modal">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2407,21 +2407,7 @@ function collectFaturaVendasLinhas() {
   return { lines, total };
 }
 
-async function imprimirFaturaVendas() {
-  const tid = S.turnoData?.id;
-  if (!tid) return;
-  await loadVendasMenu(tid, !!S.turnoCanEdit);
-  const { lines, total } = collectFaturaVendasLinhas();
-  if (!lines.length) {
-    alert('Não há vendas registadas para este turno.');
-    return;
-  }
-  const docRef = `V-${String(S.date || '').replace(/-/g, '')}-${S.turnoData.nome}-${tid}`;
-  const w = window.open('', '_blank', 'noopener');
-  if (!w) {
-    alert('Permita janelas emergentes para ver e imprimir a fatura.');
-    return;
-  }
+function buildFaturaVendaDocumentHtml(docRef, lines, total) {
   const rowsHtml = lines
     .map(
       (l) =>
@@ -2431,7 +2417,7 @@ async function imprimirFaturaVendas() {
     )
     .join('');
   const headTitle = `Fatura ${docRef}`;
-  w.document.write(`<!DOCTYPE html><html lang="pt"><head><meta charset="utf-8"/><title>${escapeHtml(headTitle)}</title>
+  return `<!DOCTYPE html><html lang="pt"><head><meta charset="utf-8"/><title>${escapeHtml(headTitle)}</title>
 <style>
 body{font-family:system-ui,-apple-system,sans-serif;padding:24px;max-width:720px;margin:0 auto;color:#111;background:#fff}
 h1{font-size:1.25rem;margin:0 0 4px;font-weight:700}
@@ -2454,9 +2440,75 @@ ${escapeHtml(dateLabelWithWeekday(S.date))} · ${escapeHtml(turnoLabel(S.turnoDa
 <div class="tot">Total: ${escapeHtml(fmt(total))}</div>
 <p class="foot">Documento de conferência interna — valores conforme o registo de vendas do turno no StockOS. Não substitui fatura fiscal regulamentada.</p>
 <p class="no-print" style="margin-top:20px"><button type="button" style="padding:10px 20px;font-size:14px;cursor:pointer;border-radius:8px;border:1px solid #ccc;background:#f8f8f8" onclick="window.print()">Imprimir</button></p>
-</body></html>`);
-  w.document.close();
-  w.focus();
+</body></html>`;
+}
+
+function closeFaturaVendaModal() {
+  document.getElementById('fatura-venda-modal')?.remove();
+}
+
+/** Se o browser bloquear pop-ups, abre a mesma fatura num modal (sem alert). */
+function openFaturaVendaModal(htmlDoc) {
+  closeFaturaVendaModal();
+  const div = document.createElement('div');
+  div.id = 'fatura-venda-modal';
+  div.className = 'modal-overlay';
+  div.style.zIndex = '260';
+  div.innerHTML = `
+    <div class="modal" style="max-width:min(760px,96vw);max-height:92vh;display:flex;flex-direction:column;padding:0;overflow:hidden">
+      <div class="modal-header" style="padding:14px 18px;border-bottom:1px solid #334155;flex-shrink:0">
+        <div class="modal-title">Documento de venda</div>
+        <button type="button" class="modal-close" id="fv-close" aria-label="Fechar">×</button>
+      </div>
+      <iframe id="fatura-venda-iframe" title="Documento de venda" style="flex:1;min-height:280px;width:100%;border:none;background:#fff"></iframe>
+      <div style="padding:12px 18px;border-top:1px solid #334155;display:flex;gap:10px;align-items:center;flex-wrap:wrap;flex-shrink:0">
+        <button type="button" class="btn btn-primary btn-sm" id="fv-print">Imprimir</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="fv-close2">Fechar</button>
+        <span style="font-size:12px;color:#64748b">Vista alternativa — não precisa de janelas emergentes.</span>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+  const iframe = div.querySelector('#fatura-venda-iframe');
+  iframe.srcdoc = htmlDoc;
+  const stop = (e) => e.stopPropagation();
+  div.querySelector('.modal').addEventListener('click', stop);
+  div.addEventListener('click', (e) => {
+    if (e.target === div) closeFaturaVendaModal();
+  });
+  document.getElementById('fv-close').addEventListener('click', closeFaturaVendaModal);
+  document.getElementById('fv-close2').addEventListener('click', closeFaturaVendaModal);
+  document.getElementById('fv-print').addEventListener('click', () => {
+    try {
+      const win = iframe.contentWindow;
+      if (win) {
+        win.focus();
+        win.print();
+      }
+    } catch (e) {
+      /* silencioso */
+    }
+  });
+}
+
+async function imprimirFaturaVendas() {
+  const tid = S.turnoData?.id;
+  if (!tid) return;
+  await loadVendasMenu(tid, !!S.turnoCanEdit);
+  const { lines, total } = collectFaturaVendasLinhas();
+  if (!lines.length) {
+    alert('Não há vendas registadas para este turno.');
+    return;
+  }
+  const docRef = `V-${String(S.date || '').replace(/-/g, '')}-${S.turnoData.nome}-${tid}`;
+  const htmlDoc = buildFaturaVendaDocumentHtml(docRef, lines, total);
+  const w = window.open('', '_blank', 'noopener');
+  if (w) {
+    w.document.write(htmlDoc);
+    w.document.close();
+    w.focus();
+    return;
+  }
+  openFaturaVendaModal(htmlDoc);
 }
 
 async function loadVendasMenu(turnoId, canEdit) {

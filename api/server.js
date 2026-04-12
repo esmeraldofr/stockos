@@ -292,6 +292,7 @@ async function initDB() {
       markLoginReady();
       await ensureRoleEnumCompras();
       await ensurePrecosVendasSnapshots();
+      await ensureTurnoPedidos();
       markDbReady();
       console.log('DB ready (bootstrap skip)');
       return;
@@ -518,6 +519,7 @@ async function initDB() {
   /** /dia e preços: ensurePrecosVendasSnapshots antes de markDbReady; se a tabela não existir, leituras usam só produtos.preco. */
   await ensureRoleEnumCompras();
   await ensurePrecosVendasSnapshots();
+  await ensureTurnoPedidos();
   /** Dedup/seed abaixo podem correr em paralelo com tráfego; schema crítico para /dia já está garantido. */
   markDbReady();
   // Remover duplicados de produtos (manter o de menor id por nome)
@@ -557,7 +559,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-18-pph-fallback-preco';
+const STOCKOS_API_BUILD = '2026-03-31-turno-pedidos';
 
 /** Folha de stock do turno: só Menu, Ingredientes e Bebidas — categoria «outro» não entra. */
 const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
@@ -1178,6 +1180,109 @@ async function ensurePrecosVendasSnapshots() {
     `);
   } catch (e) {
     console.warn('[ensurePrecosVendasSnapshots tv]', e.message);
+  }
+}
+
+async function ensureTurnoPedidos() {
+  await qry(
+    `CREATE TABLE IF NOT EXISTS turno_pedidos (
+      id SERIAL PRIMARY KEY,
+      turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+      cliente_nome TEXT NOT NULL DEFAULT '',
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    [],
+    'turno_pedidos'
+  );
+  await qry(
+    `CREATE TABLE IF NOT EXISTS turno_pedido_linhas (
+      id SERIAL PRIMARY KEY,
+      pedido_id INTEGER NOT NULL REFERENCES turno_pedidos(id) ON DELETE CASCADE,
+      produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+      quantidade NUMERIC(10,3) NOT NULL DEFAULT 0
+    )`,
+    [],
+    'turno_pedido_linhas'
+  );
+  await qry(
+    `CREATE INDEX IF NOT EXISTS idx_turno_pedidos_turno ON turno_pedidos(turno_id)`,
+    [],
+    'idx_turno_pedidos_turno'
+  );
+  await qry(
+    `CREATE INDEX IF NOT EXISTS idx_turno_pedido_linhas_pedido ON turno_pedido_linhas(pedido_id)`,
+    [],
+    'idx_turno_pedido_linhas_pedido'
+  );
+}
+
+/**
+ * Define quantidade absoluta em turno_vendas e aplica delta ao stock (menu/copo/ingredientes).
+ */
+async function applyTurnoVendaQuantity(client, turnoId, produto_id, newQty) {
+  const prodInfo = await client.query(
+    'SELECT venda_por_copo, kg_por_copo FROM produtos WHERE id=$1',
+    [produto_id]
+  );
+  const prow = prodInfo.rows[0];
+  if (!prow) throw new Error('Produto não encontrado');
+  const isCopo = prow.venda_por_copo === true && parseFloat(prow.kg_por_copo) > 0;
+
+  let nq = parseFloat(newQty);
+  if (isCopo) nq = Math.max(0, Math.floor(nq));
+
+  const old = await client.query(
+    'SELECT quantidade FROM turno_vendas WHERE turno_id=$1 AND produto_id=$2',
+    [turnoId, produto_id]
+  );
+  const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
+  const delta = nq - oldQty;
+
+  await client.query(
+    `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
+     ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
+    [turnoId, produto_id, nq]
+  );
+
+  if (delta === 0) return;
+
+  if (isCopo) {
+    const kg = delta * parseFloat(prow.kg_por_copo);
+    await client.query(
+      `UPDATE turno_stock SET deixado=GREATEST(0, COALESCE(deixado,0) - $1)
+       WHERE turno_id=$2 AND produto_id=$3`,
+      [kg, turnoId, produto_id]
+    );
+    return;
+  }
+
+  async function expandIngredientes(prodId, fator) {
+    const r = await client.query(
+      'SELECT componente_id, quantidade FROM receitas WHERE produto_id=$1',
+      [prodId]
+    );
+    if (r.rows.length === 0) {
+      return [{ componente_id: prodId, quantidade: fator }];
+    }
+    const ingredientes = [];
+    for (const comp of r.rows) {
+      const sub = await expandIngredientes(comp.componente_id, fator * parseFloat(comp.quantidade));
+      ingredientes.push(...sub);
+    }
+    return ingredientes;
+  }
+
+  const ingredientes = await expandIngredientes(produto_id, delta);
+  const totais = {};
+  for (const ing of ingredientes) {
+    totais[ing.componente_id] = (totais[ing.componente_id] || 0) + ing.quantidade;
+  }
+  for (const [compId, qtd] of Object.entries(totais)) {
+    await client.query(
+      `UPDATE turno_stock SET deixado=GREATEST(0, COALESCE(deixado,0) - $1)
+       WHERE turno_id=$2 AND produto_id=$3`,
+      [qtd, turnoId, compId]
+    );
   }
 }
 
@@ -3618,6 +3723,158 @@ app.get('/api/turnos/:id/vendas', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+async function produtoPermitePedidoVenda(client, produto_id) {
+  const r = await client.query(
+    `SELECT categoria, venda_avulso, venda_por_copo, kg_por_copo, nome FROM produtos WHERE id=$1`,
+    [produto_id]
+  );
+  if (!r.rows.length) return { ok: false, msg: 'Produto inválido' };
+  const p = r.rows[0];
+  const nome = String(p.nome || '')
+    .trim()
+    .toLowerCase();
+  if (nome === 'fino barril') return { ok: false, msg: 'Produto não disponível em pedidos' };
+  if (p.categoria === 'menu') return { ok: true };
+  if (p.categoria === 'bebida') {
+    if (p.venda_por_copo === true && parseFloat(p.kg_por_copo) > 0) return { ok: true };
+    return { ok: false, msg: 'Bebidas por unidade: use o registo de stock, não pedidos ao balcão' };
+  }
+  if (p.venda_avulso === true && p.categoria !== 'menu' && p.categoria !== 'bebida') return { ok: true };
+  return { ok: false, msg: 'Este produto não pode ser vendido em pedido ao balcão' };
+}
+
+app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
+  try {
+    await ensureTurnoPedidos();
+    const turnoId = req.params.id;
+    const r = await query(
+      `SELECT tp.id, tp.turno_id, tp.cliente_nome, tp.criado_em,
+              tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
+              p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
+              p.preco_copos_pacote, p.qtd_copos_pacote
+       FROM turno_pedidos tp
+       LEFT JOIN turno_pedido_linhas tpl ON tpl.pedido_id = tp.id
+       LEFT JOIN produtos p ON p.id = tpl.produto_id
+       WHERE tp.turno_id = $1
+       ORDER BY tp.criado_em DESC, tpl.id ASC`,
+      [turnoId]
+    );
+    const map = new Map();
+    for (const row of r.rows) {
+      if (!map.has(row.id)) {
+        map.set(row.id, {
+          id: row.id,
+          turno_id: row.turno_id,
+          cliente_nome: row.cliente_nome,
+          criado_em: row.criado_em,
+          linhas: []
+        });
+      }
+      if (row.linha_id != null && row.produto_id != null) {
+        map.get(row.id).linhas.push({
+          produto_id: row.produto_id,
+          quantidade: parseFloat(row.quantidade),
+          produto_nome: row.produto_nome,
+          preco: parseFloat(row.preco) || 0,
+          venda_por_copo: row.venda_por_copo,
+          kg_por_copo: parseFloat(row.kg_por_copo) || 0,
+          preco_copos_pacote: parseFloat(row.preco_copos_pacote) || 0,
+          qtd_copos_pacote: parseInt(row.qtd_copos_pacote, 10) || 0
+        });
+      }
+    }
+    const list = [...map.values()];
+    for (const ped of list) {
+      let total = 0;
+      for (const ln of ped.linhas) {
+        const copo = ln.venda_por_copo === true && ln.kg_por_copo > 0;
+        if (copo) {
+          const c = Math.floor(parseFloat(ln.quantidade));
+          const u = ln.preco;
+          const n = ln.qtd_copos_pacote;
+          const p = ln.preco_copos_pacote;
+          total += n >= 2 && p > 0 ? Math.floor(c / n) * p + (c % n) * u : c * u;
+        } else {
+          total += parseFloat(ln.quantidade) * ln.preco;
+        }
+      }
+      ped.total_kz = total;
+    }
+    res.json(list);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await ensureTurnoPedidos();
+    await client.query('BEGIN');
+    const turnoId = parseInt(req.params.id, 10);
+    const { cliente_nome, linhas } = req.body;
+    const tCheck = await client.query(`SELECT id, estado FROM turnos WHERE id=$1`, [turnoId]);
+    if (!tCheck.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ erro: 'Turno não encontrado' });
+    }
+    if (tCheck.rows[0].estado !== 'aberto') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ erro: 'Só é possível registar pedidos com o turno aberto.' });
+    }
+    if (!Array.isArray(linhas) || linhas.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ erro: 'Adicione pelo menos uma linha ao pedido.' });
+    }
+    const normalized = [];
+    for (const raw of linhas) {
+      const pid = raw.produto_id;
+      let q = parseFloat(raw.quantidade);
+      if (!Number.isFinite(q) || q <= 0) continue;
+      const check = await produtoPermitePedidoVenda(client, pid);
+      if (!check.ok) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ erro: check.msg || 'Produto inválido' });
+      }
+      const pinf = await client.query(
+        `SELECT venda_por_copo, kg_por_copo FROM produtos WHERE id=$1`,
+        [pid]
+      );
+      const isCopo = pinf.rows[0].venda_por_copo === true && parseFloat(pinf.rows[0].kg_por_copo) > 0;
+      if (isCopo) q = Math.floor(q);
+      normalized.push({ produto_id: pid, quantidade: q });
+    }
+    if (normalized.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ erro: 'Nenhuma linha válida (quantidade > 0).' });
+    }
+    const pedidoIns = await client.query(
+      `INSERT INTO turno_pedidos (turno_id, cliente_nome) VALUES ($1, $2) RETURNING id, criado_em`,
+      [turnoId, String(cliente_nome || '').trim().slice(0, 200)]
+    );
+    const pedidoId = pedidoIns.rows[0].id;
+    for (const line of normalized) {
+      await client.query(
+        `INSERT INTO turno_pedido_linhas (pedido_id, produto_id, quantidade) VALUES ($1,$2,$3)`,
+        [pedidoId, line.produto_id, line.quantidade]
+      );
+      const oldRow = await client.query(
+        `SELECT quantidade FROM turno_vendas WHERE turno_id=$1 AND produto_id=$2`,
+        [turnoId, line.produto_id]
+      );
+      const oldQ = oldRow.rows.length ? parseFloat(oldRow.rows[0].quantidade) : 0;
+      await applyTurnoVendaQuantity(client, turnoId, line.produto_id, oldQ + line.quantidade);
+    }
+    await client.query('COMMIT');
+    res.json({ id: pedidoId, sucesso: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ erro: e.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -3636,63 +3893,7 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
     let newQty = parseFloat(quantidade);
     if (isCopo) newQty = Math.max(0, Math.floor(newQty));
 
-    const old = await client.query(
-      'SELECT quantidade FROM turno_vendas WHERE turno_id=$1 AND produto_id=$2',
-      [turnoId, produto_id]
-    );
-    const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
-    const delta = newQty - oldQty;
-
-    await client.query(
-      `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
-       ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
-      [turnoId, produto_id, newQty]
-    );
-
-    if (delta !== 0) {
-      if (isCopo) {
-        const kg = delta * parseFloat(prow.kg_por_copo);
-        await client.query(
-          `UPDATE turno_stock SET deixado=GREATEST(0, COALESCE(deixado,0) - $1)
-           WHERE turno_id=$2 AND produto_id=$3`,
-          [kg, turnoId, produto_id]
-        );
-        await client.query('COMMIT');
-        res.json({ sucesso: true });
-        return;
-      }
-      // Expand recipe recursively: if a component itself has a recipe, use its ingredients instead
-      async function expandIngredientes(prodId, fator) {
-        const r = await client.query(
-          'SELECT componente_id, quantidade FROM receitas WHERE produto_id=$1',
-          [prodId]
-        );
-        if (r.rows.length === 0) {
-          // Leaf ingredient — subtract from stock directly
-          return [{ componente_id: prodId, quantidade: fator }];
-        }
-        const ingredientes = [];
-        for (const comp of r.rows) {
-          const sub = await expandIngredientes(comp.componente_id, fator * parseFloat(comp.quantidade));
-          ingredientes.push(...sub);
-        }
-        return ingredientes;
-      }
-
-      const ingredientes = await expandIngredientes(produto_id, delta);
-      // Aggregate in case the same ingredient appears multiple times
-      const totais = {};
-      for (const ing of ingredientes) {
-        totais[ing.componente_id] = (totais[ing.componente_id] || 0) + ing.quantidade;
-      }
-      for (const [compId, qtd] of Object.entries(totais)) {
-        await client.query(
-          `UPDATE turno_stock SET deixado=GREATEST(0, COALESCE(deixado,0) - $1)
-           WHERE turno_id=$2 AND produto_id=$3`,
-          [qtd, turnoId, compId]
-        );
-      }
-    }
+    await applyTurnoVendaQuantity(client, turnoId, produto_id, newQty);
 
     await client.query('COMMIT');
     res.json({ sucesso: true });

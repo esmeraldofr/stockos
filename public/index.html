@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-fatura-iframe-modal">
+<html lang="pt" data-stockos-ui="2026-03-31-pedidos-balcao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2250,6 +2250,11 @@ async function loadTurno() {
       </div>
 
       <div id="tab-vendas" class="turno-tab-panel">
+        <div class="card" id="pedidos-balcao-card" style="margin-bottom:12px">
+          <div class="card-title">Pedidos ao balcão</div>
+          <p style="font-size:12px;color:#64748b;margin:-4px 0 10px;line-height:1.45">Um pedido por cliente ou mesa. Cada pedido tem a sua fatura; as quantidades somam nas vendas do turno.</p>
+          <div id="pedidos-balcao-mount"><span style="color:#64748b">A carregar…</span></div>
+        </div>
         <div class="card" id="vendas-menu-card">
           <div class="card-title">🍽️ Vendas de Menu</div>
           <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
@@ -2443,6 +2448,195 @@ ${escapeHtml(dateLabelWithWeekday(S.date))} · ${escapeHtml(turnoLabel(S.turnoDa
 </body></html>`;
 }
 
+function buildFaturaPedidoDocumentHtml(docRef, pedido) {
+  const linhas = pedido.linhas || [];
+  const rows = [];
+  let total = 0;
+  for (const ln of linhas) {
+    const copo = ln.venda_por_copo === true && parseFloat(ln.kg_por_copo) > 0;
+    const nome = ln.produto_nome || 'Item';
+    if (copo) {
+      const copos = Math.floor(parseFloat(ln.quantidade));
+      const sub = precoVendaCopos(
+        copos,
+        parseFloat(ln.preco) || 0,
+        parseInt(ln.qtd_copos_pacote, 10) || 0,
+        parseFloat(ln.preco_copos_pacote) || 0
+      );
+      total += sub;
+      rows.push({
+        desc: `${nomeVendaBebidaLegivel(prodIdKey(ln.produto_id), nome)} (copos)`,
+        detalhe: `${fmtNum(copos)} copos`,
+        subFmt: fmt(sub)
+      });
+    } else {
+      const q = parseFloat(ln.quantidade) || 0;
+      const u = parseFloat(ln.preco) || 0;
+      const sub = q * u;
+      total += sub;
+      rows.push({
+        desc: nome,
+        detalhe: u > 0 ? `${fmtNum(q)} × ${fmt(u)}` : `${fmtNum(q)}`,
+        subFmt: fmt(sub)
+      });
+    }
+  }
+  const rowsHtml = rows
+    .map(
+      (l) =>
+        `<tr><td>${escapeHtml(l.desc)}</td><td class="t-r">${escapeHtml(l.detalhe)}</td><td class="t-r">${escapeHtml(
+          l.subFmt
+        )}</td></tr>`
+    )
+    .join('');
+  const headTitle = `Pedido ${docRef}`;
+  const cliente = String(pedido.cliente_nome || '').trim();
+  const extraMeta = cliente
+    ? `<br/>Cliente / referência: <strong>${escapeHtml(cliente)}</strong>`
+    : '';
+  const when = pedido.criado_em ? dateTimeLabel(pedido.criado_em) : '';
+  return `<!DOCTYPE html><html lang="pt"><head><meta charset="utf-8"/><title>${escapeHtml(headTitle)}</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;padding:24px;max-width:720px;margin:0 auto;color:#111;background:#fff}
+h1{font-size:1.25rem;margin:0 0 4px;font-weight:700}
+.meta{color:#444;font-size:13px;margin-bottom:20px;line-height:1.5}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{border-bottom:1px solid #ddd;padding:8px 6px;text-align:left}
+th{background:#f5f5f5;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#333}
+.t-r{text-align:right;font-variant-numeric:tabular-nums}
+.tot{margin-top:18px;text-align:right;font-size:1.15rem;font-weight:700}
+.foot{margin-top:28px;font-size:11px;color:#666;line-height:1.45}
+@media print{body{padding:12px}.no-print{display:none!important}}
+</style></head><body>
+<h1>Fatura de pedido</h1>
+<div class="meta">StockOS · Ref. <strong>${escapeHtml(docRef)}</strong>${extraMeta}<br/>
+${escapeHtml(dateLabelWithWeekday(S.date))} · ${escapeHtml(turnoLabel(S.turnoData.nome))}${when ? ` · ${escapeHtml(when)}` : ''}</div>
+<table>
+<thead><tr><th>Descrição</th><th class="t-r">Quantidade / preço</th><th class="t-r">Total</th></tr></thead>
+<tbody>${rowsHtml}</tbody>
+</table>
+<div class="tot">Total: ${escapeHtml(fmt(total))}</div>
+<p class="foot">Documento de conferência interna — um pedido ao balcão. Não substitui fatura fiscal regulamentada.</p>
+<p class="no-print" style="margin-top:20px"><button type="button" style="padding:10px 20px;font-size:14px;cursor:pointer;border-radius:8px;border:1px solid #ccc;background:#f8f8f8" onclick="window.print()">Imprimir</button></p>
+</body></html>`;
+}
+
+function openFaturaDocumentHtml(htmlDoc) {
+  const w = window.open('', '_blank', 'noopener');
+  if (w) {
+    w.document.write(htmlDoc);
+    w.document.close();
+    w.focus();
+    return;
+  }
+  openFaturaVendaModal(htmlDoc);
+}
+
+function imprimirFaturaPedido(pedido) {
+  if (!pedido || !pedido.id || !S.turnoData?.id) return;
+  const docRef = `P-${String(S.date || '').replace(/-/g, '')}-${S.turnoData.nome}-${pedido.id}`;
+  openFaturaDocumentHtml(buildFaturaPedidoDocumentHtml(docRef, pedido));
+}
+
+function imprimirFaturaPedidoPorId(pedidoId) {
+  const list = window.__stockosPedidosBalcao || [];
+  const p = list.find((x) => String(x.id) === String(pedidoId));
+  if (p) imprimirFaturaPedido(p);
+}
+
+function pedidoBalcaoAddLinha() {
+  const wrap = document.getElementById('pedido-linhas-wrap');
+  if (!wrap) return;
+  const produtos = window.__pedidoProdutosOpts || [];
+  if (!produtos.length) return;
+  const opts = produtos
+    .map((o) => `<option value="${o.id}">${escapeHtml(o.grupo)} — ${escapeHtml(o.nome)}</option>`)
+    .join('');
+  const row = document.createElement('div');
+  row.className = 'pedido-linha-row';
+  row.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center';
+  row.innerHTML = `<select class="pedido-linha-prod" style="flex:1;min-width:160px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px;color:#f1f5f9;font-size:14px">${opts}</select>
+    <input type="number" min="0.001" step="any" class="pedido-linha-qty" placeholder="Qtd" style="width:96px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px;color:#f1f5f9;text-align:right;font-size:14px"/>`;
+  wrap.appendChild(row);
+}
+
+async function registarPedidoBalcao(turnoId) {
+  const wrap = document.getElementById('pedido-linhas-wrap');
+  if (!wrap) return;
+  const linhas = [];
+  wrap.querySelectorAll('.pedido-linha-row').forEach((row) => {
+    const pid = row.querySelector('.pedido-linha-prod')?.value;
+    const qty = parseFloat(row.querySelector('.pedido-linha-qty')?.value);
+    if (!pid) return;
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    linhas.push({ produto_id: pid, quantidade: qty });
+  });
+  if (!linhas.length) {
+    alert('Indique pelo menos uma linha com quantidade maior que zero.');
+    return;
+  }
+  const cliente = document.getElementById('pedido-cliente-nome')?.value || '';
+  const tid = String(turnoId);
+  await api('POST', `/turnos/${tid}/pedidos`, { cliente_nome: cliente, linhas });
+  await loadVendasMenu(tid, !!S.turnoCanEdit);
+}
+
+async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
+  const mount = document.getElementById('pedidos-balcao-mount');
+  if (!mount) return;
+  window.__pedidoProdutosOpts = produtosParaPedido;
+  if (!produtosParaPedido.length) {
+    mount.innerHTML =
+      '<span style="color:#64748b">Sem artigos para pedido ao balcão. Configure produtos Menu, avulso ou bebida por copo.</span>';
+    return;
+  }
+  let pedidos = [];
+  try {
+    pedidos = await api('GET', `/turnos/${encodeURIComponent(turnoId)}/pedidos`);
+  } catch (e) {
+    mount.innerHTML = `<span style="color:#ef4444">${escapeHtml(e.message)}</span>`;
+    return;
+  }
+  window.__stockosPedidosBalcao = pedidos;
+  const opts = produtosParaPedido
+    .map((o) => `<option value="${o.id}">${escapeHtml(o.grupo)} — ${escapeHtml(o.nome)}</option>`)
+    .join('');
+  const formHtml = canEdit
+    ? `<div style="margin-bottom:14px;padding:12px;background:#0f172a;border-radius:8px;border:1px solid #334155">
+      <div class="field" style="margin-bottom:8px"><label>Cliente ou referência (opcional)</label>
+        <input type="text" id="pedido-cliente-nome" maxlength="200" placeholder="Ex.: Mesa 2, nome do cliente" style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box"/>
+      </div>
+      <div id="pedido-linhas-wrap" style="display:flex;flex-direction:column;gap:8px">
+        <div class="pedido-linha-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <select class="pedido-linha-prod" style="flex:1;min-width:160px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px;color:#f1f5f9;font-size:14px">${opts}</select>
+          <input type="number" min="0.001" step="any" class="pedido-linha-qty" placeholder="Qtd" style="width:96px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px;color:#f1f5f9;text-align:right;font-size:14px"/>
+        </div>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="pedidoBalcaoAddLinha()">+ Linha</button>
+      <button type="button" class="btn btn-success btn-sm" style="margin-top:12px" onclick="runAction(event, async () => { await registarPedidoBalcao('${String(turnoId)}'); })">Registar pedido</button>
+    </div>`
+    : '';
+  const listHtml =
+    pedidos.length > 0
+      ? pedidos
+          .map((p) => {
+            const tot = fmt(p.total_kz || 0);
+            const when = p.criado_em ? dateTimeLabel(p.criado_em) : '';
+            const cli = p.cliente_nome ? escapeHtml(p.cliente_nome) : '—';
+            return `<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #334155">
+      <div>
+        <div style="font-weight:600;color:#e2e8f0">Pedido #${p.id}</div>
+        <div style="font-size:12px;color:#64748b">${escapeHtml(when)} · ${cli}</div>
+        <div style="font-size:13px;color:#94a3b8;margin-top:4px">Total <strong style="color:#4ade80">${tot}</strong></div>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="imprimirFaturaPedidoPorId(${p.id})">Fatura</button>
+    </div>`;
+          })
+          .join('')
+      : '<span style="color:#64748b">Nenhum pedido registado neste turno.</span>';
+  mount.innerHTML = formHtml + `<div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:8px 0 6px">Pedidos do turno</div>${listHtml}`;
+}
+
 function closeFaturaVendaModal() {
   document.getElementById('fatura-venda-modal')?.remove();
 }
@@ -2500,15 +2694,7 @@ async function imprimirFaturaVendas() {
     return;
   }
   const docRef = `V-${String(S.date || '').replace(/-/g, '')}-${S.turnoData.nome}-${tid}`;
-  const htmlDoc = buildFaturaVendaDocumentHtml(docRef, lines, total);
-  const w = window.open('', '_blank', 'noopener');
-  if (w) {
-    w.document.write(htmlDoc);
-    w.document.close();
-    w.focus();
-    return;
-  }
-  openFaturaVendaModal(htmlDoc);
+  openFaturaDocumentHtml(buildFaturaVendaDocumentHtml(docRef, lines, total));
 }
 
 async function loadVendasMenu(turnoId, canEdit) {
@@ -2547,6 +2733,7 @@ async function loadVendasMenu(turnoId, canEdit) {
 
     if (!menuProds.length && !bebidaProds.length && !avulsoProds.length) {
       show('vendas-menu-list', '<span style="color:#64748b">Nenhum produto de menu configurado. Adicione produtos com categoria "Menu".</span>');
+      await renderPedidosBalcao(turnoId, canEdit, []);
       return;
     }
 
@@ -2770,10 +2957,18 @@ async function loadVendasMenu(turnoId, canEdit) {
                + totalRow;
     show('vendas-menu-list', html);
     refreshVendasTotal();
+    const pedidoCatalog = [];
+    for (const p of menuProds) pedidoCatalog.push({ id: p.id, nome: p.nome, grupo: 'Menu' });
+    for (const p of avulsoProds) pedidoCatalog.push({ id: p.id, nome: p.nome, grupo: 'Avulso' });
+    for (const p of bebidaCopoProds) pedidoCatalog.push({ id: p.id, nome: `${p.nome} (copos)`, grupo: 'Bebida' });
+    pedidoCatalog.sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
+    await renderPedidosBalcao(turnoId, canEdit, pedidoCatalog);
   } catch(e) {
     lastVendasApiRows = [];
     lastResumoVendasCardHtml = '';
     show('vendas-menu-list', `<span style="color:#ef4444">${e.message}</span>`);
+    const pm = document.getElementById('pedidos-balcao-mount');
+    if (pm) pm.innerHTML = `<span style="color:#ef4444">${escapeHtml(e.message)}</span>`;
   }
 }
 

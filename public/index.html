@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-bebida-unidade-ui">
+<html lang="pt" data-stockos-ui="2026-03-31-pedido-bebida-unidade">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2723,7 +2723,7 @@ function imprimirFaturaPedidoPorId(pedidoId) {
 function pedidoEmojiGrupo(grupo) {
   if (grupo === 'Menu') return '🍽️';
   if (grupo === 'Avulso') return '🛒';
-  if (grupo === 'Bebida') return '🥤';
+  if (grupo === 'BebidaCopo' || grupo === 'BebidaUnidade' || grupo === 'Bebida') return '🥤';
   return '📦';
 }
 
@@ -2922,7 +2922,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   window.__pedidoProdutosOpts = produtosParaPedido;
   if (!produtosParaPedido.length) {
     mount.innerHTML =
-      '<span style="color:#64748b">Sem artigos para pedido ao balcão. Configure produtos Menu, avulso ou bebida por copo.</span>';
+      '<span style="color:#64748b">Sem artigos para pedido ao balcão. Configure produtos Menu, avulso ou bebidas (por copo ou por unidade).</span>';
     return;
   }
   pedidoBalcaoInitDraftForTurno(turnoId);
@@ -2954,7 +2954,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <button type="button" class="pedido-filter--on" data-grupo="all" onclick="pedidoBalcaoSetFilter(this)">Todos</button>
           <button type="button" data-grupo="Menu" onclick="pedidoBalcaoSetFilter(this)">Menu</button>
           <button type="button" data-grupo="Avulso" onclick="pedidoBalcaoSetFilter(this)">Avulso</button>
-          <button type="button" data-grupo="Bebida" onclick="pedidoBalcaoSetFilter(this)">Bebida (copos)</button>
+          <button type="button" data-grupo="BebidaCopo" onclick="pedidoBalcaoSetFilter(this)">Bebida (copos)</button>
+          <button type="button" data-grupo="BebidaUnidade" onclick="pedidoBalcaoSetFilter(this)">Bebida (unidade)</button>
         </div>
         <div class="pedidos-balcao-tiles">${tilesHtml}</div>
       </div>
@@ -3384,7 +3385,15 @@ async function loadVendasMenu(turnoId, canEdit) {
       pedidoCatalog.push({
         id: p.id,
         nome: `${p.nome} (copos)`,
-        grupo: 'Bebida',
+        grupo: 'BebidaCopo',
+        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0
+      });
+    }
+    for (const p of bebidaOutras) {
+      pedidoCatalog.push({
+        id: p.id,
+        nome: `${p.nome} (unidade)`,
+        grupo: 'BebidaUnidade',
         preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0
       });
     }

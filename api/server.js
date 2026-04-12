@@ -3778,8 +3778,8 @@ async function produtoPermitePedidoVenda(client, produto_id) {
   if (nome === 'fino barril') return { ok: false, msg: 'Produto não disponível em pedidos' };
   if (p.categoria === 'menu') return { ok: true };
   if (p.categoria === 'bebida') {
-    if (p.venda_por_copo === true && parseFloat(p.kg_por_copo) > 0) return { ok: true };
-    return { ok: false, msg: 'Bebidas por unidade: use o registo de stock, não pedidos ao balcão' };
+    /** Por copo ou por unidade — ambos no balcão; stock actualizado como nas vendas. */
+    return { ok: true };
   }
   if (p.venda_avulso === true && p.categoria !== 'menu' && p.categoria !== 'bebida') return { ok: true };
   return { ok: false, msg: 'Este produto não pode ser vendido em pedido ao balcão' };

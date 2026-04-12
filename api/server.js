@@ -292,7 +292,11 @@ async function initDB() {
       markLoginReady();
       await ensureRoleEnumCompras();
       await ensurePrecosVendasSnapshots();
-      await ensureTurnoPedidos();
+      try {
+        await ensureTurnoPedidos();
+      } catch (e) {
+        console.error('[initDB] ensureTurnoPedidos (bootstrap skip):', e && e.message, e && e.stack);
+      }
       markDbReady();
       console.log('DB ready (bootstrap skip)');
       return;
@@ -519,7 +523,11 @@ async function initDB() {
   /** /dia e preços: ensurePrecosVendasSnapshots antes de markDbReady; se a tabela não existir, leituras usam só produtos.preco. */
   await ensureRoleEnumCompras();
   await ensurePrecosVendasSnapshots();
-  await ensureTurnoPedidos();
+  try {
+    await ensureTurnoPedidos();
+  } catch (e) {
+    console.error('[initDB] ensureTurnoPedidos (full init):', e && e.message, e && e.stack);
+  }
   /** Dedup/seed abaixo podem correr em paralelo com tráfego; schema crítico para /dia já está garantido. */
   markDbReady();
   // Remover duplicados de produtos (manter o de menor id por nome)
@@ -562,11 +570,17 @@ initDB()
   .catch((e) => {
     console.error('[initDB] fatal', e && e.message, e && e.stack);
     if (!loginReadyResolved) rejectLoginReady(e);
-    if (!dbReadyResolved) rejectDbReady(e);
+    /** Não rejeitar dbReady: senão toda a API fica «DB não disponível» após qualquer falha no arranque. */
+    if (!dbReadyResolved) {
+      console.warn(
+        '[initDB] dbReady: arranque incompleto — a marcar pronto na mesma (modo degradado). Verifique logs e DDL (ex.: turno_pedidos).'
+      );
+      markDbReady();
+    }
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-01-pedidos-ddl-query';
+const STOCKOS_API_BUILD = '2026-04-01-dbready-never-reject';
 
 /** Folha de stock do turno: só Menu, Ingredientes e Bebidas — categoria «outro» não entra. */
 const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";

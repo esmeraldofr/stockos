@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-pedidos-pos">
+<html lang="pt" data-stockos-ui="2026-03-31-fix-nullish-or">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3319,7 +3319,7 @@ async function loadVendasMenu(turnoId, canEdit) {
         id: p.id,
         nome: p.nome,
         grupo: 'Menu',
-        preco: vendasProdPrecos[p.id] ?? parseFloat(p.preco) || 0
+        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0
       });
     }
     for (const p of avulsoProds) {
@@ -3327,7 +3327,7 @@ async function loadVendasMenu(turnoId, canEdit) {
         id: p.id,
         nome: p.nome,
         grupo: 'Avulso',
-        preco: vendasProdPrecos[p.id] ?? parseFloat(p.preco) || 0
+        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0
       });
     }
     for (const p of bebidaCopoProds) {
@@ -3335,7 +3335,7 @@ async function loadVendasMenu(turnoId, canEdit) {
         id: p.id,
         nome: `${p.nome} (copos)`,
         grupo: 'Bebida',
-        preco: vendasProdPrecos[p.id] ?? parseFloat(p.preco) || 0
+        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0
       });
     }
     pedidoCatalog.sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));

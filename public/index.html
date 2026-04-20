@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-20-areas-trabalho-escalados">
+<html lang="pt" data-stockos-ui="2026-04-20-historico-vendas-por-produto">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4921,11 +4921,115 @@ async function drawHistorico() {
   await loadHistorico();
 }
 
+/** Categorias conhecidas para agrupar o card «Quantidade vendida por produto». */
+const HIST_CAT_LABEL = {
+  menu: 'Menu',
+  ingredientes: 'Ingredientes',
+  bebida: 'Bebidas',
+  outro: 'Outros'
+};
+
+function histVendasProdutosCardHtml(rows) {
+  const list = Array.isArray(rows) ? rows.filter((r) => {
+    const q = parseFloat(r.qtd_vendida) || 0;
+    const v = parseFloat(r.valor_vendas) || 0;
+    return q > 0 || v > 0;
+  }) : [];
+  if (!list.length) {
+    return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title" style="margin-bottom:8px">🍽️ Quantidade vendida por produto</div>
+      <div style="color:#64748b;font-size:13px">Sem vendas de produtos no período.</div>
+    </div>`;
+  }
+  const porCat = {};
+  let totalQtd = 0;
+  let totalValor = 0;
+  for (const r of list) {
+    const cat = r.categoria || 'outro';
+    if (!porCat[cat]) porCat[cat] = [];
+    porCat[cat].push(r);
+    totalQtd += parseFloat(r.qtd_vendida) || 0;
+    totalValor += parseFloat(r.valor_vendas) || 0;
+  }
+  const ordemCats = ['menu', 'bebida', 'ingredientes', 'outro'];
+  const catsOrdenadas = Object.keys(porCat).sort((a, b) => {
+    const ia = ordemCats.indexOf(a);
+    const ib = ordemCats.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+  });
+  const secoes = catsOrdenadas.map((cat) => {
+    const rowsCat = porCat[cat].sort((a, b) => {
+      const qa = parseFloat(a.qtd_vendida) || 0;
+      const qb = parseFloat(b.qtd_vendida) || 0;
+      if (qb !== qa) return qb - qa;
+      return String(a.produto_nome || '').localeCompare(String(b.produto_nome || ''));
+    });
+    let qCat = 0;
+    let vCat = 0;
+    const trs = rowsCat.map((r) => {
+      const q = parseFloat(r.qtd_vendida) || 0;
+      const v = parseFloat(r.valor_vendas) || 0;
+      qCat += q;
+      vCat += v;
+      const sigla = medicaoSigla(r.tipo_medicao || 'unidade');
+      return `
+      <tr>
+        <td style="padding:6px 8px;color:#e2e8f0">${escapeHtml(r.produto_nome || 'Sem nome')}</td>
+        <td style="padding:6px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums">${fmtNum(q)} <span style="color:#64748b;font-size:11px">${escapeHtml(sigla)}</span></td>
+        <td style="padding:6px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(v)}</td>
+        <td style="padding:6px 8px;text-align:right;color:#64748b;font-size:11px">${r.turnos || 0}</td>
+      </tr>`;
+    }).join('');
+    const label = HIST_CAT_LABEL[cat] || cat;
+    return `
+      <tr><td colspan="4" class="section-header" style="background:#0f172a;color:#94a3b8;font-size:11px;padding:8px 10px;text-transform:uppercase;letter-spacing:0.06em">${escapeHtml(label)}</td></tr>
+      ${trs}
+      <tr>
+        <td style="padding:6px 8px;color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Subtotal ${escapeHtml(label.toLowerCase())}</td>
+        <td style="padding:6px 8px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;font-weight:600">${fmtNum(qCat)}</td>
+        <td style="padding:6px 8px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;font-weight:600">${fmt(vCat)}</td>
+        <td></td>
+      </tr>`;
+  }).join('');
+  return `
+    <div class="card" style="margin-bottom:16px;padding:0;overflow:hidden">
+      <div style="padding:14px 16px 8px">
+        <div class="card-title" style="margin-bottom:4px">🍽️ Quantidade vendida por produto</div>
+        <div style="font-size:12px;color:#64748b">Soma de «vendido» por produto em todos os turnos do período (encontrado + entrada − deixado).</div>
+      </div>
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:8px;color:#94a3b8;font-size:12px">Produto</th>
+              <th style="text-align:right;padding:8px;color:#94a3b8;font-size:12px">Quantidade</th>
+              <th style="text-align:right;padding:8px;color:#94a3b8;font-size:12px">Valor</th>
+              <th style="text-align:right;padding:8px;color:#94a3b8;font-size:12px">Turnos</th>
+            </tr>
+          </thead>
+          <tbody>${secoes}</tbody>
+          <tfoot>
+            <tr style="border-top:2px solid #334155">
+              <td style="padding:10px 8px;color:#f1f5f9;font-weight:700">Total do período</td>
+              <td style="padding:10px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700">${fmtNum(totalQtd)}</td>
+              <td style="padding:10px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalValor)}</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>`;
+}
+
 async function loadHistorico() {
   const ini = val('h-inicio'), fim = val('h-fim');
   show('hist-content','<div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div>');
   try {
-    const rows = await api('GET', `/historico?inicio=${ini}&fim=${fim}`);
+    const [rows, vendasProdutos] = await Promise.all([
+      api('GET', `/historico?inicio=${ini}&fim=${fim}`),
+      api('GET', `/historico/vendas-produtos?inicio=${encodeURIComponent(ini)}&fim=${encodeURIComponent(fim)}`).catch(() => [])
+    ]);
     if (!rows.length) { show('hist-content','<div class="alert alert-error">Sem dados neste período</div>'); return; }
 
     let sumVendas = 0, sumGerado = 0, sumFinal = 0;
@@ -5029,6 +5133,7 @@ async function loadHistorico() {
         </div>
         <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">Por dia: Manhã · Tarde · Noite e <strong style="color:#94a3b8">Total do dia</strong> (soma dos três). Clica num turno para esse turno; clica em Total do dia para o dia.</p>
       </div>
+      ${histVendasProdutosCardHtml(vendasProdutos)}
       ${rowsHtml}
     `);
   } catch(e) { show('hist-content',`<div class="alert alert-error">${e.message}</div>`); }

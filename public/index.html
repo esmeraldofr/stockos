@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-03-31-pedido-entrega">
+<html lang="pt" data-stockos-ui="2026-04-20-areas-trabalho-escalados">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -91,6 +91,12 @@ button.is-action-busy{cursor:wait!important}
 @media(max-width:900px){.turno-areas-grid{grid-template-columns:1fr}}
 .turno-area{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;font-size:12px;line-height:1.45;color:#cbd5e1}
 .turno-area-num{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 6px;border-radius:6px;background:rgba(59,130,246,0.22);color:#93c5fd;font-size:11px;font-weight:700}
+.turno-area-body{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1}
+.turno-area-label{color:#cbd5e1}
+.turno-area-people{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.turno-area-person{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(96,165,250,0.12);border:1px solid rgba(96,165,250,0.25);color:#bfdbfe;font-size:11px;font-weight:600;line-height:1.4}
+.turno-area-empty{color:#475569;font-size:11px;font-style:italic}
+.turno-area-origem{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;margin-top:2px}
 
 /* Tabela de stock */
 .table-wrap{overflow-x:auto;overflow-y:auto;max-height:calc(100vh - 180px);-webkit-overflow-scrolling:touch}
@@ -2208,16 +2214,26 @@ function refreshVendasTotal() {
 
 const TURNO_ORDER = ['manha','tarde','noite'];
 
-/** Referência fixa: três áreas de responsabilidade em cada turno (UI apenas). */
-const TURNO_AREAS_TRABALHO_HTML = `
+/** Referência fixa: três áreas de responsabilidade em cada turno (UI apenas).
+ *  O slot `turno-area-people--N` é preenchido depois com os escalados. */
+function turnoAreasTrabalhoHtml() {
+  const cells = AREAS_TRABALHO_META.map((a) => `
+    <div class="turno-area">
+      <span class="turno-area-num">${a.id}</span>
+      <div class="turno-area-body">
+        <span class="turno-area-label">${escapeHtml(a.label)}</span>
+        <div class="turno-area-people" id="turno-area-people--${a.id}"><span class="turno-area-empty">a carregar…</span></div>
+      </div>
+    </div>`).join('');
+  return `
 <div class="card turno-areas-card" style="padding:12px 14px">
-  <div class="card-title" style="font-size:12px;margin-bottom:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em">Áreas de trabalho</div>
-  <div class="turno-areas-grid">
-    <div class="turno-area"><span class="turno-area-num">1</span><span>Caixa, fino, limpeza do passeio</span></div>
-    <div class="turno-area"><span class="turno-area-num">2</span><span>Hambúrguer, limpeza chão da sala, deixar o lixo</span></div>
-    <div class="turno-area"><span class="turno-area-num">3</span><span>Petisco, limpeza do chão da cozinha, lavar a loiça</span></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+    <div class="card-title" style="font-size:12px;margin:0;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em">Áreas de trabalho</div>
+    <div id="turno-areas-origem" class="turno-area-origem"></div>
   </div>
+  <div class="turno-areas-grid">${cells}</div>
 </div>`;
+}
 
 async function navTurno(dir) {
   const idx = TURNO_ORDER.indexOf(S.turnoData?.nome);
@@ -2382,7 +2398,7 @@ async function loadTurno() {
           <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
           <button type="button" class="turno-tab" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
       </div>
-      ${TURNO_AREAS_TRABALHO_HTML}
+      ${turnoAreasTrabalhoHtml()}
 
       <div id="tab-stock" class="turno-tab-panel active">
         <div class="card" style="padding:0;overflow:hidden">
@@ -2507,6 +2523,7 @@ async function loadTurno() {
     }
     await loadTurnoResumoTab(turno.id);
     renderIrregularidadesTurno();
+    loadTurnoAreasEscalados();
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -4598,6 +4615,76 @@ function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
   }
 }
 
+/** Preenche, no cartão «Áreas de trabalho», quem está escalado para cada área (1–3). */
+async function loadTurnoAreasEscalados() {
+  const container = document.querySelector('.turno-areas-card');
+  if (!container) return;
+  const turnoNome = S.turnoData?.nome;
+  if (!turnoNome || !S.date) return;
+  try {
+    const escalaPack = await api(
+      'GET',
+      `/escala/semana?data_inicio=${encodeURIComponent(S.date)}&data_fim=${encodeURIComponent(S.date)}`
+    ).catch(() => ({ semana: [], template: [] }));
+    const rowsDia = escalaPack?.semana || [];
+    const rowsTemplate = escalaPack?.template || [];
+    const listaDia = rowsDia.filter((r) => r.turno === turnoNome);
+    const d = new Date(S.date + 'T12:00:00Z');
+    const day = d.getUTCDay();
+    const diaSemana = day === 0 ? 6 : day - 1;
+    const listaTpl = rowsTemplate.filter(
+      (r) => Number(r.dia_semana) === diaSemana && r.turno === turnoNome
+    );
+    const lista = listaDia.length ? listaDia : listaTpl;
+    const origem = listaDia.length
+      ? 'Escala do dia'
+      : (listaTpl.length ? 'Escala template' : '');
+    const origEl = document.getElementById('turno-areas-origem');
+    if (origEl) origEl.textContent = origem;
+
+    const porArea = { 1: [], 2: [], 3: [], 0: [] };
+    lista.forEach((r) => {
+      const a = r.area_trabalho != null && r.area_trabalho !== ''
+        ? parseInt(r.area_trabalho, 10)
+        : NaN;
+      const key = Number.isFinite(a) && a >= 1 && a <= 3 ? a : 0;
+      porArea[key].push(r);
+    });
+
+    AREAS_TRABALHO_META.forEach((area) => {
+      const slot = document.getElementById(`turno-area-people--${area.id}`);
+      if (!slot) return;
+      const pessoas = porArea[area.id] || [];
+      if (!pessoas.length) {
+        slot.innerHTML = '<span class="turno-area-empty">sem escalados</span>';
+        return;
+      }
+      slot.innerHTML = pessoas.map((r) => {
+        const nome = r.utilizador_nome || 'Sem nome';
+        const role = r.utilizador_role ? String(r.utilizador_role).toUpperCase() : '';
+        const tipParts = [];
+        if (role) tipParts.push(role);
+        if (r.notas) tipParts.push(String(r.notas));
+        const tip = tipParts.join(' · ');
+        return `<span class="turno-area-person"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${escapeHtml(nome)}</span>`;
+      }).join('');
+    });
+
+    const semAreaCount = (porArea[0] || []).length;
+    if (semAreaCount > 0 && origEl) {
+      const nomes = porArea[0]
+        .map((r) => r.utilizador_nome || 'Sem nome')
+        .join(', ');
+      origEl.textContent = `${origem ? origem + ' · ' : ''}Sem área: ${nomes}`;
+    }
+  } catch (e) {
+    AREAS_TRABALHO_META.forEach((area) => {
+      const slot = document.getElementById(`turno-area-people--${area.id}`);
+      if (slot) slot.innerHTML = '<span class="turno-area-empty">—</span>';
+    });
+  }
+}
+
 async function loadEscalaTurno() {
   const el = document.getElementById('turno-escala-list');
   if (!el) return;
@@ -4737,6 +4824,7 @@ async function loadEscalaTurno() {
       toggleExtra();
     }
     renderIrregularidadesTurno();
+    loadTurnoAreasEscalados();
   } catch (e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }

@@ -290,6 +290,8 @@ async function initDB() {
     if (chk.rows.length && chk.rows[0].v === STOCKOS_BOOTSTRAP_VERSION) {
       /** Login só precisa de SELECT em utilizadores — não esperar pelo DO/ALTER do enum «compras». */
       markLoginReady();
+      /** Em background: preencher `username` para utilizadores antigos (admin, etc.) para que o login por username funcione. */
+      ensureUsernameColumn().catch((e) => console.warn('[initDB] ensureUsernameColumn (bootstrap skip):', e && e.message));
       await ensureRoleEnumCompras();
       await ensurePrecosVendasSnapshots();
       try {
@@ -1382,15 +1384,19 @@ function pgErrText(e) {
  */
 async function queryUtilizadorPorLogin(login) {
   const L = String(login || '').trim();
+  /** Alias hardcoded: permite entrar como `admin` mesmo quando o backfill de username ainda
+   *  não correu (ensureUsernameColumn só é chamado por /api/utilizadores). */
+  const emailAlias = L.toLowerCase() === 'admin' ? 'admin@stockos.ao' : null;
   try {
     const r = await query(
       `SELECT * FROM utilizadores WHERE ativo=true AND (
         LOWER(email) = LOWER($1)
+        OR ($2::text IS NOT NULL AND LOWER(email) = $2)
         OR (STRPOS($1, '@') = 0 AND LOWER(COALESCE(username, '')) = LOWER($1))
       )
       ORDER BY CASE WHEN LOWER(email) = LOWER($1) THEN 0 ELSE 1 END
       LIMIT 1`,
-      [L]
+      [L, emailAlias]
     );
     return r;
   } catch (e) {
@@ -1399,6 +1405,13 @@ async function queryUtilizadorPorLogin(login) {
       [L]
     );
     if (byEmail.rows.length > 0 || L.includes('@')) return byEmail;
+    if (emailAlias) {
+      const byAlias = await query(
+        `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(email)=$1`,
+        [emailAlias]
+      );
+      if (byAlias.rows.length > 0) return byAlias;
+    }
     try {
       return await query(
         `SELECT * FROM utilizadores WHERE ativo=true AND LOWER(username)=LOWER($1)`,

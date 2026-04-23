@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-20-historico-vendas-por-produto">
+<html lang="pt" data-stockos-ui="2026-04-20-botao-menu-drawer">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -24,9 +24,33 @@ input,select,button,textarea{font-family:inherit}
 .nav-btn svg{width:22px;height:22px}
 
 /* Header */
-#header{background:#1e293b;border-bottom:1px solid #334155;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
+#header{background:#1e293b;border-bottom:1px solid #334155;padding:12px 16px 12px 58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
 #header h1{font-size:18px;font-weight:700;color:#f1f5f9}
 .header-sub{font-size:12px;color:#64748b}
+
+/* Botão de menu (hamburger) + drawer lateral */
+body:not(.has-auth) #menu-toggle,body:not(.has-auth) #menu-drawer,body:not(.has-auth) #menu-overlay{display:none!important}
+#menu-toggle{position:fixed;top:10px;left:10px;z-index:60;width:40px;height:40px;border-radius:10px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:.15s;box-shadow:0 2px 6px rgba(0,0,0,0.3)}
+#menu-toggle:hover{background:#1e293b;border-color:#475569}
+#menu-toggle svg{width:20px;height:20px}
+body.env-develop #menu-toggle,body.env-qualidade #menu-toggle{top:32px}
+#menu-overlay{position:fixed;inset:0;background:rgba(2,6,23,0.55);z-index:190;opacity:0;pointer-events:none;transition:opacity .18s}
+#menu-drawer{position:fixed;top:0;left:0;bottom:0;width:280px;max-width:85vw;background:#0f172a;border-right:1px solid #334155;z-index:200;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform .2s ease;box-shadow:6px 0 18px rgba(0,0,0,0.35)}
+body.menu-open #menu-overlay{opacity:1;pointer-events:auto}
+body.menu-open #menu-drawer{transform:translateX(0)}
+body.menu-open{overflow:hidden}
+.menu-header{padding:16px 16px 12px;border-bottom:1px solid #334155;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.menu-header-title{font-size:15px;font-weight:700;color:#f1f5f9}
+.menu-header-sub{font-size:11px;color:#64748b;margin-top:2px}
+.menu-close{background:none;border:none;color:#94a3b8;font-size:22px;cursor:pointer;line-height:1;padding:4px 8px;border-radius:6px}
+.menu-close:hover{color:#e2e8f0;background:#1e293b}
+.menu-items{flex:1;overflow-y:auto;padding:8px}
+.menu-item{width:100%;display:flex;align-items:center;gap:12px;padding:11px 12px;margin-bottom:2px;background:none;border:none;color:#cbd5e1;font-size:14px;border-radius:8px;cursor:pointer;text-align:left;transition:.15s}
+.menu-item:hover{background:#1e293b;color:#f1f5f9}
+.menu-item.active{background:rgba(59,130,246,0.14);color:#93c5fd}
+.menu-item svg{width:20px;height:20px;flex-shrink:0}
+.menu-item.menu-item-logout{color:#f87171;margin-top:8px;border-top:1px solid #334155;border-radius:0;padding-top:14px}
+.menu-item.menu-item-logout:hover{background:rgba(239,68,68,0.08);color:#fca5a5}
 
 /* Cards */
 .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:16px;margin-bottom:12px}
@@ -524,6 +548,20 @@ input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-
 </head>
 <body>
 <div id="env-banner"></div>
+<button type="button" id="menu-toggle" aria-label="Abrir menu" onclick="toggleMenuDrawer(true)">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+</button>
+<div id="menu-overlay" onclick="toggleMenuDrawer(false)"></div>
+<nav id="menu-drawer" aria-hidden="true" aria-label="Menu principal">
+  <div class="menu-header">
+    <div>
+      <div class="menu-header-title">StockOS</div>
+      <div class="menu-header-sub" id="menu-drawer-user">&nbsp;</div>
+    </div>
+    <button type="button" class="menu-close" aria-label="Fechar menu" onclick="toggleMenuDrawer(false)">×</button>
+  </div>
+  <div class="menu-items" id="menu-drawer-items"></div>
+</nav>
 <div id="app"></div>
 <script>
 (function(){
@@ -1192,11 +1230,13 @@ async function navigate(page, params) {
   S.page = page;
   if (params) Object.assign(S, params);
   if (page !== 'turno') S.turnoId = null;
+  if (document.body.classList.contains('menu-open')) toggleMenuDrawer(false);
   await draw();
 }
 
 async function draw() {
-  if (!S.token) { drawLogin(); return; }
+  document.body.classList.toggle('has-auth', !!S.token);
+  if (!S.token) { document.body.classList.remove('menu-open'); drawLogin(); return; }
   if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario'].includes(S.page)) {
     S.page = 'dia';
   }
@@ -1296,6 +1336,84 @@ function doLogout() {
 }
 
 // ── NAV ───────────────────────────────────────────────────────
+/** Itens do menu (lateral e bottom nav) com as mesmas regras de visibilidade por role. */
+function menuEntries() {
+  const role = S.user?.role;
+  const isAdmin = role === 'admin';
+  const showHistorico = role !== 'compras';
+  const showArmazem = ['admin', 'gestor', 'compras'].includes(role);
+  const showEscala = role === 'admin' || role === 'gestor';
+  const showDepositos = ['admin', 'gestor', 'compras'].includes(role);
+  const entries = [
+    { page: 'dia', label: 'Dia',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>' },
+    { page: 'calendario', label: 'Calendário',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/><line x1="8" y1="18" x2="8" y2="18.01"/><line x1="12" y1="18" x2="12" y2="18.01"/><line x1="16" y1="18" x2="16" y2="18.01"/></svg>' }
+  ];
+  if (showDepositos) entries.push({ page: 'depositos', label: 'Banco',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h3l2-7h8l2 7h3"/><path d="M5 10v10a2 2 0 002 2h10a2 2 0 002-2V10"/><rect x="9" y="14" width="6" height="4" rx="1"/></svg>' });
+  if (showHistorico) {
+    entries.push({ page: 'historico', label: 'Histórico',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' });
+    entries.push({ page: 'irregularidades', label: 'Irregularidades',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' });
+  }
+  entries.push({ page: 'produtos', label: 'Produtos',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>' });
+  if (showArmazem) {
+    entries.push({ page: 'fornecedores', label: 'Fornecedores',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 18V6a2 2 0 00-2-2H4a2 2 0 00-2 2v11a1 1 0 001 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 001-1v-3.65a1 1 0 00-.22-.624l-3.48-4.35A1 1 0 0017.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>' });
+    entries.push({ page: 'armazem', label: 'Armazém',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>' });
+  }
+  if (showEscala) entries.push({ page: 'escala', label: 'Escala',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>' });
+  if (isAdmin) entries.push({ page: 'admin', label: 'Admin',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' });
+  return entries;
+}
+
+function toggleMenuDrawer(open) {
+  const willOpen = typeof open === 'boolean' ? open : !document.body.classList.contains('menu-open');
+  document.body.classList.toggle('menu-open', willOpen);
+  const drawer = document.getElementById('menu-drawer');
+  if (drawer) drawer.setAttribute('aria-hidden', willOpen ? 'false' : 'true');
+  if (willOpen) renderMenuDrawer();
+}
+
+function menuDrawerNavigate(page) {
+  toggleMenuDrawer(false);
+  navigate(page);
+}
+
+function menuDrawerLogout() {
+  toggleMenuDrawer(false);
+  doLogout();
+}
+
+function renderMenuDrawer() {
+  const cont = document.getElementById('menu-drawer-items');
+  const userEl = document.getElementById('menu-drawer-user');
+  if (!cont) return;
+  if (!S.token || !S.user) {
+    cont.innerHTML = '';
+    if (userEl) userEl.textContent = '';
+    return;
+  }
+  const nome = S.user?.nome || '';
+  const role = S.user?.role ? String(S.user.role).toUpperCase() : '';
+  if (userEl) userEl.textContent = nome ? `${nome}${role ? ` · ${role}` : ''}` : (role || '');
+  const items = menuEntries().map((e) => `
+    <button type="button" class="menu-item${S.page === e.page ? ' active' : ''}" onclick="menuDrawerNavigate('${e.page}')">
+      ${e.svg}<span>${e.label}</span>
+    </button>`).join('');
+  cont.innerHTML = `${items}
+    <button type="button" class="menu-item menu-item-logout" onclick="menuDrawerLogout()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      <span>Sair</span>
+    </button>`;
+}
+
 function navBar() {
   const isAdmin = S.user?.role === 'admin';
   const showHistorico = S.user?.role !== 'compras';
@@ -6735,6 +6853,11 @@ async function removeEscalaTemplate(id) {
 }
 
 // ── START ─────────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('menu-open')) {
+    toggleMenuDrawer(false);
+  }
+});
 draw().catch(e => console.error(e));
 </script>
 </body>

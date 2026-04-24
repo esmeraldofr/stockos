@@ -22,9 +22,13 @@ jobs:
         run: sudo apt-get install -y postgresql-client
 
       - name: Run SQL setup
+        # Idempotente mas tolera erros esperados quando a BD real tem colunas de tipo
+        # diferente do SQL template (ex.: produtos.id UUID vs INTEGER). Os passos
+        # seguintes (pgcrypto, reset de admin) têm de correr mesmo assim.
+        continue-on-error: true
         run: |
           echo "Running SQL (idempotent)..."
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/stockos_database.sql
+          psql "$DATABASE_URL" -f supabase/stockos_database.sql || echo "SQL setup completed with warnings/errors (continuing)."
           echo "Done."
 
       - name: Extensão pgcrypto (digest no passo seguinte)
@@ -32,9 +36,9 @@ jobs:
 
       - name: Set admin password
         run: |
-          psql "$DATABASE_URL" -c "
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
             UPDATE utilizadores SET senha_hash = encode(
               digest('admin123' || 'stockos-pwd-salt-2025', 'sha256'), 'hex'
-            ) WHERE email = 'admin@stockos.ao';
+            ), ativo = TRUE WHERE email = 'admin@stockos.ao';
           "
           echo "Admin password set."

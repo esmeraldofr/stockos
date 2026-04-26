@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-24-auth-admin-alias">
+<html lang="pt" data-stockos-ui="2026-04-26-fix-overflow-areas-trabalho">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -8,7 +8,7 @@
 <title>StockOS</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;overflow-x:hidden}
 #env-banner{position:fixed;top:0;left:0;right:0;z-index:9999;text-align:center;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:3px 0;display:none}
 body.env-develop #env-banner{display:block;background:#d97706;color:#fff}
 body.env-qualidade #env-banner{display:block;background:#7c3aed;color:#fff}
@@ -120,7 +120,7 @@ button.is-action-busy{cursor:wait!important}
 .turno-area-people{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
 .turno-area-person{display:inline-block;padding:2px 8px;border-radius:999px;background:rgba(96,165,250,0.12);border:1px solid rgba(96,165,250,0.25);color:#bfdbfe;font-size:11px;font-weight:600;line-height:1.4}
 .turno-area-empty{color:#475569;font-size:11px;font-style:italic}
-.turno-area-origem{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;margin-top:2px}
+.turno-area-origem{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;margin-top:2px;white-space:normal;word-break:break-word;overflow-wrap:anywhere;line-height:1.35}
 
 /* Tabela de stock */
 .table-wrap{overflow-x:auto;overflow-y:auto;max-height:calc(100vh - 180px);-webkit-overflow-scrolling:touch}
@@ -2345,10 +2345,8 @@ function turnoAreasTrabalhoHtml() {
     </div>`).join('');
   return `
 <div class="card turno-areas-card" style="padding:12px 14px">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
-    <div class="card-title" style="font-size:12px;margin:0;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em">Áreas de trabalho</div>
-    <div id="turno-areas-origem" class="turno-area-origem"></div>
-  </div>
+  <div class="card-title" style="font-size:12px;margin:0 0 6px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em">Áreas de trabalho</div>
+  <div id="turno-areas-origem" class="turno-area-origem" style="margin:0 0 10px"></div>
   <div class="turno-areas-grid">${cells}</div>
 </div>`;
 }

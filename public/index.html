@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-pedido-talao-rawbt">
+<html lang="pt" data-stockos-ui="2026-04-27-pedido-talao-logo">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2890,6 +2890,147 @@ function pedidoBalcaoIsAndroid() {
   return /android/i.test(String(navigator.userAgent || ''));
 }
 
+/** Logo do talão: guardamos preview (data URL) e bytes ESC/POS (GS v 0) em localStorage. */
+function pedidoBalcaoLogoGetPreview() {
+  try { return localStorage.getItem('stockos.pedidoLogoPreview') || ''; } catch (_) { return ''; }
+}
+function pedidoBalcaoLogoGetEscPos() {
+  try { return localStorage.getItem('stockos.pedidoLogoEscPos') || ''; } catch (_) { return ''; }
+}
+function pedidoBalcaoLogoClear() {
+  try {
+    localStorage.removeItem('stockos.pedidoLogoPreview');
+    localStorage.removeItem('stockos.pedidoLogoEscPos');
+  } catch (_) {}
+  pedidoBalcaoLogoRefreshUI();
+}
+
+function pedidoBalcaoLogoRefreshUI() {
+  const wrap = document.getElementById('pedido-logo-preview-wrap');
+  if (!wrap) return;
+  const url = pedidoBalcaoLogoGetPreview();
+  if (url) {
+    wrap.innerHTML = `<img src="${escapeHtml(url)}" alt="Logo" style="max-width:160px;max-height:80px;background:#fff;padding:4px;border-radius:6px"/>`;
+  } else {
+    wrap.innerHTML = '<span style="color:#64748b;font-size:11px">Sem logo definido</span>';
+  }
+  const btn = document.getElementById('pedido-logo-clear-btn');
+  if (btn) btn.style.display = url ? 'inline-block' : 'none';
+}
+
+function pedidoBalcaoLogoLoadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Falha ao carregar imagem.'));
+    img.src = src;
+  });
+}
+
+/** Converte uma imagem (data URL) em bytes ESC/POS GS v 0 (raster monocromático). */
+async function pedidoBalcaoImageToEscPosRaster(dataUrl) {
+  const img = await pedidoBalcaoLogoLoadImage(dataUrl);
+  const MAX_W = 384; // 58 mm @ ~203 dpi
+  const MAX_H = 200;
+  let scale = 1;
+  if (img.width > MAX_W) scale = MAX_W / img.width;
+  if (img.height * scale > MAX_H) scale = MAX_H / img.height;
+  let w = Math.max(8, Math.floor(img.width * scale));
+  let h = Math.max(1, Math.floor(img.height * scale));
+  w = w - (w % 8); // múltiplo de 8
+  if (w < 8) w = 8;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  const id = ctx.getImageData(0, 0, w, h);
+  const data = id.data;
+  // Grayscale para Float32 (com alfa contra branco)
+  const gray = new Float32Array(w * h);
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    const a = data[i + 3] / 255;
+    const r = data[i] * a + 255 * (1 - a);
+    const g = data[i + 1] * a + 255 * (1 - a);
+    const b = data[i + 2] * a + 255 * (1 - a);
+    gray[j] = 0.299 * r + 0.587 * g + 0.114 * b;
+  }
+  // Floyd–Steinberg
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      const oldP = gray[idx];
+      const newP = oldP < 128 ? 0 : 255;
+      gray[idx] = newP;
+      const err = oldP - newP;
+      if (x + 1 < w) gray[idx + 1] += err * 7 / 16;
+      if (y + 1 < h) {
+        if (x > 0) gray[idx + w - 1] += err * 3 / 16;
+        gray[idx + w] += err * 5 / 16;
+        if (x + 1 < w) gray[idx + w + 1] += err * 1 / 16;
+      }
+    }
+  }
+  // Empacotar em bits (1 = preto)
+  const bytesPerRow = w / 8;
+  const raster = new Uint8Array(bytesPerRow * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (gray[y * w + x] < 128) {
+        raster[y * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
+      }
+    }
+  }
+  // Cabeçalho GS v 0 m xL xH yL yH
+  const xL = bytesPerRow & 0xff;
+  const xH = (bytesPerRow >> 8) & 0xff;
+  const yL = h & 0xff;
+  const yH = (h >> 8) & 0xff;
+  const header = [0x1d, 0x76, 0x30, 0x00, xL, xH, yL, yH];
+  // Construir string latin1 (1 byte por char) para guardar/serializar
+  let s = '';
+  for (let i = 0; i < header.length; i++) s += String.fromCharCode(header[i]);
+  for (let i = 0; i < raster.length; i++) s += String.fromCharCode(raster[i]);
+  return s;
+}
+
+async function pedidoBalcaoLogoOnFile(input) {
+  if (!input || !input.files || !input.files[0]) return;
+  const file = input.files[0];
+  if (!/^image\//.test(file.type)) {
+    alert('Selecione um ficheiro de imagem (PNG, JPG…).');
+    input.value = '';
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    alert('Imagem demasiado grande. Use um ficheiro até 5 MB.');
+    input.value = '';
+    return;
+  }
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => reject(new Error('Não foi possível ler a imagem.'));
+      r.readAsDataURL(file);
+    });
+    const escpos = await pedidoBalcaoImageToEscPosRaster(dataUrl);
+    try {
+      localStorage.setItem('stockos.pedidoLogoPreview', dataUrl);
+      localStorage.setItem('stockos.pedidoLogoEscPos', escpos);
+    } catch (e) {
+      alert('Logo gerado mas não foi possível guardar (armazenamento cheio).');
+    }
+    pedidoBalcaoLogoRefreshUI();
+  } catch (e) {
+    alert('Falha ao processar imagem: ' + (e && e.message ? e.message : e));
+  } finally {
+    input.value = '';
+  }
+}
+
 function pedidoBalcaoAutoPrintEnabled() {
   try {
     const v = localStorage.getItem('stockos.pedidoAutoPrint');
@@ -2997,6 +3138,11 @@ function pedidoBalcaoBuildTalaoEscPos(pedido) {
   let out = '';
   out += ESC + '@';
   out += ESC + 'a' + '\x01';
+  const logoBin = pedidoBalcaoLogoGetEscPos();
+  if (logoBin) {
+    out += logoBin;
+    out += '\n';
+  }
   out += GS + '!' + '\x11';
   out += 'STOCKOS\n';
   out += GS + '!' + '\x00';
@@ -3383,12 +3529,29 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <input type="checkbox" id="pedido-com-entrega" style="width:18px;height:18px;accent-color:#0ea5e9;cursor:pointer"/>
           <span>Entrega ao domicílio / fora do balcão</span>
         </label>
-        <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px 10px;border-radius:8px;background:#0f172a;border:1px dashed #334155;cursor:pointer;font-size:12px;color:#cbd5e1;user-select:none">
+        <label style="display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:8px 10px;border-radius:8px;background:#0f172a;border:1px dashed #334155;cursor:pointer;font-size:12px;color:#cbd5e1;user-select:none">
           <input type="checkbox" id="pedido-auto-print" ${
             pedidoBalcaoAutoPrintEnabled() ? 'checked' : ''
           } onchange="pedidoBalcaoToggleAutoPrint(this)" style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer"/>
           <span>🖨️ Imprimir talão automaticamente (RawBT · Bluetooth)</span>
         </label>
+        <details style="margin-bottom:12px;font-size:12px;color:#cbd5e1" ${
+          pedidoBalcaoLogoGetPreview() ? '' : ''
+        }>
+          <summary style="cursor:pointer;padding:6px 0;list-style:none;display:flex;align-items:center;gap:8px">
+            <span>🖼️ Logo do talão</span>
+            <span style="font-size:10px;color:#64748b">(opcional · 58 mm)</span>
+          </summary>
+          <div style="padding:10px;background:#0f172a;border:1px dashed #334155;border-radius:8px;display:flex;flex-direction:column;gap:8px;align-items:flex-start">
+            <div id="pedido-logo-preview-wrap" style="min-height:40px;display:flex;align-items:center;justify-content:center;width:100%"></div>
+            <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">
+              <span>Escolher imagem…</span>
+              <input type="file" accept="image/*" style="display:none" onchange="pedidoBalcaoLogoOnFile(this)"/>
+            </label>
+            <button type="button" id="pedido-logo-clear-btn" class="btn btn-ghost btn-sm" style="display:none" onclick="pedidoBalcaoLogoClear()">Remover logo</button>
+            <span style="font-size:10px;color:#64748b;line-height:1.35">PNG/JPG. É reduzido a 384 px e convertido para preto-e-branco para a impressora térmica.</span>
+          </div>
+        </details>
         <div class="pedido-side-title" style="margin-top:4px">Teclado</div>
         <div class="pedido-keypad">
           <button type="button" class="pedido-kp-act" onclick="pedidoBalcaoKeypad('bs')">← Apagar</button>
@@ -3439,6 +3602,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     formHtml +
     `<div class="pedidos-balcao-lista-turno"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px">Pedidos do turno</div>${listHtml}</div>`;
   pedidoBalcaoSyncDraftUI();
+  pedidoBalcaoLogoRefreshUI();
 }
 
 function closeFaturaVendaModal() {

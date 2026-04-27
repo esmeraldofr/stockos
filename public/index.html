@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-irreg-sem-simbolos">
+<html lang="pt" data-stockos-ui="2026-04-27-turno-tab-persist">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -632,6 +632,8 @@ const S = {
   turnoId: null,
   turnoData: null,
   turnoCanEdit: false,
+  /** Aba ativa do turno (persistida ao mudar de turno). */
+  turnoTab: 'stock',
   produtos: [],
   utilizadores: [],
   turnosDia: [],
@@ -640,7 +642,8 @@ const S = {
 };
 
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
-const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM' };
+const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
+const ALLOWED_TURNO_TABS = ['stock', 'vendas', 'pedidos', 'registos', 'escala'];
 const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin'];
 
 function _storageGet(key) {
@@ -673,9 +676,11 @@ function _storageSet(key, val) {
     const d = _storageGet(UI_STATE_KEYS.date);
     const tid = _storageGet(UI_STATE_KEYS.turnoId);
     const cy = _storageGet(UI_STATE_KEYS.calYM);
+    const tt = _storageGet(UI_STATE_KEYS.turnoTab);
     if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) S.date = d;
     if (S.page === 'turno' && tid) S.turnoId = tid;
     if (cy && /^\d{4}-\d{2}$/.test(cy)) S.calYM = cy;
+    if (tt && ALLOWED_TURNO_TABS.includes(tt)) S.turnoTab = tt;
   } catch (_) {}
 })();
 
@@ -701,6 +706,9 @@ function persistUiState() {
     }
     if (S.calYM) _storageSet(UI_STATE_KEYS.calYM, S.calYM);
     else _storageSet(UI_STATE_KEYS.calYM, null);
+    if (S.page === 'turno' && S.turnoTab && ALLOWED_TURNO_TABS.includes(S.turnoTab)) {
+      _storageSet(UI_STATE_KEYS.turnoTab, S.turnoTab);
+    }
     syncUrlHashToPage();
   } catch (_) {}
 }
@@ -2524,17 +2532,20 @@ async function loadTurno() {
       cx1 === null || cx2 === null || cx3 === null ? NaN : cx1 + cx2 + cx3;
     const tf = Number.isFinite(tg) ? tg - parseFloat(caixa.saida || 0) : NaN;
 
+    const activeTab = ['stock','vendas','pedidos','registos','escala'].includes(S.turnoTab) ? S.turnoTab : 'stock';
+    const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
+    const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
     show('turno-content', `
       <div class="turno-tabs">
-          <button type="button" class="turno-tab active" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
-          <button type="button" class="turno-tab" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
-          <button type="button" class="turno-tab" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
-          <button type="button" class="turno-tab" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
-          <button type="button" class="turno-tab" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
+          <button type="button" class="${tabCls('stock')}" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
+          <button type="button" class="${tabCls('vendas')}" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>
+          <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
+          <button type="button" class="${tabCls('registos')}" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
+          <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
       </div>
       ${turnoAreasTrabalhoHtml()}
 
-      <div id="tab-stock" class="turno-tab-panel active">
+      <div id="tab-stock" class="${panelCls('stock')}">
         <div class="card" style="padding:0;overflow:hidden">
           <div class="table-wrap">
             <table>
@@ -2570,14 +2581,14 @@ async function loadTurno() {
         </div>
       </div>
 
-      <div id="tab-vendas" class="turno-tab-panel">
+      <div id="tab-vendas" class="${panelCls('vendas')}">
         <div class="card" id="vendas-menu-card">
           <div class="card-title">🍽️ Vendas de Menu</div>
           <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
         </div>
       </div>
 
-      <div id="tab-pedidos" class="turno-tab-panel">
+      <div id="tab-pedidos" class="${panelCls('pedidos')}">
         <div class="card" id="pedidos-balcao-card" style="margin-bottom:12px">
           <div class="card-title">Pedidos ao balcão</div>
           <p style="font-size:12px;color:#64748b;margin:-4px 0 10px;line-height:1.45">Um pedido por cliente ou mesa. Cada pedido tem a sua fatura; as quantidades somam nas vendas do turno.</p>
@@ -2585,7 +2596,7 @@ async function loadTurno() {
         </div>
       </div>
 
-      <div id="tab-registos" class="turno-tab-panel">
+      <div id="tab-registos" class="${panelCls('registos')}">
         <div id="turno-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
         <div class="card mt-12" id="turno-irregularidades-card" style="display:none">
           <div class="card-title">⚠️ Irregularidades</div>
@@ -2631,7 +2642,7 @@ async function loadTurno() {
         </div>
       </div>
 
-      <div id="tab-escala" class="turno-tab-panel">
+      <div id="tab-escala" class="${panelCls('escala')}">
         <div class="card">
           <div class="card-title">👥 Escala do Turno</div>
           <p style="font-size:12px;color:#64748b;margin:-4px 0 10px;line-height:1.4">Horário: <strong style="color:#cbd5e1">${turnoHorarioLabel(turno.nome)}</strong></p>
@@ -2658,6 +2669,11 @@ async function loadTurno() {
     await loadTurnoResumoTab(turno.id);
     renderIrregularidadesTurno();
     loadTurnoAreasEscalados();
+    if (activeTab === 'vendas' || activeTab === 'pedidos') {
+      try { await loadVendasMenu(turno.id, !!S.turnoCanEdit); } catch (_) {}
+    } else if (activeTab === 'escala') {
+      try { await loadEscalaTurno(); } catch (_) {}
+    }
   } catch(e) {
     show('turno-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -4719,10 +4735,13 @@ function calcCaixa() {
 }
 
 async function switchTurnoTab(name, btn) {
+  S.turnoTab = name;
+  try { persistUiState(); } catch (_) {}
   document.querySelectorAll('.turno-tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.turno-tab').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name)?.classList.add('active');
-  btn.classList.add('active');
+  if (btn) btn.classList.add('active');
+  else document.querySelector(`.turno-tab[data-turno-tab="${name}"]`)?.classList.add('active');
   if (name === 'escala') {
     await loadEscalaTurno();
   }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-pedido-talao-logo">
+<html lang="pt" data-stockos-ui="2026-04-27-fino-barril-novo">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2473,9 +2473,22 @@ async function loadTurno() {
         const taraKg = parseFloat(s.peso_tara_kg) || 0;
         let metaLinha = medicaoSigla(s.tipo_medicao);
         if (taraKg > 0) metaLinha += ` · recipiente ${fmtNum(taraKg)} kg`;
+        const isFB = isFinoBarrilNome(s.produto_nome);
+        const fbBtnHtml =
+          canEdit && isFB
+            ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px;padding:4px 10px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.5);color:#86efac;line-height:1.2"
+                onclick="runAction(event, async () => { await adicionarFinoBarrilNovo(${JSON.stringify(
+                  String(s.produto_id)
+                )}); })"
+                title="Soma ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos à coluna Entrada (cheio ${fmtNum(
+                KG_FINO_BARRIL_CHEIO
+              )} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)">+ Novo barril (+${fmtNum(
+                KG_FINO_BARRIL_NET
+              )} kg)</button>`
+            : '';
         return `
           <tr class="stock-row">
-            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div></td>
+            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div>${fbBtnHtml}</td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado)}"
@@ -4093,6 +4106,10 @@ function getVendidoRegistadoEmVendas(s) {
 
 /** 1 copo Fino = 0,270 kg (barril → copos em irregularidades). */
 const KG_FINO_COPO = 0.27;
+/** Pesos de referência do barril de Fino. */
+const KG_FINO_BARRIL_CHEIO = 61.05; // peso bruto na balança
+const KG_FINO_BARRIL_VAZIO = 12.9;  // tara
+const KG_FINO_BARRIL_NET = KG_FINO_BARRIL_CHEIO - KG_FINO_BARRIL_VAZIO; // 48,15 kg líquidos por barril novo
 function prodNomeNorm(n) {
   return String(n || '').trim().toLowerCase();
 }
@@ -5030,6 +5047,51 @@ async function submitEntrada(turnoId) {
   } catch(e) {
     if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
   }
+}
+
+/** Adiciona 1 barril novo de Fino (peso líquido = cheio − tara) à coluna Entrada. */
+async function adicionarFinoBarrilNovo(produtoId) {
+  const turnoId = S.turnoData?.id;
+  if (!turnoId) {
+    alert('Turno não está aberto.');
+    return;
+  }
+  if (!produtoId) return;
+  const ok = confirm(
+    `Adicionar 1 barril novo de Fino?\n\n` +
+      `+ ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos à Entrada\n` +
+      `(barril cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(
+        KG_FINO_BARRIL_VAZIO
+      )} kg)`
+  );
+  if (!ok) return;
+  await api('POST', `/turnos/${turnoId}/entradas`, {
+    produto_id: produtoId,
+    tipo: 'entrada',
+    origem: 'armazem',
+    preco: 0,
+    quantidade: KG_FINO_BARRIL_NET,
+    notas: `Barril novo (${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(
+      KG_FINO_BARRIL_VAZIO
+    )} kg)`
+  });
+  const pid = prodIdKey(produtoId);
+  const entradasRows = await api('GET', `/turnos/${turnoId}/entradas`);
+  const soma = entradasRows
+    .filter((e) => prodIdKey(e.produto_id) === pid)
+    .reduce(
+      (s, e) =>
+        s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1),
+      0
+    );
+  const cell = document.getElementById(`entrada-${pid}`);
+  if (cell) cell.textContent = fmtQtyInput(soma);
+  if (!stockBuf[pid])
+    stockBuf[pid] = { encontrado: null, entrada: 0, deixado: null, fechados: 0 };
+  stockBuf[pid].entrada = soma;
+  updateStock(produtoId, 'entrada', soma);
+  const stocks = S.turnoData?.stock || [];
+  await loadRegistosMovimentosSection(turnoId, stocks, true);
 }
 
 function renderSaidasSection(turnoId, canEdit, saidas, entradas) {

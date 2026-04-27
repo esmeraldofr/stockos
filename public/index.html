@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-fino-irreg-simples">
+<html lang="pt" data-stockos-ui="2026-04-27-irreg-sem-simbolos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4257,8 +4257,8 @@ function buildIrregStockVsMenusHtml({ stockRow, stockBuf, vendasBuf, receitasIrr
     <div style="margin-top:10px;padding:8px 10px;border-radius:6px;border:1px solid ${border};background:${bg};font-size:12px;color:#cbd5e1;line-height:1.4">
       <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">${escapeHtml(stockRow.produto_nome)} (stock vs menus)</div>
       <div>Stock <span style="color:#94a3b8">(enc.+entr.−deix.)</span> <strong>${fmtNum(qtyStock)}</strong> ${um}</div>
-      <div style="margin-top:4px">Σ menus com ${escapeHtml(receitaLabel)} na receita <span style="color:#64748b">(vendas × qtd. na receita)</span> <strong>${fmtNum(qtyMenus)}</strong> ${um}</div>
-      <div style="margin-top:4px"><span style="color:#94a3b8">Δ</span> <strong style="color:#fb923c">${diff >= 0 ? '+' : ''}${fmtNum(diff)}</strong> ${um}</div>
+      <div style="margin-top:4px">Total de menus com ${escapeHtml(receitaLabel)} na receita <span style="color:#64748b">(vendas × qtd. na receita)</span> <strong>${fmtNum(qtyMenus)}</strong> ${um}</div>
+      <div style="margin-top:4px"><span style="color:#94a3b8">Diferença</span> <strong style="color:#fb923c">${diff >= 0 ? '+' : ''}${fmtNum(diff)}</strong> ${um}</div>
     </div>`;
 }
 
@@ -4320,8 +4320,8 @@ function buildIrregularidadesHtmlParts({
   let caixaHtml = '';
   if (caixaIrreg) {
     caixaHtml = `<div style="padding:8px 10px;background:rgba(251,146,60,0.1);border-radius:6px;margin-bottom:10px;border:1px solid rgba(251,146,60,0.45);font-size:12px;color:#cbd5e1;line-height:1.4">
-      <span style="color:#fb923c;font-weight:700">Caixa:</span> vendas <strong>${fmt(tv)}</strong> ≠ gerado <strong>${fmt(tg)}</strong>
-      <span style="color:#94a3b8"> · Δ </span><strong style="color:#fb923c">${Number.isFinite(diffCaixa) ? `${diffCaixa >= 0 ? '+' : ''}${fmt(diffCaixa)}` : '—'}</strong>
+      <span style="color:#fb923c;font-weight:700">Caixa:</span> vendas <strong>${fmt(tv)}</strong> diferente de gerado <strong>${fmt(tg)}</strong>
+      <span style="color:#94a3b8"> · diferença </span><strong style="color:#fb923c">${Number.isFinite(diffCaixa) ? `${diffCaixa >= 0 ? '+' : ''}${fmt(diffCaixa)}` : '—'}</strong>
     </div>`;
   }
 
@@ -4402,7 +4402,7 @@ function buildIrregularidadesHtmlParts({
       finoHtml = `
     <div style="margin-top:10px;padding:8px 10px;border-radius:6px;border:1px solid ${border};background:${bg};font-size:12px;color:#cbd5e1;line-height:1.4">
       <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">Fino barril</div>
-      <div>Stock <strong>${coposStockTxt}</strong> · Vendas <strong>${fmtNum(coposVendas)}</strong> · Δ <strong style="color:#fb923c">${diffTxt}</strong> copos</div>
+      <div>Stock <strong>${coposStockTxt}</strong> · Vendas <strong>${fmtNum(coposVendas)}</strong> · diferença <strong style="color:#fb923c">${diffTxt}</strong> copos</div>
       <div style="margin-top:3px;font-size:11px;color:#94a3b8">${kgTxt}${kgTxt ? ' · ' : ''}400: ${fmtNum(v400)} · 1000: ${fmtNum(v1000)}</div>
       ${missing ? '<div style="margin-top:4px;font-size:11px;color:#fbbf24">Faltam Fino 400/1000 no catálogo/stock.</div>' : ''}
     </div>`;

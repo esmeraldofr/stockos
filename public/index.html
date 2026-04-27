@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-fino-barril-novo">
+<html lang="pt" data-stockos-ui="2026-04-27-fino-barril-novo-fix">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1224,6 +1224,17 @@ async function runAction(ev, work) {
     restore();
   }
 }
+
+document.addEventListener('click', (ev) => {
+  const btn = ev.target && ev.target.closest && ev.target.closest('.stock-fino-novo-btn');
+  if (!btn) return;
+  ev.preventDefault();
+  const pid = btn.getAttribute('data-fino-pid') || '';
+  if (!pid) return;
+  runAction({ currentTarget: btn }, async () => {
+    await adicionarFinoBarrilNovo(pid);
+  });
+});
 
 // ── ROUTER ────────────────────────────────────────────────────
 async function navigate(page, params) {
@@ -2474,17 +2485,11 @@ async function loadTurno() {
         let metaLinha = medicaoSigla(s.tipo_medicao);
         if (taraKg > 0) metaLinha += ` · recipiente ${fmtNum(taraKg)} kg`;
         const isFB = isFinoBarrilNome(s.produto_nome);
+        const fbPid = String(s.produto_id || '').replace(/[^0-9a-zA-Z-]/g, '');
         const fbBtnHtml =
-          canEdit && isFB
-            ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px;padding:4px 10px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.5);color:#86efac;line-height:1.2"
-                onclick="runAction(event, async () => { await adicionarFinoBarrilNovo(${JSON.stringify(
-                  String(s.produto_id)
-                )}); })"
-                title="Soma ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos à coluna Entrada (cheio ${fmtNum(
-                KG_FINO_BARRIL_CHEIO
-              )} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)">+ Novo barril (+${fmtNum(
-                KG_FINO_BARRIL_NET
-              )} kg)</button>`
+          canEdit && isFB && fbPid
+            ? `<button type="button" class="btn btn-ghost btn-sm stock-fino-novo-btn" data-fino-pid="${fbPid}" style="margin-top:6px;font-size:11px;padding:4px 10px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.5);color:#86efac;line-height:1.2"
+                title="Soma ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos à coluna Entrada (cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)">+ Novo barril (+${fmtNum(KG_FINO_BARRIL_NET)} kg)</button>`
             : '';
         return `
           <tr class="stock-row">

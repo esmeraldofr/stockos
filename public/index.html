@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-26-fix-overflow-areas-trabalho">
+<html lang="pt" data-stockos-ui="2026-04-27-pedido-talao-rawbt">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2884,6 +2884,191 @@ function pedidoEntregaLabel(comEntrega) {
   return comEntrega ? 'Com entrega' : 'Sem entrega (balcão)';
 }
 
+/* ───── Impressão de talão ESC/POS via RawBT (Android + Bluetooth) ───── */
+
+function pedidoBalcaoIsAndroid() {
+  return /android/i.test(String(navigator.userAgent || ''));
+}
+
+function pedidoBalcaoAutoPrintEnabled() {
+  try {
+    const v = localStorage.getItem('stockos.pedidoAutoPrint');
+    return v === null ? true : v === '1';
+  } catch (_) {
+    return true;
+  }
+}
+
+function pedidoBalcaoSetAutoPrint(on) {
+  try {
+    localStorage.setItem('stockos.pedidoAutoPrint', on ? '1' : '0');
+  } catch (_) {}
+}
+
+function pedidoBalcaoToggleAutoPrint(el) {
+  if (!el) return;
+  pedidoBalcaoSetAutoPrint(!!el.checked);
+}
+
+function pedidoBalcaoAsciiFold(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7E\n]/g, '?');
+}
+
+function pedidoBalcaoBuildTalaoEscPos(pedido) {
+  const W = 32; // 58 mm @ Font A
+  const ESC = '\x1B';
+  const GS = '\x1D';
+  const fold = pedidoBalcaoAsciiFold;
+  const padR = (l, r, w = W) => {
+    const ll = fold(l);
+    const rr = fold(r);
+    const sp = Math.max(1, w - ll.length - rr.length);
+    return ll + ' '.repeat(sp) + rr;
+  };
+  const center = (s) => {
+    const ss = fold(s);
+    const p = Math.max(0, Math.floor((W - ss.length) / 2));
+    return ' '.repeat(p) + ss;
+  };
+  const wrapName = (q, name) => {
+    const head = `${q} ${fold(name)}`;
+    if (head.length <= W) return head + '\n';
+    const lines = [];
+    let cur = `${q} `;
+    const words = fold(name).split(/\s+/);
+    for (const w of words) {
+      if ((cur + w).length > W) {
+        lines.push(cur.trimEnd());
+        cur = '   ' + w + ' ';
+      } else {
+        cur += w + ' ';
+      }
+    }
+    if (cur.trim()) lines.push(cur.trimEnd());
+    return lines.join('\n') + '\n';
+  };
+
+  const linhas = pedido.linhas || [];
+  let total = 0;
+  let body = '';
+  for (const ln of linhas) {
+    const copo = !!ln.venda_por_copo && parseFloat(ln.kg_por_copo) > 0;
+    const nome = ln.produto_nome || 'Item';
+    let qtyLabel, sub, unitLine;
+    if (copo) {
+      const copos = Math.floor(parseFloat(ln.quantidade));
+      const u = parseFloat(ln.preco) || 0;
+      const n = parseInt(ln.qtd_copos_pacote, 10) || 0;
+      const pp = parseFloat(ln.preco_copos_pacote) || 0;
+      sub = precoVendaCopos(copos, u, n, pp);
+      qtyLabel = `${copos}x`;
+      unitLine =
+        n >= 2 && pp > 0
+          ? `  pac.${n}=${fmt(pp)} | un.${fmt(u)}`
+          : `  ${fmt(u)} / copo`;
+    } else {
+      const q = parseFloat(ln.quantidade) || 0;
+      const u = parseFloat(ln.preco) || 0;
+      sub = q * u;
+      qtyLabel = `${fmtNum(q)}x`;
+      unitLine = `  ${fmt(u)} / un.`;
+    }
+    total += sub;
+    body += wrapName(qtyLabel, nome);
+    body += padR(unitLine, fmt(sub)) + '\n';
+  }
+
+  const cliente = String(pedido.cliente_nome || '').trim();
+  const when = pedido.criado_em
+    ? new Date(pedido.criado_em).toLocaleString('pt-PT', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    : '';
+  const turnoNome = (S.turnoData && S.turnoData.nome) || '';
+  const dataHdr = S.date || '';
+
+  let out = '';
+  out += ESC + '@';
+  out += ESC + 'a' + '\x01';
+  out += GS + '!' + '\x11';
+  out += 'STOCKOS\n';
+  out += GS + '!' + '\x00';
+  if (turnoNome) out += fold(`Turno ${turnoNome}`) + '\n';
+  out += '\n';
+  out += ESC + 'a' + '\x00';
+  out += fold(`Pedido #${pedido.id}`) + '\n';
+  if (cliente) out += fold(`Mesa/cliente: ${cliente}`) + '\n';
+  if (when) out += fold(`Data: ${when}`) + '\n';
+  else if (dataHdr) out += fold(`Data: ${dataHdr}`) + '\n';
+  out += '-'.repeat(W) + '\n';
+  out += body;
+  out += '-'.repeat(W) + '\n';
+  out += padR('TOTAL', fmt(total)) + '\n';
+  out += fold(`Pagamento: ${pedidoTipoPagamentoLabel(pedido.tipo_pagamento)}`) + '\n';
+  out += fold(`Entrega:   ${pedidoEntregaLabel(!!pedido.com_entrega)}`) + '\n';
+  out += '\n';
+  out += ESC + 'a' + '\x01';
+  out += 'Obrigado!\n';
+  out += '\n\n\n\n';
+  out += ESC + 'a' + '\x00';
+  return out;
+}
+
+function pedidoBalcaoB64Latin1(s) {
+  let bin = '';
+  for (let i = 0; i < s.length; i++) {
+    bin += String.fromCharCode(s.charCodeAt(i) & 0xff);
+  }
+  try {
+    return btoa(bin);
+  } catch (_) {
+    return '';
+  }
+}
+
+function pedidoBalcaoImprimirTalao(pedido) {
+  if (!pedido) return false;
+  const text = pedidoBalcaoBuildTalaoEscPos(pedido);
+  const b64 = pedidoBalcaoB64Latin1(text);
+  if (!b64) return false;
+  const url = `rawbt:base64,${b64}`;
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 800);
+    return true;
+  } catch (_) {
+    try {
+      window.location.href = url;
+      return true;
+    } catch (__) {
+      return false;
+    }
+  }
+}
+
+function pedidoBalcaoImprimirTalaoPorId(pedidoId) {
+  const list = window.__stockosPedidosBalcao || [];
+  const p = list.find((x) => String(x.id) === String(pedidoId));
+  if (!p) {
+    alert('Pedido não encontrado.');
+    return;
+  }
+  const ok = pedidoBalcaoImprimirTalao(p);
+  if (!ok) alert('Não foi possível abrir a impressão.');
+}
+
 function pedidoBalcaoInitDraftForTurno(turnoId) {
   if (String(window.__pedidoBalcaoDraftTurnoId || '') !== String(turnoId)) {
     window.__pedidoBalcaoDraft = {};
@@ -3088,6 +3273,9 @@ async function registarPedidoBalcao(turnoId) {
     document.getElementById('pedido-tipo-pagamento')?.value || 'dinheiro';
   const comEntrega = !!document.getElementById('pedido-com-entrega')?.checked;
   const tid = String(turnoId);
+  const idsAntes = new Set(
+    (window.__stockosPedidosBalcao || []).map((p) => String(p.id))
+  );
   await api('POST', `/turnos/${tid}/pedidos`, {
     cliente_nome: cliente,
     tipo_pagamento: tipoPag,
@@ -3097,6 +3285,22 @@ async function registarPedidoBalcao(turnoId) {
   window.__pedidoBalcaoDraft = {};
   window.__pedidoBalcaoDraftTurnoId = tid;
   await loadVendasMenu(tid, !!S.turnoCanEdit);
+  if (pedidoBalcaoAutoPrintEnabled()) {
+    const lista = window.__stockosPedidosBalcao || [];
+    const novo = lista
+      .filter((p) => !idsAntes.has(String(p.id)))
+      .sort(
+        (a, b) =>
+          (Number(b.id) || 0) - (Number(a.id) || 0)
+      )[0];
+    if (novo) {
+      try {
+        pedidoBalcaoImprimirTalao(novo);
+      } catch (e) {
+        console.warn('Auto-print falhou:', e);
+      }
+    }
+  }
 }
 
 async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
@@ -3175,9 +3379,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             <option value="outro">Outro</option>
           </select>
         </div>
-        <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer;font-size:13px;color:#e2e8f0;user-select:none">
+        <label style="display:flex;align-items:center;gap:10px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#e2e8f0;user-select:none">
           <input type="checkbox" id="pedido-com-entrega" style="width:18px;height:18px;accent-color:#0ea5e9;cursor:pointer"/>
           <span>Entrega ao domicílio / fora do balcão</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px 10px;border-radius:8px;background:#0f172a;border:1px dashed #334155;cursor:pointer;font-size:12px;color:#cbd5e1;user-select:none">
+          <input type="checkbox" id="pedido-auto-print" ${
+            pedidoBalcaoAutoPrintEnabled() ? 'checked' : ''
+          } onchange="pedidoBalcaoToggleAutoPrint(this)" style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer"/>
+          <span>🖨️ Imprimir talão automaticamente (RawBT · Bluetooth)</span>
         </label>
         <div class="pedido-side-title" style="margin-top:4px">Teclado</div>
         <div class="pedido-keypad">
@@ -3217,7 +3427,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">Entrega: <strong style="color:#cbd5e1">${ent}</strong></div>
         <div style="font-size:13px;color:#94a3b8;margin-top:4px">Total <strong style="color:#4ade80">${tot}</strong></div>
       </div>
-      <button type="button" class="btn btn-ghost btn-sm" onclick="imprimirFaturaPedidoPorId(${p.id})">Fatura</button>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="pedidoBalcaoImprimirTalaoPorId(${p.id})" title="Imprimir talão na impressora térmica (RawBT)">🖨️ Talão</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="imprimirFaturaPedidoPorId(${p.id})">Fatura</button>
+      </div>
     </div>`;
           })
           .join('')

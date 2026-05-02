@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-irreg-diff-sem-sinal">
+<html lang="pt" data-stockos-ui="2026-04-27-irreg-quem-trabalhou">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5846,16 +5846,17 @@ async function loadIrregularidadesLista() {
         chunk.map(async (r) => {
           const dataStr = String(r.data).slice(0, 10);
           try {
-            const [turnos, vendas, depTurno] = await Promise.all([
+            const [turnos, vendas, depTurno, equipaReal] = await Promise.all([
               api('GET', `/dia?data=${encodeURIComponent(dataStr)}&turno_id=${encodeURIComponent(r.turno_id)}`),
               api('GET', `/turnos/${r.turno_id}/vendas`),
-              getDepositoTurno(dataStr, r.turno_id)
+              getDepositoTurno(dataStr, r.turno_id),
+              api('GET', `/turnos/${r.turno_id}/equipa-real`).catch(() => [])
             ]);
             const turno = turnos[0];
             if (!turno) return null;
             const snap = computeIrregularidadesSnapshot(turno, vendas, produtos, receitas, depTurno);
             if (!snap.hasAny) return null;
-            return { r, dataStr, snap };
+            return { r, dataStr, snap, equipaReal: Array.isArray(equipaReal) ? equipaReal : [] };
           } catch (_) {
             return null;
           }
@@ -5871,15 +5872,22 @@ async function loadIrregularidadesLista() {
       return;
     }
     const html = out
-      .map(({ r, dataStr, snap }) => {
+      .map(({ r, dataStr, snap, equipaReal }) => {
         const title = `${turnoLabel(r.nome)} — ${dateLabelWithWeekday(dataStr)}`;
         const tid = String(r.turno_id);
+        const nomesEquipa = (equipaReal || [])
+          .map((p) => String(p.utilizador_nome || '').trim())
+          .filter(Boolean);
+        const equipaLine = nomesEquipa.length
+          ? `Trabalharam: ${escapeHtml(nomesEquipa.join(', '))}`
+          : 'Trabalharam: — (sem registo na aba Escala)';
         return `
       <div class="card" style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px">
           <div>
             <div style="font-weight:700;color:#f1f5f9;font-size:15px">⚠️ ${escapeHtml(title)}</div>
             <div style="font-size:11px;color:#64748b;margin-top:2px">${escapeHtml(dataStr)} · ${r.estado === 'fechado' ? 'Fechado' : 'Aberto'}</div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.4">${equipaLine}</div>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, async () => { await openTurnoFromIrreg('${dataStr}', '${tid}'); })">Abrir turno</button>
         </div>

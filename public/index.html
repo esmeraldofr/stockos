@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-detalhes">
+<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-detalhes-dia">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6019,7 +6019,7 @@ async function loadAssiduidade() {
     function dataCurta(iso) {
       if (!iso) return '';
       const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
-      return m ? `${m[3]}/${m[2]}` : String(iso);
+      return m ? m[3] : String(iso);
     }
     function chipsDetalhe(items, cor) {
       const arr = Array.isArray(items) ? items : [];

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-turno-tab-persist">
+<html lang="pt" data-stockos-ui="2026-04-27-troca-irregularidades-areas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2543,7 +2543,12 @@ async function loadTurno() {
           <button type="button" class="${tabCls('registos')}" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>
           <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
       </div>
-      ${turnoAreasTrabalhoHtml()}
+      <div class="card mt-12" id="turno-irregularidades-card" style="display:none">
+        <div class="card-title">⚠️ Irregularidades</div>
+        <div id="turno-irregularidades-meta" style="font-size:12px;color:#94a3b8;margin:-4px 0 10px;line-height:1.4"></div>
+        <div id="turno-irregularidades-equipa" style="font-size:11px;color:#64748b;margin:0 0 10px;line-height:1.4"></div>
+        <div id="turno-irregularidades-list"></div>
+      </div>
 
       <div id="tab-stock" class="${panelCls('stock')}">
         <div class="card" style="padding:0;overflow:hidden">
@@ -2598,12 +2603,7 @@ async function loadTurno() {
 
       <div id="tab-registos" class="${panelCls('registos')}">
         <div id="turno-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
-        <div class="card mt-12" id="turno-irregularidades-card" style="display:none">
-          <div class="card-title">⚠️ Irregularidades</div>
-          <div id="turno-irregularidades-meta" style="font-size:12px;color:#94a3b8;margin:-4px 0 10px;line-height:1.4"></div>
-          <div id="turno-irregularidades-equipa" style="font-size:11px;color:#64748b;margin:0 0 10px;line-height:1.4"></div>
-          <div id="turno-irregularidades-list"></div>
-        </div>
+        ${turnoAreasTrabalhoHtml()}
         <div class="card mt-16">
           <div class="card-title">💰 Caixa</div>
           <div class="caixa-grid">

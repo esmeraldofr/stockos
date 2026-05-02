@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-mensal">
+<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-detalhes">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6013,6 +6013,21 @@ async function loadAssiduidade() {
     const sumTrab = rows.reduce((s, r) => s + (Number(r.turnos_trabalhados ?? r.dias_trabalhados) || 0), 0);
     const sumFalt = rows.reduce((s, r) => s + (Number(r.faltas) || 0), 0);
     const sumHE = rows.reduce((s, r) => s + (Number(r.horas_extra) || 0), 0);
+    function turnoAbbr(nome) {
+      return { manha: 'M', tarde: 'T', noite: 'N' }[nome] || String(nome || '').slice(0, 1).toUpperCase();
+    }
+    function dataCurta(iso) {
+      if (!iso) return '';
+      const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      return m ? `${m[3]}/${m[2]}` : String(iso);
+    }
+    function chipsDetalhe(items, cor) {
+      const arr = Array.isArray(items) ? items : [];
+      if (!arr.length) return '';
+      return `<div style="display:flex;flex-wrap:wrap;gap:3px;justify-content:flex-end;margin-top:4px;max-width:240px;margin-left:auto">${
+        arr.map((it) => `<span title="${escapeHtml(String(it.data || ''))} · ${escapeHtml(String(it.turno || ''))}" style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:999px;background:${cor.bg};border:1px solid ${cor.border};color:${cor.fg};font-size:10px;font-weight:600;line-height:1.4;font-variant-numeric:tabular-nums">${escapeHtml(dataCurta(it.data))}<span style="opacity:.85">${escapeHtml(turnoAbbr(it.turno))}</span></span>`).join('')
+      }</div>`;
+    }
     const trs = rows.map((r) => {
       const esperados = Number(r.turnos_esperados ?? r.dias_esperados) || 0;
       const presencas = Number(r.turnos_trabalhados ?? r.dias_trabalhados) || 0;
@@ -6025,6 +6040,8 @@ async function loadAssiduidade() {
       const taxaCor = taxa == null ? '#64748b' : (taxa >= 95 ? '#4ade80' : taxa >= 80 ? '#fbbf24' : '#f87171');
       const faltasCor = faltas > 0 ? '#f87171' : '#64748b';
       const heCor = horasExtra > 0 ? '#a78bfa' : '#64748b';
+      const faltasChips = chipsDetalhe(r.faltas_detalhe, { bg: 'rgba(248,113,113,0.1)', border: 'rgba(248,113,113,0.35)', fg: '#fca5a5' });
+      const heChips = chipsDetalhe(r.horas_extra_detalhe, { bg: 'rgba(167,139,250,0.1)', border: 'rgba(167,139,250,0.35)', fg: '#c4b5fd' });
       return `
         <tr>
           <td style="padding:8px 10px;color:#e2e8f0">
@@ -6033,8 +6050,14 @@ async function loadAssiduidade() {
           </td>
           <td style="padding:8px 10px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums">${esperados}</td>
           <td style="padding:8px 10px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:600">${presencas}</td>
-          <td style="padding:8px 10px;text-align:right;color:${faltasCor};font-variant-numeric:tabular-nums;font-weight:600">${faltas}</td>
-          <td style="padding:8px 10px;text-align:right;color:${heCor};font-variant-numeric:tabular-nums;font-weight:600">${horasExtra}</td>
+          <td style="padding:8px 10px;text-align:right;vertical-align:top">
+            <div style="color:${faltasCor};font-variant-numeric:tabular-nums;font-weight:600">${faltas}</div>
+            ${faltasChips}
+          </td>
+          <td style="padding:8px 10px;text-align:right;vertical-align:top">
+            <div style="color:${heCor};font-variant-numeric:tabular-nums;font-weight:600">${horasExtra}</div>
+            ${heChips}
+          </td>
           <td style="padding:8px 10px;text-align:right;color:${taxaCor};font-variant-numeric:tabular-nums;font-weight:700">${taxaTxt}</td>
         </tr>`;
     }).join('');

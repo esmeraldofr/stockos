@@ -4499,7 +4499,28 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
                      WHERE e.utilizador_id = u.id::text AND e.d = t.d AND e.turno = t.turno
                    )
                ) x
-             ), 0)::int AS horas_extra
+             ), 0)::int AS horas_extra,
+             COALESCE((
+               SELECT json_agg(json_build_object('data', to_char(x.d, 'YYYY-MM-DD'), 'turno', x.turno) ORDER BY x.d, x.turno)
+               FROM (
+                 SELECT DISTINCT e.d, e.turno FROM esperados e WHERE e.utilizador_id = u.id::text
+                 EXCEPT
+                 SELECT DISTINCT t.d, t.turno FROM trabalhados t WHERE t.utilizador_id = u.id::text
+               ) x
+             ), '[]'::json) AS faltas_detalhe,
+             COALESCE((
+               SELECT json_agg(json_build_object('data', to_char(x.d, 'YYYY-MM-DD'), 'turno', x.turno) ORDER BY x.d, x.turno)
+               FROM (
+                 SELECT DISTINCT t.d, t.turno
+                 FROM trabalhados t
+                 WHERE t.utilizador_id = u.id::text
+                   AND t.hora_extra IS TRUE
+                   AND NOT EXISTS (
+                     SELECT 1 FROM esperados e
+                     WHERE e.utilizador_id = u.id::text AND e.d = t.d AND e.turno = t.turno
+                   )
+               ) x
+             ), '[]'::json) AS horas_extra_detalhe
       FROM utilizadores u
       WHERE u.ativo = TRUE
       ORDER BY u.nome ASC
@@ -4518,6 +4539,8 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
         turnos_trabalhados: trab,
         faltas: falt,
         horas_extra: he,
+        faltas_detalhe: Array.isArray(row.faltas_detalhe) ? row.faltas_detalhe : [],
+        horas_extra_detalhe: Array.isArray(row.horas_extra_detalhe) ? row.horas_extra_detalhe : [],
         // Aliases para compat com clientes antigos que tinham o JS em cache.
         dias_esperados: esp,
         dias_trabalhados: trab

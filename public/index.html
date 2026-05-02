@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-compras-ver-irregularidades">
+<html lang="pt" data-stockos-ui="2026-04-27-pagina-assiduidade">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -644,7 +644,7 @@ const S = {
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
 const ALLOWED_TURNO_TABS = ['stock', 'vendas', 'pedidos', 'registos', 'escala'];
-const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin'];
+const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin'];
 
 function _storageGet(key) {
   try {
@@ -1256,7 +1256,7 @@ async function navigate(page, params) {
 async function draw() {
   document.body.classList.toggle('has-auth', !!S.token);
   if (!S.token) { document.body.classList.remove('menu-open'); drawLogin(); return; }
-  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario', 'irregularidades'].includes(S.page)) {
+  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario', 'irregularidades', 'assiduidade'].includes(S.page)) {
     S.page = 'dia';
   }
   if (S.page === 'admin' && S.user?.role !== 'admin') {
@@ -1286,6 +1286,10 @@ async function draw() {
         break;
       case 'irregularidades':
         await drawIrregularidades();
+        break;
+      case 'assiduidade':
+        if (!['admin','gestor','compras'].includes(S.user?.role)) { await navigate('dia'); return; }
+        await drawAssiduidade();
         break;
       case 'armazem':  await drawArmazem(); break;
       case 'fornecedores':
@@ -1363,6 +1367,7 @@ function menuEntries() {
   const isAdmin = role === 'admin';
   const showHistorico = role !== 'compras';
   const showIrregularidades = !!role;
+  const showAssiduidade = ['admin','gestor','compras'].includes(role);
   const showArmazem = ['admin', 'gestor', 'compras'].includes(role);
   const showEscala = role === 'admin' || role === 'gestor';
   const showDepositos = ['admin', 'gestor', 'compras'].includes(role);
@@ -1381,6 +1386,10 @@ function menuEntries() {
   if (showIrregularidades) {
     entries.push({ page: 'irregularidades', label: 'Irregularidades',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' });
+  }
+  if (showAssiduidade) {
+    entries.push({ page: 'assiduidade', label: 'Assiduidade',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 7-7"/><path d="M21 12v6a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>' });
   }
   entries.push({ page: 'produtos', label: 'Produtos',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>' });
@@ -1442,6 +1451,7 @@ function navBar() {
   const isAdmin = S.user?.role === 'admin';
   const showHistorico = S.user?.role !== 'compras';
   const showIrregularidades = !!S.user?.role;
+  const showAssiduidade = ['admin','gestor','compras'].includes(S.user?.role);
   const showArmazem = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   const showEscala = S.user?.role === 'admin' || S.user?.role === 'gestor';
   const showDepositos = ['admin', 'gestor', 'compras'].includes(S.user?.role);
@@ -1469,6 +1479,11 @@ function navBar() {
       <button class="nav-btn ${S.page==='irregularidades'?'active':''}" onclick="runAction(event, () => navigate('irregularidades'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         Irregularidades
+      </button>` : ''}
+      ${showAssiduidade ? `
+      <button class="nav-btn ${S.page==='assiduidade'?'active':''}" onclick="runAction(event, () => navigate('assiduidade'))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 7-7"/><path d="M21 12v6a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
+        Assiduidade
       </button>` : ''}
       <button class="nav-btn ${S.page==='produtos'?'active':''}" onclick="runAction(event, () => navigate('produtos'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
@@ -5905,6 +5920,148 @@ async function loadIrregularidadesLista() {
     show('irreg-content', html);
   } catch (e) {
     show('irreg-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
+  }
+}
+
+// ── ASSIDUIDADE ───────────────────────────────────────────────
+function firstDayOfMonthIso(d) {
+  const x = new Date(d + 'T12:00:00');
+  return new Date(x.getFullYear(), x.getMonth(), 1).toISOString().split('T')[0];
+}
+function lastDayOfMonthIso(d) {
+  const x = new Date(d + 'T12:00:00');
+  return new Date(x.getFullYear(), x.getMonth() + 1, 0).toISOString().split('T')[0];
+}
+
+async function drawAssiduidade() {
+  render(`
+    <div id="header">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:#f1f5f9">Assiduidade</div>
+        <div class="header-sub">Dias esperados, trabalhados, faltas e horas extra · 1 folga por semana</div>
+      </div>
+    </div>
+    <div id="content">
+      <div class="card">
+        <div class="card-title">Período</div>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          <div class="field" style="flex:1;min-width:140px;margin:0"><label>De</label><input type="date" id="as-inicio"/></div>
+          <div class="field" style="flex:1;min-width:140px;margin:0"><label>Até</label><input type="date" id="as-fim"/></div>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="setAssiduidadeMesAtual()">Mês actual</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="setAssiduidadeMesAnterior()">Mês anterior</button>
+          <button type="button" class="btn btn-primary" onclick="runAction(event, loadAssiduidade)">Carregar</button>
+        </div>
+      </div>
+      <div id="assiduidade-content"></div>
+    </div>
+    ${navBar()}
+  `);
+  const hoje = new Date().toISOString().split('T')[0];
+  document.getElementById('as-inicio').value = firstDayOfMonthIso(hoje);
+  document.getElementById('as-fim').value = lastDayOfMonthIso(hoje);
+  await loadAssiduidade();
+}
+
+function setAssiduidadeMesAtual() {
+  const hoje = new Date().toISOString().split('T')[0];
+  document.getElementById('as-inicio').value = firstDayOfMonthIso(hoje);
+  document.getElementById('as-fim').value = lastDayOfMonthIso(hoje);
+  loadAssiduidade();
+}
+
+function setAssiduidadeMesAnterior() {
+  const hoje = new Date();
+  const ant = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 15).toISOString().split('T')[0];
+  document.getElementById('as-inicio').value = firstDayOfMonthIso(ant);
+  document.getElementById('as-fim').value = lastDayOfMonthIso(ant);
+  loadAssiduidade();
+}
+
+async function loadAssiduidade() {
+  const ini = val('as-inicio');
+  const fim = val('as-fim');
+  if (!ini || !fim) {
+    show('assiduidade-content', '<div class="alert alert-error">Indica o intervalo de datas.</div>');
+    return;
+  }
+  show('assiduidade-content', '<div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div>');
+  try {
+    const data = await api('GET', `/assiduidade?inicio=${encodeURIComponent(ini)}&fim=${encodeURIComponent(fim)}`);
+    const rows = (data && data.rows) || [];
+    if (!rows.length) {
+      show('assiduidade-content', '<div class="card"><p style="color:#94a3b8;margin:0">Sem dados de utilizadores activos no período.</p></div>');
+      return;
+    }
+    const sumEsp = rows.reduce((s, r) => s + (r.dias_esperados || 0), 0);
+    const sumTrab = rows.reduce((s, r) => s + (r.dias_trabalhados || 0), 0);
+    const sumFalt = rows.reduce((s, r) => s + (r.faltas || 0), 0);
+    const sumHE = rows.reduce((s, r) => s + (r.horas_extra || 0), 0);
+    const trs = rows.map((r) => {
+      const taxa = r.dias_esperados > 0
+        ? Math.round((r.dias_trabalhados / r.dias_esperados) * 100)
+        : null;
+      const taxaTxt = taxa == null ? '—' : `${taxa}%`;
+      const taxaCor = taxa == null ? '#64748b' : (taxa >= 95 ? '#4ade80' : taxa >= 80 ? '#fbbf24' : '#f87171');
+      const faltasCor = (r.faltas || 0) > 0 ? '#f87171' : '#64748b';
+      const heCor = (r.horas_extra || 0) > 0 ? '#a78bfa' : '#64748b';
+      return `
+        <tr>
+          <td style="padding:8px 10px;color:#e2e8f0">
+            <div style="font-weight:600">${escapeHtml(r.utilizador_nome || 'Sem nome')}</div>
+            <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
+          </td>
+          <td style="padding:8px 10px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums">${r.dias_esperados}</td>
+          <td style="padding:8px 10px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:600">${r.dias_trabalhados}</td>
+          <td style="padding:8px 10px;text-align:right;color:${faltasCor};font-variant-numeric:tabular-nums;font-weight:600">${r.faltas}</td>
+          <td style="padding:8px 10px;text-align:right;color:${heCor};font-variant-numeric:tabular-nums;font-weight:600">${r.horas_extra}</td>
+          <td style="padding:8px 10px;text-align:right;color:${taxaCor};font-variant-numeric:tabular-nums;font-weight:700">${taxaTxt}</td>
+        </tr>`;
+    }).join('');
+    show('assiduidade-content', `
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title" style="margin-bottom:10px">Totais do período</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Dias esperados</div>
+            <div style="font-size:22px;font-weight:700;color:#cbd5e1;margin-top:4px">${sumEsp}</div>
+          </div>
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Trabalhados</div>
+            <div style="font-size:22px;font-weight:700;color:#a5b4fc;margin-top:4px">${sumTrab}</div>
+          </div>
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Faltas</div>
+            <div style="font-size:22px;font-weight:700;color:#f87171;margin-top:4px">${sumFalt}</div>
+          </div>
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Horas extra</div>
+            <div style="font-size:22px;font-weight:700;color:#a78bfa;margin-top:4px">${sumHE}</div>
+          </div>
+        </div>
+        <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">
+          <strong style="color:#94a3b8">Esperados</strong>: dias únicos em que o funcionário estava na escala (do dia ou template). Garante 1 folga por semana — turnos não escalados não contam. <strong style="color:#94a3b8">Trabalhados</strong>: dias únicos com presença registada. <strong style="color:#94a3b8">Faltas</strong>: esperados − trabalhados. <strong style="color:#94a3b8">Horas extra</strong>: turnos com hora extra aplicada.
+        </p>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table style="width:100%;border-collapse:collapse">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Funcionário</th>
+                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Esperados</th>
+                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Trabalhados</th>
+                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Faltas</th>
+                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Horas extra</th>
+                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Assiduidade</th>
+              </tr>
+            </thead>
+            <tbody>${trs}</tbody>
+          </table>
+        </div>
+      </div>
+    `);
+  } catch (e) {
+    show('assiduidade-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
   }
 }
 

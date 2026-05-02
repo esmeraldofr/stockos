@@ -4427,5 +4427,76 @@ app.delete('/api/turnos/:id/faltas/:utilizador_id', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+/**
+ * Resumo de assiduidade por utilizador no período [inicio, fim] (datas ISO inclusive).
+ * - dias_esperados: dias DISTINTOS em que o utilizador estava escalado (escala do dia ou,
+ *   na ausência dela para essa data, escala template da respectiva dia_semana).
+ * - dias_trabalhados: dias DISTINTOS com presença em turno_equipa_real (`turnos.data`).
+ * - faltas: max(0, esperados − trabalhados).
+ * - horas_extra: nº de turnos com `hora_extra=true` em turno_equipa_real.
+ */
+app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    const { inicio, fim } = req.query;
+    if (!inicio || !fim) return res.status(400).json({ erro: 'inicio e fim são obrigatórios (YYYY-MM-DD)' });
+    /** Dias DISTINTOS escalados: usa escala do dia se houver linhas para a data, senão template da dia_semana.
+     *  generate_series garante que o template é considerado mesmo em dias sem nenhuma escala criada. */
+    const sql = `
+      WITH dias AS (
+        SELECT generate_series($1::date, $2::date, INTERVAL '1 day')::date AS d
+      ),
+      dias_com_escala_dia AS (
+        SELECT DISTINCT data::date AS d FROM escala WHERE data BETWEEN $1::date AND $2::date
+      ),
+      esperados AS (
+        SELECT e.utilizador_id::text AS utilizador_id, e.data::date AS d
+        FROM escala e
+        WHERE e.data BETWEEN $1::date AND $2::date AND e.utilizador_id IS NOT NULL
+        UNION
+        SELECT et.utilizador_id::text AS utilizador_id, dias.d
+        FROM dias
+        JOIN escala_template et ON et.dia_semana = ((EXTRACT(ISODOW FROM dias.d)::int) - 1)
+        WHERE et.utilizador_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM dias_com_escala_dia x WHERE x.d = dias.d)
+      ),
+      trabalhados AS (
+        SELECT er.utilizador_id::text AS utilizador_id,
+               t.data::date AS d,
+               COALESCE(er.hora_extra, FALSE) AS hora_extra
+        FROM turno_equipa_real er
+        JOIN turnos t ON t.id = er.turno_id
+        WHERE t.data BETWEEN $1::date AND $2::date
+      )
+      SELECT u.id::text AS utilizador_id,
+             u.nome AS utilizador_nome,
+             u.role AS utilizador_role,
+             COALESCE((SELECT COUNT(DISTINCT d) FROM esperados e WHERE e.utilizador_id = u.id::text), 0)::int AS dias_esperados,
+             COALESCE((SELECT COUNT(DISTINCT d) FROM trabalhados t WHERE t.utilizador_id = u.id::text), 0)::int AS dias_trabalhados,
+             COALESCE((SELECT COUNT(*)         FROM trabalhados t WHERE t.utilizador_id = u.id::text AND t.hora_extra IS TRUE), 0)::int AS horas_extra
+      FROM utilizadores u
+      WHERE u.ativo = TRUE
+      ORDER BY u.nome ASC
+    `;
+    const r = await query(sql, [inicio, fim]);
+    const rows = r.rows.map((row) => {
+      const esperados = parseInt(row.dias_esperados, 10) || 0;
+      const trabalhados = parseInt(row.dias_trabalhados, 10) || 0;
+      const faltas = Math.max(0, esperados - trabalhados);
+      return {
+        utilizador_id: row.utilizador_id,
+        utilizador_nome: row.utilizador_nome,
+        utilizador_role: row.utilizador_role,
+        dias_esperados: esperados,
+        dias_trabalhados: trabalhados,
+        faltas,
+        horas_extra: parseInt(row.horas_extra, 10) || 0
+      };
+    });
+    res.json({ inicio, fim, rows });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 app.listen(PORT, () => console.log(`StockOS v3 na porta ${PORT}`));
 module.exports = app;

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-detalhes-dia">
+<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-detalhes-compacto">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6024,9 +6024,9 @@ async function loadAssiduidade() {
     function chipsDetalhe(items, cor) {
       const arr = Array.isArray(items) ? items : [];
       if (!arr.length) return '';
-      return `<div style="display:flex;flex-wrap:wrap;gap:3px;justify-content:flex-end;margin-top:4px;max-width:240px;margin-left:auto">${
-        arr.map((it) => `<span title="${escapeHtml(String(it.data || ''))} · ${escapeHtml(String(it.turno || ''))}" style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:999px;background:${cor.bg};border:1px solid ${cor.border};color:${cor.fg};font-size:10px;font-weight:600;line-height:1.4;font-variant-numeric:tabular-nums">${escapeHtml(dataCurta(it.data))}<span style="opacity:.85">${escapeHtml(turnoAbbr(it.turno))}</span></span>`).join('')
-      }</div>`;
+      const titulo = arr.map((it) => `${it.data || ''} · ${it.turno || ''}`).join('\n');
+      const txt = arr.map((it) => `${dataCurta(it.data)}${turnoAbbr(it.turno)}`).join(', ');
+      return `<div title="${escapeHtml(titulo)}" style="margin-top:4px;color:${cor.fg};font-size:11px;font-weight:600;line-height:1.35;text-align:right;font-variant-numeric:tabular-nums;word-break:break-word">${escapeHtml(txt)}</div>`;
     }
     const trs = rows.map((r) => {
       const esperados = Number(r.turnos_esperados ?? r.dias_esperados) || 0;

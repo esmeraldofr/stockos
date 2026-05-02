@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-pagina-assiduidade">
+<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-por-turno">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5938,7 +5938,7 @@ async function drawAssiduidade() {
     <div id="header">
       <div>
         <div style="font-size:18px;font-weight:700;color:#f1f5f9">Assiduidade</div>
-        <div class="header-sub">Dias esperados, trabalhados, faltas e horas extra · 1 folga por semana</div>
+        <div class="header-sub">Turnos esperados, trabalhados, faltas e horas extra · 1 folga por semana</div>
       </div>
     </div>
     <div id="content">
@@ -5992,13 +5992,14 @@ async function loadAssiduidade() {
       show('assiduidade-content', '<div class="card"><p style="color:#94a3b8;margin:0">Sem dados de utilizadores activos no período.</p></div>');
       return;
     }
-    const sumEsp = rows.reduce((s, r) => s + (r.dias_esperados || 0), 0);
-    const sumTrab = rows.reduce((s, r) => s + (r.dias_trabalhados || 0), 0);
+    const sumEsp = rows.reduce((s, r) => s + (r.turnos_esperados || 0), 0);
+    const sumTrab = rows.reduce((s, r) => s + (r.turnos_trabalhados || 0), 0);
     const sumFalt = rows.reduce((s, r) => s + (r.faltas || 0), 0);
     const sumHE = rows.reduce((s, r) => s + (r.horas_extra || 0), 0);
     const trs = rows.map((r) => {
-      const taxa = r.dias_esperados > 0
-        ? Math.round((r.dias_trabalhados / r.dias_esperados) * 100)
+      const presencas = (r.turnos_trabalhados || 0);
+      const taxa = r.turnos_esperados > 0
+        ? Math.round((Math.min(presencas, r.turnos_esperados) / r.turnos_esperados) * 100)
         : null;
       const taxaTxt = taxa == null ? '—' : `${taxa}%`;
       const taxaCor = taxa == null ? '#64748b' : (taxa >= 95 ? '#4ade80' : taxa >= 80 ? '#fbbf24' : '#f87171');
@@ -6010,8 +6011,8 @@ async function loadAssiduidade() {
             <div style="font-weight:600">${escapeHtml(r.utilizador_nome || 'Sem nome')}</div>
             <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
           </td>
-          <td style="padding:8px 10px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums">${r.dias_esperados}</td>
-          <td style="padding:8px 10px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:600">${r.dias_trabalhados}</td>
+          <td style="padding:8px 10px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums">${r.turnos_esperados}</td>
+          <td style="padding:8px 10px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:600">${r.turnos_trabalhados}</td>
           <td style="padding:8px 10px;text-align:right;color:${faltasCor};font-variant-numeric:tabular-nums;font-weight:600">${r.faltas}</td>
           <td style="padding:8px 10px;text-align:right;color:${heCor};font-variant-numeric:tabular-nums;font-weight:600">${r.horas_extra}</td>
           <td style="padding:8px 10px;text-align:right;color:${taxaCor};font-variant-numeric:tabular-nums;font-weight:700">${taxaTxt}</td>
@@ -6022,7 +6023,7 @@ async function loadAssiduidade() {
         <div class="card-title" style="margin-bottom:10px">Totais do período</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
           <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;text-align:center">
-            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Dias esperados</div>
+            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Turnos esperados</div>
             <div style="font-size:22px;font-weight:700;color:#cbd5e1;margin-top:4px">${sumEsp}</div>
           </div>
           <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;text-align:center">
@@ -6039,7 +6040,7 @@ async function loadAssiduidade() {
           </div>
         </div>
         <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">
-          <strong style="color:#94a3b8">Esperados</strong>: dias únicos em que o funcionário estava na escala (do dia ou template). Garante 1 folga por semana — turnos não escalados não contam. <strong style="color:#94a3b8">Trabalhados</strong>: dias únicos com presença registada. <strong style="color:#94a3b8">Faltas</strong>: esperados − trabalhados. <strong style="color:#94a3b8">Horas extra</strong>: turnos com hora extra aplicada.
+          <strong style="color:#94a3b8">Esperados</strong>: turnos em que o funcionário estava na escala (do dia ou, na ausência, template). A regra "1 folga por semana" está implícita na escala. <strong style="color:#94a3b8">Trabalhados</strong>: turnos com presença registada. <strong style="color:#94a3b8">Faltas</strong>: turnos em que estava escalado mas não foi registada presença. <strong style="color:#94a3b8">Horas extra</strong>: turnos em que trabalhou sem estar escalado, com hora extra aplicada.
         </p>
       </div>
       <div class="card" style="padding:0;overflow:hidden">
@@ -6048,7 +6049,7 @@ async function loadAssiduidade() {
             <thead>
               <tr>
                 <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Funcionário</th>
-                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Esperados</th>
+                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Turnos esperados</th>
                 <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Trabalhados</th>
                 <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Faltas</th>
                 <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Horas extra</th>

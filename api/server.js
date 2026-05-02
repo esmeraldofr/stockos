@@ -4429,18 +4429,19 @@ app.delete('/api/turnos/:id/faltas/:utilizador_id', auth, async (req, res) => {
 
 /**
  * Resumo de assiduidade por utilizador no período [inicio, fim] (datas ISO inclusive).
- * - dias_esperados: dias DISTINTOS em que o utilizador estava escalado (escala do dia ou,
- *   na ausência dela para essa data, escala template da respectiva dia_semana).
- * - dias_trabalhados: dias DISTINTOS com presença em turno_equipa_real (`turnos.data`).
- * - faltas: max(0, esperados − trabalhados).
- * - horas_extra: nº de turnos com `hora_extra=true` em turno_equipa_real.
+ * Tudo na granularidade de TURNO (não de dia).
+ * - turnos_esperados: nº de turnos DISTINTOS em que o utilizador estava escalado.
+ *   Fonte: tabela `escala` para a data; quando não há nenhuma linha em `escala` para
+ *   essa data (qualquer turno/utilizador), usa `escala_template` da `dia_semana`.
+ * - turnos_trabalhados: nº de turnos com presença registada em `turno_equipa_real`.
+ * - faltas: turnos onde estava ESCALADO mas NÃO HÁ presença registada (set difference).
+ * - horas_extra: turnos com presença + `hora_extra=true` + NÃO estava escalado
+ *   (presenças não escaladas marcadas como hora extra).
  */
 app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     const { inicio, fim } = req.query;
     if (!inicio || !fim) return res.status(400).json({ erro: 'inicio e fim são obrigatórios (YYYY-MM-DD)' });
-    /** Dias DISTINTOS escalados: usa escala do dia se houver linhas para a data, senão template da dia_semana.
-     *  generate_series garante que o template é considerado mesmo em dias sem nenhuma escala criada. */
     const sql = `
       WITH dias AS (
         SELECT generate_series($1::date, $2::date, INTERVAL '1 day')::date AS d
@@ -4449,11 +4450,11 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
         SELECT DISTINCT data::date AS d FROM escala WHERE data BETWEEN $1::date AND $2::date
       ),
       esperados AS (
-        SELECT e.utilizador_id::text AS utilizador_id, e.data::date AS d
+        SELECT e.utilizador_id::text AS utilizador_id, e.data::date AS d, e.turno
         FROM escala e
         WHERE e.data BETWEEN $1::date AND $2::date AND e.utilizador_id IS NOT NULL
         UNION
-        SELECT et.utilizador_id::text AS utilizador_id, dias.d
+        SELECT et.utilizador_id::text AS utilizador_id, dias.d, et.turno
         FROM dias
         JOIN escala_template et ON et.dia_semana = ((EXTRACT(ISODOW FROM dias.d)::int) - 1)
         WHERE et.utilizador_id IS NOT NULL
@@ -4462,6 +4463,7 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
       trabalhados AS (
         SELECT er.utilizador_id::text AS utilizador_id,
                t.data::date AS d,
+               t.nome AS turno,
                COALESCE(er.hora_extra, FALSE) AS hora_extra
         FROM turno_equipa_real er
         JOIN turnos t ON t.id = er.turno_id
@@ -4470,28 +4472,45 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
       SELECT u.id::text AS utilizador_id,
              u.nome AS utilizador_nome,
              u.role AS utilizador_role,
-             COALESCE((SELECT COUNT(DISTINCT d) FROM esperados e WHERE e.utilizador_id = u.id::text), 0)::int AS dias_esperados,
-             COALESCE((SELECT COUNT(DISTINCT d) FROM trabalhados t WHERE t.utilizador_id = u.id::text), 0)::int AS dias_trabalhados,
-             COALESCE((SELECT COUNT(*)         FROM trabalhados t WHERE t.utilizador_id = u.id::text AND t.hora_extra IS TRUE), 0)::int AS horas_extra
+             COALESCE((
+               SELECT COUNT(*) FROM (SELECT DISTINCT d, turno FROM esperados e WHERE e.utilizador_id = u.id::text) x
+             ), 0)::int AS turnos_esperados,
+             COALESCE((
+               SELECT COUNT(*) FROM (SELECT DISTINCT d, turno FROM trabalhados t WHERE t.utilizador_id = u.id::text) x
+             ), 0)::int AS turnos_trabalhados,
+             COALESCE((
+               SELECT COUNT(*) FROM (
+                 SELECT DISTINCT e.d, e.turno FROM esperados e WHERE e.utilizador_id = u.id::text
+                 EXCEPT
+                 SELECT DISTINCT t.d, t.turno FROM trabalhados t WHERE t.utilizador_id = u.id::text
+               ) x
+             ), 0)::int AS faltas,
+             COALESCE((
+               SELECT COUNT(*) FROM (
+                 SELECT DISTINCT t.d, t.turno
+                 FROM trabalhados t
+                 WHERE t.utilizador_id = u.id::text
+                   AND t.hora_extra IS TRUE
+                   AND NOT EXISTS (
+                     SELECT 1 FROM esperados e
+                     WHERE e.utilizador_id = u.id::text AND e.d = t.d AND e.turno = t.turno
+                   )
+               ) x
+             ), 0)::int AS horas_extra
       FROM utilizadores u
       WHERE u.ativo = TRUE
       ORDER BY u.nome ASC
     `;
     const r = await query(sql, [inicio, fim]);
-    const rows = r.rows.map((row) => {
-      const esperados = parseInt(row.dias_esperados, 10) || 0;
-      const trabalhados = parseInt(row.dias_trabalhados, 10) || 0;
-      const faltas = Math.max(0, esperados - trabalhados);
-      return {
-        utilizador_id: row.utilizador_id,
-        utilizador_nome: row.utilizador_nome,
-        utilizador_role: row.utilizador_role,
-        dias_esperados: esperados,
-        dias_trabalhados: trabalhados,
-        faltas,
-        horas_extra: parseInt(row.horas_extra, 10) || 0
-      };
-    });
+    const rows = r.rows.map((row) => ({
+      utilizador_id: row.utilizador_id,
+      utilizador_nome: row.utilizador_nome,
+      utilizador_role: row.utilizador_role,
+      turnos_esperados: parseInt(row.turnos_esperados, 10) || 0,
+      turnos_trabalhados: parseInt(row.turnos_trabalhados, 10) || 0,
+      faltas: parseInt(row.faltas, 10) || 0,
+      horas_extra: parseInt(row.horas_extra, 10) || 0
+    }));
     res.json({ inicio, fim, rows });
   } catch (e) {
     res.status(500).json({ erro: e.message });

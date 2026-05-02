@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-irreg-banco-vs-caixa">
+<html lang="pt" data-stockos-ui="2026-04-27-irreg-diff-sem-sinal">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4285,7 +4285,7 @@ function buildIrregStockVsMenusHtml({ stockRow, stockBuf, vendasBuf, receitasIrr
       <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">${escapeHtml(stockRow.produto_nome)} (stock vs menus)</div>
       <div>Stock <span style="color:#94a3b8">(enc.+entr.−deix.)</span> <strong>${fmtNum(qtyStock)}</strong> ${um}</div>
       <div style="margin-top:4px">Total de menus com ${escapeHtml(receitaLabel)} na receita <span style="color:#64748b">(vendas × qtd. na receita)</span> <strong>${fmtNum(qtyMenus)}</strong> ${um}</div>
-      <div style="margin-top:4px"><span style="color:#94a3b8">Diferença</span> <strong style="color:#fb923c">${diff >= 0 ? '+' : ''}${fmtNum(diff)}</strong> ${um}</div>
+      <div style="margin-top:4px"><span style="color:#94a3b8">Diferença</span> <strong style="color:#fb923c">${fmtNum(Math.abs(diff))}</strong> ${um}</div>
     </div>`;
 }
 
@@ -4349,7 +4349,7 @@ function buildIrregularidadesHtmlParts({
   if (caixaIrreg) {
     caixaHtml = `<div style="padding:8px 10px;background:rgba(251,146,60,0.1);border-radius:6px;margin-bottom:10px;border:1px solid rgba(251,146,60,0.45);font-size:12px;color:#cbd5e1;line-height:1.4">
       <span style="color:#fb923c;font-weight:700">Caixa:</span> vendas <strong>${fmt(tv)}</strong> diferente de gerado <strong>${fmt(tg)}</strong>
-      <span style="color:#94a3b8"> · diferença </span><strong style="color:#fb923c">${Number.isFinite(diffCaixa) ? `${diffCaixa >= 0 ? '+' : ''}${fmt(diffCaixa)}` : '—'}</strong>
+      <span style="color:#94a3b8"> · diferença </span><strong style="color:#fb923c">${Number.isFinite(diffCaixa) ? fmt(Math.abs(diffCaixa)) : '—'}</strong>
     </div>`;
   }
 
@@ -4382,10 +4382,10 @@ function buildIrregularidadesHtmlParts({
       if (dinIrreg || tpaIrreg) {
         const linhas = [];
         if (dinIrreg) {
-          linhas.push(`<div>Dinheiro: caixa <strong>${fmt(dinDevido)}</strong> · banco <strong>${fmt(liquido)}</strong> · diferença <strong style="color:#fb923c">${diffDin >= 0 ? '+' : ''}${fmt(diffDin)}</strong></div>`);
+          linhas.push(`<div>Dinheiro: caixa <strong>${fmt(dinDevido)}</strong> · banco <strong>${fmt(liquido)}</strong> · diferença <strong style="color:#fb923c">${fmt(Math.abs(diffDin))}</strong></div>`);
         }
         if (tpaIrreg) {
-          linhas.push(`<div>TPA: caixa <strong>${fmt(tpaCaixa)}</strong> · banco <strong>${fmt(tpaDep)}</strong> · diferença <strong style="color:#fb923c">${diffTpa >= 0 ? '+' : ''}${fmt(diffTpa)}</strong></div>`);
+          linhas.push(`<div>TPA: caixa <strong>${fmt(tpaCaixa)}</strong> · banco <strong>${fmt(tpaDep)}</strong> · diferença <strong style="color:#fb923c">${fmt(Math.abs(diffTpa))}</strong></div>`);
         }
         bancoHtml = `<div style="padding:8px 10px;background:rgba(251,146,60,0.1);border-radius:6px;margin-bottom:10px;border:1px solid rgba(251,146,60,0.45);font-size:12px;color:#cbd5e1;line-height:1.4">
           <div style="font-weight:700;color:#fb923c;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Banco</div>
@@ -4466,9 +4466,7 @@ function buildIrregularidadesHtmlParts({
       const border = 'rgba(251,146,60,0.45)';
       const bg = 'rgba(251,146,60,0.1)';
       const coposStockTxt = Number.isFinite(coposStock) ? fmtNum(Math.round(coposStock)) : '—';
-      const diffTxt = Number.isFinite(diff)
-        ? `${diff >= 0 ? '+' : ''}${fmtNum(Math.round(diff))}`
-        : '—';
+      const diffTxt = Number.isFinite(diff) ? fmtNum(Math.abs(Math.round(diff))) : '—';
       const kgTxt = Number.isFinite(kgVend) ? `${fmtNum(kgVend)} kg` : '';
       finoHtml = `
     <div style="margin-top:10px;padding:8px 10px;border-radius:6px;border:1px solid ${border};background:${bg};font-size:12px;color:#cbd5e1;line-height:1.4">

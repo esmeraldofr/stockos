@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-troca-irregularidades-areas">
+<html lang="pt" data-stockos-ui="2026-04-27-irreg-banco-vs-caixa">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2411,6 +2411,17 @@ async function loadTurno() {
     if (!turno) { show('turno-content','<div class="alert alert-error">Turno não encontrado</div>'); return; }
 
     S.turnoData = turno;
+    S.turnoDeposito = undefined;
+    if (turno.estado === 'fechado' && ['admin','gestor','compras'].includes(S.user?.role)) {
+      try {
+        const deps = await api('GET', `/depositos?data=${encodeURIComponent(myDate)}`);
+        if (mySeq !== loadTurnoSeq) return;
+        const found = (Array.isArray(deps) ? deps : []).find((d) => String(d.turno_id) === String(myTurnoId));
+        S.turnoDeposito = found || null;
+      } catch (_) {
+        S.turnoDeposito = undefined;
+      }
+    }
     stockBuf = {};
     turno.stock.forEach((s) => {
       const sid = prodIdKey(s.produto_id);
@@ -4321,7 +4332,8 @@ function buildIrregularidadesHtmlParts({
   totalVendasKz,
   totalGeradoKz,
   produtos,
-  receitasIrreg
+  receitasIrreg,
+  depositosTurno
 }) {
   const stock = turno?.stock || [];
   const prodArr = produtos && produtos.length ? produtos : (S.produtos || []);
@@ -4339,6 +4351,49 @@ function buildIrregularidadesHtmlParts({
       <span style="color:#fb923c;font-weight:700">Caixa:</span> vendas <strong>${fmt(tv)}</strong> diferente de gerado <strong>${fmt(tg)}</strong>
       <span style="color:#94a3b8"> · diferença </span><strong style="color:#fb923c">${Number.isFinite(diffCaixa) ? `${diffCaixa >= 0 ? '+' : ''}${fmt(diffCaixa)}` : '—'}</strong>
     </div>`;
+  }
+
+  /** Banco: cruza o que devia ter ido para o banco (dinheiro do turno menos saídas de caixa)
+   *  com o que foi efetivamente registado no depósito desse turno (valor bruto menos saídas
+   *  do depósito para armazém). Considera "vendas TPA" do turno vs "TPA registado". */
+  let bancoHtml = '';
+  if (turno?.estado === 'fechado' && depositosTurno !== undefined) {
+    const dep = depositosTurno;
+    const din = parseFloat(turno.caixa?.dinheiro);
+    const saidaCaixa = parseFloat(turno.caixa?.saida) || 0;
+    const tpaCaixa = parseFloat(turno.caixa?.tpa);
+    const dinDevido = Number.isFinite(din) ? Math.max(0, din - saidaCaixa) : NaN;
+    if (!dep) {
+      if (Number.isFinite(dinDevido) && dinDevido > 0) {
+        bancoHtml = `<div style="padding:8px 10px;background:rgba(251,146,60,0.1);border-radius:6px;margin-bottom:10px;border:1px solid rgba(251,146,60,0.45);font-size:12px;color:#cbd5e1;line-height:1.4">
+          <span style="color:#fb923c;font-weight:700">Banco:</span> sem registo de depósito para este turno
+          <span style="color:#94a3b8"> · esperado </span><strong>${fmt(dinDevido)}</strong>
+        </div>`;
+      }
+    } else {
+      const bruto = parseFloat(dep.valor) || 0;
+      const saidaDep = parseFloat(dep.valor_saidas) || 0;
+      const liquido = Math.max(0, bruto - saidaDep);
+      const tpaDep = parseFloat(dep.valor_tpa);
+      const diffDin = Number.isFinite(dinDevido) ? liquido - dinDevido : NaN;
+      const diffTpa = Number.isFinite(tpaCaixa) && Number.isFinite(tpaDep) ? tpaDep - tpaCaixa : NaN;
+      const dinIrreg = Number.isFinite(diffDin) && Math.round(diffDin * 100) !== 0;
+      const tpaIrreg = Number.isFinite(diffTpa) && Math.round(diffTpa * 100) !== 0;
+      if (dinIrreg || tpaIrreg) {
+        const linhas = [];
+        if (dinIrreg) {
+          linhas.push(`<div>Dinheiro: caixa <strong>${fmt(dinDevido)}</strong> · banco <strong>${fmt(liquido)}</strong> · diferença <strong style="color:#fb923c">${diffDin >= 0 ? '+' : ''}${fmt(diffDin)}</strong></div>`);
+        }
+        if (tpaIrreg) {
+          linhas.push(`<div>TPA: caixa <strong>${fmt(tpaCaixa)}</strong> · banco <strong>${fmt(tpaDep)}</strong> · diferença <strong style="color:#fb923c">${diffTpa >= 0 ? '+' : ''}${fmt(diffTpa)}</strong></div>`);
+        }
+        bancoHtml = `<div style="padding:8px 10px;background:rgba(251,146,60,0.1);border-radius:6px;margin-bottom:10px;border:1px solid rgba(251,146,60,0.45);font-size:12px;color:#cbd5e1;line-height:1.4">
+          <div style="font-weight:700;color:#fb923c;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Banco</div>
+          ${linhas.join('')}
+          ${saidaDep > 0 ? `<div style="margin-top:3px;font-size:11px;color:#94a3b8">Líquido = bruto ${fmt(bruto)} − saída p/ armazém ${fmt(saidaDep)}</div>` : ''}
+        </div>`;
+      }
+    }
   }
 
   let stockHtml = '';
@@ -4463,8 +4518,8 @@ function buildIrregularidadesHtmlParts({
     }
   }
 
-  const hasAny = !!(caixaHtml || stockHtml || finoHtml || batataHtml || coxaHtml);
-  return { hasAny, caixaHtml, stockHtml, finoHtml, batataHtml, coxaHtml };
+  const hasAny = !!(caixaHtml || bancoHtml || stockHtml || finoHtml || batataHtml || coxaHtml);
+  return { hasAny, caixaHtml, bancoHtml, stockHtml, finoHtml, batataHtml, coxaHtml };
 }
 
 /**
@@ -4472,7 +4527,7 @@ function buildIrregularidadesHtmlParts({
  * `vendasRows` + catálogo e delega em `buildIrregularidadesHtmlParts`.
  * @returns {{ hasAny: boolean, caixaHtml: string, stockHtml: string, finoHtml: string, batataHtml: string, coxaHtml: string }}
  */
-function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas) {
+function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas, depositosTurno) {
   const stock = turno.stock || [];
   const stockBufL = {};
   stock.forEach((s) => {
@@ -4650,7 +4705,8 @@ function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas) {
     totalVendasKz: tv,
     totalGeradoKz: tg,
     produtos,
-    receitasIrreg: receitasBufL
+    receitasIrreg: receitasBufL,
+    depositosTurno
   });
 }
 
@@ -4682,9 +4738,10 @@ function renderIrregularidadesTurno() {
     totalVendasKz: getTotalVendasTurnoKz(),
     totalGeradoKz: getTotalGeradoCaixaKz(),
     produtos: S.produtos || [],
-    receitasIrreg: receitasBuf
+    receitasIrreg: receitasBuf,
+    depositosTurno: S.turnoDeposito
   });
-  mount.innerHTML = (snap.caixaHtml + snap.stockHtml + snap.finoHtml + snap.batataHtml + snap.coxaHtml).trim();
+  mount.innerHTML = (snap.caixaHtml + (snap.bancoHtml || '') + snap.stockHtml + snap.finoHtml + snap.batataHtml + snap.coxaHtml).trim();
   const showCard = snap.hasAny;
   setIrregCardVisible(showCard);
   void refreshIrregularidadesEquipaLine(showCard);
@@ -5770,6 +5827,19 @@ async function loadIrregularidadesLista() {
       show('irreg-content', '<div class="alert alert-error">Sem turnos neste período.</div>');
       return;
     }
+    const podeVerDepositos = ['admin','gestor','compras'].includes(S.user?.role);
+    /** Cache por data para não chamar /depositos vezes seguidas para o mesmo dia. */
+    const depositosCacheByDate = new Map();
+    async function getDepositoTurno(dataStr, turnoId) {
+      if (!podeVerDepositos) return undefined;
+      if (!depositosCacheByDate.has(dataStr)) {
+        const p = api('GET', `/depositos?data=${encodeURIComponent(dataStr)}`).catch(() => []);
+        depositosCacheByDate.set(dataStr, p);
+      }
+      const list = await depositosCacheByDate.get(dataStr);
+      const arr = Array.isArray(list) ? list : [];
+      return arr.find((d) => String(d.turno_id) === String(turnoId)) || null;
+    }
     const CHUNK = 6;
     const out = [];
     for (let i = 0; i < histRows.length; i += CHUNK) {
@@ -5778,14 +5848,14 @@ async function loadIrregularidadesLista() {
         chunk.map(async (r) => {
           const dataStr = String(r.data).slice(0, 10);
           try {
-            const turnos = await api(
-              'GET',
-              `/dia?data=${encodeURIComponent(dataStr)}&turno_id=${encodeURIComponent(r.turno_id)}`
-            );
+            const [turnos, vendas, depTurno] = await Promise.all([
+              api('GET', `/dia?data=${encodeURIComponent(dataStr)}&turno_id=${encodeURIComponent(r.turno_id)}`),
+              api('GET', `/turnos/${r.turno_id}/vendas`),
+              getDepositoTurno(dataStr, r.turno_id)
+            ]);
             const turno = turnos[0];
             if (!turno) return null;
-            const vendas = await api('GET', `/turnos/${r.turno_id}/vendas`);
-            const snap = computeIrregularidadesSnapshot(turno, vendas, produtos, receitas);
+            const snap = computeIrregularidadesSnapshot(turno, vendas, produtos, receitas, depTurno);
             if (!snap.hasAny) return null;
             return { r, dataStr, snap };
           } catch (_) {
@@ -5798,7 +5868,7 @@ async function loadIrregularidadesLista() {
     if (!out.length) {
       show(
         'irreg-content',
-        '<div class="card"><p style="color:#94a3b8;margin:0">Nenhuma irregularidade neste período (caixa alinhado, stock, Batata, Coxa e Fino dentro dos critérios).</p></div>'
+        '<div class="card"><p style="color:#94a3b8;margin:0">Nenhuma irregularidade neste período (caixa alinhado, banco/depósito alinhado, stock, Batata, Coxa e Fino dentro dos critérios).</p></div>'
       );
       return;
     }
@@ -5815,7 +5885,7 @@ async function loadIrregularidadesLista() {
           </div>
           <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, async () => { await openTurnoFromIrreg('${dataStr}', '${tid}'); })">Abrir turno</button>
         </div>
-        <div>${snap.caixaHtml}${snap.stockHtml}${snap.finoHtml}${snap.batataHtml}${snap.coxaHtml}</div>
+        <div>${snap.caixaHtml}${snap.bancoHtml || ''}${snap.stockHtml}${snap.finoHtml}${snap.batataHtml}${snap.coxaHtml}</div>
       </div>`;
       })
       .join('');

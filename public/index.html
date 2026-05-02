@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-detalhes-dow">
+<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-dia-turno-dow">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6034,7 +6034,7 @@ async function loadAssiduidade() {
       const arr = Array.isArray(items) ? items : [];
       if (!arr.length) return '';
       const titulo = arr.map((it) => `${it.data || ''} · ${it.turno || ''}`).join('\n');
-      const txt = arr.map((it) => `${dataCurta(it.data)}${diaSemanaAbbr(it.data)}${turnoAbbr(it.turno)}`).join(', ');
+      const txt = arr.map((it) => `${dataCurta(it.data)}${turnoAbbr(it.turno)}${diaSemanaAbbr(it.data)}`).join(', ');
       return `<div title="${escapeHtml(titulo)}" style="margin-top:4px;color:${cor.fg};font-size:11px;font-weight:600;line-height:1.35;text-align:right;font-variant-numeric:tabular-nums;word-break:break-word">${escapeHtml(txt)}</div>`;
     }
     const trs = rows.map((r) => {

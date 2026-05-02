@@ -4440,6 +4440,9 @@ app.delete('/api/turnos/:id/faltas/:utilizador_id', auth, async (req, res) => {
  */
 app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     const { inicio, fim } = req.query;
     if (!inicio || !fim) return res.status(400).json({ erro: 'inicio e fim são obrigatórios (YYYY-MM-DD)' });
     const sql = `
@@ -4502,15 +4505,24 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
       ORDER BY u.nome ASC
     `;
     const r = await query(sql, [inicio, fim]);
-    const rows = r.rows.map((row) => ({
-      utilizador_id: row.utilizador_id,
-      utilizador_nome: row.utilizador_nome,
-      utilizador_role: row.utilizador_role,
-      turnos_esperados: parseInt(row.turnos_esperados, 10) || 0,
-      turnos_trabalhados: parseInt(row.turnos_trabalhados, 10) || 0,
-      faltas: parseInt(row.faltas, 10) || 0,
-      horas_extra: parseInt(row.horas_extra, 10) || 0
-    }));
+    const rows = r.rows.map((row) => {
+      const esp = parseInt(row.turnos_esperados, 10) || 0;
+      const trab = parseInt(row.turnos_trabalhados, 10) || 0;
+      const falt = parseInt(row.faltas, 10) || 0;
+      const he = parseInt(row.horas_extra, 10) || 0;
+      return {
+        utilizador_id: row.utilizador_id,
+        utilizador_nome: row.utilizador_nome,
+        utilizador_role: row.utilizador_role,
+        turnos_esperados: esp,
+        turnos_trabalhados: trab,
+        faltas: falt,
+        horas_extra: he,
+        // Aliases para compat com clientes antigos que tinham o JS em cache.
+        dias_esperados: esp,
+        dias_trabalhados: trab
+      };
+    });
     res.json({ inicio, fim, rows });
   } catch (e) {
     res.status(500).json({ erro: e.message });

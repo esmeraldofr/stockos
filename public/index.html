@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-back-compat">
+<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-mensal">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5933,6 +5933,28 @@ function lastDayOfMonthIso(d) {
   return new Date(x.getFullYear(), x.getMonth() + 1, 0).toISOString().split('T')[0];
 }
 
+function currentMonthIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+function monthFromIso(monthStr) {
+  const m = String(monthStr || '').match(/^(\d{4})-(\d{2})$/);
+  if (!m) return null;
+  const ano = parseInt(m[1], 10);
+  const mes = parseInt(m[2], 10);
+  if (!Number.isFinite(ano) || mes < 1 || mes > 12) return null;
+  const first = new Date(ano, mes - 1, 1);
+  const last = new Date(ano, mes, 0);
+  const fmt = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+  return { inicio: fmt(first), fim: fmt(last) };
+}
+function shiftMonthIso(monthStr, delta) {
+  const m = String(monthStr || '').match(/^(\d{4})-(\d{2})$/);
+  if (!m) return currentMonthIso();
+  const d = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 async function drawAssiduidade() {
   render(`
     <div id="header">
@@ -5943,47 +5965,42 @@ async function drawAssiduidade() {
     </div>
     <div id="content">
       <div class="card">
-        <div class="card-title">Período</div>
-        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-          <div class="field" style="flex:1;min-width:140px;margin:0"><label>De</label><input type="date" id="as-inicio"/></div>
-          <div class="field" style="flex:1;min-width:140px;margin:0"><label>Até</label><input type="date" id="as-fim"/></div>
+        <div class="card-title">Mês</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="btn btn-ghost btn-sm" aria-label="Mês anterior" onclick="changeAssiduidadeMonth(-1)">‹</button>
+          <div class="field" style="margin:0"><input type="month" id="as-mes" onchange="loadAssiduidade()"/></div>
+          <button type="button" class="btn btn-ghost btn-sm" aria-label="Mês seguinte" onclick="changeAssiduidadeMonth(1)">›</button>
           <button type="button" class="btn btn-ghost btn-sm" onclick="setAssiduidadeMesAtual()">Mês actual</button>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="setAssiduidadeMesAnterior()">Mês anterior</button>
-          <button type="button" class="btn btn-primary" onclick="runAction(event, loadAssiduidade)">Carregar</button>
         </div>
       </div>
       <div id="assiduidade-content"></div>
     </div>
     ${navBar()}
   `);
-  const hoje = new Date().toISOString().split('T')[0];
-  document.getElementById('as-inicio').value = firstDayOfMonthIso(hoje);
-  document.getElementById('as-fim').value = lastDayOfMonthIso(hoje);
+  document.getElementById('as-mes').value = currentMonthIso();
   await loadAssiduidade();
 }
 
 function setAssiduidadeMesAtual() {
-  const hoje = new Date().toISOString().split('T')[0];
-  document.getElementById('as-inicio').value = firstDayOfMonthIso(hoje);
-  document.getElementById('as-fim').value = lastDayOfMonthIso(hoje);
+  document.getElementById('as-mes').value = currentMonthIso();
   loadAssiduidade();
 }
 
-function setAssiduidadeMesAnterior() {
-  const hoje = new Date();
-  const ant = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 15).toISOString().split('T')[0];
-  document.getElementById('as-inicio').value = firstDayOfMonthIso(ant);
-  document.getElementById('as-fim').value = lastDayOfMonthIso(ant);
+function changeAssiduidadeMonth(delta) {
+  const el = document.getElementById('as-mes');
+  el.value = shiftMonthIso(el.value || currentMonthIso(), delta);
   loadAssiduidade();
 }
 
 async function loadAssiduidade() {
-  const ini = val('as-inicio');
-  const fim = val('as-fim');
-  if (!ini || !fim) {
-    show('assiduidade-content', '<div class="alert alert-error">Indica o intervalo de datas.</div>');
+  const mes = val('as-mes') || currentMonthIso();
+  const range = monthFromIso(mes);
+  if (!range) {
+    show('assiduidade-content', '<div class="alert alert-error">Mês inválido.</div>');
     return;
   }
+  const ini = range.inicio;
+  const fim = range.fim;
   show('assiduidade-content', '<div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div>');
   try {
     const data = await api('GET', `/assiduidade?inicio=${encodeURIComponent(ini)}&fim=${encodeURIComponent(fim)}`);

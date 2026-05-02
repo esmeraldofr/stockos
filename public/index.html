@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-irreg-quem-trabalhou">
+<html lang="pt" data-stockos-ui="2026-04-27-compras-ver-irregularidades">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1256,7 +1256,7 @@ async function navigate(page, params) {
 async function draw() {
   document.body.classList.toggle('has-auth', !!S.token);
   if (!S.token) { document.body.classList.remove('menu-open'); drawLogin(); return; }
-  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario'].includes(S.page)) {
+  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario', 'irregularidades'].includes(S.page)) {
     S.page = 'dia';
   }
   if (S.page === 'admin' && S.user?.role !== 'admin') {
@@ -1277,12 +1277,14 @@ async function draw() {
         if (!S.turnoId) { S.page = 'dia'; await drawDia(); break; }
         await drawTurno();
         break;
-      case 'historico':await drawHistorico(); break;
-      case 'irregularidades':
+      case 'historico':
         if (S.user?.role === 'compras') {
           await navigate('dia');
           break;
         }
+        await drawHistorico();
+        break;
+      case 'irregularidades':
         await drawIrregularidades();
         break;
       case 'armazem':  await drawArmazem(); break;
@@ -1360,6 +1362,7 @@ function menuEntries() {
   const role = S.user?.role;
   const isAdmin = role === 'admin';
   const showHistorico = role !== 'compras';
+  const showIrregularidades = !!role;
   const showArmazem = ['admin', 'gestor', 'compras'].includes(role);
   const showEscala = role === 'admin' || role === 'gestor';
   const showDepositos = ['admin', 'gestor', 'compras'].includes(role);
@@ -1374,6 +1377,8 @@ function menuEntries() {
   if (showHistorico) {
     entries.push({ page: 'historico', label: 'Histórico',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>' });
+  }
+  if (showIrregularidades) {
     entries.push({ page: 'irregularidades', label: 'Irregularidades',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' });
   }
@@ -1436,6 +1441,7 @@ function renderMenuDrawer() {
 function navBar() {
   const isAdmin = S.user?.role === 'admin';
   const showHistorico = S.user?.role !== 'compras';
+  const showIrregularidades = !!S.user?.role;
   const showArmazem = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   const showEscala = S.user?.role === 'admin' || S.user?.role === 'gestor';
   const showDepositos = ['admin', 'gestor', 'compras'].includes(S.user?.role);
@@ -1458,7 +1464,8 @@ function navBar() {
       <button class="nav-btn ${S.page==='historico'?'active':''}" onclick="runAction(event, () => navigate('historico'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
         Histórico
-      </button>
+      </button>` : ''}
+      ${showIrregularidades ? `
       <button class="nav-btn ${S.page==='irregularidades'?'active':''}" onclick="runAction(event, () => navigate('irregularidades'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         Irregularidades

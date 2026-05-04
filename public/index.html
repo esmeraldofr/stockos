@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-sem-futuro">
+<html lang="pt" data-stockos-ui="2026-04-27-pagina-auditoria">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -644,7 +644,7 @@ const S = {
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
 const ALLOWED_TURNO_TABS = ['stock', 'vendas', 'pedidos', 'registos', 'escala'];
-const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin'];
+const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria'];
 
 function _storageGet(key) {
   try {
@@ -1291,6 +1291,10 @@ async function draw() {
         if (!['admin','gestor','compras'].includes(S.user?.role)) { await navigate('dia'); return; }
         await drawAssiduidade();
         break;
+      case 'auditoria':
+        if (!['admin','gestor'].includes(S.user?.role)) { await navigate('dia'); return; }
+        await drawAuditoria();
+        break;
       case 'armazem':  await drawArmazem(); break;
       case 'fornecedores':
         if (!['admin', 'gestor', 'compras'].includes(S.user?.role)) { await navigate('dia'); return; }
@@ -1368,6 +1372,7 @@ function menuEntries() {
   const showHistorico = role !== 'compras';
   const showIrregularidades = !!role;
   const showAssiduidade = ['admin','gestor','compras'].includes(role);
+  const showAuditoria = ['admin','gestor'].includes(role);
   const showArmazem = ['admin', 'gestor', 'compras'].includes(role);
   const showEscala = role === 'admin' || role === 'gestor';
   const showDepositos = ['admin', 'gestor', 'compras'].includes(role);
@@ -1390,6 +1395,10 @@ function menuEntries() {
   if (showAssiduidade) {
     entries.push({ page: 'assiduidade', label: 'Assiduidade',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 7-7"/><path d="M21 12v6a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>' });
+  }
+  if (showAuditoria) {
+    entries.push({ page: 'auditoria', label: 'Auditoria',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>' });
   }
   entries.push({ page: 'produtos', label: 'Produtos',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>' });
@@ -1452,6 +1461,7 @@ function navBar() {
   const showHistorico = S.user?.role !== 'compras';
   const showIrregularidades = !!S.user?.role;
   const showAssiduidade = ['admin','gestor','compras'].includes(S.user?.role);
+  const showAuditoria = ['admin','gestor'].includes(S.user?.role);
   const showArmazem = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   const showEscala = S.user?.role === 'admin' || S.user?.role === 'gestor';
   const showDepositos = ['admin', 'gestor', 'compras'].includes(S.user?.role);
@@ -1484,6 +1494,11 @@ function navBar() {
       <button class="nav-btn ${S.page==='assiduidade'?'active':''}" onclick="runAction(event, () => navigate('assiduidade'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 7-7"/><path d="M21 12v6a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
         Assiduidade
+      </button>` : ''}
+      ${showAuditoria ? `
+      <button class="nav-btn ${S.page==='auditoria'?'active':''}" onclick="runAction(event, () => navigate('auditoria'))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>
+        Auditoria
       </button>` : ''}
       <button class="nav-btn ${S.page==='produtos'?'active':''}" onclick="runAction(event, () => navigate('produtos'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
@@ -6117,6 +6132,128 @@ async function loadAssiduidade() {
     `);
   } catch (e) {
     show('assiduidade-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
+  }
+}
+
+// ── AUDITORIA ─────────────────────────────────────────────────
+async function drawAuditoria() {
+  render(`
+    <div id="header">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:#f1f5f9">Auditoria</div>
+        <div class="header-sub">Resumo das atividades realizadas na app</div>
+      </div>
+    </div>
+    <div id="content">
+      <div class="card">
+        <div class="card-title">Filtros</div>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          <div class="field" style="flex:1;min-width:140px;margin:0"><label>De</label><input type="date" id="aud-inicio"/></div>
+          <div class="field" style="flex:1;min-width:140px;margin:0"><label>Até</label><input type="date" id="aud-fim"/></div>
+          <div class="field" style="flex:2;min-width:200px;margin:0"><label>Pesquisar</label><input type="text" id="aud-q" placeholder="ex.: turno fechado, depósito, login"/></div>
+          <button type="button" class="btn btn-primary" onclick="runAction(event, loadAuditoria)">Carregar</button>
+        </div>
+      </div>
+      <div id="aud-content"></div>
+    </div>
+    ${navBar()}
+  `);
+  const hoje = new Date().toISOString().split('T')[0];
+  document.getElementById('aud-inicio').value = addDays(hoje, -7);
+  document.getElementById('aud-fim').value = hoje;
+  await loadAuditoria();
+}
+
+function audMetodoBadge(m) {
+  const bg = { GET: '#1e293b', POST: 'rgba(34,197,94,0.16)', PUT: 'rgba(59,130,246,0.16)', DELETE: 'rgba(248,113,113,0.16)' }[m] || '#1e293b';
+  const fg = { GET: '#94a3b8', POST: '#4ade80', PUT: '#60a5fa', DELETE: '#f87171' }[m] || '#94a3b8';
+  return `<span style="display:inline-block;padding:1px 6px;border-radius:4px;background:${bg};color:${fg};font-size:10px;font-weight:700;letter-spacing:.04em">${escapeHtml(m)}</span>`;
+}
+
+function audStatusBadge(status) {
+  const s = parseInt(status, 10) || 0;
+  let cor = '#64748b';
+  if (s >= 200 && s < 300) cor = '#4ade80';
+  else if (s >= 400 && s < 500) cor = '#fb923c';
+  else if (s >= 500) cor = '#f87171';
+  return `<span style="color:${cor};font-weight:700;font-variant-numeric:tabular-nums">${s || '—'}</span>`;
+}
+
+function audPayloadResumo(payload) {
+  if (!payload) return '';
+  let obj = payload;
+  if (typeof payload === 'string') {
+    try { obj = JSON.parse(payload); } catch (_) { return ''; }
+  }
+  if (!obj || typeof obj !== 'object') return '';
+  const partes = [];
+  for (const [k, v] of Object.entries(obj)) {
+    if (v == null || v === '') continue;
+    if (Array.isArray(v) || typeof v === 'object') {
+      partes.push(`${k}=…`);
+    } else {
+      const txt = String(v);
+      partes.push(`${k}=${txt.length > 50 ? txt.slice(0, 50) + '…' : txt}`);
+    }
+    if (partes.length >= 4) { partes.push('…'); break; }
+  }
+  return partes.join(' · ');
+}
+
+async function loadAuditoria() {
+  const ini = val('aud-inicio');
+  const fim = val('aud-fim');
+  const q = val('aud-q').trim();
+  show('aud-content', '<div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div>');
+  try {
+    const params = [];
+    if (ini) params.push(`inicio=${encodeURIComponent(ini)}`);
+    if (fim) params.push(`fim=${encodeURIComponent(fim)}`);
+    if (q) params.push(`acao=${encodeURIComponent(q)}`);
+    params.push('limit=300');
+    const data = await api('GET', `/auditoria?${params.join('&')}`);
+    const rows = (data && data.rows) || [];
+    if (!rows.length) {
+      show('aud-content', '<div class="card"><p style="color:#94a3b8;margin:0">Sem registos no período/filtro.</p></div>');
+      return;
+    }
+    const trs = rows.map((r) => {
+      const payloadResumo = audPayloadResumo(r.payload);
+      const detalheLinha = [r.descricao, payloadResumo].filter(Boolean).join(' · ');
+      return `
+        <tr>
+          <td style="padding:8px 10px;color:#94a3b8;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:top">${escapeHtml(r.quando_local || '')}</td>
+          <td style="padding:8px 10px;color:#e2e8f0;vertical-align:top">
+            <div style="font-weight:600">${escapeHtml(r.utilizador_nome || '— anónimo —')}</div>
+            <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
+          </td>
+          <td style="padding:8px 10px;vertical-align:top">
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${audMetodoBadge(r.metodo)} ${audStatusBadge(r.status)}</div>
+            <div style="font-size:13px;color:#cbd5e1;margin-top:3px;font-weight:500">${escapeHtml(r.acao || '')}</div>
+            ${detalheLinha ? `<div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.35">${escapeHtml(detalheLinha)}</div>` : ''}
+            <div style="font-size:10px;color:#475569;margin-top:2px;font-family:monospace">${escapeHtml(r.caminho || '')}</div>
+          </td>
+        </tr>`;
+    }).join('');
+    show('aud-content', `
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table style="width:100%;border-collapse:collapse">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px;white-space:nowrap">Quando</th>
+                <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Utilizador</th>
+                <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Atividade</th>
+              </tr>
+            </thead>
+            <tbody>${trs}</tbody>
+          </table>
+        </div>
+      </div>
+      <p style="margin:10px 0 0;font-size:11px;color:#64748b">A mostrar até 300 registos mais recentes do período. Para ver mais antigos, restringe o intervalo.</p>
+    `);
+  } catch (e) {
+    show('aud-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
   }
 }
 

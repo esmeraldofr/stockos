@@ -787,10 +787,17 @@ app.post('/api/auth/login', async (req, res) => {
     const login = loginFromBody(req);
     if (!login || !password) return res.status(400).json({ erro: 'Nome de utilizador e senha são obrigatórios' });
     const r = await queryUtilizadorPorLogin(login);
-    if (!r.rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
+    if (!r.rows.length) {
+      auditLoginAttempt(req, res, 401, login, null);
+      return res.status(401).json({ erro: 'Credenciais inválidas' });
+    }
     const user = r.rows[0];
-    if (user.senha_hash !== hashPassword(password)) return res.status(401).json({ erro: 'Credenciais inválidas' });
+    if (user.senha_hash !== hashPassword(password)) {
+      auditLoginAttempt(req, res, 401, login, user);
+      return res.status(401).json({ erro: 'Credenciais inválidas' });
+    }
     const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username });
+    auditLoginAttempt(req, res, 200, login, user);
     res.json({
       token,
       user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username }
@@ -803,8 +810,194 @@ app.post('/api/auth/login', async (req, res) => {
     });
   }
 });
+
+/** Regista tentativa de login na auditoria (sem expor a password). */
+function auditLoginAttempt(req, res, status, loginInput, user) {
+  setImmediate(async () => {
+    try {
+      await ensureAuditoria();
+      const ip =
+        (req.headers['x-forwarded-for'] || '').toString().split(',')[0].trim() ||
+        req.ip || '';
+      const desc = status === 200 ? 'Sessão iniciada' : 'Falha de login';
+      await query(
+        `INSERT INTO auditoria (utilizador_id, utilizador_nome, utilizador_role, metodo, caminho, acao, descricao, status, ip, payload)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          user && user.id != null ? String(user.id) : null,
+          user ? user.nome : null,
+          user ? user.role : null,
+          'POST',
+          '/api/auth/login',
+          desc,
+          status === 200 ? '' : `tentativa: ${String(loginInput || '').slice(0, 80)}`,
+          status,
+          ip || null,
+          null
+        ]
+      );
+    } catch (e) {
+      console.warn('[auditoria] login:', e && e.message);
+    }
+  });
+}
 app.use(express.static('public'));
 app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { res.status(500).json({ erro: 'DB não disponível' }); } });
+
+// ── AUDITORIA ─────────────────────────────────────────────────
+let auditoriaReady = false;
+async function ensureAuditoria() {
+  if (auditoriaReady) return;
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS auditoria (
+      id BIGSERIAL PRIMARY KEY,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      utilizador_id TEXT,
+      utilizador_nome TEXT,
+      utilizador_role TEXT,
+      metodo VARCHAR(8) NOT NULL,
+      caminho TEXT NOT NULL,
+      acao TEXT NOT NULL,
+      descricao TEXT NOT NULL DEFAULT '',
+      status SMALLINT NOT NULL DEFAULT 0,
+      ip TEXT,
+      payload JSONB
+    )`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON auditoria (criado_em DESC)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_auditoria_utilizador ON auditoria (utilizador_id, criado_em DESC)`);
+    auditoriaReady = true;
+  } catch (e) {
+    console.warn('[auditoria] ensure:', e && e.message);
+  }
+}
+
+/** Mapa rota → descrição amigável (para a aba Auditoria). */
+const AUDIT_ROUTE_LABELS = [
+  // Auth & utilizadores
+  { re: /^\/api\/auth\/login$/i, m: 'POST', label: 'Sessão iniciada' },
+  { re: /^\/api\/auth\/alterar-password$/i, m: 'POST', label: 'Password do próprio alterada' },
+  { re: /^\/api\/utilizadores$/i, m: 'POST', label: 'Utilizador criado' },
+  { re: /^\/api\/utilizadores\/[^/]+$/i, m: 'PUT', label: 'Utilizador editado' },
+  // Produtos / receitas
+  { re: /^\/api\/produtos$/i, m: 'POST', label: 'Produto criado' },
+  { re: /^\/api\/produtos\/[^/]+$/i, m: 'PUT', label: 'Produto editado' },
+  { re: /^\/api\/produtos\/[^/]+$/i, m: 'DELETE', label: 'Produto removido' },
+  { re: /^\/api\/receitas$/i, m: 'POST', label: 'Receita guardada' },
+  { re: /^\/api\/receitas\/[^/]+$/i, m: 'PUT', label: 'Receita editada' },
+  { re: /^\/api\/receitas\/[^/]+$/i, m: 'DELETE', label: 'Receita removida' },
+  // Fornecedores / armazém
+  { re: /^\/api\/fornecedores$/i, m: 'POST', label: 'Fornecedor guardado' },
+  { re: /^\/api\/armazem\/libertacoes$/i, m: 'POST', label: 'Libertação para turno' },
+  { re: /^\/api\/armazem\/compras$/i, m: 'POST', label: 'Compra registada' },
+  { re: /^\/api\/armazem\/faturas$/i, m: 'POST', label: 'Fatura registada' },
+  // Turnos
+  { re: /^\/api\/turnos\/abrir$/i, m: 'POST', label: 'Turno aberto' },
+  { re: /^\/api\/turnos\/[^/]+\/fechar$/i, m: 'POST', label: 'Turno fechado' },
+  { re: /^\/api\/turnos\/[^/]+\/reabrir$/i, m: 'POST', label: 'Turno reaberto' },
+  { re: /^\/api\/turnos\/[^/]+\/stock$/i, m: 'PUT', label: 'Stock do turno guardado' },
+  { re: /^\/api\/turnos\/[^/]+\/caixa$/i, m: 'PUT', label: 'Caixa do turno guardada' },
+  { re: /^\/api\/turnos\/[^/]+\/entradas$/i, m: 'POST', label: 'Entrada de stock' },
+  { re: /^\/api\/turnos\/[^/]+\/entradas\/[^/]+$/i, m: 'DELETE', label: 'Entrada removida' },
+  { re: /^\/api\/turnos\/[^/]+\/saidas$/i, m: 'POST', label: 'Saída de caixa' },
+  { re: /^\/api\/turnos\/[^/]+\/saidas\/[^/]+$/i, m: 'DELETE', label: 'Saída removida' },
+  { re: /^\/api\/turnos\/[^/]+\/vendas$/i, m: 'POST', label: 'Venda de menu actualizada' },
+  { re: /^\/api\/turnos\/[^/]+\/pedidos$/i, m: 'POST', label: 'Pedido ao balcão registado' },
+  { re: /^\/api\/turnos\/[^/]+\/pedidos\/[^/]+$/i, m: 'DELETE', label: 'Pedido ao balcão removido' },
+  { re: /^\/api\/turnos\/[^/]+\/equipa-real$/i, m: 'POST', label: 'Presença registada' },
+  { re: /^\/api\/turnos\/[^/]+\/equipa-real\/[^/]+$/i, m: 'DELETE', label: 'Presença removida' },
+  { re: /^\/api\/turnos\/[^/]+\/faltas$/i, m: 'POST', label: 'Motivo de falta guardado' },
+  { re: /^\/api\/turnos\/[^/]+\/faltas\/[^/]+$/i, m: 'DELETE', label: 'Motivo de falta removido' },
+  // Depósitos
+  { re: /^\/api\/depositos$/i, m: 'POST', label: 'Depósito guardado' },
+  { re: /^\/api\/depositos\/lote$/i, m: 'POST', label: 'Depósitos do dia guardados' },
+  { re: /^\/api\/depositos\/bordero-dia$/i, m: 'POST', label: 'Borderô do dia carregado' },
+  { re: /^\/api\/depositos\/bordero-dia$/i, m: 'DELETE', label: 'Borderô do dia removido' },
+  // Escala
+  { re: /^\/api\/escala$/i, m: 'POST', label: 'Escala do dia guardada' },
+  { re: /^\/api\/escala\/[^/]+$/i, m: 'PUT', label: 'Escala do dia editada' },
+  { re: /^\/api\/escala\/[^/]+$/i, m: 'DELETE', label: 'Escala do dia removida' },
+  { re: /^\/api\/escala\/template$/i, m: 'POST', label: 'Modelo da escala guardado' },
+  { re: /^\/api\/escala\/template\/[^/]+$/i, m: 'PUT', label: 'Modelo da escala editado' },
+  { re: /^\/api\/escala\/template\/[^/]+$/i, m: 'DELETE', label: 'Modelo da escala removido' },
+  // Manutenção
+  { re: /^\/api\/migrate$/i, m: 'POST', label: 'Migração executada' },
+  { re: /^\/api\/reseed-produtos$/i, m: 'POST', label: 'Re-seed de produtos' }
+];
+function auditDescribeAction(method, path) {
+  const m = String(method || '').toUpperCase();
+  const p = String(path || '').split('?')[0];
+  for (const entry of AUDIT_ROUTE_LABELS) {
+    if (entry.m === m && entry.re.test(p)) return entry.label;
+  }
+  return `${m} ${p}`;
+}
+
+/** Body sanitizado: nunca regista passwords, fotos base64 e tokens. */
+function auditSanitizeBody(body) {
+  if (!body || typeof body !== 'object') return null;
+  const REDACT_KEYS = new Set([
+    'password', 'passwordAtual', 'passwordNova', 'senha', 'senha_hash',
+    'token', 'authorization', 'foto_base64', 'bordero_foto_base64'
+  ]);
+  function clean(v) {
+    if (Array.isArray(v)) return v.map(clean);
+    if (v && typeof v === 'object') {
+      const o = {};
+      for (const [k, val] of Object.entries(v)) {
+        if (REDACT_KEYS.has(k)) { o[k] = '[REDACTED]'; continue; }
+        if (typeof val === 'string' && val.length > 4000) { o[k] = val.slice(0, 4000) + '…'; continue; }
+        o[k] = clean(val);
+      }
+      return o;
+    }
+    return v;
+  }
+  try {
+    const c = clean(body);
+    return c && Object.keys(c).length ? c : null;
+  } catch (_) { return null; }
+}
+
+/** Middleware: regista POST/PUT/DELETE /api/* depois da resposta. Não bloqueia o pedido. */
+app.use(function auditMiddleware(req, res, next) {
+  const m = String(req.method || '').toUpperCase();
+  if (m !== 'POST' && m !== 'PUT' && m !== 'DELETE') return next();
+  const p = (req.path || req.url || '').split('?')[0];
+  if (!p.startsWith('/api/')) return next();
+  if (p === '/api/auditoria') return next(); // não regista as próprias leituras
+  res.on('finish', () => {
+    /** await assíncrono — não bloqueamos a resposta. */
+    (async () => {
+      try {
+        await ensureAuditoria();
+        const u = req.user || {};
+        const payload = auditSanitizeBody(req.body);
+        const ip =
+          (req.headers['x-forwarded-for'] || '').toString().split(',')[0].trim() ||
+          req.ip || '';
+        await query(
+          `INSERT INTO auditoria (utilizador_id, utilizador_nome, utilizador_role, metodo, caminho, acao, descricao, status, ip, payload)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [
+            u.id != null ? String(u.id) : null,
+            u.nome || null,
+            u.role || null,
+            m,
+            p,
+            auditDescribeAction(m, p),
+            '',
+            res.statusCode || 0,
+            ip || null,
+            payload ? JSON.stringify(payload) : null
+          ]
+        );
+      } catch (e) {
+        console.warn('[auditoria] insert:', e && e.message);
+      }
+    })();
+  });
+  next();
+});
 
 app.use((req, res, next) => {
   if (!isStockosApiReadOnly()) return next();
@@ -4564,6 +4757,43 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
       };
     });
     res.json({ inicio, fim, rows });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/**
+ * Lê auditoria com filtros opcionais. Apenas admin/gestor.
+ * `?inicio=YYYY-MM-DD&fim=YYYY-MM-DD&utilizador_id=…&acao=texto&limit=200`.
+ */
+app.get('/api/auditoria', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    await ensureAuditoria();
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '200', 10)));
+    const params = [];
+    const where = [];
+    if (req.query.inicio) { params.push(String(req.query.inicio)); where.push(`a.criado_em >= $${params.length}::date`); }
+    if (req.query.fim) { params.push(String(req.query.fim)); where.push(`a.criado_em < ($${params.length}::date + INTERVAL '1 day')`); }
+    if (req.query.utilizador_id) { params.push(String(req.query.utilizador_id)); where.push(`a.utilizador_id = $${params.length}`); }
+    if (req.query.acao) {
+      params.push('%' + String(req.query.acao).toLowerCase() + '%');
+      where.push(`(LOWER(a.acao) LIKE $${params.length} OR LOWER(a.caminho) LIKE $${params.length})`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const sql = `
+      SELECT a.id,
+             to_char(a.criado_em AT TIME ZONE 'Africa/Luanda', 'YYYY-MM-DD HH24:MI:SS') AS quando_local,
+             a.criado_em,
+             a.utilizador_id, a.utilizador_nome, a.utilizador_role,
+             a.metodo, a.caminho, a.acao, a.descricao, a.status, a.ip, a.payload
+      FROM auditoria a
+      ${whereSql}
+      ORDER BY a.criado_em DESC, a.id DESC
+      LIMIT ${limit}
+    `;
+    const r = await query(sql, params);
+    res.json({ rows: r.rows, limit });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

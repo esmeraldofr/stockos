@@ -4773,8 +4773,22 @@ app.get('/api/auditoria', auth, requireRole('admin','gestor'), async (req, res) 
     const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '200', 10)));
     const params = [];
     const where = [];
-    if (req.query.inicio) { params.push(String(req.query.inicio)); where.push(`a.criado_em >= $${params.length}::date`); }
-    if (req.query.fim) { params.push(String(req.query.fim)); where.push(`a.criado_em < ($${params.length}::date + INTERVAL '1 day')`); }
+    /** Datas e horas são sempre interpretadas em Africa/Luanda (depois convertidas para UTC). */
+    const horaInicio = /^\d{1,2}:\d{2}(?::\d{2})?$/.test(String(req.query.hora_inicio || '')) ? String(req.query.hora_inicio) : '00:00';
+    const horaFim = /^\d{1,2}:\d{2}(?::\d{2})?$/.test(String(req.query.hora_fim || '')) ? String(req.query.hora_fim) : '';
+    if (req.query.inicio) {
+      params.push(`${String(req.query.inicio)} ${horaInicio}`);
+      where.push(`a.criado_em >= ($${params.length}::timestamp AT TIME ZONE 'Africa/Luanda')`);
+    }
+    if (req.query.fim) {
+      if (horaFim) {
+        params.push(`${String(req.query.fim)} ${horaFim}`);
+        where.push(`a.criado_em <= ($${params.length}::timestamp AT TIME ZONE 'Africa/Luanda')`);
+      } else {
+        params.push(String(req.query.fim));
+        where.push(`a.criado_em < (($${params.length}::date + INTERVAL '1 day') AT TIME ZONE 'Africa/Luanda')`);
+      }
+    }
     if (req.query.utilizador_id) { params.push(String(req.query.utilizador_id)); where.push(`a.utilizador_id = $${params.length}`); }
     if (req.query.acao) {
       params.push('%' + String(req.query.acao).toLowerCase() + '%');

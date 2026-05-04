@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-dia-turno-dow">
+<html lang="pt" data-stockos-ui="2026-04-27-assiduidade-sem-futuro">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6039,11 +6039,13 @@ async function loadAssiduidade() {
     }
     const trs = rows.map((r) => {
       const esperados = Number(r.turnos_esperados ?? r.dias_esperados) || 0;
+      const esperadosPassados = Number(r.turnos_esperados_passados ?? esperados) || 0;
       const presencas = Number(r.turnos_trabalhados ?? r.dias_trabalhados) || 0;
       const faltas = Number(r.faltas) || 0;
       const horasExtra = Number(r.horas_extra) || 0;
-      const taxa = esperados > 0
-        ? Math.round((Math.min(presencas, esperados) / esperados) * 100)
+      const baseTaxa = esperadosPassados > 0 ? esperadosPassados : esperados;
+      const taxa = baseTaxa > 0
+        ? Math.round((Math.min(presencas, baseTaxa) / baseTaxa) * 100)
         : null;
       const taxaTxt = taxa == null ? '—' : `${taxa}%`;
       const taxaCor = taxa == null ? '#64748b' : (taxa >= 95 ? '#4ade80' : taxa >= 80 ? '#fbbf24' : '#f87171');
@@ -6092,7 +6094,7 @@ async function loadAssiduidade() {
           </div>
         </div>
         <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">
-          <strong style="color:#94a3b8">Esperados</strong>: turnos em que o funcionário estava na escala (do dia ou, na ausência, template). A regra "1 folga por semana" está implícita na escala. <strong style="color:#94a3b8">Trabalhados</strong>: turnos com presença registada. <strong style="color:#94a3b8">Faltas</strong>: turnos em que estava escalado mas não foi registada presença. <strong style="color:#94a3b8">Horas extra</strong>: turnos em que trabalhou sem estar escalado, com hora extra aplicada.
+          <strong style="color:#94a3b8">Esperados</strong>: turnos em que o funcionário estava na escala (do dia ou, na ausência, template). A regra "1 folga por semana" está implícita na escala. <strong style="color:#94a3b8">Trabalhados</strong>: turnos com presença registada. <strong style="color:#94a3b8">Faltas</strong>: turnos passados em que estava escalado e não foi registada presença — <em>turnos de hoje e futuros não são contados</em>. <strong style="color:#94a3b8">Horas extra</strong>: turnos em que trabalhou sem estar escalado, com hora extra aplicada. <strong style="color:#94a3b8">Assiduidade %</strong>: presenças sobre esperados <em>já passados</em>.
         </p>
       </div>
       <div class="card" style="padding:0;overflow:hidden">

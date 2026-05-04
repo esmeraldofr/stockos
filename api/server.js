@@ -4446,7 +4446,10 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
     const { inicio, fim } = req.query;
     if (!inicio || !fim) return res.status(400).json({ erro: 'inicio e fim são obrigatórios (YYYY-MM-DD)' });
     const sql = `
-      WITH dias AS (
+      WITH hoje AS (
+        SELECT (NOW() AT TIME ZONE 'Africa/Luanda')::date AS d
+      ),
+      dias AS (
         SELECT generate_series($1::date, $2::date, INTERVAL '1 day')::date AS d
       ),
       dias_com_escala_dia AS (
@@ -4478,12 +4481,22 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
              COALESCE((
                SELECT COUNT(*) FROM (SELECT DISTINCT d, turno FROM esperados e WHERE e.utilizador_id = u.id::text) x
              ), 0)::int AS turnos_esperados,
+             /** Esperados cuja data já passou (estritamente < hoje, em Luanda). Usado para taxa de assiduidade. */
+             COALESCE((
+               SELECT COUNT(*) FROM (
+                 SELECT DISTINCT e.d, e.turno FROM esperados e
+                 WHERE e.utilizador_id = u.id::text AND e.d < (SELECT d FROM hoje)
+               ) x
+             ), 0)::int AS turnos_esperados_passados,
              COALESCE((
                SELECT COUNT(*) FROM (SELECT DISTINCT d, turno FROM trabalhados t WHERE t.utilizador_id = u.id::text) x
              ), 0)::int AS turnos_trabalhados,
+             /** Faltas: estava escalado, NÃO trabalhou e a data já passou. Turnos de hoje/futuro não contam. */
              COALESCE((
                SELECT COUNT(*) FROM (
-                 SELECT DISTINCT e.d, e.turno FROM esperados e WHERE e.utilizador_id = u.id::text
+                 SELECT DISTINCT e.d, e.turno
+                 FROM esperados e
+                 WHERE e.utilizador_id = u.id::text AND e.d < (SELECT d FROM hoje)
                  EXCEPT
                  SELECT DISTINCT t.d, t.turno FROM trabalhados t WHERE t.utilizador_id = u.id::text
                ) x
@@ -4503,7 +4516,9 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
              COALESCE((
                SELECT json_agg(json_build_object('data', to_char(x.d, 'YYYY-MM-DD'), 'turno', x.turno) ORDER BY x.d, x.turno)
                FROM (
-                 SELECT DISTINCT e.d, e.turno FROM esperados e WHERE e.utilizador_id = u.id::text
+                 SELECT DISTINCT e.d, e.turno
+                 FROM esperados e
+                 WHERE e.utilizador_id = u.id::text AND e.d < (SELECT d FROM hoje)
                  EXCEPT
                  SELECT DISTINCT t.d, t.turno FROM trabalhados t WHERE t.utilizador_id = u.id::text
                ) x
@@ -4528,6 +4543,7 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
     const r = await query(sql, [inicio, fim]);
     const rows = r.rows.map((row) => {
       const esp = parseInt(row.turnos_esperados, 10) || 0;
+      const espPassados = parseInt(row.turnos_esperados_passados, 10) || 0;
       const trab = parseInt(row.turnos_trabalhados, 10) || 0;
       const falt = parseInt(row.faltas, 10) || 0;
       const he = parseInt(row.horas_extra, 10) || 0;
@@ -4536,6 +4552,7 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
         utilizador_nome: row.utilizador_nome,
         utilizador_role: row.utilizador_role,
         turnos_esperados: esp,
+        turnos_esperados_passados: espPassados,
         turnos_trabalhados: trab,
         faltas: falt,
         horas_extra: he,

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-auditoria-filtro-hora">
+<html lang="pt" data-stockos-ui="2026-04-27-auditoria-hora-fix">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6148,14 +6148,14 @@ async function drawAuditoria() {
       <div class="card">
         <div class="card-title">Filtros</div>
         <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-          <div class="field" style="flex:1;min-width:140px;margin:0"><label>De (data)</label><input type="date" id="aud-inicio"/></div>
-          <div class="field" style="flex:0 0 110px;min-width:90px;margin:0"><label>Hora início</label><input type="time" id="aud-hora-inicio" step="60"/></div>
-          <div class="field" style="flex:1;min-width:140px;margin:0"><label>Até (data)</label><input type="date" id="aud-fim"/></div>
-          <div class="field" style="flex:0 0 110px;min-width:90px;margin:0"><label>Hora fim</label><input type="time" id="aud-hora-fim" step="60"/></div>
-          <div class="field" style="flex:2;min-width:200px;margin:0"><label>Pesquisar</label><input type="text" id="aud-q" placeholder="ex.: turno fechado, depósito, login"/></div>
+          <div class="field" style="flex:1;min-width:140px;margin:0"><label>De (data)</label><input type="date" id="aud-inicio" onchange="runAction(event, loadAuditoria)"/></div>
+          <div class="field" style="flex:0 0 110px;min-width:90px;margin:0"><label>Hora início</label><input type="time" id="aud-hora-inicio" step="60" onchange="runAction(event, loadAuditoria)"/></div>
+          <div class="field" style="flex:1;min-width:140px;margin:0"><label>Até (data)</label><input type="date" id="aud-fim" onchange="runAction(event, loadAuditoria)"/></div>
+          <div class="field" style="flex:0 0 110px;min-width:90px;margin:0"><label>Hora fim</label><input type="time" id="aud-hora-fim" step="60" onchange="runAction(event, loadAuditoria)"/></div>
+          <div class="field" style="flex:2;min-width:200px;margin:0"><label>Pesquisar</label><input type="text" id="aud-q" placeholder="ex.: turno fechado, depósito, login" onkeydown="if(event.key==='Enter') runAction(event, loadAuditoria)"/></div>
           <button type="button" class="btn btn-primary" onclick="runAction(event, loadAuditoria)">Carregar</button>
         </div>
-        <p style="margin:10px 0 0;font-size:11px;color:#64748b;line-height:1.4">As horas são interpretadas em Angola (UTC+1). Deixa <strong>Hora início</strong>/<strong>Hora fim</strong> em branco para apanhar o dia inteiro.</p>
+        <p style="margin:10px 0 0;font-size:11px;color:#64748b;line-height:1.4">Horas em hora de Angola (UTC+1). Sem hora preenchida, <strong>De</strong> assume <code>00:00</code> e <strong>Até</strong> assume <code>23:59:59</code>. Ao mudar qualquer filtro a lista recarrega.</p>
       </div>
       <div id="aud-content"></div>
     </div>

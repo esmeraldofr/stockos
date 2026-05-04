@@ -4773,20 +4773,35 @@ app.get('/api/auditoria', auth, requireRole('admin','gestor'), async (req, res) 
     const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '200', 10)));
     const params = [];
     const where = [];
-    /** Datas e horas são sempre interpretadas em Africa/Luanda (depois convertidas para UTC). */
-    const horaInicio = /^\d{1,2}:\d{2}(?::\d{2})?$/.test(String(req.query.hora_inicio || '')) ? String(req.query.hora_inicio) : '00:00';
-    const horaFim = /^\d{1,2}:\d{2}(?::\d{2})?$/.test(String(req.query.hora_fim || '')) ? String(req.query.hora_fim) : '';
-    if (req.query.inicio) {
-      params.push(`${String(req.query.inicio)} ${horaInicio}`);
-      where.push(`a.criado_em >= ($${params.length}::timestamp AT TIME ZONE 'Africa/Luanda')`);
+    /** Datas e horas são sempre interpretadas em Africa/Luanda. */
+    const reTime = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+    const reDate = /^\d{4}-\d{2}-\d{2}$/;
+    const inicioStr = reDate.test(String(req.query.inicio || '')) ? String(req.query.inicio) : '';
+    const fimStr = reDate.test(String(req.query.fim || '')) ? String(req.query.fim) : '';
+    const horaIniM = reTime.exec(String(req.query.hora_inicio || ''));
+    const horaFimM = reTime.exec(String(req.query.hora_fim || ''));
+    const horaIni = horaIniM ? `${horaIniM[1].padStart(2, '0')}:${horaIniM[2]}:${horaIniM[3] || '00'}` : null;
+    const horaFim = horaFimM ? `${horaFimM[1].padStart(2, '0')}:${horaFimM[2]}:${horaFimM[3] || '59'}` : null;
+    /** Se houver hora sem data, usa hoje em Luanda (vem do servidor para coerência). */
+    if (inicioStr || horaIni) {
+      const dataIni = inicioStr || `(NOW() AT TIME ZONE 'Africa/Luanda')::date::text`;
+      const horaIniSql = horaIni || '00:00:00';
+      if (inicioStr) {
+        params.push(`${inicioStr} ${horaIniSql}`);
+        where.push(`a.criado_em >= ($${params.length}::timestamp AT TIME ZONE 'Africa/Luanda')`);
+      } else {
+        params.push(horaIniSql);
+        where.push(`a.criado_em >= ((((NOW() AT TIME ZONE 'Africa/Luanda')::date || ' ' || $${params.length})::timestamp) AT TIME ZONE 'Africa/Luanda')`);
+      }
     }
-    if (req.query.fim) {
-      if (horaFim) {
-        params.push(`${String(req.query.fim)} ${horaFim}`);
+    if (fimStr || horaFim) {
+      const horaFimSql = horaFim || '23:59:59';
+      if (fimStr) {
+        params.push(`${fimStr} ${horaFimSql}`);
         where.push(`a.criado_em <= ($${params.length}::timestamp AT TIME ZONE 'Africa/Luanda')`);
       } else {
-        params.push(String(req.query.fim));
-        where.push(`a.criado_em < (($${params.length}::date + INTERVAL '1 day') AT TIME ZONE 'Africa/Luanda')`);
+        params.push(horaFimSql);
+        where.push(`a.criado_em <= ((((NOW() AT TIME ZONE 'Africa/Luanda')::date || ' ' || $${params.length})::timestamp) AT TIME ZONE 'Africa/Luanda')`);
       }
     }
     if (req.query.utilizador_id) { params.push(String(req.query.utilizador_id)); where.push(`a.utilizador_id = $${params.length}`); }

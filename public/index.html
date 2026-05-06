@@ -7553,7 +7553,6 @@ async function drawAdmin() {
       <div id="admin-msg"></div>
       <div id="admin-form"></div>
       <div id="admin-users"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
-      <div id="admin-faces-mount"></div>
       <div class="card mt-16">
         <div class="card-title">Alterar Password</div>
         <div id="pass-msg"></div>
@@ -7565,7 +7564,6 @@ async function drawAdmin() {
     ${navBar()}
   `);
   await loadUtilizadores();
-  if (S.user?.role === 'admin') drawAdminFaces();
 }
 
 async function loadUtilizadores() {
@@ -7911,11 +7909,13 @@ async function drawPerfil() {
       </div>
       <div id="perfil-assiduidade"><div class="card"><div class="spinner" style="margin:16px auto"></div></div></div>
       <div id="perfil-presencas"><div class="card"><div class="spinner" style="margin:16px auto"></div></div></div>
+      ${S.user?.role === 'admin' ? `<div id="perfil-faces-mount"></div>` : ''}
     </div>
     ${navBar()}
   `);
   carregarPerfilAssiduidade(targetUid);
   carregarPerfilPresencas(targetUid);
+  if (S.user?.role === 'admin') desenharPerfilFace(u);
 }
 
 async function carregarPerfilAssiduidade(targetUid) {
@@ -8163,32 +8163,27 @@ window.navigate = async function(page, params) {
   return _origNavigate(page, params);
 };
 
-// ── ADMIN: GERIR FACES ────────────────────────────────────────
+// ── FACE BIOMÉTRICA NO PERFIL ────────────────────────────────
 
-async function drawAdminFaces() {
-  const mount = document.getElementById('admin-faces-mount');
+function desenharPerfilFace(u) {
+  const mount = document.getElementById('perfil-faces-mount');
   if (!mount) return;
-  mount.innerHTML = '<div class="spinner" style="margin:20px auto"></div>';
-  try {
-    const users = await api('GET', '/utilizadores');
-    mount.innerHTML = `
-      <div class="card">
-        <div class="card-title" style="margin-bottom:12px">👤 Gerir Faces</div>
-        ${users.filter(u => u.ativo).map(u => `
-          <div class="produto-row" style="align-items:center">
-            <div class="produto-info">
-              <div class="produto-nome">${escapeHtml(u.nome)}</div>
-              <div class="produto-meta">${u.has_face ? '✅ Face registada' : '⬜ Sem face'}</div>
-            </div>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-ghost btn-sm" onclick="enrollFace('${u.id}','${escapeHtml(u.nome)}')">
-                ${u.has_face ? 'Atualizar' : 'Registar'}
-              </button>
-              ${u.has_face ? `<button class="btn btn-ghost btn-sm" style="color:#f87171" onclick="removeFace('${u.id}')">Remover</button>` : ''}
-            </div>
-          </div>`).join('')}
-      </div>`;
-  } catch(e) { mount.innerHTML = `<div class="alert alert-error">${e.message}</div>`; }
+  const hasFace = !!u.has_face;
+  mount.innerHTML = `
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px">🪪 Face Biométrica</div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:14px;color:${hasFace ? '#4ade80' : '#94a3b8'}">
+          ${hasFace ? '✅ Face registada' : '⬜ Sem face registada'}
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="enrollFace('${u.id}','${escapeHtml(u.nome)}')">
+            ${hasFace ? 'Atualizar' : 'Registar'}
+          </button>
+          ${hasFace ? `<button class="btn btn-ghost btn-sm" style="color:#f87171" onclick="removeFace('${u.id}')">Remover</button>` : ''}
+        </div>
+      </div>
+    </div>`;
 }
 
 let enrollStream = null;
@@ -8242,7 +8237,7 @@ async function captureEnrollFace(uid) {
     }
     await api('PUT', `/utilizadores/${uid}/face-descriptor`, { descriptor: Array.from(det.descriptor) });
     if (statusEl) statusEl.textContent = '✅ Face registada com sucesso!';
-    setTimeout(() => { closeEnrollModal(); drawAdminFaces(); }, 1200);
+    setTimeout(() => { closeEnrollModal(); navigate('perfil'); }, 1200);
   } catch(e) {
     if (statusEl) statusEl.textContent = 'Erro: ' + e.message;
     if (btn) btn.disabled = false;
@@ -8254,7 +8249,7 @@ async function removeFace(uid) {
   if (!confirm('Remover face registada?')) return;
   try {
     await api('DELETE', `/utilizadores/${uid}/face-descriptor`, null);
-    drawAdminFaces();
+    navigate('perfil');
   } catch(e) { alert('Erro: ' + e.message); }
 }
 

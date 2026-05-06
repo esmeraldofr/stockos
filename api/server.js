@@ -14,6 +14,39 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'stockos-secret-2025';
 const PWD_SALT   = 'stockos-pwd-salt-2025';
 
+const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
+const SQL_P_STOCK_CATEGORIAS = "p.categoria IN ('menu','ingredientes','bebida')";
+const SQL_ORD_H = `(CASE h.valid_from_turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 0 END)`;
+let _sqlUsePrecoHistorico = true;
+
+function sqlWhereHistLteTurno(turnAlias) {
+  const ordT = `(CASE ${turnAlias}.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 0 END)`;
+  return `(h.valid_from < ${turnAlias}.data OR (h.valid_from = ${turnAlias}.data AND ${SQL_ORD_H} <= ${ordT}))`;
+}
+function sqlPPrecoNaData() {
+  if (!_sqlUsePrecoHistorico) return `p.preco::numeric`;
+  return `COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+}
+function sqlGteStockVendido() {
+  return `GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric)`;
+}
+function sqlTsValorVendaLinha() {
+  if (!_sqlUsePrecoHistorico) {
+    return `CASE WHEN ts.valor_vendas_reportado_kz IS NOT NULL THEN ts.valor_vendas_reportado_kz::numeric ELSE GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric) * p.preco::numeric END`;
+  }
+  return `CASE WHEN ts.valor_vendas_reportado_kz IS NOT NULL THEN ts.valor_vendas_reportado_kz::numeric ELSE GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric) * ${sqlPPrecoNaData()} END`;
+}
+function sqlBackfillTurnoStockValorKz() {
+  const g = sqlGteStockVendido();
+  if (!_sqlUsePrecoHistorico) return `${g} * p.preco::numeric`;
+  return `${g} * COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+}
+function sqlFechoTurnoStockValorKz() {
+  const g = sqlGteStockVendido();
+  if (!_sqlUsePrecoHistorico) return `${g} * p.preco::numeric`;
+  return `${g} * COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('tu')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+}
+
 const _dbUrlRaw = process.env.DATABASE_URL;
 if (!_dbUrlRaw) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
 

@@ -7880,15 +7880,12 @@ function verPerfil(uid) {
 }
 
 async function drawPerfil() {
-  // Se admin/gestor e perfilUid definido, mostrar perfil de outro utilizador
+  // Carregar lista de utilizadores para obter has_face e dados completos
   const isPriv = ['admin','gestor'].includes(S.user?.role);
-  const targetUid = (isPriv && S.perfilUid && S.perfilUid !== S.user?.id) ? S.perfilUid : null;
-  let u = S.user || {};
-  if (targetUid) {
-    const lista = S.utilizadores || await api('GET','/utilizadores').catch(() => []);
-    const found = lista.find(x => x.id === targetUid);
-    if (found) u = { ...found };
-  }
+  const targetUid = (isPriv && S.perfilUid) ? S.perfilUid : null;
+  if (!S.utilizadores) S.utilizadores = await api('GET','/utilizadores').catch(() => []);
+  const lista = S.utilizadores;
+  let u = lista.find(x => x.id === (targetUid || S.user?.id)) || S.user || {};
   const roleLabel = { admin: 'Admin', gestor: 'Gestor', operador: 'Operador', compras: 'Compras' }[u.role] || u.role;
   render(`
     <div id="header">

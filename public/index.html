@@ -2146,6 +2146,81 @@ function isFinoBarrilNome(nome) {
   return String(nome || '').trim().toLowerCase() === 'fino barril';
 }
 
+function parseCaixaInputRaw(id) {
+  const raw = String(document.getElementById(id)?.value ?? '').trim();
+  if (raw === '') return null;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : null;
+}
+function parseCaixaTriploFromInputs() {
+  const tpa = parseCaixaInputRaw('c-tpa');
+  const tr = parseCaixaInputRaw('c-transf');
+  const d = parseCaixaInputRaw('c-din');
+  if (tpa === null || tr === null || d === null) return NaN;
+  return tpa + tr + d;
+}
+function nomeVendaBebidaLegivel(pid, nomeCatalogo) {
+  const raw = String(nomeCatalogo || '').trim();
+  const n = raw.replace(/\s*\(copos\)\s*$/i, '').trim();
+  const uuidSolo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const produtoUuid = /^Produto\s+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!n) return 'Bebida';
+  if (uuidSolo.test(n)) return 'Bebida';
+  if (produtoUuid.test(n)) return 'Bebida';
+  if (/^Produto\s+[0-9a-f-]{36}/i.test(n)) return 'Bebida';
+  return n;
+}
+function fmtStockNumberAttr(v) {
+  if (v === '' || v === null || v === undefined) return '0';
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : parsePtOrIsoNumberString(String(v));
+  if (!Number.isFinite(n)) return '0';
+  return String(Math.round(n * 1000) / 1000);
+}
+function stockNumberInputBlur(el) {
+  const pid = el.getAttribute('data-stock-pid');
+  const field = el.getAttribute('data-stock-field');
+  if (!pid || !field) return;
+  const raw = String(el.value ?? '').trim();
+  if ((field === 'encontrado' || field === 'deixado') && raw === '') {
+    el.value = '';
+    el.classList.remove('stock-caixa-required-missing');
+    updateStock(pid, field, '');
+    return;
+  }
+  let n = parseFloat(raw);
+  if (!Number.isFinite(n) || raw === '') n = 0;
+  const row = S.turnoData?.stock?.find((s) => prodIdKey(s.produto_id) === prodIdKey(pid));
+  const kgBarril = getFinoBarrilRecipienteKgFromRow(row);
+  if (S.turnoCanEdit && kgBarril != null && (field === 'encontrado' || field === 'deixado') && n === 0) {
+    n = kgBarril;
+  }
+  if (field === 'encontrado' && row) {
+    const prev = row.prev_deixado;
+    if (prev !== null && prev !== undefined) {
+      const prevNum = parseFloat(prev);
+      if (Number.isFinite(prevNum) && Math.abs(n - prevNum) >= 0.001) {
+        const nom = String(row.produto_nome || '').trim() || 'Produto';
+        const med = medicaoSigla(row.tipo_medicao || 'unidade');
+        alert(`Encontrado (${fmtNum(n)} ${med}) é diferente de T. anterior (${fmtNum(prevNum)} ${med}).\n\n${nom}`);
+      }
+    }
+  }
+  el.value = String(Math.round(n * 1000) / 1000);
+  el.classList.remove('stock-caixa-required-missing');
+  updateStock(pid, field, el.value);
+}
+function caixaInputBlur(el) {
+  if (!el || el.disabled) return;
+  if (el.getAttribute('data-caixa-req') === '1' && String(el.value).trim() === '') {
+    calcCaixa();
+    return;
+  }
+  if (String(el.value).trim() === '') {
+    el.value = '0';
+    calcCaixa();
+  }
+}
+
 function parseEncontradoFromRow(v) {
   if (v === null || v === undefined || v === '') return null;
   const n = typeof v === 'number' ? v : parseFloat(v);
@@ -3666,6 +3741,26 @@ async function imprimirFaturaVendas() {
   }
   const docRef = `V-${String(S.date || '').replace(/-/g, '')}-${S.turnoData.nome}-${tid}`;
   openFaturaDocumentHtml(buildFaturaVendaDocumentHtml(docRef, lines, total));
+}
+
+async function loadTurnoResumoTab(turnoId) {
+  const mount = document.getElementById('turno-resumo-mount');
+  if (!mount) return;
+  mount.innerHTML = '<span style="color:#64748b">A carregar…</span>';
+  if (!S.turnoData) {
+    mount.innerHTML = '<span style="color:#ef4444">Sem dados do turno.</span>';
+    return;
+  }
+  try {
+    await loadVendasMenu(turnoId, false);
+  } catch (e) {
+    mount.innerHTML = `<div class="card"><span style="color:#ef4444">${escapeHtml(e.message)}</span></div>`;
+    return;
+  }
+  let resumoVendasHtml = lastResumoVendasCardHtml
+    ? lastResumoVendasCardHtml.replace(/\bid="vendas-total-geral"/g, 'id="resumo-tab-total-vendas"')
+    : '<div class="card"><div class="card-title">Resumo de vendas</div><span style="color:#64748b">Sem linhas de resumo.</span></div>';
+  mount.innerHTML = resumoVendasHtml;
 }
 
 async function loadVendasMenu(turnoId, canEdit) {

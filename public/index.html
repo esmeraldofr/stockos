@@ -1215,6 +1215,7 @@ async function draw() {
       case 'escala':   await drawEscala(); break;
       case 'admin':    await drawAdmin(); break;
       case 'presenca': await drawPresenca(); break;
+      case 'perfil':   await drawPerfil(); break;
       default:         await drawDia();
     }
   } finally {
@@ -1327,6 +1328,8 @@ function menuEntries() {
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' });
   entries.push({ page: 'presenca', label: 'Presença',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>' });
+  entries.push({ page: 'perfil', label: 'Perfil',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' });
   return entries;
 }
 
@@ -7865,6 +7868,100 @@ async function loadPresencaDescriptors() {
       return { id: u.id, nome: u.nome, descriptor: new Float32Array(raw) };
     });
   } catch(e) { console.warn('[presenca] descritores:', e.message); }
+}
+
+// ── PERFIL ────────────────────────────────────────────────────
+
+async function drawPerfil() {
+  const u = S.user || {};
+  const roleLabel = { admin: 'Admin', gestor: 'Gestor', operador: 'Operador', compras: 'Compras' }[u.role] || u.role;
+  render(`
+    <div id="header">
+      <div style="font-size:18px;font-weight:700;color:#f1f5f9">👤 Perfil</div>
+    </div>
+    <div id="content" style="padding-bottom:80px">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:16px;padding:4px 0 8px">
+          <div style="width:56px;height:56px;border-radius:50%;background:#1e3a5f;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">
+            ${(u.nome||'?')[0].toUpperCase()}
+          </div>
+          <div>
+            <div style="font-size:18px;font-weight:700;color:#f1f5f9">${escapeHtml(u.nome||'')}</div>
+            <div style="font-size:13px;color:#94a3b8;margin-top:2px">${escapeHtml(u.username||u.email||'')} · ${roleLabel}</div>
+          </div>
+        </div>
+        ${u.email ? `<div style="font-size:13px;color:#64748b;padding-top:8px;border-top:1px solid #1e293b">${escapeHtml(u.email)}</div>` : ''}
+      </div>
+      <div id="perfil-assiduidade"><div class="card"><div class="spinner" style="margin:16px auto"></div></div></div>
+      <div id="perfil-presencas"><div class="card"><div class="spinner" style="margin:16px auto"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  carregarPerfilAssiduidade();
+  carregarPerfilPresencas();
+}
+
+async function carregarPerfilAssiduidade() {
+  const now = new Date();
+  const inicio = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  const fim = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+  const mesLabel = new Date(inicio).toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
+  try {
+    const d = await api('GET', `/me/assiduidade?inicio=${inicio}&fim=${fim}`);
+    const esp = d.turnos_esperados_passados || 0;
+    const trab = d.turnos_trabalhados || 0;
+    const faltas = d.faltas || 0;
+    const taxa = esp > 0 ? Math.round(trab / esp * 100) : (trab > 0 ? 100 : 0);
+    const cor = taxa >= 90 ? '#4ade80' : taxa >= 70 ? '#facc15' : '#f87171';
+    const falhasHtml = (d.faltas_detalhe || []).slice(0, 5).map(f =>
+      `<div style="font-size:12px;color:#94a3b8;padding:2px 0">${f.data} · ${f.turno}</div>`
+    ).join('');
+    show('perfil-assiduidade', `
+      <div class="card">
+        <div class="card-title">📊 Assiduidade — ${mesLabel}</div>
+        <div style="display:flex;gap:16px;margin-bottom:12px">
+          <div style="flex:1;text-align:center">
+            <div style="font-size:28px;font-weight:700;color:${cor}">${taxa}%</div>
+            <div style="font-size:11px;color:#64748b">Taxa</div>
+          </div>
+          <div style="flex:1;text-align:center">
+            <div style="font-size:22px;font-weight:700;color:#f1f5f9">${trab}/${esp}</div>
+            <div style="font-size:11px;color:#64748b">Turnos</div>
+          </div>
+          <div style="flex:1;text-align:center">
+            <div style="font-size:22px;font-weight:700;color:${faltas>0?'#f87171':'#4ade80'}">${faltas}</div>
+            <div style="font-size:11px;color:#64748b">Faltas</div>
+          </div>
+        </div>
+        ${faltas > 0 ? `<div style="border-top:1px solid #1e293b;padding-top:8px"><div style="font-size:12px;color:#64748b;margin-bottom:4px">Faltas registadas:</div>${falhasHtml}</div>` : ''}
+      </div>`);
+  } catch(e) { show('perfil-assiduidade', `<div class="alert alert-error">${e.message}</div>`); }
+}
+
+async function carregarPerfilPresencas() {
+  try {
+    const lista = await api('GET', '/me/presencas');
+    if (!lista.length) {
+      show('perfil-presencas', `<div class="card"><div class="card-title">📷 Presenças Biométricas</div><div style="color:#64748b;font-size:13px;padding:8px 0">Nenhum registo nos últimos 60 dias.</div></div>`);
+      return;
+    }
+    const rows = lista.slice(0, 30).map(p => {
+      const dt = new Date(p.criado_em);
+      const dataStr = dt.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' });
+      const horaStr = dt.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+      const icone = p.tipo === 'entrada' ? '✅' : '🚪';
+      const cor = p.tipo === 'entrada' ? '#4ade80' : '#f87171';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1e293b">
+        <div style="font-size:13px;color:#cbd5e1">${icone} <span style="color:${cor};font-weight:600">${p.tipo === 'entrada' ? 'Entrada' : 'Saída'}</span></div>
+        <div style="font-size:12px;color:#64748b">${dataStr} ${horaStr}</div>
+      </div>`;
+    }).join('');
+    show('perfil-presencas', `
+      <div class="card">
+        <div class="card-title">📷 Presenças Biométricas</div>
+        ${rows}
+      </div>`);
+  } catch(e) { show('perfil-presencas', `<div class="alert alert-error">${e.message}</div>`); }
 }
 
 async function drawPresenca() {

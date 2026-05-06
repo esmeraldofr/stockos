@@ -4262,6 +4262,62 @@ app.get('/api/presencas', auth, requireRole('admin','gestor'), async (req, res) 
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+/** Presenças biométricas do próprio utilizador autenticado (últimos 60 dias). */
+app.get('/api/me/presencas', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT id, tipo, criado_em FROM presencas
+       WHERE utilizador_id = $1 AND criado_em >= NOW() - INTERVAL '60 days'
+       ORDER BY criado_em DESC LIMIT 200`,
+      [req.user.id]
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Assiduidade do próprio utilizador no mês indicado (?inicio=YYYY-MM-DD&fim=YYYY-MM-DD). */
+app.get('/api/me/assiduidade', auth, async (req, res) => {
+  try {
+    const { inicio, fim } = req.query;
+    if (!inicio || !fim) return res.status(400).json({ erro: 'inicio e fim obrigatórios' });
+    const sql = `
+      WITH hoje AS (SELECT (NOW() AT TIME ZONE 'Africa/Luanda')::date AS d),
+      dias AS (SELECT generate_series($1::date, $2::date, INTERVAL '1 day')::date AS d),
+      dias_com_escala_dia AS (
+        SELECT DISTINCT data::date AS d FROM escala WHERE data BETWEEN $1::date AND $2::date
+      ),
+      esperados AS (
+        SELECT data::date AS d, turno FROM escala
+        WHERE data BETWEEN $1::date AND $2::date AND utilizador_id = $3
+        UNION
+        SELECT dias.d, et.turno FROM dias
+        JOIN escala_template et ON et.dia_semana = ((EXTRACT(ISODOW FROM dias.d)::int) - 1)
+        WHERE et.utilizador_id = $3
+          AND NOT EXISTS (SELECT 1 FROM dias_com_escala_dia x WHERE x.d = dias.d)
+      ),
+      trabalhados AS (
+        SELECT t.data::date AS d, t.nome AS turno
+        FROM turno_equipa_real er
+        JOIN turnos t ON t.id = er.turno_id
+        WHERE t.data BETWEEN $1::date AND $2::date AND er.utilizador_id = $3
+      )
+      SELECT
+        (SELECT COUNT(*) FROM (SELECT DISTINCT d,turno FROM esperados) x)::int AS turnos_esperados,
+        (SELECT COUNT(*) FROM (SELECT DISTINCT d,turno FROM esperados WHERE d < (SELECT d FROM hoje)) x)::int AS turnos_esperados_passados,
+        (SELECT COUNT(*) FROM (SELECT DISTINCT d,turno FROM trabalhados) x)::int AS turnos_trabalhados,
+        (SELECT COUNT(*) FROM (
+          SELECT DISTINCT e.d,e.turno FROM esperados e WHERE e.d < (SELECT d FROM hoje)
+          EXCEPT SELECT DISTINCT d,turno FROM trabalhados
+        ) x)::int AS faltas,
+        (SELECT COALESCE(json_agg(json_build_object('data',to_char(x.d,'YYYY-MM-DD'),'turno',x.turno) ORDER BY x.d,x.turno),'[]'::json)
+         FROM (SELECT DISTINCT e.d,e.turno FROM esperados e WHERE e.d < (SELECT d FROM hoje)
+               EXCEPT SELECT DISTINCT d,turno FROM trabalhados) x) AS faltas_detalhe
+    `;
+    const r = await query(sql, [inicio, fim, req.user.id]);
+    res.json(r.rows[0] || {});
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ── ESCALA ────────────────────────────────────────────────────
 async function ensureEscala() {
   await query(`CREATE TABLE IF NOT EXISTS escala (

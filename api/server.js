@@ -4216,7 +4216,7 @@ app.put('/api/utilizadores/:id/face-descriptor', auth, requireRole('admin'), asy
     if (!Array.isArray(descriptor) || descriptor.length !== 128) {
       return res.status(400).json({ erro: 'Descritor inválido (array de 128 números)' });
     }
-    await query(`UPDATE utilizadores SET face_descriptor=$1 WHERE id=$2`, [JSON.stringify(descriptor), req.params.id]);
+    await query(`UPDATE utilizadores SET face_descriptor=$1::jsonb WHERE id=$2`, [JSON.stringify(descriptor), req.params.id]);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

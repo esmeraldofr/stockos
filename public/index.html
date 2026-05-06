@@ -7860,11 +7860,10 @@ async function loadFaceApi() {
 async function loadPresencaDescriptors() {
   try {
     const data = await fetch('/api/face-descriptors').then(r => r.json());
-    presencaDescriptors = data.map(u => ({
-      id: u.id,
-      nome: u.nome,
-      descriptor: new Float32Array(u.descriptor),
-    }));
+    presencaDescriptors = data.map(u => {
+      const raw = typeof u.descriptor === 'string' ? JSON.parse(u.descriptor) : u.descriptor;
+      return { id: u.id, nome: u.nome, descriptor: new Float32Array(raw) };
+    });
   } catch(e) { console.warn('[presenca] descritores:', e.message); }
 }
 

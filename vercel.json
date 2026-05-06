@@ -47,5 +47,5 @@
   "env": {
     "NODE_ENV": "production"
   },
-  "regions": ["fra1"]
+  "regions": ["dub1"]
 }

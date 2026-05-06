@@ -109,7 +109,8 @@ const _sqlOpts = {
   prepare: false,
   /** Serverless + pooler em modo transacção: mais slots reduzem filas quando há vários GET em paralelo. */
   max: Math.min(10, Math.max(3, parseInt(process.env.PG_POOL_MAX || '6', 10) || 6)),
-  idle_timeout: 20,
+  /** Manter ligações warm entre requests no mesmo container (evita TLS handshake a cada chamada com tráfego espaçado). */
+  idle_timeout: 120,
   max_lifetime: 60 * 30,
   connect_timeout: 15
 };

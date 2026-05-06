@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-06-presenca-facial">
+<html lang="pt" data-stockos-ui="2026-05-06-fix-btnstyle">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3840,6 +3840,8 @@ async function loadVendasMenu(turnoId, canEdit) {
       vendasProdPrecos[pid] = u;
       vendasProdPrecos[v.produto_id] = u;
     });
+
+    const btnStyle = 'width:28px;height:28px;border-radius:6px;border:none;font-size:1.1rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;';
 
     bebidaCopoCfg = {};
     const bebidaCopoProds = bebidaProds.filter(

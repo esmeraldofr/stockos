@@ -7903,9 +7903,10 @@ async function drawPerfil() {
 
 async function carregarPerfilAssiduidade() {
   const now = new Date();
-  const inicio = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  const fim = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
-  const mesLabel = new Date(inicio).toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
+  const y = now.getFullYear(), m = now.getMonth();
+  const inicio = `${y}-${String(m+1).padStart(2,'0')}-01`;
+  const fim = `${y}-${String(m+1).padStart(2,'0')}-${String(new Date(y,m+1,0).getDate()).padStart(2,'0')}`;
+  const mesLabel = new Date(y, m, 1).toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
   try {
     const d = await api('GET', `/me/assiduidade?inicio=${inicio}&fim=${fim}`);
     const esp = d.turnos_esperados_passados || 0;

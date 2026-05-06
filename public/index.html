@@ -7822,7 +7822,7 @@ draw().catch(e => console.error(e));
 
 // ── RECONHECIMENTO FACIAL / PRESENÇA ─────────────────────────
 
-const FACEAPI_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.esm-nobundle.js';
+const FACEAPI_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js';
 const MODELS_URL  = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
 let faceApiLoaded = false;
 let faceApiLoading = false;
@@ -7836,8 +7836,14 @@ async function loadFaceApi() {
   if (faceApiLoaded) return presencaFaceApi;
   if (faceApiLoading) { await new Promise(r => setTimeout(r, 200)); return loadFaceApi(); }
   faceApiLoading = true;
-  const mod = await import(FACEAPI_CDN);
-  presencaFaceApi = mod.default || mod;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = FACEAPI_CDN;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Falha ao carregar face-api.js'));
+    document.head.appendChild(s);
+  });
+  presencaFaceApi = window.faceapi;
   const fa = presencaFaceApi;
   await Promise.all([
     fa.nets.tinyFaceDetector.loadFromUri(MODELS_URL),

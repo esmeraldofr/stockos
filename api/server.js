@@ -107,10 +107,10 @@ const _dbUrl = normalizeSupabasePoolerUrl(_dbUrlRaw);
 const _sqlOpts = {
   ssl: 'require',
   prepare: false,
-  /** Serverless + pooler em modo transacção: mais slots reduzem filas quando há vários GET em paralelo. */
-  max: Math.min(10, Math.max(3, parseInt(process.env.PG_POOL_MAX || '6', 10) || 6)),
-  /** Manter ligações warm entre requests no mesmo container (evita TLS handshake a cada chamada com tráfego espaçado). */
-  idle_timeout: 120,
+  /** Serverless + pooler em modo transacção: poucos slots por instância (limite Supavisor 200 client conns). */
+  max: Math.min(10, Math.max(2, parseInt(process.env.PG_POOL_MAX || '3', 10) || 3)),
+  /** Compromisso: manter warm o suficiente para reusar entre requests próximos sem saturar o pooler. */
+  idle_timeout: 30,
   max_lifetime: 60 * 30,
   connect_timeout: 15
 };

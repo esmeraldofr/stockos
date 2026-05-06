@@ -7845,7 +7845,8 @@ async function loadFaceApi() {
   });
   presencaFaceApi = window.faceapi;
   const fa = presencaFaceApi;
-  if (window.tf?.ready) await window.tf.ready();
+  if (fa.tf?.setBackend) await fa.tf.setBackend('webgl').catch(() => fa.tf.setBackend('cpu').catch(() => {}));
+  if (fa.tf?.ready) await fa.tf.ready();
   await Promise.all([
     fa.nets.tinyFaceDetector.loadFromUri(MODELS_URL),
     fa.nets.faceLandmark68Net.loadFromUri(MODELS_URL),

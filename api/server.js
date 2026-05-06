@@ -4262,22 +4262,26 @@ app.get('/api/presencas', auth, requireRole('admin','gestor'), async (req, res) 
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-/** Presenças biométricas do próprio utilizador autenticado (últimos 60 dias). */
+/** Presenças biométricas — próprio utilizador ou qualquer um se admin/gestor (?utilizador_id=). */
 app.get('/api/me/presencas', auth, async (req, res) => {
   try {
+    const isPriv = ['admin','gestor'].includes(req.user.role);
+    const uid = (isPriv && req.query.utilizador_id) ? req.query.utilizador_id : req.user.id;
     const r = await query(
       `SELECT id, tipo, criado_em FROM presencas
        WHERE utilizador_id = $1 AND criado_em >= NOW() - INTERVAL '60 days'
        ORDER BY criado_em DESC LIMIT 200`,
-      [req.user.id]
+      [uid]
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-/** Assiduidade do próprio utilizador no mês indicado (?inicio=YYYY-MM-DD&fim=YYYY-MM-DD). */
+/** Assiduidade — próprio utilizador ou qualquer um se admin/gestor (?utilizador_id=). */
 app.get('/api/me/assiduidade', auth, async (req, res) => {
   try {
+    const isPriv = ['admin','gestor'].includes(req.user.role);
+    const uid = (isPriv && req.query.utilizador_id) ? req.query.utilizador_id : req.user.id;
     const { inicio, fim } = req.query;
     if (!inicio || !fim) return res.status(400).json({ erro: 'inicio e fim obrigatórios' });
     const sql = `
@@ -4313,7 +4317,7 @@ app.get('/api/me/assiduidade', auth, async (req, res) => {
          FROM (SELECT DISTINCT e.d,e.turno FROM esperados e WHERE e.d < (SELECT d FROM hoje)
                EXCEPT SELECT DISTINCT d,turno FROM trabalhados) x) AS faltas_detalhe
     `;
-    const r = await query(sql, [inicio, fim, req.user.id]);
+    const r = await query(sql, [inicio, fim, uid]);
     res.json(r.rows[0] || {});
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

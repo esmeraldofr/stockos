@@ -1342,6 +1342,7 @@ function toggleMenuDrawer(open) {
 }
 
 function menuDrawerNavigate(page) {
+  if (page === 'perfil') S.perfilUid = null; // ver o próprio perfil
   toggleMenuDrawer(false);
   navigate(page);
 }
@@ -7579,7 +7580,10 @@ async function loadUtilizadores() {
               <div class="produto-nome">${u.nome}</div>
               <div class="produto-meta">${u.username || '—'} · ${u.email} · ${u.role} ${!u.ativo?'· Inactivo':''}</div>
             </div>
-            <button class="btn btn-ghost btn-sm" onclick='showUserForm(${JSON.stringify(u)})'>Editar</button>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-ghost btn-sm" onclick='verPerfil("${u.id}")'>Perfil</button>
+              <button class="btn btn-ghost btn-sm" onclick='showUserForm(${JSON.stringify(u)})'>Editar</button>
+            </div>
           </div>`).join('')}
       </div>`);
   } catch(e) { show('admin-users',`<div class="alert alert-error">${e.message}</div>`); }
@@ -7872,8 +7876,21 @@ async function loadPresencaDescriptors() {
 
 // ── PERFIL ────────────────────────────────────────────────────
 
+function verPerfil(uid) {
+  S.perfilUid = uid;
+  navigate('perfil');
+}
+
 async function drawPerfil() {
-  const u = S.user || {};
+  // Se admin/gestor e perfilUid definido, mostrar perfil de outro utilizador
+  const isPriv = ['admin','gestor'].includes(S.user?.role);
+  const targetUid = (isPriv && S.perfilUid && S.perfilUid !== S.user?.id) ? S.perfilUid : null;
+  let u = S.user || {};
+  if (targetUid) {
+    const lista = S.utilizadores || await api('GET','/utilizadores').catch(() => []);
+    const found = lista.find(x => x.id === targetUid);
+    if (found) u = { ...found };
+  }
   const roleLabel = { admin: 'Admin', gestor: 'Gestor', operador: 'Operador', compras: 'Compras' }[u.role] || u.role;
   render(`
     <div id="header">
@@ -7897,18 +7914,19 @@ async function drawPerfil() {
     </div>
     ${navBar()}
   `);
-  carregarPerfilAssiduidade();
-  carregarPerfilPresencas();
+  carregarPerfilAssiduidade(targetUid);
+  carregarPerfilPresencas(targetUid);
 }
 
-async function carregarPerfilAssiduidade() {
+async function carregarPerfilAssiduidade(targetUid) {
   const now = new Date();
   const y = now.getFullYear(), m = now.getMonth();
   const inicio = `${y}-${String(m+1).padStart(2,'0')}-01`;
   const fim = `${y}-${String(m+1).padStart(2,'0')}-${String(new Date(y,m+1,0).getDate()).padStart(2,'0')}`;
   const mesLabel = new Date(y, m, 1).toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
   try {
-    const d = await api('GET', `/me/assiduidade?inicio=${inicio}&fim=${fim}`);
+    const qs = targetUid ? `&utilizador_id=${targetUid}` : '';
+    const d = await api('GET', `/me/assiduidade?inicio=${inicio}&fim=${fim}${qs}`);
     const esp = d.turnos_esperados_passados || 0;
     const trab = d.turnos_trabalhados || 0;
     const faltas = d.faltas || 0;
@@ -7939,9 +7957,10 @@ async function carregarPerfilAssiduidade() {
   } catch(e) { show('perfil-assiduidade', `<div class="alert alert-error">${e.message}</div>`); }
 }
 
-async function carregarPerfilPresencas() {
+async function carregarPerfilPresencas(targetUid) {
   try {
-    const lista = await api('GET', '/me/presencas');
+    const qs = targetUid ? `?utilizador_id=${targetUid}` : '';
+    const lista = await api('GET', `/me/presencas${qs}`);
     if (!lista.length) {
       show('perfil-presencas', `<div class="card"><div class="card-title">📷 Presenças Biométricas</div><div style="color:#64748b;font-size:13px;padding:8px 0">Nenhum registo nos últimos 60 dias.</div></div>`);
       return;

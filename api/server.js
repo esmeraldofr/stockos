@@ -332,6 +332,7 @@ async function initDB() {
       } catch (e) {
         console.error('[initDB] ensureTurnoPedidos (bootstrap skip):', e && e.message, e && e.stack);
       }
+      await ensurePresencas();
       markDbReady();
       console.log('DB ready (bootstrap skip)');
       return;
@@ -548,6 +549,7 @@ async function initDB() {
   } catch (e) {
     console.error('[initDB] ensureTurnoPedidos (full init):', e && e.message, e && e.stack);
   }
+  await ensurePresencas();
   /** Dedup/seed abaixo podem correr em paralelo com tráfego; schema crítico para /dia já está garantido. */
   markDbReady();
   // Remover duplicados de produtos (manter o de menor id por nome)
@@ -4128,7 +4130,7 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
 app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const r = await query('SELECT id,email,nome,username,role,ativo FROM utilizadores ORDER BY nome');
+    const r = await query('SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face FROM utilizadores ORDER BY nome');
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -4183,6 +4185,80 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
           [nome, role, ativo, req.params.id]
         );
     res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── PRESENÇAS / RECONHECIMENTO FACIAL ────────────────────────
+async function ensurePresencas() {
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_descriptor JSONB`, [], 'utilizadores-face-descriptor');
+  await qry(`CREATE TABLE IF NOT EXISTS presencas (
+    id SERIAL PRIMARY KEY,
+    utilizador_id UUID NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+    tipo VARCHAR(10) NOT NULL CHECK (tipo IN ('entrada', 'saida')),
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'presencas');
+  await qry(`CREATE INDEX IF NOT EXISTS idx_presencas_criado ON presencas(criado_em DESC)`, [], 'idx-presencas-criado');
+}
+
+/** Descritores faciais de todos os utilizadores activos (sem auth — necessário no ecrã de presença). */
+app.get('/api/face-descriptors', async (req, res) => {
+  try {
+    await dbReady;
+    const r = await query(`SELECT id, nome, face_descriptor FROM utilizadores WHERE ativo=true AND face_descriptor IS NOT NULL`);
+    res.json(r.rows.map(u => ({ id: u.id, nome: u.nome, descriptor: u.face_descriptor })));
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Guardar descritor facial de um utilizador (admin). */
+app.put('/api/utilizadores/:id/face-descriptor', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { descriptor } = req.body;
+    if (!Array.isArray(descriptor) || descriptor.length !== 128) {
+      return res.status(400).json({ erro: 'Descritor inválido (array de 128 números)' });
+    }
+    await query(`UPDATE utilizadores SET face_descriptor=$1 WHERE id=$2`, [JSON.stringify(descriptor), req.params.id]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Remover descritor facial (admin). */
+app.delete('/api/utilizadores/:id/face-descriptor', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await query(`UPDATE utilizadores SET face_descriptor=NULL WHERE id=$1`, [req.params.id]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Registar presença (entrada/saída) — sem auth pois o funcionário não está logado. */
+app.post('/api/presencas', async (req, res) => {
+  try {
+    await dbReady;
+    const { utilizador_id, tipo } = req.body;
+    if (!utilizador_id || !['entrada','saida'].includes(tipo)) {
+      return res.status(400).json({ erro: 'Parâmetros inválidos' });
+    }
+    const u = await query(`SELECT id, nome FROM utilizadores WHERE id=$1 AND ativo=true`, [utilizador_id]);
+    if (!u.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
+    const r = await query(
+      `INSERT INTO presencas (utilizador_id, tipo) VALUES ($1, $2) RETURNING id, criado_em`,
+      [utilizador_id, tipo]
+    );
+    res.json({ ok: true, id: r.rows[0].id, nome: u.rows[0].nome, tipo, criado_em: r.rows[0].criado_em });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Listar presenças (admin/gestor). */
+app.get('/api/presencas', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    const { data, utilizador_id } = req.query;
+    let sql = `SELECT p.id, p.utilizador_id, u.nome, p.tipo, p.criado_em
+               FROM presencas p JOIN utilizadores u ON u.id = p.utilizador_id WHERE 1=1`;
+    const params = [];
+    if (data) { params.push(data); sql += ` AND p.criado_em::date = $${params.length}`; }
+    if (utilizador_id) { params.push(utilizador_id); sql += ` AND p.utilizador_id = $${params.length}`; }
+    sql += ` ORDER BY p.criado_em DESC LIMIT 500`;
+    const r = await query(sql, params);
+    res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

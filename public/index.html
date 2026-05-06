@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-06-fix-auth-utilizador-inativo">
+<html lang="pt" data-stockos-ui="2026-05-06-presenca-facial">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -544,6 +544,22 @@ input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-
 .dia-escala-empty{color:#475569;font-size:12px;padding:6px 4px}
 .dia-escala-area-badge{display:inline-block;margin-left:4px;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700;background:rgba(167,139,250,0.22);color:#c4b5fd;vertical-align:middle}
 .escala-area-sel{font-size:10px;max-width:100%;padding:3px 6px;border-radius:4px;background:#0f172a;border:1px solid #334155;color:#94a3b8}
+</style>
+<style>
+#presenca-screen{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-height:100vh;padding:24px 16px;gap:16px;background:#0f172a}
+#presenca-video-wrap{position:relative;width:100%;max-width:400px;border-radius:16px;overflow:hidden;background:#1e293b;aspect-ratio:4/3}
+#presenca-video{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1)}
+#presenca-canvas{position:absolute;top:0;left:0;width:100%;height:100%;transform:scaleX(-1)}
+#presenca-status{font-size:15px;color:#94a3b8;text-align:center;min-height:24px}
+#presenca-result{width:100%;max-width:400px;background:#1e293b;border-radius:12px;padding:20px;text-align:center;display:none}
+#presenca-result .p-nome{font-size:22px;font-weight:700;color:#f1f5f9;margin-bottom:4px}
+#presenca-result .p-sub{font-size:13px;color:#94a3b8;margin-bottom:16px}
+.presenca-btns{display:flex;gap:10px;justify-content:center}
+.btn-entrada{background:#14532d;color:#4ade80;border:none;border-radius:8px;padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer}
+.btn-saida{background:#7f1d1d;color:#fca5a5;border:none;border-radius:8px;padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer}
+#presenca-confirm{width:100%;max-width:400px;background:#1e293b;border-radius:12px;padding:20px;text-align:center;display:none}
+.face-enroll-wrap{display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px 0}
+#enroll-video{width:260px;height:195px;border-radius:10px;object-fit:cover;background:#0f172a;transform:scaleX(-1)}
 </style>
 </head>
 <body>
@@ -1198,6 +1214,7 @@ async function draw() {
       case 'produtos': await drawProdutos(); break;
       case 'escala':   await drawEscala(); break;
       case 'admin':    await drawAdmin(); break;
+      case 'presenca': await drawPresenca(); break;
       default:         await drawDia();
     }
   } finally {
@@ -1222,6 +1239,7 @@ function drawLogin() {
           <input id="l-pass" type="password" placeholder="••••••" autocomplete="current-password"/>
         </div>
         <button class="btn btn-primary btn-full" onclick="runAction(event, doLogin)">Entrar</button>
+        <button class="btn btn-ghost btn-full" style="margin-top:8px;font-size:13px;color:#94a3b8" onclick="openPresencaModal()">📷 Registo de Presença</button>
       </div>
     </div>
   `);
@@ -1307,6 +1325,8 @@ function menuEntries() {
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>' });
   if (isAdmin) entries.push({ page: 'admin', label: 'Admin',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' });
+  entries.push({ page: 'presenca', label: 'Presença',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>' });
   return entries;
 }
 
@@ -7529,6 +7549,7 @@ async function drawAdmin() {
       <div id="admin-msg"></div>
       <div id="admin-form"></div>
       <div id="admin-users"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+      <div id="admin-faces-mount"></div>
       <div class="card mt-16">
         <div class="card-title">Alterar Password</div>
         <div id="pass-msg"></div>
@@ -7540,6 +7561,7 @@ async function drawAdmin() {
     ${navBar()}
   `);
   await loadUtilizadores();
+  if (S.me?.role === 'admin') drawAdminFaces();
 }
 
 async function loadUtilizadores() {
@@ -7796,6 +7818,323 @@ document.addEventListener('keydown', (e) => {
     toggleMenuDrawer(false);
   }
 });
+draw().catch(e => console.error(e));
+
+// ── RECONHECIMENTO FACIAL / PRESENÇA ─────────────────────────
+
+const FACEAPI_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.esm-nobundle.js';
+const MODELS_URL  = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+let faceApiLoaded = false;
+let faceApiLoading = false;
+let presencaStream = null;
+let presencaLoop = null;
+let presencaFaceApi = null;
+let presencaDescriptors = [];   // [{id, nome, descriptor: Float32Array}]
+let presencaLocked = false;     // evita processar frames enquanto animação de confirmação
+
+async function loadFaceApi() {
+  if (faceApiLoaded) return presencaFaceApi;
+  if (faceApiLoading) { await new Promise(r => setTimeout(r, 200)); return loadFaceApi(); }
+  faceApiLoading = true;
+  const mod = await import(FACEAPI_CDN);
+  presencaFaceApi = mod.default || mod;
+  const fa = presencaFaceApi;
+  await Promise.all([
+    fa.nets.tinyFaceDetector.loadFromUri(MODELS_URL),
+    fa.nets.faceLandmark68Net.loadFromUri(MODELS_URL),
+    fa.nets.faceRecognitionNet.loadFromUri(MODELS_URL),
+  ]);
+  faceApiLoaded = true;
+  faceApiLoading = false;
+  return fa;
+}
+
+async function loadPresencaDescriptors() {
+  try {
+    const data = await fetch('/api/face-descriptors').then(r => r.json());
+    presencaDescriptors = data.map(u => ({
+      id: u.id,
+      nome: u.nome,
+      descriptor: new Float32Array(u.descriptor),
+    }));
+  } catch(e) { console.warn('[presenca] descritores:', e.message); }
+}
+
+async function drawPresenca() {
+  render(`
+    <div id="header">
+      <div id="header-h1" style="font-size:18px;font-weight:700;color:#f1f5f9">📷 Presença</div>
+    </div>
+    <div id="content">
+      <div id="presenca-screen">
+        <div id="presenca-video-wrap">
+          <video id="presenca-video" autoplay muted playsinline></video>
+          <canvas id="presenca-canvas"></canvas>
+        </div>
+        <div id="presenca-status">A carregar modelos…</div>
+        <div id="presenca-result">
+          <div class="p-nome" id="p-nome"></div>
+          <div class="p-sub" id="p-sub"></div>
+          <div class="presenca-btns">
+            <button class="btn-entrada" onclick="registarPresenca('entrada')">✅ Entrada</button>
+            <button class="btn-saida"   onclick="registarPresenca('saida')">🚪 Saída</button>
+          </div>
+        </div>
+        <div id="presenca-confirm"></div>
+      </div>
+    </div>
+    ${navBar()}
+  `);
+  iniciarPresencaCamera();
+}
+
+async function openPresencaModal() {
+  render(`
+    <div id="presenca-screen" style="min-height:100vh">
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 0 4px;width:100%;max-width:400px">
+        <button class="btn btn-ghost btn-sm" onclick="draw()">‹ Voltar</button>
+        <span style="font-size:17px;font-weight:700;color:#f1f5f9">📷 Presença</span>
+      </div>
+      <div id="presenca-video-wrap">
+        <video id="presenca-video" autoplay muted playsinline></video>
+        <canvas id="presenca-canvas"></canvas>
+      </div>
+      <div id="presenca-status">A carregar modelos…</div>
+      <div id="presenca-result">
+        <div class="p-nome" id="p-nome"></div>
+        <div class="p-sub" id="p-sub"></div>
+        <div class="presenca-btns">
+          <button class="btn-entrada" onclick="registarPresenca('entrada')">✅ Entrada</button>
+          <button class="btn-saida"   onclick="registarPresenca('saida')">🚪 Saída</button>
+        </div>
+      </div>
+      <div id="presenca-confirm"></div>
+    </div>
+  `);
+  iniciarPresencaCamera();
+}
+
+async function iniciarPresencaCamera() {
+  pararPresencaCamera();
+  const statusEl = () => document.getElementById('presenca-status');
+  try {
+    const fa = await loadFaceApi();
+    if (statusEl()) statusEl().textContent = 'A aceder à câmara…';
+    presencaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } });
+    const video = document.getElementById('presenca-video');
+    if (!video) { pararPresencaCamera(); return; }
+    video.srcObject = presencaStream;
+    await new Promise(r => video.addEventListener('loadedmetadata', r, { once: true }));
+    const canvas = document.getElementById('presenca-canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    await loadPresencaDescriptors();
+    if (statusEl()) statusEl().textContent = presencaDescriptors.length
+      ? 'Coloca o rosto em frente à câmara…'
+      : '⚠️ Nenhuma face registada. Vai a Admin → Gerir Faces.';
+    const opts = new fa.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+    presencaLoop = setInterval(async () => {
+      const v = document.getElementById('presenca-video');
+      if (!v || !presencaDescriptors.length || presencaLocked) return;
+      try {
+        const det = await fa.detectSingleFace(v, opts).withFaceLandmarks().withFaceDescriptor();
+        if (!det) return;
+        const matcher = new fa.FaceMatcher(
+          presencaDescriptors.map(u => new fa.LabeledFaceDescriptors(u.id + '|' + u.nome, [u.descriptor]))
+        );
+        const match = matcher.findBestMatch(det.descriptor);
+        if (match.distance < 0.5) {
+          const [uid, nome] = match.label.split('|');
+          mostrarResultadoPresenca(uid, nome, match.distance);
+        }
+      } catch(e) { /* silent */ }
+    }, 900);
+  } catch(e) {
+    if (statusEl()) statusEl().textContent = '⚠️ Câmara não disponível: ' + e.message;
+  }
+}
+
+function mostrarResultadoPresenca(uid, nome, distancia) {
+  presencaLocked = true;
+  clearInterval(presencaLoop);
+  const result = document.getElementById('presenca-result');
+  const statusEl = document.getElementById('presenca-status');
+  if (!result) return;
+  document.getElementById('p-nome').textContent = nome;
+  document.getElementById('p-sub').textContent = `Reconhecido (${Math.round((1 - distancia) * 100)}% confiança)`;
+  result.style.display = 'block';
+  if (statusEl) statusEl.textContent = '';
+  result._uid = uid;
+  result._nome = nome;
+}
+
+async function registarPresenca(tipo) {
+  const result = document.getElementById('presenca-result');
+  if (!result) return;
+  const uid = result._uid;
+  const nome = result._nome;
+  try {
+    await fetch('/api/presencas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ utilizador_id: uid, tipo }),
+    }).then(r => r.json());
+    const label = tipo === 'entrada' ? '✅ Entrada registada' : '🚪 Saída registada';
+    const confirm = document.getElementById('presenca-confirm');
+    result.style.display = 'none';
+    if (confirm) {
+      confirm.style.display = 'block';
+      confirm.innerHTML = `<div style="font-size:20px;font-weight:700;color:#4ade80">${label}</div>
+        <div style="color:#94a3b8;margin-top:4px">${nome}</div>
+        <div style="color:#475569;font-size:12px;margin-top:4px">${new Date().toLocaleTimeString('pt-PT')}</div>`;
+    }
+    setTimeout(() => retomarPresencaCamera(), 3000);
+  } catch(e) {
+    alert('Erro: ' + e.message);
+    retomarPresencaCamera();
+  }
+}
+
+function retomarPresencaCamera() {
+  presencaLocked = false;
+  const result = document.getElementById('presenca-result');
+  const confirm = document.getElementById('presenca-confirm');
+  const statusEl = document.getElementById('presenca-status');
+  if (result) result.style.display = 'none';
+  if (confirm) { confirm.style.display = 'none'; confirm.innerHTML = ''; }
+  if (statusEl) statusEl.textContent = 'Coloca o rosto em frente à câmara…';
+  const fa = presencaFaceApi;
+  if (!fa || !presencaStream) return;
+  const opts = new fa.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+  presencaLoop = setInterval(async () => {
+    const v = document.getElementById('presenca-video');
+    if (!v || !presencaDescriptors.length || presencaLocked) return;
+    try {
+      const det = await fa.detectSingleFace(v, opts).withFaceLandmarks().withFaceDescriptor();
+      if (!det) return;
+      const matcher = new fa.FaceMatcher(
+        presencaDescriptors.map(u => new fa.LabeledFaceDescriptors(u.id + '|' + u.nome, [u.descriptor]))
+      );
+      const match = matcher.findBestMatch(det.descriptor);
+      if (match.distance < 0.5) mostrarResultadoPresenca(match.label.split('|')[0], match.label.split('|')[1], match.distance);
+    } catch(e) { /* silent */ }
+  }, 900);
+}
+
+function pararPresencaCamera() {
+  clearInterval(presencaLoop);
+  if (presencaStream) { presencaStream.getTracks().forEach(t => t.stop()); presencaStream = null; }
+  presencaLocked = false;
+}
+
+// Parar câmara ao navegar para outra página
+const _origNavigate = navigate;
+window.navigate = async function(page, params) {
+  if (page !== 'presenca') pararPresencaCamera();
+  return _origNavigate(page, params);
+};
+
+// ── ADMIN: GERIR FACES ────────────────────────────────────────
+
+async function drawAdminFaces() {
+  const mount = document.getElementById('admin-faces-mount');
+  if (!mount) return;
+  mount.innerHTML = '<div class="spinner" style="margin:20px auto"></div>';
+  try {
+    const users = await api('GET', '/utilizadores');
+    mount.innerHTML = `
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px">👤 Gerir Faces</div>
+        ${users.filter(u => u.ativo).map(u => `
+          <div class="produto-row" style="align-items:center">
+            <div class="produto-info">
+              <div class="produto-nome">${escapeHtml(u.nome)}</div>
+              <div class="produto-meta">${u.has_face ? '✅ Face registada' : '⬜ Sem face'}</div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-ghost btn-sm" onclick="enrollFace('${u.id}','${escapeHtml(u.nome)}')">
+                ${u.has_face ? 'Atualizar' : 'Registar'}
+              </button>
+              ${u.has_face ? `<button class="btn btn-ghost btn-sm" style="color:#f87171" onclick="removeFace('${u.id}')">Remover</button>` : ''}
+            </div>
+          </div>`).join('')}
+      </div>`;
+  } catch(e) { mount.innerHTML = `<div class="alert alert-error">${e.message}</div>`; }
+}
+
+let enrollStream = null;
+let enrollCapturing = false;
+
+async function enrollFace(uid, nome) {
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px';
+  modal.innerHTML = `
+    <div style="color:#f1f5f9;font-size:18px;font-weight:700">Registar face — ${escapeHtml(nome)}</div>
+    <div class="face-enroll-wrap">
+      <video id="enroll-video" autoplay muted playsinline></video>
+    </div>
+    <div id="enroll-status" style="color:#94a3b8;font-size:14px">A carregar câmara…</div>
+    <div style="display:flex;gap:12px">
+      <button class="btn btn-primary" id="enroll-capture-btn" disabled onclick="captureEnrollFace('${uid}')">📸 Capturar</button>
+      <button class="btn btn-ghost" onclick="closeEnrollModal()">Cancelar</button>
+    </div>`;
+  document.body.appendChild(modal);
+  window._enrollModal = modal;
+  try {
+    const fa = await loadFaceApi();
+    enrollStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+    const video = document.getElementById('enroll-video');
+    video.srcObject = enrollStream;
+    await new Promise(r => video.addEventListener('loadedmetadata', r, { once: true }));
+    document.getElementById('enroll-status').textContent = 'Posiciona o rosto no centro e clica Capturar.';
+    document.getElementById('enroll-capture-btn').disabled = false;
+  } catch(e) {
+    document.getElementById('enroll-status').textContent = 'Erro: ' + e.message;
+  }
+}
+
+async function captureEnrollFace(uid) {
+  if (enrollCapturing) return;
+  enrollCapturing = true;
+  const statusEl = document.getElementById('enroll-status');
+  const btn = document.getElementById('enroll-capture-btn');
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.textContent = 'A processar…';
+  try {
+    const fa = presencaFaceApi;
+    const video = document.getElementById('enroll-video');
+    const opts = new fa.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.4 });
+    const det = await fa.detectSingleFace(video, opts).withFaceLandmarks().withFaceDescriptor();
+    if (!det) {
+      if (statusEl) statusEl.textContent = '⚠️ Nenhuma face detectada. Ajusta a posição.';
+      if (btn) btn.disabled = false;
+      enrollCapturing = false;
+      return;
+    }
+    await api('PUT', `/utilizadores/${uid}/face-descriptor`, { descriptor: Array.from(det.descriptor) });
+    if (statusEl) statusEl.textContent = '✅ Face registada com sucesso!';
+    setTimeout(() => { closeEnrollModal(); drawAdminFaces(); }, 1200);
+  } catch(e) {
+    if (statusEl) statusEl.textContent = 'Erro: ' + e.message;
+    if (btn) btn.disabled = false;
+    enrollCapturing = false;
+  }
+}
+
+async function removeFace(uid) {
+  if (!confirm('Remover face registada?')) return;
+  try {
+    await api('DELETE', `/utilizadores/${uid}/face-descriptor`, null);
+    drawAdminFaces();
+  } catch(e) { alert('Erro: ' + e.message); }
+}
+
+function closeEnrollModal() {
+  if (enrollStream) { enrollStream.getTracks().forEach(t => t.stop()); enrollStream = null; }
+  enrollCapturing = false;
+  if (window._enrollModal) { window._enrollModal.remove(); window._enrollModal = null; }
+}
+
 draw().catch(e => console.error(e));
 </script>
 </body>

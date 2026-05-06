@@ -523,10 +523,18 @@ function verifyToken(token) {
   } catch { return null; }
 }
 function hashPassword(p) { return crypto.createHash('sha256').update(p + PWD_SALT).digest('hex'); }
-function auth(req, res, next) {
+async function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ','');
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ erro: 'Não autenticado' });
+  try {
+    const r = await query(`SELECT ativo FROM utilizadores WHERE id=$1`, [payload.id]);
+    if (!r.rows.length || !r.rows[0].ativo) {
+      return res.status(401).json({ erro: 'Conta inactiva' });
+    }
+  } catch (e) {
+    console.warn('[auth] verificação ativo falhou:', e.message);
+  }
   req.user = payload; next();
 }
 function requireRole(...roles) {

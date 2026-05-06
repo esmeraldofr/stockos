@@ -7561,7 +7561,7 @@ async function drawAdmin() {
     ${navBar()}
   `);
   await loadUtilizadores();
-  if (S.me?.role === 'admin') drawAdminFaces();
+  if (S.user?.role === 'admin') drawAdminFaces();
 }
 
 async function loadUtilizadores() {

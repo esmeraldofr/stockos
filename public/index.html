@@ -7940,22 +7940,27 @@ async function iniciarPresencaCamera() {
     if (statusEl()) statusEl().textContent = presencaDescriptors.length
       ? 'Coloca o rosto em frente à câmara…'
       : '⚠️ Nenhuma face registada. Vai a Admin → Gerir Faces.';
-    const opts = new fa.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+    const opts = new fa.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 });
     presencaLoop = setInterval(async () => {
       const v = document.getElementById('presenca-video');
       if (!v || !presencaDescriptors.length || presencaLocked) return;
+      const st = statusEl();
       try {
         const det = await fa.detectSingleFace(v, opts).withFaceLandmarks().withFaceDescriptor();
-        if (!det) return;
+        if (!det) { if (st) st.textContent = 'Coloca o rosto em frente à câmara…'; return; }
+        if (st) st.textContent = '🔍 A identificar…';
         const matcher = new fa.FaceMatcher(
-          presencaDescriptors.map(u => new fa.LabeledFaceDescriptors(u.id + '|' + u.nome, [u.descriptor]))
+          presencaDescriptors.map(u => new fa.LabeledFaceDescriptors(u.id + '|' + u.nome, [u.descriptor])),
+          0.6
         );
         const match = matcher.findBestMatch(det.descriptor);
-        if (match.distance < 0.5) {
+        if (match.label !== 'unknown') {
           const [uid, nome] = match.label.split('|');
           mostrarResultadoPresenca(uid, nome, match.distance);
+        } else {
+          if (st) st.textContent = '❓ Rosto não reconhecido';
         }
-      } catch(e) { /* silent */ }
+      } catch(e) { if (st) st.textContent = '⚠️ ' + e.message; }
     }, 900);
   } catch(e) {
     if (statusEl()) statusEl().textContent = '⚠️ Câmara não disponível: ' + e.message;

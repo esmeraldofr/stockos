@@ -7883,7 +7883,7 @@ async function drawPerfil() {
   // Carregar lista de utilizadores para obter has_face e dados completos
   const isPriv = ['admin','gestor'].includes(S.user?.role);
   const targetUid = (isPriv && S.perfilUid) ? S.perfilUid : null;
-  if (!S.utilizadores) S.utilizadores = await api('GET','/utilizadores').catch(() => []);
+  if (!S.utilizadores.length) S.utilizadores = await api('GET','/utilizadores').catch(() => []);
   const lista = S.utilizadores;
   let u = lista.find(x => x.id === (targetUid || S.user?.id)) || S.user || {};
   const roleLabel = { admin: 'Admin', gestor: 'Gestor', operador: 'Operador', compras: 'Compras' }[u.role] || u.role;

@@ -2146,6 +2146,25 @@ function isFinoBarrilNome(nome) {
   return String(nome || '').trim().toLowerCase() === 'fino barril';
 }
 
+function parseEncontradoFromRow(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+function fmtStockEncontradoAttr(v) {
+  if (v === '' || v === null || v === undefined) return '';
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : parsePtOrIsoNumberString(String(v));
+  if (!Number.isFinite(n)) return '';
+  return String(Math.round(n * 1000) / 1000);
+}
+function vendidoQtyFromStockParts(enc, ent, dei) {
+  const e = enc === null || enc === undefined || enc === '' ? NaN : parseFloat(enc);
+  if (!Number.isFinite(e)) return NaN;
+  const d = dei === null || dei === undefined || dei === '' ? NaN : parseFloat(dei);
+  if (!Number.isFinite(d)) return NaN;
+  return Math.max(0, e + (parseFloat(ent) || 0) - d);
+}
+
 /** Linha de stock do turno para um produto: `stockBuf` (editável) ou fallback a `S.turnoData.stock`. */
 function getStockLineForProduto(pid) {
   const k = prodIdKey(pid);

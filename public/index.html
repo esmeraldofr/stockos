@@ -3765,17 +3765,6 @@ async function loadVendasMenu(turnoId, canEdit) {
     }).join('');
     const bebidaRows = bebidaOutras.map((p) => {
       bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
-      const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
-      const qty = Math.max(0, b.encontrado + b.entrada - b.deixado);
-      return `<div class="produto-row" style="align-items:center">
-        <div class="produto-info"><div class="produto-nome">${p.nome}</div>
-          ${p.preco > 0 ? `<div class="produto-meta">${fmt(p.preco)} · stock ${fmtNum(qty)} un</div>` : ''}
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">${qtyCopo}</div>
-      </div>`;
-    }).join('');
-    const bebidaRows = bebidaOutras.map((p) => {
-      bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
       const pid = prodIdKey(p.id);
       const b = getStockLineForProduto(p.id);
       let qty = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);

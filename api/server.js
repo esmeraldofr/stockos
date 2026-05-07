@@ -212,7 +212,7 @@ async function ensurePgSingleton() {
 
 const query = async (text, params) => {
   let lastErr = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const sql = await ensurePgSingleton();
       const rows = await sql.unsafe(text, params || []);
@@ -221,12 +221,16 @@ const query = async (text, params) => {
       lastErr = e;
       const msg = String(e && e.message ? e.message : e);
       const transient =
-        attempt === 0 &&
-        (/ECONNRESET|ECONNREFUSED|ENETUNREACH|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03|MaxClientsInSessionMode|pool_size/i.test(msg) ||
+        attempt < 2 &&
+        (/ECONNRESET|ECONNREFUSED|ENETUNREACH|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03|MaxClientsInSessionMode|pool_size|EMAXCONN|max client connections/i.test(msg) ||
           e.code === 'ECONNRESET' ||
           e.code === 'ENETUNREACH');
       if (transient) {
         await resetPgSingleton();
+        // backoff curto para EMAXCONN (esperar conexões libertarem no pooler)
+        if (/EMAXCONN|max client connections/i.test(msg)) {
+          await new Promise((r) => setTimeout(r, 250 + Math.floor(Math.random() * 250)));
+        }
         continue;
       }
       throw e;

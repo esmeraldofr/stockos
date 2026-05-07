@@ -1319,7 +1319,17 @@ async function ensureTurnoCaixaEntradasNullable() {
 
 async function ensurePrecosVendasSnapshots() {
   if (precosVendasSnapshotsReady) return;
+  // Fast path: meta flag set by a previous successful run — avoids 24+ DDL queries on every cold-start
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='preco_snap_ddl_v1'`);
+    if (r.rows.length) { precosVendasSnapshotsReady = true; return; }
+  } catch (_) {}
   await withAdvisoryLock(7654321007, async () => {
+    // Re-check inside lock (another instance may have set the flag while we waited)
+    try {
+      const r2 = await query(`SELECT v FROM stockos_meta WHERE k='preco_snap_ddl_v1'`);
+      if (r2.rows.length) { precosVendasSnapshotsReady = true; return; }
+    } catch (_) {}
     await ensureProdutoPrecoHistorico();
     await ensureTurnoStockEncontradoNullable();
     await ensureTurnoStockDeixadoNullable();
@@ -1328,27 +1338,17 @@ async function ensurePrecosVendasSnapshots() {
     await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2)`, [], 'turno_vendas-precio-snap');
     await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2)`, [], 'turno_vendas-preco-copo-snap');
     await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTEGER`, [], 'turno_vendas-qtd-copo-snap');
-    try {
-      await query(`
-        UPDATE turno_stock ts
-        SET valor_vendas_reportado_kz = (${sqlBackfillTurnoStockValorKz()})
-        FROM produtos p, turnos t
-        WHERE ts.produto_id = p.id AND ts.turno_id = t.id AND t.estado = 'fechado' AND ts.valor_vendas_reportado_kz IS NULL
-      `);
-    } catch (e) {
-      console.warn('[ensurePrecosVendasSnapshots ts]', e.message);
-    }
-    try {
-      await query(`
-        UPDATE turno_vendas tv
-        SET ${sqlBackfillTurnoVendasSnapshotsSet()}
-        FROM produtos p, turnos t
-        WHERE tv.produto_id = p.id AND tv.turno_id = t.id AND t.estado = 'fechado' AND tv.preco_unit_snapshot IS NULL
-      `);
-    } catch (e) {
-      console.warn('[ensurePrecosVendasSnapshots tv]', e.message);
-    }
+    await qry(`INSERT INTO stockos_meta(k,v) VALUES('preco_snap_ddl_v1','done') ON CONFLICT(k) DO UPDATE SET v='done'`, [], 'preco-snap-meta');
     precosVendasSnapshotsReady = true;
+    // Backfill runs in background — never blocks markDbReady()
+    setImmediate(async () => {
+      try {
+        await query(`UPDATE turno_stock ts SET valor_vendas_reportado_kz = (${sqlBackfillTurnoStockValorKz()}) FROM produtos p, turnos t WHERE ts.produto_id = p.id AND ts.turno_id = t.id AND t.estado = 'fechado' AND ts.valor_vendas_reportado_kz IS NULL`);
+      } catch (e) { console.warn('[ensurePrecosVendasSnapshots ts backfill]', e.message); }
+      try {
+        await query(`UPDATE turno_vendas tv SET ${sqlBackfillTurnoVendasSnapshotsSet()} FROM produtos p, turnos t WHERE tv.produto_id = p.id AND tv.turno_id = t.id AND t.estado = 'fechado' AND tv.preco_unit_snapshot IS NULL`);
+      } catch (e) { console.warn('[ensurePrecosVendasSnapshots tv backfill]', e.message); }
+    });
   });
   if (!precosVendasSnapshotsReady) {
     try { _sqlUsePrecoHistorico = await produtoPrecoHistoricoTableExists(); } catch (_) {}
@@ -1357,8 +1357,18 @@ async function ensurePrecosVendasSnapshots() {
 
 async function ensureTurnoPedidos() {
   if (turnoPedidosReady) return;
+  // Fast path: meta flag set by a previous successful run
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_pedidos_ddl_v1'`);
+    if (r.rows.length) { turnoPedidosReady = true; return; }
+  } catch (_) {}
   try {
     await withAdvisoryLock(7654321005, async () => {
+      // Re-check inside lock
+      try {
+        const r2 = await query(`SELECT v FROM stockos_meta WHERE k='turno_pedidos_ddl_v1'`);
+        if (r2.rows.length) { turnoPedidosReady = true; return; }
+      } catch (_) {}
       /** Alinhar produto_id ao tipo de produtos.id (INTEGER vs UUID — FK falha se diferir). */
       const _pidCheck = await query(
         `SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
@@ -1394,8 +1404,10 @@ async function ensureTurnoPedidos() {
       )`);
       await query(`CREATE INDEX IF NOT EXISTS idx_turno_pedidos_turno ON turno_pedidos(turno_id)`);
       await query(`CREATE INDEX IF NOT EXISTS idx_turno_pedido_linhas_pedido ON turno_pedido_linhas(pedido_id)`);
+      await qry(`INSERT INTO stockos_meta(k,v) VALUES('turno_pedidos_ddl_v1','done') ON CONFLICT(k) DO UPDATE SET v='done'`, [], 'turno-pedidos-meta');
+      turnoPedidosReady = true;
     });
-    turnoPedidosReady = true;
+    turnoPedidosReady = true; // if lock not acquired, another instance is running DDL — treat as ready
   } catch (e) {
     console.error('[ensureTurnoPedidos]', e && e.message, e && e.stack);
   }
@@ -4248,8 +4260,18 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
 // ── PRESENÇAS / RECONHECIMENTO FACIAL ────────────────────────
 async function ensurePresencas() {
   if (presencasReady) return;
+  // Fast path: meta flag set by a previous successful run
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='presencas_ddl_v1'`);
+    if (r.rows.length) { presencasReady = true; return; }
+  } catch (_) {}
   try {
     await withAdvisoryLock(7654321006, async () => {
+      // Re-check inside lock
+      try {
+        const r2 = await query(`SELECT v FROM stockos_meta WHERE k='presencas_ddl_v1'`);
+        if (r2.rows.length) { presencasReady = true; return; }
+      } catch (_) {}
       await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_descriptor JSONB`, [], 'utilizadores-face-descriptor');
       await qry(`CREATE TABLE IF NOT EXISTS presencas (
         id SERIAL PRIMARY KEY,
@@ -4258,8 +4280,10 @@ async function ensurePresencas() {
         criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`, [], 'presencas');
       await qry(`CREATE INDEX IF NOT EXISTS idx_presencas_criado ON presencas(criado_em DESC)`, [], 'idx-presencas-criado');
+      await qry(`INSERT INTO stockos_meta(k,v) VALUES('presencas_ddl_v1','done') ON CONFLICT(k) DO UPDATE SET v='done'`, [], 'presencas-meta');
+      presencasReady = true;
     });
-    presencasReady = true;
+    presencasReady = true; // if lock not acquired, another instance is running DDL — treat as ready
   } catch (e) {
     console.warn('[ensurePresencas]', e && e.message);
   }

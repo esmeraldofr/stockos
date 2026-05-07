@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-07-fix-fechar-turno">
+<html lang="pt" data-stockos-ui="2026-05-07-fix-nome-copos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3854,6 +3854,7 @@ async function loadVendasMenu(turnoId, canEdit) {
     bebidaProdIds = bebidaOutras.map((p) => p.id);
     bebidaCopoProds.forEach((p) => {
       bebidaCopoCfg[p.id] = {
+        nome: nomeVendaBebidaLegivel(String(p.id), p.nome),
         kgPorCopo: parseFloat(p.kg_por_copo) || 0,
         preco: parseFloat(p.preco) || 0,
         qtdPacote: parseInt(p.qtd_copos_pacote, 10) || 0,

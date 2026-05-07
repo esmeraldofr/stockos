@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-07-fix-coldstart-ddl">
+<html lang="pt" data-stockos-ui="2026-05-07-auditoria-hide-stock">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6237,6 +6237,12 @@ async function drawAuditoria() {
           <div class="field" style="flex:2;min-width:200px;margin:0"><label>Pesquisar</label><input type="text" id="aud-q" placeholder="ex.: turno fechado, depósito, login" onkeydown="if(event.key==='Enter') runAction(event, loadAuditoria)"/></div>
           <button type="button" class="btn btn-primary" onclick="runAction(event, loadAuditoria)">Carregar</button>
         </div>
+        <div style="margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#94a3b8;cursor:pointer;user-select:none">
+            <input type="checkbox" id="aud-hide-stock" onchange="audApplyFilter()" style="accent-color:#3b82f6;width:14px;height:14px"/>
+            Ocultar «Stock do turno guardado»
+          </label>
+        </div>
         <p style="margin:10px 0 0;font-size:11px;color:#64748b;line-height:1.4">Horas em hora de Angola (UTC+1). Sem hora preenchida, <strong>De</strong> assume <code>00:00</code> e <strong>Até</strong> assume <code>23:59:59</code>. Ao mudar qualquer filtro a lista recarrega.</p>
       </div>
       <div id="aud-content"></div>
@@ -6287,6 +6293,55 @@ function audPayloadResumo(payload) {
   return partes.join(' · ');
 }
 
+let _audRows = [];
+
+function audApplyFilter() {
+  const hideStock = document.getElementById('aud-hide-stock')?.checked;
+  const rows = hideStock
+    ? _audRows.filter((r) => r.acao !== 'Stock do turno guardado')
+    : _audRows;
+  if (!rows.length) {
+    show('aud-content', '<div class="card"><p style="color:#94a3b8;margin:0">Sem registos no período/filtro' + (hideStock && _audRows.length ? ' (tudo oculto pelo filtro activo)' : '') + '.</p></div>');
+    return;
+  }
+  const trs = rows.map((r) => {
+    const payloadResumo = audPayloadResumo(r.payload);
+    const detalheLinha = [r.descricao, payloadResumo].filter(Boolean).join(' · ');
+    return `
+      <tr>
+        <td style="padding:8px 10px;color:#94a3b8;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:top">${escapeHtml(r.quando_local || '')}</td>
+        <td style="padding:8px 10px;color:#e2e8f0;vertical-align:top">
+          <div style="font-weight:600">${escapeHtml(r.utilizador_nome || '— anónimo —')}</div>
+          <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
+        </td>
+        <td style="padding:8px 10px;vertical-align:top">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${audMetodoBadge(r.metodo)} ${audStatusBadge(r.status)}</div>
+          <div style="font-size:13px;color:#cbd5e1;margin-top:3px;font-weight:500">${escapeHtml(r.acao || '')}</div>
+          ${detalheLinha ? `<div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.35">${escapeHtml(detalheLinha)}</div>` : ''}
+          <div style="font-size:10px;color:#475569;margin-top:2px;font-family:monospace">${escapeHtml(r.caminho || '')}</div>
+        </td>
+      </tr>`;
+  }).join('');
+  const ocultos = _audRows.length - rows.length;
+  show('aud-content', `
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px;white-space:nowrap">Quando</th>
+              <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Utilizador</th>
+              <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Atividade</th>
+            </tr>
+          </thead>
+          <tbody>${trs}</tbody>
+        </table>
+      </div>
+    </div>
+    <p style="margin:10px 0 0;font-size:11px;color:#64748b">A mostrar ${rows.length} registo${rows.length !== 1 ? 's' : ''}${ocultos > 0 ? ` (${ocultos} oculto${ocultos !== 1 ? 's' : ''} pelo filtro)` : ''} — até 300 mais recentes do período.</p>
+  `);
+}
+
 async function loadAuditoria() {
   const ini = val('aud-inicio');
   const fim = val('aud-fim');
@@ -6303,46 +6358,12 @@ async function loadAuditoria() {
     if (q) params.push(`acao=${encodeURIComponent(q)}`);
     params.push('limit=300');
     const data = await api('GET', `/auditoria?${params.join('&')}`);
-    const rows = (data && data.rows) || [];
-    if (!rows.length) {
+    _audRows = (data && data.rows) || [];
+    if (!_audRows.length) {
       show('aud-content', '<div class="card"><p style="color:#94a3b8;margin:0">Sem registos no período/filtro.</p></div>');
       return;
     }
-    const trs = rows.map((r) => {
-      const payloadResumo = audPayloadResumo(r.payload);
-      const detalheLinha = [r.descricao, payloadResumo].filter(Boolean).join(' · ');
-      return `
-        <tr>
-          <td style="padding:8px 10px;color:#94a3b8;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:top">${escapeHtml(r.quando_local || '')}</td>
-          <td style="padding:8px 10px;color:#e2e8f0;vertical-align:top">
-            <div style="font-weight:600">${escapeHtml(r.utilizador_nome || '— anónimo —')}</div>
-            <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
-          </td>
-          <td style="padding:8px 10px;vertical-align:top">
-            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${audMetodoBadge(r.metodo)} ${audStatusBadge(r.status)}</div>
-            <div style="font-size:13px;color:#cbd5e1;margin-top:3px;font-weight:500">${escapeHtml(r.acao || '')}</div>
-            ${detalheLinha ? `<div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.35">${escapeHtml(detalheLinha)}</div>` : ''}
-            <div style="font-size:10px;color:#475569;margin-top:2px;font-family:monospace">${escapeHtml(r.caminho || '')}</div>
-          </td>
-        </tr>`;
-    }).join('');
-    show('aud-content', `
-      <div class="card" style="padding:0;overflow:hidden">
-        <div class="table-wrap">
-          <table style="width:100%;border-collapse:collapse">
-            <thead>
-              <tr>
-                <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px;white-space:nowrap">Quando</th>
-                <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Utilizador</th>
-                <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Atividade</th>
-              </tr>
-            </thead>
-            <tbody>${trs}</tbody>
-          </table>
-        </div>
-      </div>
-      <p style="margin:10px 0 0;font-size:11px;color:#64748b">A mostrar até 300 registos mais recentes do período. Para ver mais antigos, restringe o intervalo.</p>
-    `);
+    audApplyFilter();
   } catch (e) {
     show('aud-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
   }

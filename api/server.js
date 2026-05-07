@@ -258,6 +258,8 @@ const pool = {
 
 /** Evita correr a migração de depósitos em cada pedido (scan completo à BD). */
 let depositosSaidasMigrationDone = false;
+let depositosBancoReady = false;
+let fornecedoresReady = false;
 /** ALTER/enum de utilizadores só na primeira vez por processo. */
 let usernameColumnEnsured = false;
 
@@ -268,20 +270,28 @@ async function qry(sql, params, label) {
 
 /** Índices leves (IF NOT EXISTS) — aceleram /dia, escala. Corre após init. */
 async function ensureStockosPerfIndexes() {
-  const stmts = [
-    'CREATE INDEX IF NOT EXISTS idx_turnos_data ON turnos (data)',
-    'CREATE INDEX IF NOT EXISTS idx_turno_stock_turno_id ON turno_stock (turno_id)',
-    'CREATE INDEX IF NOT EXISTS idx_turno_stock_turno_prod ON turno_stock (turno_id, produto_id)',
-    'CREATE INDEX IF NOT EXISTS idx_turno_vendas_turno_id ON turno_vendas (turno_id)',
-    'CREATE INDEX IF NOT EXISTS idx_turno_caixa_turno_id ON turno_caixa (turno_id)',
-    'CREATE INDEX IF NOT EXISTS idx_escala_data ON escala (data)'
-  ];
-  for (let i = 0; i < stmts.length; i++) {
-    try {
-      await query(stmts[i]);
-    } catch (e) {
-      console.warn('[idx]', i, (e && e.message) || e);
+  // Advisory lock evita contention de DDL entre múltiplas instâncias Vercel em cold-start simultâneo.
+  // pg_try_advisory_lock retorna false imediatamente se outra instância já detém o lock — skip sem bloquear.
+  let locked = false;
+  try {
+    const r = await query(`SELECT pg_try_advisory_lock(7654321001)`);
+    locked = r.rows[0].pg_try_advisory_lock;
+    if (!locked) return; // outra instância está a criar os índices
+    const stmts = [
+      'CREATE INDEX IF NOT EXISTS idx_turnos_data ON turnos (data)',
+      'CREATE INDEX IF NOT EXISTS idx_turno_stock_turno_id ON turno_stock (turno_id)',
+      'CREATE INDEX IF NOT EXISTS idx_turno_stock_turno_prod ON turno_stock (turno_id, produto_id)',
+      'CREATE INDEX IF NOT EXISTS idx_turno_vendas_turno_id ON turno_vendas (turno_id)',
+      'CREATE INDEX IF NOT EXISTS idx_turno_caixa_turno_id ON turno_caixa (turno_id)',
+      'CREATE INDEX IF NOT EXISTS idx_escala_data ON escala (data)'
+    ];
+    for (let i = 0; i < stmts.length; i++) {
+      try { await query(stmts[i]); } catch (e) { console.warn('[idx]', i, (e && e.message) || e); }
     }
+  } catch (e) {
+    console.warn('[idx setup]', (e && e.message) || e);
+  } finally {
+    if (locked) await query(`SELECT pg_advisory_unlock(7654321001)`).catch(() => {});
   }
 }
 
@@ -743,7 +753,16 @@ app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { re
 let auditoriaReady = false;
 async function ensureAuditoria() {
   if (auditoriaReady) return;
+  // Advisory lock evita contention de DDL entre múltiplas instâncias em cold-start simultâneo.
+  let locked = false;
   try {
+    const r = await query(`SELECT pg_try_advisory_lock(7654321002)`);
+    locked = r.rows[0].pg_try_advisory_lock;
+    if (!locked) {
+      // Outra instância está a criar a tabela/índices — marcar como pronto para não bloquear pedidos.
+      auditoriaReady = true;
+      return;
+    }
     await query(`CREATE TABLE IF NOT EXISTS auditoria (
       id BIGSERIAL PRIMARY KEY,
       criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -763,6 +782,8 @@ async function ensureAuditoria() {
     auditoriaReady = true;
   } catch (e) {
     console.warn('[auditoria] ensure:', e && e.message);
+  } finally {
+    if (locked) await query(`SELECT pg_advisory_unlock(7654321002)`).catch(() => {});
   }
 }
 
@@ -1546,36 +1567,44 @@ function loginFromBody(req) {
 }
 
 async function ensureDepositosBanco() {
-  await query(`CREATE TABLE IF NOT EXISTS depositos_banco (
-    id SERIAL PRIMARY KEY,
-    data_referencia DATE,
-    data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
-    valor NUMERIC(15,2) NOT NULL,
-    referencia TEXT NOT NULL DEFAULT '',
-    notas TEXT NOT NULL DEFAULT '',
-    criado_por TEXT NOT NULL DEFAULT '',
-    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )`);
-  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS turno_id INTEGER REFERENCES turnos(id) ON DELETE CASCADE`).catch(() => {});
-  await query(`DELETE FROM depositos_banco WHERE turno_id IS NULL`).catch(() => {});
-  await query(`ALTER TABLE depositos_banco DROP COLUMN IF EXISTS data_referencia`).catch(() => {});
+  if (depositosBancoReady) return;
+  let locked = false;
   try {
-    await query(`ALTER TABLE depositos_banco ALTER COLUMN turno_id SET NOT NULL`);
-  } catch (_) {}
-  try {
-    await query(`CREATE UNIQUE INDEX IF NOT EXISTS depositos_banco_turno_id_key ON depositos_banco(turno_id)`);
-  } catch (_) {}
-  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
-  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
-  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
-  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS bordero_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
-  if (!depositosSaidasMigrationDone) {
-    try {
-      await migrateDepositosSaidasAntigasAgrupadas();
-      depositosSaidasMigrationDone = true;
-    } catch (e) {
-      console.error('migrateDepositosSaidasAntigasAgrupadas', e);
+    const r = await query(`SELECT pg_try_advisory_lock(7654321003)`);
+    locked = r.rows[0].pg_try_advisory_lock;
+    if (!locked) { depositosBancoReady = true; return; }
+    await query(`CREATE TABLE IF NOT EXISTS depositos_banco (
+      id SERIAL PRIMARY KEY,
+      data_referencia DATE,
+      data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
+      valor NUMERIC(15,2) NOT NULL,
+      referencia TEXT NOT NULL DEFAULT '',
+      notas TEXT NOT NULL DEFAULT '',
+      criado_por TEXT NOT NULL DEFAULT '',
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS turno_id INTEGER REFERENCES turnos(id) ON DELETE CASCADE`).catch(() => {});
+    await query(`DELETE FROM depositos_banco WHERE turno_id IS NULL`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco DROP COLUMN IF EXISTS data_referencia`).catch(() => {});
+    try { await query(`ALTER TABLE depositos_banco ALTER COLUMN turno_id SET NOT NULL`); } catch (_) {}
+    try { await query(`CREATE UNIQUE INDEX IF NOT EXISTS depositos_banco_turno_id_key ON depositos_banco(turno_id)`); } catch (_) {}
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS bordero_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
+    if (!depositosSaidasMigrationDone) {
+      try {
+        await migrateDepositosSaidasAntigasAgrupadas();
+        depositosSaidasMigrationDone = true;
+      } catch (e) {
+        console.error('migrateDepositosSaidasAntigasAgrupadas', e);
+      }
     }
+    depositosBancoReady = true;
+  } catch (e) {
+    console.warn('[ensureDepositosBanco]', e && e.message);
+  } finally {
+    if (locked) await query(`SELECT pg_advisory_unlock(7654321003)`).catch(() => {});
   }
 }
 
@@ -2363,21 +2392,33 @@ async function refreshFaturaTotalAgg(client, faturaId) {
 }
 
 async function ensureFornecedores() {
-  await query(`CREATE TABLE IF NOT EXISTS fornecedores (
-    id SERIAL PRIMARY KEY,
-    nome TEXT NOT NULL,
-    notas TEXT NOT NULL DEFAULT '',
-    ativo BOOLEAN NOT NULL DEFAULT true,
-    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    criado_por TEXT NOT NULL DEFAULT ''
-  )`);
-  await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS fornecedor_id INTEGER`).catch(() => {});
-  await query(`DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_fornecedor_id_fkey') THEN
-      ALTER TABLE armazem_faturas ADD CONSTRAINT armazem_faturas_fornecedor_id_fkey
-      FOREIGN KEY (fornecedor_id) REFERENCES fornecedores(id) ON DELETE SET NULL;
-    END IF;
-  END $$`).catch(() => {});
+  if (fornecedoresReady) return;
+  let locked = false;
+  try {
+    const r = await query(`SELECT pg_try_advisory_lock(7654321004)`);
+    locked = r.rows[0].pg_try_advisory_lock;
+    if (!locked) { fornecedoresReady = true; return; }
+    await query(`CREATE TABLE IF NOT EXISTS fornecedores (
+      id SERIAL PRIMARY KEY,
+      nome TEXT NOT NULL,
+      notas TEXT NOT NULL DEFAULT '',
+      ativo BOOLEAN NOT NULL DEFAULT true,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      criado_por TEXT NOT NULL DEFAULT ''
+    )`);
+    await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS fornecedor_id INTEGER`).catch(() => {});
+    await query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_fornecedor_id_fkey') THEN
+        ALTER TABLE armazem_faturas ADD CONSTRAINT armazem_faturas_fornecedor_id_fkey
+        FOREIGN KEY (fornecedor_id) REFERENCES fornecedores(id) ON DELETE SET NULL;
+      END IF;
+    END $$`).catch(() => {});
+    fornecedoresReady = true;
+  } catch (e) {
+    console.warn('[ensureFornecedores]', e && e.message);
+  } finally {
+    if (locked) await query(`SELECT pg_advisory_unlock(7654321004)`).catch(() => {});
+  }
 }
 
 app.get('/api/fornecedores', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {

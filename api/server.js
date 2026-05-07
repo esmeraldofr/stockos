@@ -276,6 +276,7 @@ let depositosBancoReady = false;
 let fornecedoresReady = false;
 let turnoPedidosReady = false;
 let presencasReady = false;
+let precosVendasSnapshotsReady = false;
 /** ALTER/enum de utilizadores só na primeira vez por processo. */
 let usernameColumnEnsured = false;
 
@@ -1317,33 +1318,40 @@ async function ensureTurnoCaixaEntradasNullable() {
 }
 
 async function ensurePrecosVendasSnapshots() {
-  await ensureProdutoPrecoHistorico();
-  await ensureTurnoStockEncontradoNullable();
-  await ensureTurnoStockDeixadoNullable();
-  await ensureTurnoCaixaEntradasNullable();
-  await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS valor_vendas_reportado_kz NUMERIC(15,2)`, [], 'turno_stock-valor-snap');
-  await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2)`, [], 'turno_vendas-precio-snap');
-  await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2)`, [], 'turno_vendas-preco-copo-snap');
-  await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTEGER`, [], 'turno_vendas-qtd-copo-snap');
-  try {
-    await query(`
-      UPDATE turno_stock ts
-      SET valor_vendas_reportado_kz = (${sqlBackfillTurnoStockValorKz()})
-      FROM produtos p, turnos t
-      WHERE ts.produto_id = p.id AND ts.turno_id = t.id AND t.estado = 'fechado' AND ts.valor_vendas_reportado_kz IS NULL
-    `);
-  } catch (e) {
-    console.warn('[ensurePrecosVendasSnapshots ts]', e.message);
-  }
-  try {
-    await query(`
-      UPDATE turno_vendas tv
-      SET ${sqlBackfillTurnoVendasSnapshotsSet()}
-      FROM produtos p, turnos t
-      WHERE tv.produto_id = p.id AND tv.turno_id = t.id AND t.estado = 'fechado' AND tv.preco_unit_snapshot IS NULL
-    `);
-  } catch (e) {
-    console.warn('[ensurePrecosVendasSnapshots tv]', e.message);
+  if (precosVendasSnapshotsReady) return;
+  await withAdvisoryLock(7654321007, async () => {
+    await ensureProdutoPrecoHistorico();
+    await ensureTurnoStockEncontradoNullable();
+    await ensureTurnoStockDeixadoNullable();
+    await ensureTurnoCaixaEntradasNullable();
+    await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS valor_vendas_reportado_kz NUMERIC(15,2)`, [], 'turno_stock-valor-snap');
+    await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2)`, [], 'turno_vendas-precio-snap');
+    await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2)`, [], 'turno_vendas-preco-copo-snap');
+    await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTEGER`, [], 'turno_vendas-qtd-copo-snap');
+    try {
+      await query(`
+        UPDATE turno_stock ts
+        SET valor_vendas_reportado_kz = (${sqlBackfillTurnoStockValorKz()})
+        FROM produtos p, turnos t
+        WHERE ts.produto_id = p.id AND ts.turno_id = t.id AND t.estado = 'fechado' AND ts.valor_vendas_reportado_kz IS NULL
+      `);
+    } catch (e) {
+      console.warn('[ensurePrecosVendasSnapshots ts]', e.message);
+    }
+    try {
+      await query(`
+        UPDATE turno_vendas tv
+        SET ${sqlBackfillTurnoVendasSnapshotsSet()}
+        FROM produtos p, turnos t
+        WHERE tv.produto_id = p.id AND tv.turno_id = t.id AND t.estado = 'fechado' AND tv.preco_unit_snapshot IS NULL
+      `);
+    } catch (e) {
+      console.warn('[ensurePrecosVendasSnapshots tv]', e.message);
+    }
+    precosVendasSnapshotsReady = true;
+  });
+  if (!precosVendasSnapshotsReady) {
+    try { _sqlUsePrecoHistorico = await produtoPrecoHistoricoTableExists(); } catch (_) {}
   }
 }
 
@@ -4593,7 +4601,7 @@ app.get('/api/equipa/pessoas', auth, async (req, res) => {
 });
 
 app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
-  try {
+  const selectEquipa = async (id) => {
     const r = await query(
       `SELECT er.*,
               u.nome AS utilizador_nome, u.role AS utilizador_role,
@@ -4603,12 +4611,18 @@ app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
        LEFT JOIN utilizadores uc ON er.cobrindo_utilizador_id::text = uc.id::text
        WHERE er.turno_id=$1
        ORDER BY er.criado_em ASC`,
-      [req.params.id]
+      [id]
     );
-    res.json(r.rows);
+    return r.rows;
+  };
+  try {
+    res.json(await selectEquipa(req.params.id));
   } catch (e) {
-    if (e.message.includes('does not exist')) {
-      try {
+    if (!e.message.includes('does not exist')) {
+      return res.status(500).json({ erro: e.message });
+    }
+    try {
+      await withAdvisoryLock(7654321008, async () => {
         await query(`CREATE TABLE IF NOT EXISTS turno_equipa_real (
           id SERIAL PRIMARY KEY,
           turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
@@ -4623,21 +4637,9 @@ app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
         await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT`).catch(()=>{});
         await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE`).catch(()=>{});
         await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT ''`).catch(()=>{});
-        const r2 = await query(
-          `SELECT er.*,
-                  u.nome AS utilizador_nome, u.role AS utilizador_role,
-                  uc.nome AS cobrindo_utilizador_nome
-           FROM turno_equipa_real er
-           LEFT JOIN utilizadores u ON er.utilizador_id::text = u.id::text
-           LEFT JOIN utilizadores uc ON er.cobrindo_utilizador_id::text = uc.id::text
-           WHERE er.turno_id=$1
-           ORDER BY er.criado_em ASC`,
-          [req.params.id]
-        );
-        return res.json(r2.rows);
-      } catch (e2) { return res.status(500).json({ erro: e2.message }); }
-    }
-    res.status(500).json({ erro: e.message });
+      });
+      res.json(await selectEquipa(req.params.id));
+    } catch (e2) { res.status(500).json({ erro: e2.message }); }
   }
 });
 

@@ -46,6 +46,20 @@ function sqlFechoTurnoStockValorKz() {
   if (!_sqlUsePrecoHistorico) return `${g} * p.preco::numeric`;
   return `${g} * COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('tu')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
 }
+// SET clause para snapshot de preços em turno_vendas — alias 't' (backfill de fechados antigos)
+function sqlBackfillTurnoVendasSnapshotsSet() {
+  const precoUnit = !_sqlUsePrecoHistorico
+    ? `p.preco::numeric`
+    : `COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+  return `preco_unit_snapshot = ${precoUnit}, preco_copos_pacote_snapshot = p.preco_copos_pacote, qtd_copos_pacote_snapshot = p.qtd_copos_pacote`;
+}
+// SET clause para snapshot de preços em turno_vendas — alias 'tu' (fecho em tempo real)
+function sqlFechoTurnoVendasSnapshotsSet() {
+  const precoUnit = !_sqlUsePrecoHistorico
+    ? `p.preco::numeric`
+    : `COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+  return `preco_unit_snapshot = ${precoUnit}, preco_copos_pacote_snapshot = p.preco_copos_pacote, qtd_copos_pacote_snapshot = p.qtd_copos_pacote`;
+}
 
 const _dbUrlRaw = process.env.DATABASE_URL;
 if (!_dbUrlRaw) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }

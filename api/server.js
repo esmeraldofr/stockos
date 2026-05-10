@@ -1153,6 +1153,40 @@ function getDirectSupabasePostgresUrl() {
   return null;
 }
 
+/** Detecta em runtime o tipo PG de produtos.id (UUID ou INTEGER) e devolve as DDLs adequadas. */
+async function pphDdlStatementsForCurrentDb() {
+  let pidType = 'INTEGER';
+  try {
+    const r = await query(
+      `SELECT data_type FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
+    );
+    const dt = r.rows[0]?.data_type ? String(r.rows[0].data_type).toLowerCase() : '';
+    if (dt === 'uuid') pidType = 'UUID';
+    else if (dt === 'text') pidType = 'TEXT';
+    else if (dt === 'integer' || dt === 'bigint' || dt === 'smallint') pidType = dt.toUpperCase();
+  } catch (e) {
+    console.warn('[pphDdlStatementsForCurrentDb] não consegui detectar produtos.id, assumo INTEGER:', e && e.message);
+  }
+  return [
+    `CREATE TABLE IF NOT EXISTS produto_preco_historico (
+        id SERIAL PRIMARY KEY,
+        produto_id ${pidType} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+        valid_from DATE NOT NULL,
+        valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha' CHECK (valid_from_turno IN ('manha','tarde','noite')),
+        preco NUMERIC(15,2) NOT NULL DEFAULT 0,
+        preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0,
+        qtd_copos_pacote INTEGER NOT NULL DEFAULT 0
+      )`,
+    `ALTER TABLE produto_preco_historico ADD COLUMN IF NOT EXISTS valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha'`,
+    `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_produto_id_valid_from_key`,
+    `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_prod_vig_key`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS produto_preco_historico_prod_vig_uidx ON produto_preco_historico (produto_id, valid_from, valid_from_turno)`,
+    `CREATE INDEX IF NOT EXISTS idx_produto_preco_hist_lookup ON produto_preco_historico (produto_id, valid_from DESC)`
+  ];
+}
+
+/** Mantido para compatibilidade — usado em legacy paths que esperam um array fixo. */
 const PPH_DDL_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS produto_preco_historico (
       id SERIAL PRIMARY KEY,
@@ -1178,8 +1212,9 @@ const PPH_DDL_STATEMENTS = [
 async function ensureProdutoPrecoHistoricoLive() {
   let exists = await produtoPrecoHistoricoTableExists();
   if (!exists) {
-    console.warn('[ensureProdutoPrecoHistoricoLive] tabela ausente — tentar criar.');
-    for (const ddl of PPH_DDL_STATEMENTS) {
+    console.warn('[ensureProdutoPrecoHistoricoLive] tabela ausente — tentar criar com tipo correcto de produtos.id.');
+    const ddls = await pphDdlStatementsForCurrentDb();
+    for (const ddl of ddls) {
       try { await query(ddl); }
       catch (e) { console.warn('[ensureProdutoPrecoHistoricoLive] DDL falhou:', e && e.message); }
     }

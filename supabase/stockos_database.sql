@@ -33,16 +33,31 @@ CREATE TABLE IF NOT EXISTS produtos (
 
 -- ============================================================
 --  PRODUTO_PRECO_HISTORICO — vigência por (data, turno). Relatórios: última linha ≤ (data turno, nome turno).
+--  produto_id assume o mesmo tipo que produtos.id (UUID em produção, INTEGER no esquema legacy).
 -- ============================================================
-CREATE TABLE IF NOT EXISTS produto_preco_historico (
-  id SERIAL PRIMARY KEY,
-  produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
-  valid_from DATE NOT NULL,
-  valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha' CHECK (valid_from_turno IN ('manha','tarde','noite')),
-  preco NUMERIC(15,2) NOT NULL DEFAULT 0,
-  preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0,
-  qtd_copos_pacote INTEGER NOT NULL DEFAULT 0
-);
+DO $$
+DECLARE
+  pid_type TEXT;
+BEGIN
+  SELECT data_type INTO pid_type
+  FROM information_schema.columns
+  WHERE table_schema='public' AND table_name='produtos' AND column_name='id';
+  IF pid_type IS NULL THEN
+    pid_type := 'integer';
+  END IF;
+  EXECUTE format(
+    'CREATE TABLE IF NOT EXISTS produto_preco_historico (
+       id SERIAL PRIMARY KEY,
+       produto_id %s NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+       valid_from DATE NOT NULL,
+       valid_from_turno VARCHAR(10) NOT NULL DEFAULT ''manha'' CHECK (valid_from_turno IN (''manha'',''tarde'',''noite'')),
+       preco NUMERIC(15,2) NOT NULL DEFAULT 0,
+       preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0,
+       qtd_copos_pacote INTEGER NOT NULL DEFAULT 0
+     )',
+    pid_type
+  );
+END $$;
 -- BD já criada sem valid_from_turno: CREATE TABLE IF NOT EXISTS não altera tabelas antigas.
 ALTER TABLE produto_preco_historico ADD COLUMN IF NOT EXISTS valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha';
 ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_produto_id_valid_from_key;

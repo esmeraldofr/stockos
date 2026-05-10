@@ -19,7 +19,12 @@
   "builds": [
     {
       "src": "api/server.js",
-      "use": "@vercel/node"
+      "use": "@vercel/node",
+      "config": {
+        "maxLambdaSize": "50mb",
+        "maxDuration": 60,
+        "memory": 1024
+      }
     },
     {
       "src": "public/**",

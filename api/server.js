@@ -368,24 +368,19 @@ async function initDB() {
   try {
     const chk = await query(`SELECT v FROM stockos_meta WHERE k = $1`, ['bootstrap']);
     if (chk.rows.length && chk.rows[0].v === STOCKOS_BOOTSTRAP_VERSION) {
-      /** Login só precisa de SELECT em utilizadores — não esperar pelo DO/ALTER do enum «compras». */
+      /** Fast-path bootstrap-skip: o esquema já está aplicado. Marca login E db como prontos
+       *  IMEDIATAMENTE e move TODAS as verificações idempotentes para background.
+       *  Endpoints (/dia, /produtos, …) deixam de esperar 30-60s no primeiro pedido após cold start. */
       markLoginReady();
-      /** Em background: preencher `username` para utilizadores antigos (admin, etc.) para que o login por username funcione. */
-      ensureUsernameColumn().catch((e) => console.warn('[initDB] ensureUsernameColumn (bootstrap skip):', e && e.message));
-      /** Defensivo: confirmar que produto_preco_historico EXISTE mesmo com meta flag set,
-       *  e atualizar `_sqlUsePrecoHistorico` em conformidade. Tenta criar se ausente.
-       *  Resolve o caso em que a tabela foi removida/dropped mas `preco_snap_ddl_v1='done'`. */
-      ensureProdutoPrecoHistoricoLive().catch((e) => console.warn('[initDB] ensureProdutoPrecoHistoricoLive (bootstrap skip):', e && e.message));
-      await ensureRoleEnumCompras();
-      await ensurePrecosVendasSnapshots();
-      try {
-        await ensureTurnoPedidos();
-      } catch (e) {
-        console.error('[initDB] ensureTurnoPedidos (bootstrap skip):', e && e.message, e && e.stack);
-      }
-      await ensurePresencas();
       markDbReady();
-      console.log('DB ready (bootstrap skip)');
+      console.log('DB ready (bootstrap skip — verifications running in background)');
+      // Background: ensures idempotentes (todas têm meta-flag fast-path interno).
+      ensureUsernameColumn().catch((e) => console.warn('[initDB:bg] ensureUsernameColumn:', e && e.message));
+      ensureProdutoPrecoHistoricoLive().catch((e) => console.warn('[initDB:bg] ensureProdutoPrecoHistoricoLive:', e && e.message));
+      ensureRoleEnumCompras().catch((e) => console.warn('[initDB:bg] ensureRoleEnumCompras:', e && e.message));
+      ensurePrecosVendasSnapshots().catch((e) => console.warn('[initDB:bg] ensurePrecosVendasSnapshots:', e && e.message));
+      ensureTurnoPedidos().catch((e) => console.error('[initDB:bg] ensureTurnoPedidos:', e && e.message));
+      ensurePresencas().catch((e) => console.warn('[initDB:bg] ensurePresencas:', e && e.message));
       return;
     }
   } catch (e) {

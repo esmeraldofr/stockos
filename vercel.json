@@ -52,5 +52,11 @@
   "env": {
     "NODE_ENV": "production"
   },
-  "regions": ["dub1"]
+  "regions": ["dub1"],
+  "crons": [
+    {
+      "path": "/api/db-check",
+      "schedule": "*/4 * * * *"
+    }
+  ]
 }

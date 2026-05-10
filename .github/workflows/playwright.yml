@@ -1,0 +1,67 @@
+name: Playwright E2E
+
+on:
+  pull_request:
+    branches: [develop, qualidade, main]
+    paths:
+      - 'public/**'
+      - 'api/**'
+      - 'tests/e2e/**'
+      - 'playwright.config.js'
+      - 'package.json'
+      - '.github/workflows/playwright.yml'
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'URL alvo dos testes (deixar vazio = produção)'
+        required: false
+        default: 'https://stockos-mu.vercel.app'
+
+jobs:
+  e2e:
+    name: Playwright (${{ inputs.base_url || 'https://stockos-mu.vercel.app' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # PRs e workflow_dispatch correm contra a URL pública (default produção).
+      # Não levantamos servidor local em CI: evitamos depender de DATABASE_URL.
+      E2E_BASE_URL: ${{ inputs.base_url || 'https://stockos-mu.vercel.app' }}
+      # Credenciais do admin (override via secrets se quiseres usar contas dedicadas de teste).
+      E2E_USER: ${{ secrets.E2E_USER || 'admin' }}
+      E2E_PASS: ${{ secrets.E2E_PASS || 'admin123' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: npx playwright test
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+      - name: Upload traces & screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+          retention-days: 14

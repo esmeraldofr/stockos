@@ -126,7 +126,9 @@ const _sqlOpts = {
   /** Compromisso: manter warm o suficiente para reusar entre requests próximos sem saturar o pooler. */
   idle_timeout: 30,
   max_lifetime: 60 * 30,
-  connect_timeout: 15
+  /** Era 15s — em cold start várias candidates falham × 15s → curl atinge 60s.
+   *  6s é suficiente para handshake SSL ao Supabase quando a rede está ok. */
+  connect_timeout: 6
 };
 let _activeDbUrl = _dbUrl;
 /** Instância única do cliente postgres (reutiliza ligações TCP/TLS). */
@@ -623,6 +625,10 @@ async function initDB() {
   );
   console.log('DB ready');
 }
+/** Pré-aquecer o singleton postgres no top-level. Evita que o primeiro pedido após
+ *  cold start espere pelo handshake SSL ao Supabase. Não bloqueia initDB nem o app.listen. */
+ensurePgSingleton().catch((e) => console.warn('[boot] ensurePgSingleton prewarm:', e && e.message));
+
 initDB()
   .then(() => {
     markDbReady();

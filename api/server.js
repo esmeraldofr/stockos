@@ -629,6 +629,14 @@ async function initDB() {
  *  cold start espere pelo handshake SSL ao Supabase. Não bloqueia initDB nem o app.listen. */
 ensurePgSingleton().catch((e) => console.warn('[boot] ensurePgSingleton prewarm:', e && e.message));
 
+/** Optimistic ready: assume que o esquema já está aplicado (caso normal em produção)
+ *  e desbloqueia o login + endpoints imediatamente. initDB() corre em background para
+ *  validar e aplicar migrações se necessário. Se o esquema realmente faltar, as queries
+ *  individuais dão erro com a mensagem específica (melhor do que pendurar 60s+ esperando
+ *  pelo handshake do pool em cold start). */
+markLoginReady();
+markDbReady();
+
 initDB()
   .then(() => {
     markDbReady();

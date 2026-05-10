@@ -372,6 +372,10 @@ async function initDB() {
       markLoginReady();
       /** Em background: preencher `username` para utilizadores antigos (admin, etc.) para que o login por username funcione. */
       ensureUsernameColumn().catch((e) => console.warn('[initDB] ensureUsernameColumn (bootstrap skip):', e && e.message));
+      /** Defensivo: confirmar que produto_preco_historico EXISTE mesmo com meta flag set,
+       *  e atualizar `_sqlUsePrecoHistorico` em conformidade. Tenta criar se ausente.
+       *  Resolve o caso em que a tabela foi removida/dropped mas `preco_snap_ddl_v1='done'`. */
+      ensureProdutoPrecoHistoricoLive().catch((e) => console.warn('[initDB] ensureProdutoPrecoHistoricoLive (bootstrap skip):', e && e.message));
       await ensureRoleEnumCompras();
       await ensurePrecosVendasSnapshots();
       try {
@@ -1165,6 +1169,27 @@ const PPH_DDL_STATEMENTS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS produto_preco_historico_prod_vig_uidx ON produto_preco_historico (produto_id, valid_from, valid_from_turno)`,
   `CREATE INDEX IF NOT EXISTS idx_produto_preco_hist_lookup ON produto_preco_historico (produto_id, valid_from DESC)`
 ];
+
+/**
+ * Verifica em runtime se a tabela `produto_preco_historico` existe e atualiza a flag.
+ * Se não existir, tenta cria-la (idempotente). Útil em cold-starts no fast-path em que
+ * `preco_snap_ddl_v1` está em meta mas a tabela foi entretanto removida ou nunca criada.
+ */
+async function ensureProdutoPrecoHistoricoLive() {
+  let exists = await produtoPrecoHistoricoTableExists();
+  if (!exists) {
+    console.warn('[ensureProdutoPrecoHistoricoLive] tabela ausente — tentar criar.');
+    for (const ddl of PPH_DDL_STATEMENTS) {
+      try { await query(ddl); }
+      catch (e) { console.warn('[ensureProdutoPrecoHistoricoLive] DDL falhou:', e && e.message); }
+    }
+    exists = await produtoPrecoHistoricoTableExists();
+  }
+  _sqlUsePrecoHistorico = exists;
+  if (!exists) {
+    console.warn('[StockOS] produto_preco_historico continua ausente — leituras usam só produtos.preco.');
+  }
+}
 
 async function produtoPrecoHistoricoTableExists() {
   try {
@@ -4908,7 +4933,8 @@ app.get('/api/auditoria', auth, requireRole('admin','gestor'), async (req, res) 
   try {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     await ensureAuditoria();
-    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '200', 10)));
+    /** Limite mais conservador (era 200/500) — auditoria pode crescer rápido. */
+    const limit = Math.min(300, Math.max(1, parseInt(req.query.limit || '100', 10)));
     const params = [];
     const where = [];
     /** Datas e horas são sempre interpretadas em Africa/Luanda. */
@@ -4959,8 +4985,16 @@ app.get('/api/auditoria', auth, requireRole('admin','gestor'), async (req, res) 
       ORDER BY a.criado_em DESC, a.id DESC
       LIMIT ${limit}
     `;
-    const r = await query(sql, params);
-    res.json({ rows: r.rows, limit });
+    /** statement_timeout (15s) na conexão reservada — em pool exausto o cliente vê erro claro em vez de pendurar. */
+    const client = await pool.connect();
+    try {
+      try { await client.query(`SET statement_timeout = '15s'`); } catch (_) {}
+      const r = await client.query(sql, params);
+      res.json({ rows: r.rows, limit });
+    } finally {
+      try { await client.query(`SET statement_timeout = 0`); } catch (_) {}
+      client.release();
+    }
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

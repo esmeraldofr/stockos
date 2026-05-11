@@ -1446,6 +1446,11 @@ function navBar() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
         Admin
       </button>` : ''}
+      ${(isAdmin || S.user?.role === 'gestor') ? `
+      <button class="nav-btn ${S.page==='equipa'?'active':''}" onclick="runAction(event, () => navigate('equipa'))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+        Equipa
+      </button>` : ''}
       <button class="nav-btn" onclick="doLogout()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         Sair
@@ -7661,13 +7666,6 @@ async function drawEquipa() {
     </div>
     <div id="content">
       <div id="equipa-users"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
-      <div class="card mt-16">
-        <div class="card-title">Alterar Password</div>
-        <div id="equipa-pass-msg"></div>
-        <div class="field"><label>Password Actual</label><input type="password" id="equipa-pass-atual"/></div>
-        <div class="field"><label>Nova Password</label><input type="password" id="equipa-pass-nova"/></div>
-        <button type="button" class="btn btn-primary" onclick="runAction(event, alterarPasswordEquipa)">Alterar</button>
-      </div>
     </div>
     ${navBar()}
   `);
@@ -7695,14 +7693,6 @@ async function drawEquipa() {
   } catch(e) { show('equipa-users', `<div class="alert alert-error">${e.message}</div>`); }
 }
 
-async function alterarPasswordEquipa() {
-  try {
-    await api('POST', '/auth/alterar-password', { passwordAtual: val('equipa-pass-atual'), passwordNova: val('equipa-pass-nova') });
-    suc('equipa-pass-msg', 'Password alterada com sucesso!');
-    document.getElementById('equipa-pass-atual').value = '';
-    document.getElementById('equipa-pass-nova').value = '';
-  } catch(e) { err('equipa-pass-msg', e.message); }
-}
 
 async function alterarPassword() {
   try {

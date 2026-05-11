@@ -790,7 +790,7 @@ app.post('/api/auth/login', async (req, res) => {
     auditLoginAttempt(req, res, 200, login, user);
     res.json({
       token,
-      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username }
+      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username, has_face: user.face_descriptor != null, face_foto_url: user.face_foto_url || '' }
     });
   } catch (e) {
     console.error('[auth/login]', pgErrText(e));
@@ -4483,8 +4483,11 @@ app.get('/api/face-descriptors', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-/** Guardar descritor facial de um utilizador (admin). */
-app.put('/api/utilizadores/:id/face-descriptor', auth, requireRole('admin'), async (req, res) => {
+/** Guardar descritor facial — admin pode registar qualquer utilizador; outros só o próprio. */
+app.put('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
+  if (req.user.role !== 'admin' && String(req.user.id) !== String(req.params.id)) {
+    return res.status(403).json({ erro: 'Sem permissão para registar a face de outro utilizador' });
+  }
   try {
     const { descriptor, foto_base64 } = req.body;
     if (!Array.isArray(descriptor) || descriptor.length !== 128) {
@@ -4504,8 +4507,11 @@ app.put('/api/utilizadores/:id/face-descriptor', auth, requireRole('admin'), asy
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-/** Remover descritor facial (admin). */
-app.delete('/api/utilizadores/:id/face-descriptor', auth, requireRole('admin'), async (req, res) => {
+/** Remover descritor facial — admin pode remover qualquer; outros só o próprio. */
+app.delete('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
+  if (req.user.role !== 'admin' && String(req.user.id) !== String(req.params.id)) {
+    return res.status(403).json({ erro: 'Sem permissão para remover a face de outro utilizador' });
+  }
   try {
     const r = await query(`SELECT face_foto_url FROM utilizadores WHERE id=$1`, [req.params.id]);
     const oldUrl = r.rows[0]?.face_foto_url;

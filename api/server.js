@@ -4381,7 +4381,7 @@ app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
 });
 
 /** Equipa — utilizadores não-admin (gestor e admin podem consultar). */
-app.get('/api/equipa', auth, requireRole('admin','gestor'), async (req, res) => {
+app.get('/api/equipa', auth, requireRole('admin','gestor','operador','compras'), async (req, res) => {
   try {
     await ensureUsernameColumn();
     const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url FROM utilizadores WHERE role != 'admin' ORDER BY nome");

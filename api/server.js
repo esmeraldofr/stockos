@@ -1708,6 +1708,7 @@ async function ensureUsernameColumn() {
     console.warn('[ensureUsernameColumn] Coluna username ausente — aplica supabase/grant_stockos_app.sql e migrações como postgres, ou POST /api/migrate.');
   }
 
+  await query(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
   usernameColumnEnsured = true;
 }
 
@@ -1764,6 +1765,7 @@ function sanitizeSaidasDestino(s) {
 }
 
 const BORDERO_BUCKET = 'depositos-bordero';
+const FACE_FOTO_PREFIX = 'faces';
 
 function detectSupabaseUrlFromDatabaseUrl() {
   try {
@@ -1812,6 +1814,34 @@ async function uploadBorderoToSupabase(buffer, key, contentType) {
     throw err;
   }
   return `${base}/storage/v1/object/public/${BORDERO_BUCKET}/${key}`;
+}
+
+async function uploadFaceFotoToSupabase(buffer, uid, contentType, ext) {
+  const { url: base, key: serviceKey } = getSupabaseEnv();
+  if (!base || !serviceKey) return null;
+  const key = `${FACE_FOTO_PREFIX}/${uid}.${ext}`;
+  const uploadUrl = `${base}/storage/v1/object/${BORDERO_BUCKET}/${key}`;
+  const r = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey, 'Content-Type': contentType, 'x-upsert': 'true' },
+    body: buffer
+  });
+  if (!r.ok) return null;
+  return `${base}/storage/v1/object/public/${BORDERO_BUCKET}/${key}`;
+}
+
+async function deleteFaceFotoFromSupabase(publicUrl) {
+  const { url: base, key: serviceKey } = getSupabaseEnv();
+  if (!base || !serviceKey || !publicUrl) return;
+  const marker = `/storage/v1/object/public/${BORDERO_BUCKET}/`;
+  const i = publicUrl.indexOf(marker);
+  if (i < 0) return;
+  const path = publicUrl.slice(i + marker.length);
+  if (!path) return;
+  await fetch(`${base}/storage/v1/object/${BORDERO_BUCKET}/${path}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey }
+  }).catch(() => {});
 }
 
 async function deleteBorderoFromSupabaseStorage(publicUrl) {
@@ -4345,7 +4375,7 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
 app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const r = await query('SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face FROM utilizadores ORDER BY nome');
+    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url FROM utilizadores ORDER BY nome");
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -4447,11 +4477,20 @@ app.get('/api/face-descriptors', async (req, res) => {
 /** Guardar descritor facial de um utilizador (admin). */
 app.put('/api/utilizadores/:id/face-descriptor', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { descriptor } = req.body;
+    const { descriptor, foto_base64 } = req.body;
     if (!Array.isArray(descriptor) || descriptor.length !== 128) {
       return res.status(400).json({ erro: 'Descritor inválido (array de 128 números)' });
     }
-    await query(`UPDATE utilizadores SET face_descriptor=$1::jsonb WHERE id=$2`, [JSON.stringify(descriptor), req.params.id]);
+    let fotoUrl = null;
+    if (foto_base64) {
+      const parsed = parseDataUrlFoto(foto_base64);
+      if (parsed) fotoUrl = await uploadFaceFotoToSupabase(parsed.buffer, req.params.id, parsed.contentType, parsed.ext).catch(() => null);
+    }
+    if (fotoUrl) {
+      await query(`UPDATE utilizadores SET face_descriptor=$1::jsonb, face_foto_url=$2 WHERE id=$3`, [JSON.stringify(descriptor), fotoUrl, req.params.id]);
+    } else {
+      await query(`UPDATE utilizadores SET face_descriptor=$1::jsonb WHERE id=$2`, [JSON.stringify(descriptor), req.params.id]);
+    }
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -4459,7 +4498,10 @@ app.put('/api/utilizadores/:id/face-descriptor', auth, requireRole('admin'), asy
 /** Remover descritor facial (admin). */
 app.delete('/api/utilizadores/:id/face-descriptor', auth, requireRole('admin'), async (req, res) => {
   try {
-    await query(`UPDATE utilizadores SET face_descriptor=NULL WHERE id=$1`, [req.params.id]);
+    const r = await query(`SELECT face_foto_url FROM utilizadores WHERE id=$1`, [req.params.id]);
+    const oldUrl = r.rows[0]?.face_foto_url;
+    await query(`UPDATE utilizadores SET face_descriptor=NULL, face_foto_url='' WHERE id=$1`, [req.params.id]);
+    if (oldUrl) deleteFaceFotoFromSupabase(oldUrl).catch(() => {});
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

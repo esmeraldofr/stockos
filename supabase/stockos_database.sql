@@ -184,6 +184,7 @@ ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'operador';
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS senha_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50);
+ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_foto_url TEXT NOT NULL DEFAULT '';
 UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = '';
 UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username));

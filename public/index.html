@@ -7906,9 +7906,10 @@ async function drawPerfil() {
     <div id="content" style="padding-bottom:80px">
       <div class="card">
         <div style="display:flex;align-items:center;gap:16px;padding:4px 0 8px">
-          <div style="width:56px;height:56px;border-radius:50%;background:#1e3a5f;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">
-            ${(u.nome||'?')[0].toUpperCase()}
-          </div>
+          ${u.face_foto_url
+            ? `<img src="${escapeHtml(u.face_foto_url)}" style="width:56px;height:56px;border-radius:50%;object-fit:cover;flex-shrink:0;border:2px solid #1e3a5f">`
+            : `<div style="width:56px;height:56px;border-radius:50%;background:#1e3a5f;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">${(u.nome||'?')[0].toUpperCase()}</div>`
+          }
           <div>
             <div style="font-size:18px;font-weight:700;color:#f1f5f9">${escapeHtml(u.nome||'')}</div>
             <div style="font-size:13px;color:#94a3b8;margin-top:2px">${escapeHtml(u.username||u.email||'')} · ${roleLabel}</div>
@@ -8181,6 +8182,7 @@ function desenharPerfilFace(u) {
   mount.innerHTML = `
     <div class="card">
       <div class="card-title" style="margin-bottom:12px">🪪 Face Biométrica</div>
+      ${u.face_foto_url ? `<img src="${escapeHtml(u.face_foto_url)}" style="width:80px;height:80px;border-radius:50%;object-fit:cover;display:block;margin:0 auto 12px;border:2px solid #1e3a5f">` : ''}
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:14px;color:${hasFace ? '#4ade80' : '#94a3b8'}">
           ${hasFace ? '✅ Face registada' : '⬜ Sem face registada'}
@@ -8244,7 +8246,12 @@ async function captureEnrollFace(uid) {
       enrollCapturing = false;
       return;
     }
-    await api('PUT', `/utilizadores/${uid}/face-descriptor`, { descriptor: Array.from(det.descriptor) });
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 320;
+    canvas.height = video.videoHeight || 240;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const foto_base64 = canvas.toDataURL('image/jpeg', 0.85);
+    await api('PUT', `/utilizadores/${uid}/face-descriptor`, { descriptor: Array.from(det.descriptor), foto_base64 });
     if (statusEl) statusEl.textContent = '✅ Face registada com sucesso!';
     setTimeout(() => { closeEnrollModal(); navigate('perfil'); }, 1200);
   } catch(e) {

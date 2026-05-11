@@ -7697,6 +7697,8 @@ async function drawEquipa() {
   `);
   try {
     const lista = await api('GET', '/equipa');
+    // Guardar em S.equipaUsers para drawPerfil poder encontrar o utilizador
+    S.equipaUsers = lista;
     const roleLabel = { gestor: 'Gestor', operador: 'Operador', compras: 'Compras' };
     show('equipa-users', `
       <div class="card">
@@ -7961,12 +7963,12 @@ function verPerfil(uid) {
 }
 
 async function drawPerfil() {
-  // Carregar lista de utilizadores para obter has_face e dados completos
+  const isAdmin = S.user?.role === 'admin';
   const isPriv = ['admin','gestor'].includes(S.user?.role);
-  const targetUid = (isPriv && S.perfilUid) ? S.perfilUid : null;
+  const targetUid = S.perfilUid || null;
   if (isPriv && !S.utilizadores.length) S.utilizadores = await api('GET','/utilizadores').catch(() => []);
-  const lista = S.utilizadores;
-  let u = lista.find(x => x.id === (targetUid || S.user?.id)) || S.user || {};
+  const todasListas = [...(S.utilizadores || []), ...(S.equipaUsers || [])];
+  let u = todasListas.find(x => String(x.id) === String(targetUid || S.user?.id)) || S.user || {};
   u = { has_face: false, face_foto_url: '', ...u };
   const roleLabel = { admin: 'Admin', gestor: 'Gestor', operador: 'Operador', compras: 'Compras' }[u.role] || u.role;
   render(`
@@ -7989,13 +7991,14 @@ async function drawPerfil() {
       </div>
       <div id="perfil-assiduidade"><div class="card"><div class="spinner" style="margin:16px auto"></div></div></div>
       <div id="perfil-presencas"><div class="card"><div class="spinner" style="margin:16px auto"></div></div></div>
-      ${(isAdmin || !targetUid) ? `<div id="perfil-faces-mount"></div>` : ''}
+      ${(isAdmin || !targetUid || String(targetUid) === String(S.user?.id)) ? `<div id="perfil-faces-mount"></div>` : ''}
     </div>
     ${navBar()}
   `);
-  carregarPerfilAssiduidade(targetUid);
-  carregarPerfilPresencas(targetUid);
-  if (isAdmin || !targetUid) desenharPerfilFace(u);
+  const isOwnProfile = !targetUid || String(targetUid) === String(S.user?.id);
+  carregarPerfilAssiduidade(isPriv ? targetUid : null);
+  carregarPerfilPresencas(isPriv ? targetUid : null);
+  if (isAdmin || isOwnProfile) desenharPerfilFace(u);
 }
 
 async function carregarPerfilAssiduidade(targetUid) {

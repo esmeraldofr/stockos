@@ -128,10 +128,7 @@ const _sqlOpts = {
   max_lifetime: 60 * 30,
   /** Era 15s — em cold start várias candidates falham × 15s → curl atinge 60s.
    *  6s é suficiente para handshake SSL ao Supabase quando a rede está ok. */
-  connect_timeout: 6,
-  /** Impede que queries (incluindo o SELECT 1 de ensurePgSingleton) pendurem indefinidamente
-   *  quando o Supavisor aceita TCP mas não responde — causava HTTP 000 em ~1/3 das instâncias. */
-  connection: { statement_timeout: '12000' }
+  connect_timeout: 6
 };
 let _activeDbUrl = _dbUrl;
 /** Instância única do cliente postgres (reutiliza ligações TCP/TLS). */
@@ -215,7 +212,12 @@ async function ensurePgSingleton() {
       let sqlConn = null;
       try {
         sqlConn = postgres(url, _sqlOpts);
-        await sqlConn`SELECT 1`;
+        // Timeout explícito: connect_timeout cobre o handshake TCP/SSL mas não a execução do SELECT.
+        // Se o Supavisor aceitar TCP mas não responder à query, pendurava indefinidamente.
+        await Promise.race([
+          sqlConn`SELECT 1`,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('SELECT 1 timeout (10s)')), 10000))
+        ]);
         _pgSingleton = sqlConn;
         _activeDbUrl = url;
         return _pgSingleton;

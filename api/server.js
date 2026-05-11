@@ -312,6 +312,11 @@ async function qry(sql, params, label) {
 
 /** Índices leves (IF NOT EXISTS) — aceleram /dia, escala. Corre após init. */
 async function ensureStockosPerfIndexes() {
+  // Fast path: já feito numa cold start anterior — evita 6 CREATE INDEX + advisory lock por arranque.
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='perf_indexes_v1'`);
+    if (r.rows.length) return;
+  } catch (_) {}
   const stmts = [
     'CREATE INDEX IF NOT EXISTS idx_turnos_data ON turnos (data)',
     'CREATE INDEX IF NOT EXISTS idx_turno_stock_turno_id ON turno_stock (turno_id)',
@@ -321,9 +326,15 @@ async function ensureStockosPerfIndexes() {
     'CREATE INDEX IF NOT EXISTS idx_escala_data ON escala (data)'
   ];
   await withAdvisoryLock(7654321001, async () => {
+    // Re-verificar dentro do lock (outra instância pode ter terminado enquanto esperávamos).
+    try {
+      const r2 = await query(`SELECT v FROM stockos_meta WHERE k='perf_indexes_v1'`);
+      if (r2.rows.length) return;
+    } catch (_) {}
     for (let i = 0; i < stmts.length; i++) {
       try { await query(stmts[i]); } catch (e) { console.warn('[idx]', i, (e && e.message) || e); }
     }
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('perf_indexes_v1','done') ON CONFLICT (k) DO NOTHING`);
   }).catch(e => console.warn('[idx setup]', e && e.message));
 }
 
@@ -386,6 +397,9 @@ async function initDB() {
     }
   } catch (e) {
     console.warn('[initDB] bootstrap check:', e && e.message);
+    // Erro de ligação → não correr 70+ DDL queries com uma BD inacessível.
+    const msg = (e && e.message) || '';
+    if (/ECONNREFUSED|ECONNRESET|ENOTFOUND|timeout|EMAXCONN|pool|connect/i.test(msg)) throw e;
   }
 
   await qry(`CREATE TABLE IF NOT EXISTS utilizadores (
@@ -785,8 +799,18 @@ app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { re
 let auditoriaReady = false;
 async function ensureAuditoria() {
   if (auditoriaReady) return;
+  // Fast path via meta flag — evita CREATE INDEX em auditoria (avg 21s) em cada cold start.
   try {
-    const ok = await withAdvisoryLock(7654321002, async () => {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='auditoria_ddl_v1'`);
+    if (r.rows.length) { auditoriaReady = true; return; }
+  } catch (_) {}
+  try {
+    await withAdvisoryLock(7654321002, async () => {
+      // Re-verificar dentro do lock.
+      try {
+        const r2 = await query(`SELECT v FROM stockos_meta WHERE k='auditoria_ddl_v1'`);
+        if (r2.rows.length) { auditoriaReady = true; return; }
+      } catch (_) {}
       await query(`CREATE TABLE IF NOT EXISTS auditoria (
         id BIGSERIAL PRIMARY KEY,
         criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -803,9 +827,9 @@ async function ensureAuditoria() {
       )`);
       await query(`CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON auditoria (criado_em DESC)`);
       await query(`CREATE INDEX IF NOT EXISTS idx_auditoria_utilizador ON auditoria (utilizador_id, criado_em DESC)`);
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('auditoria_ddl_v1','done') ON CONFLICT (k) DO NOTHING`);
     });
-    // ok=false: outra instância detinha o lock e está a criar a tabela — marcar ready
-    // (INSERTs de auditoria estão em try-catch; se falhar nessa janela, é silencioso)
+    // ok=false: outra instância detinha o lock — marcar ready na mesma
     auditoriaReady = true;
   } catch (e) {
     console.warn('[auditoria] ensure:', e && e.message);

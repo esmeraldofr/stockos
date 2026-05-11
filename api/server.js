@@ -214,9 +214,10 @@ async function ensurePgSingleton() {
         sqlConn = postgres(url, _sqlOpts);
         // Timeout explícito: connect_timeout cobre o handshake TCP/SSL mas não a execução do SELECT.
         // Se o Supavisor aceitar TCP mas não responder à query, pendurava indefinidamente.
+        // 4s é suficiente: SELECT 1 numa ligação sã demora < 1s; zombie falha em 4s vs 10s antes.
         await Promise.race([
           sqlConn`SELECT 1`,
-          new Promise((_, reject) => setTimeout(() => reject(new Error('SELECT 1 timeout (10s)')), 10000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error('SELECT 1 timeout (4s)')), 4000))
         ]);
         _pgSingleton = sqlConn;
         _activeDbUrl = url;
@@ -236,7 +237,12 @@ const query = async (text, params) => {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const sql = await ensurePgSingleton();
-      const rows = await sql.unsafe(text, params || []);
+      // Timeout de 20s: se o singleton ficou zombie após estabelecido, sql.unsafe() pendura indefinidamente.
+      // "query timeout" casa com o regex transient → resetPgSingleton() + retry com ligação nova.
+      const rows = await Promise.race([
+        sql.unsafe(text, params || []),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('query timeout (20s)')), 20000))
+      ]);
       return { rows: Array.from(rows) };
     } catch (e) {
       lastErr = e;

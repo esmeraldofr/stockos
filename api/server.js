@@ -128,7 +128,10 @@ const _sqlOpts = {
   max_lifetime: 60 * 30,
   /** Era 15s — em cold start várias candidates falham × 15s → curl atinge 60s.
    *  6s é suficiente para handshake SSL ao Supabase quando a rede está ok. */
-  connect_timeout: 6
+  connect_timeout: 6,
+  /** Impede que queries (incluindo o SELECT 1 de ensurePgSingleton) pendurem indefinidamente
+   *  quando o Supavisor aceita TCP mas não responde — causava HTTP 000 em ~1/3 das instâncias. */
+  connection: { statement_timeout: '12000' }
 };
 let _activeDbUrl = _dbUrl;
 /** Instância única do cliente postgres (reutiliza ligações TCP/TLS). */
@@ -259,7 +262,18 @@ const pool = {
   query,
   connect: async () => {
     const sql = await ensurePgSingleton();
-    const reserved = await sql.reserve();
+    // Timeout de 10s: se o pool estiver esgotado sql.reserve() pendura indefinidamente sem isto.
+    let reserved;
+    try {
+      reserved = await Promise.race([
+        sql.reserve(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Pool connection timeout (10s) — servidor ocupado, tenta de novo')), 10000)
+        )
+      ]);
+    } catch (e) {
+      throw e;
+    }
     return {
       query: async (text, params) => {
         const rows = await reserved.unsafe(text, params || []);

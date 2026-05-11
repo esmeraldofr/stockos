@@ -1214,6 +1214,7 @@ async function draw() {
       case 'produtos': await drawProdutos(); break;
       case 'escala':   await drawEscala(); break;
       case 'admin':    await drawAdmin(); break;
+      case 'equipa':   await drawEquipa(); break;
       case 'presenca': await drawPresenca(); break;
       case 'perfil':   await drawPerfil(); break;
       default:         await drawDia();
@@ -1325,6 +1326,8 @@ function menuEntries() {
   if (showEscala) entries.push({ page: 'escala', label: 'Escala',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>' });
   if (isAdmin) entries.push({ page: 'admin', label: 'Admin',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' });
+  if (isAdmin || S.user?.role === 'gestor') entries.push({ page: 'equipa', label: 'Equipa',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' });
   entries.push({ page: 'presenca', label: 'Presença',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>' });
@@ -7649,6 +7652,56 @@ async function saveUser(id) {
     setTimeout(()=>show('admin-msg',''),2000);
     await loadUtilizadores();
   } catch(e) { err('user-form-msg',e.message); }
+}
+
+async function drawEquipa() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Equipa</div></div>
+    </div>
+    <div id="content">
+      <div id="equipa-users"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+      <div class="card mt-16">
+        <div class="card-title">Alterar Password</div>
+        <div id="equipa-pass-msg"></div>
+        <div class="field"><label>Password Actual</label><input type="password" id="equipa-pass-atual"/></div>
+        <div class="field"><label>Nova Password</label><input type="password" id="equipa-pass-nova"/></div>
+        <button type="button" class="btn btn-primary" onclick="runAction(event, alterarPasswordEquipa)">Alterar</button>
+      </div>
+    </div>
+    ${navBar()}
+  `);
+  try {
+    const lista = await api('GET', '/equipa');
+    const roleLabel = { gestor: 'Gestor', operador: 'Operador', compras: 'Compras' };
+    show('equipa-users', `
+      <div class="card">
+        <div class="card-title">Utilizadores</div>
+        ${lista.map(u => `
+          <div class="produto-row">
+            <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
+              ${u.face_foto_url
+                ? `<img src="${escapeHtml(u.face_foto_url)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;flex-shrink:0">`
+                : `<div style="width:36px;height:36px;border-radius:50%;background:#1e3a5f;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">${(u.nome||'?')[0].toUpperCase()}</div>`
+              }
+              <div class="produto-info">
+                <div class="produto-nome">${escapeHtml(u.nome)}</div>
+                <div class="produto-meta">${escapeHtml(u.username||'—')} · ${roleLabel[u.role]||u.role}${!u.ativo?' · Inactivo':''}</div>
+              </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick='verPerfil("${u.id}")'>Perfil</button>
+          </div>`).join('')}
+      </div>`);
+  } catch(e) { show('equipa-users', `<div class="alert alert-error">${e.message}</div>`); }
+}
+
+async function alterarPasswordEquipa() {
+  try {
+    await api('POST', '/auth/alterar-password', { passwordAtual: val('equipa-pass-atual'), passwordNova: val('equipa-pass-nova') });
+    suc('equipa-pass-msg', 'Password alterada com sucesso!');
+    document.getElementById('equipa-pass-atual').value = '';
+    document.getElementById('equipa-pass-nova').value = '';
+  } catch(e) { err('equipa-pass-msg', e.message); }
 }
 
 async function alterarPassword() {

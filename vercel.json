@@ -50,7 +50,8 @@
     }
   ],
   "env": {
-    "NODE_ENV": "production"
+    "NODE_ENV": "production",
+    "PG_POOL_MAX": "1"
   },
   "regions": ["dub1"]
 }

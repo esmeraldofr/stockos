@@ -122,7 +122,7 @@ const _sqlOpts = {
   ssl: 'require',
   prepare: false,
   /** Serverless + pooler em modo transacção: poucos slots por instância (limite Supavisor 200 client conns). */
-  max: Math.min(10, Math.max(2, parseInt(process.env.PG_POOL_MAX || '3', 10) || 3)),
+  max: Math.min(10, Math.max(1, parseInt(process.env.PG_POOL_MAX || '2', 10) || 2)),
   /** Compromisso: manter warm o suficiente para reusar entre requests próximos sem saturar o pooler. */
   idle_timeout: 30,
   max_lifetime: 60 * 30,

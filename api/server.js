@@ -197,10 +197,11 @@ function getDbCandidates() {
   return out;
 }
 
-async function resetPgSingleton() {
+function resetPgSingleton() {
   const s = _pgSingleton;
   _pgSingleton = null;
-  if (s) await s.end({ timeout: 5 }).catch(() => {});
+  // fire-and-forget: não aguardar end() para não bloquear o retry durante 5s extra.
+  if (s) s.end({ timeout: 3 }).catch(() => {});
 }
 
 /** Garante uma ligação persistente; tenta URLs candidatas só até a primeira funcionar. */
@@ -237,11 +238,11 @@ const query = async (text, params) => {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const sql = await ensurePgSingleton();
-      // Timeout de 20s: se o singleton ficou zombie após estabelecido, sql.unsafe() pendura indefinidamente.
+      // Timeout de 6s: zombies detectados rapidamente; queries sãs terminam em < 2s.
       // "query timeout" casa com o regex transient → resetPgSingleton() + retry com ligação nova.
       const rows = await Promise.race([
         sql.unsafe(text, params || []),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('query timeout (20s)')), 20000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error('query timeout (6s)')), 6000))
       ]);
       return { rows: Array.from(rows) };
     } catch (e) {

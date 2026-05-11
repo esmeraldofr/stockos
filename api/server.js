@@ -276,6 +276,9 @@ const pool = {
 let depositosSaidasMigrationDone = false;
 let depositosBancoReady = false;
 let fornecedoresReady = false;
+let armazemTablesReady = false;
+let turnoEntradasReady = false;
+let turnoSaidasReady = false;
 let turnoPedidosReady = false;
 let presencasReady = false;
 let precosVendasSnapshotsReady = false;
@@ -1693,35 +1696,38 @@ function loginFromBody(req) {
 async function ensureDepositosBanco() {
   if (depositosBancoReady) return;
   try {
-    await withAdvisoryLock(7654321003, async () => {
-      await query(`CREATE TABLE IF NOT EXISTS depositos_banco (
-        id SERIAL PRIMARY KEY,
-        data_referencia DATE,
-        data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
-        valor NUMERIC(15,2) NOT NULL,
-        referencia TEXT NOT NULL DEFAULT '',
-        notas TEXT NOT NULL DEFAULT '',
-        criado_por TEXT NOT NULL DEFAULT '',
-        criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )`);
-      await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS turno_id INTEGER REFERENCES turnos(id) ON DELETE CASCADE`).catch(() => {});
-      await query(`DELETE FROM depositos_banco WHERE turno_id IS NULL`).catch(() => {});
-      await query(`ALTER TABLE depositos_banco DROP COLUMN IF EXISTS data_referencia`).catch(() => {});
-      try { await query(`ALTER TABLE depositos_banco ALTER COLUMN turno_id SET NOT NULL`); } catch (_) {}
-      try { await query(`CREATE UNIQUE INDEX IF NOT EXISTS depositos_banco_turno_id_key ON depositos_banco(turno_id)`); } catch (_) {}
-      await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
-      await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
-      await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
-      await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS bordero_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
-      if (!depositosSaidasMigrationDone) {
-        try {
-          await migrateDepositosSaidasAntigasAgrupadas();
-          depositosSaidasMigrationDone = true;
-        } catch (e) {
-          console.error('migrateDepositosSaidasAntigasAgrupadas', e);
-        }
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='depositos_banco_ddl_v1'`);
+    if (r.rows.length) { depositosBancoReady = true; depositosSaidasMigrationDone = true; return; }
+  } catch (_) {}
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS depositos_banco (
+      id SERIAL PRIMARY KEY,
+      data_referencia DATE,
+      data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
+      valor NUMERIC(15,2) NOT NULL,
+      referencia TEXT NOT NULL DEFAULT '',
+      notas TEXT NOT NULL DEFAULT '',
+      criado_por TEXT NOT NULL DEFAULT '',
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS turno_id INTEGER REFERENCES turnos(id) ON DELETE CASCADE`).catch(() => {});
+    await query(`DELETE FROM depositos_banco WHERE turno_id IS NULL`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco DROP COLUMN IF EXISTS data_referencia`).catch(() => {});
+    try { await query(`ALTER TABLE depositos_banco ALTER COLUMN turno_id SET NOT NULL`); } catch (_) {}
+    try { await query(`CREATE UNIQUE INDEX IF NOT EXISTS depositos_banco_turno_id_key ON depositos_banco(turno_id)`); } catch (_) {}
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS bordero_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
+    if (!depositosSaidasMigrationDone) {
+      try {
+        await migrateDepositosSaidasAntigasAgrupadas();
+        depositosSaidasMigrationDone = true;
+      } catch (e) {
+        console.error('migrateDepositosSaidasAntigasAgrupadas', e);
       }
-    });
+    }
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('depositos_banco_ddl_v1','done') ON CONFLICT (k) DO NOTHING`);
     depositosBancoReady = true;
   } catch (e) {
     console.warn('[ensureDepositosBanco]', e && e.message);
@@ -2514,23 +2520,26 @@ async function refreshFaturaTotalAgg(client, faturaId) {
 async function ensureFornecedores() {
   if (fornecedoresReady) return;
   try {
-    await withAdvisoryLock(7654321004, async () => {
-      await query(`CREATE TABLE IF NOT EXISTS fornecedores (
-        id SERIAL PRIMARY KEY,
-        nome TEXT NOT NULL,
-        notas TEXT NOT NULL DEFAULT '',
-        ativo BOOLEAN NOT NULL DEFAULT true,
-        criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        criado_por TEXT NOT NULL DEFAULT ''
-      )`);
-      await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS fornecedor_id INTEGER`).catch(() => {});
-      await query(`DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_fornecedor_id_fkey') THEN
-          ALTER TABLE armazem_faturas ADD CONSTRAINT armazem_faturas_fornecedor_id_fkey
-          FOREIGN KEY (fornecedor_id) REFERENCES fornecedores(id) ON DELETE SET NULL;
-        END IF;
-      END $$`).catch(() => {});
-    });
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='fornecedores_ddl_v1'`);
+    if (r.rows.length) { fornecedoresReady = true; return; }
+  } catch (_) {}
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS fornecedores (
+      id SERIAL PRIMARY KEY,
+      nome TEXT NOT NULL,
+      notas TEXT NOT NULL DEFAULT '',
+      ativo BOOLEAN NOT NULL DEFAULT true,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      criado_por TEXT NOT NULL DEFAULT ''
+    )`);
+    await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS fornecedor_id INTEGER`).catch(() => {});
+    await query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_fornecedor_id_fkey') THEN
+        ALTER TABLE armazem_faturas ADD CONSTRAINT armazem_faturas_fornecedor_id_fkey
+        FOREIGN KEY (fornecedor_id) REFERENCES fornecedores(id) ON DELETE SET NULL;
+      END IF;
+    END $$`).catch(() => {});
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('fornecedores_ddl_v1','done') ON CONFLICT (k) DO NOTHING`);
     fornecedoresReady = true;
   } catch (e) {
     console.warn('[ensureFornecedores]', e && e.message);
@@ -2589,6 +2598,11 @@ app.put('/api/fornecedores/:id', auth, requireRole('admin', 'gestor', 'compras')
 });
 
 async function ensureArmazemTables() {
+  if (armazemTablesReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='armazem_tables_ddl_v1'`);
+    if (r.rows.length) { armazemTablesReady = true; return; }
+  } catch (_) {}
   const pidCheck = await query(
     `SELECT data_type
      FROM information_schema.columns
@@ -2686,6 +2700,8 @@ async function ensureArmazemTables() {
     UNIQUE(data, produto_id)
   )`).catch(() => {});
   await ensureFornecedores();
+  await query(`INSERT INTO stockos_meta (k,v) VALUES ('armazem_tables_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+  armazemTablesReady = true;
 }
 
 app.get('/api/armazem/saldo', auth, requireRole('admin','gestor','compras'), async (req, res) => {
@@ -3492,6 +3508,11 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
 
 // ── TURNO: entradas de stock + saídas de caixa (caixa.saida = despesas + compras stock) ──
 async function ensureTurnoEntradas() {
+  if (turnoEntradasReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_entradas_ddl_v1'`);
+    if (r.rows.length) { turnoEntradasReady = true; return; }
+  } catch (_) {}
   await query(`CREATE TABLE IF NOT EXISTS turno_entradas (
     id SERIAL PRIMARY KEY,
     turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
@@ -3506,6 +3527,8 @@ async function ensureTurnoEntradas() {
   await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS tipo VARCHAR(10) NOT NULL DEFAULT 'entrada'`).catch(()=>{});
   await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS origem VARCHAR(10) NOT NULL DEFAULT 'armazem'`).catch(()=>{});
   await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(()=>{});
+  await query(`INSERT INTO stockos_meta (k,v) VALUES ('turno_entradas_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+  turnoEntradasReady = true;
 }
 
 app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
@@ -3622,6 +3645,11 @@ app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
 });
 
 async function ensureTurnoSaidas() {
+  if (turnoSaidasReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_saidas_ddl_v1'`);
+    if (r.rows.length) { turnoSaidasReady = true; return; }
+  } catch (_) {}
   await query(`CREATE TABLE IF NOT EXISTS turno_saidas (
     id SERIAL PRIMARY KEY,
     turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
@@ -3630,6 +3658,8 @@ async function ensureTurnoSaidas() {
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  await query(`INSERT INTO stockos_meta (k,v) VALUES ('turno_saidas_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+  turnoSaidasReady = true;
 }
 
 app.get('/api/turnos/:id/saidas', auth, async (req, res) => {

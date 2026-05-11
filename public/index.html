@@ -3899,16 +3899,15 @@ async function loadVendasMenu(turnoId, canEdit) {
         cfg.qtdPacote >= 2 && cfg.precoPacote > 0
           ? `${fmt(cfg.preco)}/copo · ${cfg.qtdPacote} copos ${fmt(cfg.precoPacote)}`
           : `${fmt(cfg.preco)}/copo`;
+      const copoCtrl = canEdit
+        ? `<input type="number" min="0" step="1" inputmode="numeric" autocomplete="off" class="venda-qty-input" id="venda-qty-${p.id}" data-venda-pid="${p.id}" data-venda-turno="${turnoId}" value="${copos}" onblur="vendaQtyInputBlur(this)"/>`
+        : `<span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${copos}</span>`;
       return `<div class="produto-row" style="align-items:center">
         <div class="produto-info">
           <div class="produto-nome">${p.nome} <span style="font-size:10px;color:#64748b;font-weight:600">(copos)</span></div>
           <div class="produto-meta">${precoLinha} · ${fmtNum(cfg.kgPorCopo)} kg/copo · stock ~${fmtNum(kgStock)} kg</div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px">
-          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',-1))" style="${btnStyle}background:#1e3a5f;color:#60a5fa">−</button>` : ''}
-          <span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${copos}</span>
-          ${canEdit ? `<button type="button" onclick="runAction(event, () => deltaVenda('${turnoId}','${p.id}',1))" style="${btnStyle}background:#14532d;color:#4ade80">+</button>` : ''}
-        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">${copoCtrl}</div>
       </div>`;
     }).join('');
     const bebidaRows = bebidaOutras.map((p) => {
@@ -4110,6 +4109,34 @@ async function deltaVenda(turnoId, prodId, delta) {
   } catch(e) {
     vendasBuf[prodId] = prev;
     if (el) el.textContent = vendasBuf[prodId];
+    refreshVendasTotal();
+    alert('Erro ao registar venda: ' + e.message);
+  }
+}
+
+async function vendaQtyInputBlur(inp) {
+  const prodId = inp.dataset.vendaPid;
+  const turnoId = inp.dataset.vendaTurno;
+  if (!prodId || !turnoId) return;
+  const novaQty = Math.max(0, Math.floor(parseFloat(inp.value) || 0));
+  inp.value = novaQty;
+  const prev = vendasBuf[prodId] || 0;
+  if (novaQty === prev) return;
+  const delta = novaQty - prev;
+  vendasBuf[prodId] = novaQty;
+  refreshVendasTotal();
+  try {
+    await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: novaQty });
+    const cfg = bebidaCopoCfg[prodId];
+    if (cfg && cfg.kgPorCopo > 0) {
+      if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
+      const kgAdj = -delta * cfg.kgPorCopo;
+      stockBuf[prodId].deixado = Math.max(0, (parseFloat(stockBuf[prodId].deixado) || 0) + kgAdj);
+      updateStock(prodId, 'deixado', fmtNum(stockBuf[prodId].deixado));
+    }
+  } catch(e) {
+    vendasBuf[prodId] = prev;
+    inp.value = prev;
     refreshVendasTotal();
     alert('Erro ao registar venda: ' + e.message);
   }

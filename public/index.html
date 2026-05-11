@@ -1167,7 +1167,7 @@ async function navigate(page, params) {
 async function draw() {
   document.body.classList.toggle('has-auth', !!S.token);
   if (!S.token) { document.body.classList.remove('menu-open'); drawLogin(); return; }
-  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario', 'irregularidades', 'assiduidade'].includes(S.page)) {
+  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario', 'irregularidades', 'assiduidade', 'equipa', 'presenca', 'perfil'].includes(S.page)) {
     S.page = 'dia';
   }
   if (S.page === 'admin' && S.user?.role !== 'admin') {

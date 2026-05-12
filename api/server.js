@@ -5177,6 +5177,7 @@ app.get('/api/auditoria', auth, requireRole('admin','gestor'), async (req, res) 
     res.status(500).json({ erro: e.message });
   }
 });
-
-app.listen(PORT, () => console.log(`StockOS v3 na porta ${PORT}`));
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`StockOS v3 na porta ${PORT}`));
+}
 module.exports = app;

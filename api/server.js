@@ -400,7 +400,7 @@ function markDbReady() {
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
  */
-const STOCKOS_BOOTSTRAP_VERSION = '2026-04-01-pedidos-tbl';
+const STOCKOS_BOOTSTRAP_VERSION = '2026-05-12-perf-fix';
 
 async function initDB() {
   await qry(`CREATE TABLE IF NOT EXISTS stockos_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`, [], 'stockos_meta');
@@ -412,14 +412,7 @@ async function initDB() {
        *  Endpoints (/dia, /produtos, …) deixam de esperar 30-60s no primeiro pedido após cold start. */
       markLoginReady();
       markDbReady();
-      console.log('DB ready (bootstrap skip — verifications running in background)');
-      // Background: ensures idempotentes (todas têm meta-flag fast-path interno).
-      ensureUsernameColumn().catch((e) => console.warn('[initDB:bg] ensureUsernameColumn:', e && e.message));
-      ensureProdutoPrecoHistoricoLive().catch((e) => console.warn('[initDB:bg] ensureProdutoPrecoHistoricoLive:', e && e.message));
-      ensureRoleEnumCompras().catch((e) => console.warn('[initDB:bg] ensureRoleEnumCompras:', e && e.message));
-      ensurePrecosVendasSnapshots().catch((e) => console.warn('[initDB:bg] ensurePrecosVendasSnapshots:', e && e.message));
-      ensureTurnoPedidos().catch((e) => console.error('[initDB:bg] ensureTurnoPedidos:', e && e.message));
-      ensurePresencas().catch((e) => console.warn('[initDB:bg] ensurePresencas:', e && e.message));
+      console.log('DB ready (bootstrap skip — optimized fast-path without background DDLs)');
       return;
     }
   } catch (e) {

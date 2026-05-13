@@ -5946,8 +5946,8 @@ async function drawIrregularidades() {
     ${navBar()}
   `);
   const hoje = new Date().toISOString().split('T')[0];
-  const mes = addDays(hoje, -30);
-  document.getElementById('ir-inicio').value = mes;
+  const ontem = addDays(hoje, -1);
+  document.getElementById('ir-inicio').value = ontem;
   document.getElementById('ir-fim').value = hoje;
   await loadIrregularidadesLista();
 }

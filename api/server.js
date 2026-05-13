@@ -4019,34 +4019,58 @@ app.get('/api/historico', auth, async (req, res) => {
 });
 
 /**
- * Quantidade vendida por produto no período (agregado sobre turno_stock: enc+entrada-deixado)
- * e valor em Kz com a mesma lógica de `sqlTsValorVendaLinha()`. Mantém consistência com o
- * `total_vendas` exposto em /api/historico.
+ * Quantidade vendida por produto no período. Agrega DUAS fontes:
+ *  - `turno_stock` (em_stock_turno=true): bebidas em garrafa/lata, ingredientes — vendido = enc+entrada-deixado
+ *  - `turno_vendas` (em_stock_turno=false): menu e bebidas por copo — quantidade directa
+ * Valor em Kz usa `sqlTsValorVendaLinha()` para stock, e `quantidade * preco` (com snapshot histórico) para vendas directas.
  */
 app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
   try {
     const { inicio, fim } = req.query;
     const d1 = inicio || '2020-01-01';
     const d2 = fim || new Date().toISOString().split('T')[0];
+    const precoUnitDirecto = _sqlUsePrecoHistorico
+      ? `COALESCE(tv.preco_unit_snapshot, (SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`
+      : `COALESCE(tv.preco_unit_snapshot, p.preco)::numeric`;
     const r = await query(
-      `SELECT
-         p.id AS produto_id,
-         p.nome AS produto_nome,
-         p.categoria,
-         p.tipo_medicao,
-         p.venda_por_copo,
-         p.ordem,
-         COALESCE(SUM(${sqlGteStockVendido()}), 0)::numeric AS qtd_vendida,
-         COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS valor_vendas,
-         COUNT(DISTINCT ts.turno_id)::int AS turnos
-       FROM turno_stock ts
-       INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
-       INNER JOIN turnos t ON t.id = ts.turno_id
-       WHERE t.data BETWEEN $1::date AND $2::date
-       GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.ordem
-       HAVING COALESCE(SUM(${sqlGteStockVendido()}), 0) > 0
-          OR COALESCE(SUM(${sqlTsValorVendaLinha()}), 0) > 0
-       ORDER BY p.categoria, p.ordem NULLS LAST, p.nome`,
+      `WITH stock_sales AS (
+         SELECT
+           p.id AS produto_id,
+           p.nome AS produto_nome,
+           p.categoria,
+           p.tipo_medicao,
+           p.venda_por_copo,
+           p.ordem,
+           COALESCE(SUM(${sqlGteStockVendido()}), 0)::numeric AS qtd_vendida,
+           COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS valor_vendas,
+           COUNT(DISTINCT ts.turno_id)::int AS turnos
+         FROM turno_stock ts
+         INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+         INNER JOIN turnos t ON t.id = ts.turno_id
+         WHERE t.data BETWEEN $1::date AND $2::date
+         GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.ordem
+       ),
+       direct_sales AS (
+         SELECT
+           p.id AS produto_id,
+           p.nome AS produto_nome,
+           p.categoria,
+           p.tipo_medicao,
+           p.venda_por_copo,
+           p.ordem,
+           COALESCE(SUM(tv.quantidade), 0)::numeric AS qtd_vendida,
+           COALESCE(SUM(tv.quantidade * ${precoUnitDirecto}), 0)::numeric AS valor_vendas,
+           COUNT(DISTINCT tv.turno_id)::int AS turnos
+         FROM turno_vendas tv
+         INNER JOIN produtos p ON p.id = tv.produto_id AND p.em_stock_turno IS FALSE AND ${"p.categoria IN ('menu','ingredientes','bebida')"}
+         INNER JOIN turnos t ON t.id = tv.turno_id
+         WHERE t.data BETWEEN $1::date AND $2::date
+         GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.ordem
+       )
+       SELECT * FROM stock_sales WHERE qtd_vendida > 0 OR valor_vendas > 0
+       UNION ALL
+       SELECT * FROM direct_sales WHERE qtd_vendida > 0 OR valor_vendas > 0
+       ORDER BY categoria, ordem NULLS LAST, produto_nome`,
       [d1, d2]
     );
     res.json(r.rows);

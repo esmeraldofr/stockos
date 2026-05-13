@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-13-hist-vendas-direct">
+<html lang="pt" data-stockos-ui="2026-05-13-hist-copos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5747,7 +5747,7 @@ function histVendasProdutosCardHtml(rows) {
       const v = parseFloat(r.valor_vendas) || 0;
       qCat += q;
       vCat += v;
-      const sigla = medicaoSigla(r.tipo_medicao || 'unidade');
+      const sigla = r.venda_por_copo === true ? 'copos' : medicaoSigla(r.tipo_medicao || 'unidade');
       return `
       <tr>
         <td style="padding:6px 8px;color:#e2e8f0">${escapeHtml(r.produto_nome || 'Sem nome')}</td>

@@ -25,7 +25,8 @@ jobs:
           git fetch origin qualidade main
 
           # Garantir que local main está em sincronia com origin/main antes do merge,
-          # caso contrário o push falha com non-fast-forward.
+          # caso contrário o push falha com non-fast-forward (actions/checkout pode
+          # ter um SHA antigo do main em cache).
           git checkout -B main origin/main
           git merge --no-ff origin/qualidade -m "chore: promote qualidade to main (production)"
           git push origin main

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-04-27-auditoria-hora-fix">
+<html lang="pt" data-stockos-ui="2026-05-11-fechar-fix">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -545,6 +545,22 @@ input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-
 .dia-escala-area-badge{display:inline-block;margin-left:4px;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700;background:rgba(167,139,250,0.22);color:#c4b5fd;vertical-align:middle}
 .escala-area-sel{font-size:10px;max-width:100%;padding:3px 6px;border-radius:4px;background:#0f172a;border:1px solid #334155;color:#94a3b8}
 </style>
+<style>
+#presenca-screen{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-height:100vh;padding:24px 16px;gap:16px;background:#0f172a}
+#presenca-video-wrap{position:relative;width:100%;max-width:400px;border-radius:16px;overflow:hidden;background:#1e293b;aspect-ratio:4/3}
+#presenca-video{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1)}
+#presenca-canvas{position:absolute;top:0;left:0;width:100%;height:100%;transform:scaleX(-1)}
+#presenca-status{font-size:15px;color:#94a3b8;text-align:center;min-height:24px}
+#presenca-result{width:100%;max-width:400px;background:#1e293b;border-radius:12px;padding:20px;text-align:center;display:none}
+#presenca-result .p-nome{font-size:22px;font-weight:700;color:#f1f5f9;margin-bottom:4px}
+#presenca-result .p-sub{font-size:13px;color:#94a3b8;margin-bottom:16px}
+.presenca-btns{display:flex;gap:10px;justify-content:center}
+.btn-entrada{background:#14532d;color:#4ade80;border:none;border-radius:8px;padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer}
+.btn-saida{background:#7f1d1d;color:#fca5a5;border:none;border-radius:8px;padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer}
+#presenca-confirm{width:100%;max-width:400px;background:#1e293b;border-radius:12px;padding:20px;text-align:center;display:none}
+.face-enroll-wrap{display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px 0}
+#enroll-video{width:260px;height:195px;border-radius:10px;object-fit:cover;background:#0f172a;transform:scaleX(-1)}
+</style>
 </head>
 <body>
 <div id="env-banner"></div>
@@ -847,34 +863,6 @@ function fmtCaixaAttr(v) {
   const n = parseFloat(v);
   return Number.isFinite(n) ? String(n) : '';
 }
-/** null = campo vazio (TPA / Transf. / Dinheiro). */
-function parseCaixaInputRaw(id) {
-  const raw = String(document.getElementById(id)?.value ?? '').trim();
-  if (raw === '') return null;
-  const n = parseFloat(raw);
-  return Number.isFinite(n) ? n : null;
-}
-/** Soma TPA+Transf.+Dinheiro só quando os três estão preenchidos; senão NaN. */
-function parseCaixaTriploFromInputs() {
-  const tpa = parseCaixaInputRaw('c-tpa');
-  const tr = parseCaixaInputRaw('c-transf');
-  const d = parseCaixaInputRaw('c-din');
-  if (tpa === null || tr === null || d === null) return NaN;
-  return tpa + tr + d;
-}
-/** Evita mostrar «Produto <uuid>» ou só o uuid quando o nome na BD está incorrecto. */
-function nomeVendaBebidaLegivel(pid, nomeCatalogo) {
-  const raw = String(nomeCatalogo || '').trim();
-  /** BD por vezes guarda «… (copos)»; sem isto o regex ^Produto uuid$ falha. */
-  const n = raw.replace(/\s*\(copos\)\s*$/i, '').trim();
-  const uuidSolo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const produtoUuid = /^Produto\s+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!n) return 'Bebida';
-  if (uuidSolo.test(n)) return 'Bebida';
-  if (produtoUuid.test(n)) return 'Bebida';
-  if (/^Produto\s+[0-9a-f-]{36}/i.test(n)) return 'Bebida';
-  return n;
-}
 /** Preço total em copos: pacotes (ex. 3×1000) + resto ao preço unitário (ex. 400/copo). */
 function precoVendaCopos(copos, precoUnit, qtdPacote, precoPacote) {
   const c = Math.max(0, Math.floor(parseFloat(copos) || 0));
@@ -884,86 +872,9 @@ function precoVendaCopos(copos, precoUnit, qtdPacote, precoPacote) {
   if (n >= 2 && p > 0) return Math.floor(c / n) * p + (c % n) * u;
   return c * u;
 }
-/** Valor inicial para inputs numéricos de stock (Encontrado / Deixado / Fechados). */
-function fmtStockNumberAttr(v) {
-  if (v === '' || v === null || v === undefined) return '0';
-  const n = typeof v === 'number' && Number.isFinite(v) ? v : parsePtOrIsoNumberString(String(v));
-  if (!Number.isFinite(n)) return '0';
-  const r = Math.round(n * 1000) / 1000;
-  return String(r);
-}
-/** «Encontrado» / «Deixado»: vazio até preencher (null na API, não 0 por defeito). */
-function parseEncontradoFromRow(v) {
-  if (v === null || v === undefined || v === '') return null;
-  const n = typeof v === 'number' ? v : parseFloat(v);
-  return Number.isFinite(n) ? n : null;
-}
-function fmtStockEncontradoAttr(v) {
-  if (v === '' || v === null || v === undefined) return '';
-  const n = typeof v === 'number' && Number.isFinite(v) ? v : parsePtOrIsoNumberString(String(v));
-  if (!Number.isFinite(n)) return '';
-  const r = Math.round(n * 1000) / 1000;
-  return String(r);
-}
-/** enc+entrada−deixado; NaN se «encontrado» ou «deixado» ainda não definidos. */
-function vendidoQtyFromStockParts(enc, ent, dei) {
-  const e = enc === null || enc === undefined || enc === '' ? NaN : parseFloat(enc);
-  if (!Number.isFinite(e)) return NaN;
-  const d = dei === null || dei === undefined || dei === '' ? NaN : parseFloat(dei);
-  if (!Number.isFinite(d)) return NaN;
-  return Math.max(0, e + (parseFloat(ent) || 0) - d);
-}
-/** type=number: ao sair, vazio ou inválido → 0 visível (evita desaparecer o zero). */
-function stockNumberInputBlur(el) {
-  const pid = el.getAttribute('data-stock-pid');
-  const field = el.getAttribute('data-stock-field');
-  if (!pid || !field) return;
-  const raw = String(el.value ?? '').trim();
-  if ((field === 'encontrado' || field === 'deixado') && raw === '') {
-    el.value = '';
-    el.classList.remove('stock-caixa-required-missing');
-    updateStock(pid, field, '');
-    return;
-  }
-  let n = parseFloat(raw);
-  if (!Number.isFinite(n) || raw === '') n = 0;
-  const row = S.turnoData?.stock?.find((s) => prodIdKey(s.produto_id) === prodIdKey(pid));
-  const kgBarril = getFinoBarrilRecipienteKgFromRow(row);
-  if (
-    S.turnoCanEdit &&
-    kgBarril != null &&
-    (field === 'encontrado' || field === 'deixado') &&
-    n === 0
-  ) {
-    n = kgBarril;
-  }
-  if (field === 'encontrado' && row) {
-    const prev = row.prev_deixado;
-    if (prev !== null && prev !== undefined) {
-      const prevNum = parseFloat(prev);
-      if (Number.isFinite(prevNum) && Math.abs(n - prevNum) >= 0.001) {
-        const nom = String(row.produto_nome || '').trim() || 'Produto';
-        const med = medicaoSigla(row.tipo_medicao || 'unidade');
-        alert(
-          `Encontrado (${fmtNum(n)} ${med}) é diferente de T. anterior (${fmtNum(prevNum)} ${med}).\n\n${nom}`
-        );
-      }
-    }
-  }
-  el.value = String(Math.round(n * 1000) / 1000);
-  el.classList.remove('stock-caixa-required-missing');
-  updateStock(pid, field, el.value);
-}
-function caixaInputBlur(el) {
-  if (!el || el.disabled) return;
-  if (el.getAttribute('data-caixa-req') === '1' && String(el.value).trim() === '') {
-    calcCaixa();
-    return;
-  }
-  if (String(el.value).trim() === '') {
-    el.value = '0';
-    calcCaixa();
-  }
+function stockInputBlurQty(el) {
+  const n = parseRaw(el.value);
+  el.value = n === 0 ? '' : fmtNum(n);
 }
 function medicaoSigla(tipo) {
   return tipo === 'peso' ? 'kg' : 'un';
@@ -1256,7 +1167,7 @@ async function navigate(page, params) {
 async function draw() {
   document.body.classList.toggle('has-auth', !!S.token);
   if (!S.token) { document.body.classList.remove('menu-open'); drawLogin(); return; }
-  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario', 'irregularidades', 'assiduidade'].includes(S.page)) {
+  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario', 'irregularidades', 'assiduidade', 'equipa', 'presenca', 'perfil'].includes(S.page)) {
     S.page = 'dia';
   }
   if (S.page === 'admin' && S.user?.role !== 'admin') {
@@ -1303,6 +1214,9 @@ async function draw() {
       case 'produtos': await drawProdutos(); break;
       case 'escala':   await drawEscala(); break;
       case 'admin':    await drawAdmin(); break;
+      case 'equipa':   await drawEquipa(); break;
+      case 'presenca': await drawPresenca(); break;
+      case 'perfil':   await drawPerfil(); break;
       default:         await drawDia();
     }
   } finally {
@@ -1327,6 +1241,7 @@ function drawLogin() {
           <input id="l-pass" type="password" placeholder="••••••" autocomplete="current-password"/>
         </div>
         <button class="btn btn-primary btn-full" onclick="runAction(event, doLogin)">Entrar</button>
+        <button class="btn btn-ghost btn-full" style="margin-top:8px;font-size:13px;color:#94a3b8" onclick="openPresencaModal()">📷 Registo de Presença</button>
       </div>
     </div>
   `);
@@ -1412,6 +1327,12 @@ function menuEntries() {
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>' });
   if (isAdmin) entries.push({ page: 'admin', label: 'Admin',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' });
+  entries.push({ page: 'equipa', label: 'Equipa',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' });
+  entries.push({ page: 'presenca', label: 'Presença',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>' });
+  entries.push({ page: 'perfil', label: 'Perfil',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' });
   return entries;
 }
 
@@ -1424,6 +1345,7 @@ function toggleMenuDrawer(open) {
 }
 
 function menuDrawerNavigate(page) {
+  if (page === 'perfil') S.perfilUid = null; // ver o próprio perfil
   toggleMenuDrawer(false);
   navigate(page);
 }
@@ -1524,6 +1446,10 @@ function navBar() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
         Admin
       </button>` : ''}
+      <button class="nav-btn ${S.page==='equipa'?'active':''}" onclick="runAction(event, () => navigate('equipa'))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+        Equipa
+      </button>
       <button class="nav-btn" onclick="doLogout()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         Sair
@@ -2237,10 +2163,10 @@ let turnoMsgStickyErr = null;
 let caixaBuf = {};
 let receitasBuf = {}; // { produto_id: [{componente_id, quantidade}] }
 let menuProdIds   = []; // ids dos produtos de menu (inserção manual)
-let bebidaProdIds = []; // ids das bebidas (só unidade / stock) em Vendas
-let bebidaCopoProdIds = []; // bebidas vendidas por copo (input qty)
-let bebidaCopoCfg = {}; // { id: { kgPorCopo, preco, qtdPacote, precoPacote } }
+let bebidaProdIds = []; // bebidas “lata” (stock em unidades no resumo de vendas)
 let bebidaProdPrecos = {}; // { produto_id: preco } para calcular total
+let bebidaCopoProdIds = []; // bebidas vendidas por copo (stock em kg)
+let bebidaCopoCfg = {}; // id -> { kgPorCopo, preco, qtdPacote, precoPacote }
 let avulsoProdIds = []; // ids dos ingredientes com venda_avulso=true
 let vendasProdPrecos = {}; // { produto_id: preco } para todos os produtos de vendas
 /** Nome a partir do catálogo (evita «Produto uuid» quando stock e vendas diferem no id). */
@@ -2249,6 +2175,100 @@ let vendasProdNomes = {};
 /** Fino Barril só na folha de stock (kg), não na aba Vendas nem nos totais de vendas. */
 function isFinoBarrilNome(nome) {
   return String(nome || '').trim().toLowerCase() === 'fino barril';
+}
+
+function parseCaixaInputRaw(id) {
+  const raw = String(document.getElementById(id)?.value ?? '').trim();
+  if (raw === '') return null;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : null;
+}
+function parseCaixaTriploFromInputs() {
+  const tpa = parseCaixaInputRaw('c-tpa');
+  const tr = parseCaixaInputRaw('c-transf');
+  const d = parseCaixaInputRaw('c-din');
+  if (tpa === null || tr === null || d === null) return NaN;
+  return tpa + tr + d;
+}
+function nomeVendaBebidaLegivel(pid, nomeCatalogo) {
+  const raw = String(nomeCatalogo || '').trim();
+  const n = raw.replace(/\s*\(copos\)\s*$/i, '').trim();
+  const uuidSolo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const produtoUuid = /^Produto\s+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!n) return 'Bebida';
+  if (uuidSolo.test(n)) return 'Bebida';
+  if (produtoUuid.test(n)) return 'Bebida';
+  if (/^Produto\s+[0-9a-f-]{36}/i.test(n)) return 'Bebida';
+  return n;
+}
+function fmtStockNumberAttr(v) {
+  if (v === '' || v === null || v === undefined) return '0';
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : parsePtOrIsoNumberString(String(v));
+  if (!Number.isFinite(n)) return '0';
+  return String(Math.round(n * 1000) / 1000);
+}
+function stockNumberInputBlur(el) {
+  const pid = el.getAttribute('data-stock-pid');
+  const field = el.getAttribute('data-stock-field');
+  if (!pid || !field) return;
+  const raw = String(el.value ?? '').trim();
+  if ((field === 'encontrado' || field === 'deixado') && raw === '') {
+    el.value = '';
+    el.classList.remove('stock-caixa-required-missing');
+    updateStock(pid, field, '');
+    return;
+  }
+  let n = parseFloat(raw);
+  if (!Number.isFinite(n) || raw === '') n = 0;
+  const row = S.turnoData?.stock?.find((s) => prodIdKey(s.produto_id) === prodIdKey(pid));
+  const kgBarril = getFinoBarrilRecipienteKgFromRow(row);
+  if (S.turnoCanEdit && kgBarril != null && (field === 'encontrado' || field === 'deixado') && n === 0) {
+    n = kgBarril;
+  }
+  if (field === 'encontrado' && row) {
+    const prev = row.prev_deixado;
+    if (prev !== null && prev !== undefined) {
+      const prevNum = parseFloat(prev);
+      if (Number.isFinite(prevNum) && Math.abs(n - prevNum) >= 0.001) {
+        const nom = String(row.produto_nome || '').trim() || 'Produto';
+        const med = medicaoSigla(row.tipo_medicao || 'unidade');
+        alert(`Encontrado (${fmtNum(n)} ${med}) é diferente de T. anterior (${fmtNum(prevNum)} ${med}).\n\n${nom}`);
+      }
+    }
+  }
+  el.value = String(Math.round(n * 1000) / 1000);
+  el.classList.remove('stock-caixa-required-missing');
+  updateStock(pid, field, el.value);
+}
+function caixaInputBlur(el) {
+  if (!el || el.disabled) return;
+  if (el.getAttribute('data-caixa-req') === '1' && String(el.value).trim() === '') {
+    calcCaixa();
+    return;
+  }
+  if (String(el.value).trim() === '') {
+    el.value = '0';
+    calcCaixa();
+  }
+}
+
+function parseEncontradoFromRow(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+function fmtStockEncontradoAttr(v) {
+  if (v === '' || v === null || v === undefined) return '';
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : parsePtOrIsoNumberString(String(v));
+  if (!Number.isFinite(n)) return '';
+  return String(Math.round(n * 1000) / 1000);
+}
+function vendidoQtyFromStockParts(enc, ent, dei) {
+  const e = enc === null || enc === undefined || enc === '' ? NaN : parseFloat(enc);
+  if (!Number.isFinite(e)) return NaN;
+  const d = dei === null || dei === undefined || dei === '' ? NaN : parseFloat(dei);
+  if (!Number.isFinite(d)) return NaN;
+  return Math.max(0, e + (parseFloat(ent) || 0) - d);
 }
 
 /** Linha de stock do turno para um produto: `stockBuf` (editável) ou fallback a `S.turnoData.stock`. */
@@ -2334,6 +2354,10 @@ function refreshMenuQtys() {
     if (el.tagName === 'INPUT') el.value = String(v);
     else el.textContent = String(v);
   }
+  for (const prodId of bebidaCopoProdIds) {
+    const el = document.getElementById(`venda-qty-${prodId}`);
+    if (el) el.textContent = String(vendasBuf[prodId] || 0);
+  }
   for (const prodId of bebidaProdIds) {
     const el = document.getElementById(`venda-qty-${prodId}`);
     const pid = String(prodId);
@@ -2363,11 +2387,14 @@ function getTotalVendasTurnoKz() {
     total += calcStandaloneQty(prodId) * (vendasProdPrecos[prodId] || 0);
   }
   for (const prodId of bebidaCopoProdIds) {
-    const k = prodIdKey(prodId);
-    const cfg = bebidaCopoCfg[k];
+    const cfg = bebidaCopoCfg[prodId];
     if (!cfg) continue;
-    const copos = vendasBuf[k] || 0;
+    const copos = vendasBuf[prodId] || 0;
     total += precoVendaCopos(copos, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
+  }
+  for (const prodId of bebidaProdIds) {
+    const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
+    total += Math.max(0, b.encontrado + b.entrada - b.deixado) * (vendasProdPrecos[prodId] || 0);
   }
   forEachBebidaUnidadeVendidaLinha(({ sub }) => {
     total += sub;
@@ -3747,6 +3774,26 @@ async function imprimirFaturaVendas() {
   openFaturaDocumentHtml(buildFaturaVendaDocumentHtml(docRef, lines, total));
 }
 
+async function loadTurnoResumoTab(turnoId) {
+  const mount = document.getElementById('turno-resumo-mount');
+  if (!mount) return;
+  mount.innerHTML = '<span style="color:#64748b">A carregar…</span>';
+  if (!S.turnoData) {
+    mount.innerHTML = '<span style="color:#ef4444">Sem dados do turno.</span>';
+    return;
+  }
+  try {
+    await loadVendasMenu(turnoId, false);
+  } catch (e) {
+    mount.innerHTML = `<div class="card"><span style="color:#ef4444">${escapeHtml(e.message)}</span></div>`;
+    return;
+  }
+  let resumoVendasHtml = lastResumoVendasCardHtml
+    ? lastResumoVendasCardHtml.replace(/\bid="vendas-total-geral"/g, 'id="resumo-tab-total-vendas"')
+    : '<div class="card"><div class="card-title">Resumo de vendas</div><span style="color:#64748b">Sem linhas de resumo.</span></div>';
+  mount.innerHTML = resumoVendasHtml;
+}
+
 async function loadVendasMenu(turnoId, canEdit) {
   try {
     const [prods, vendas, todasReceitas] = await Promise.all([
@@ -3801,6 +3848,27 @@ async function loadVendasMenu(turnoId, canEdit) {
       vendasProdPrecos[v.produto_id] = u;
     });
 
+    const btnStyle = 'width:28px;height:28px;border-radius:6px;border:none;font-size:1.1rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;';
+
+    bebidaCopoCfg = {};
+    const bebidaCopoProds = bebidaProds.filter(
+      (p) => p.venda_por_copo && parseFloat(p.kg_por_copo) > 0
+    );
+    const bebidaOutras = bebidaProds.filter(
+      (p) => !(p.venda_por_copo && parseFloat(p.kg_por_copo) > 0)
+    );
+    bebidaCopoProdIds = bebidaCopoProds.map((p) => p.id);
+    bebidaProdIds = bebidaOutras.map((p) => p.id);
+    bebidaCopoProds.forEach((p) => {
+      bebidaCopoCfg[p.id] = {
+        nome: nomeVendaBebidaLegivel(String(p.id), p.nome),
+        kgPorCopo: parseFloat(p.kg_por_copo) || 0,
+        preco: parseFloat(p.preco) || 0,
+        qtdPacote: parseInt(p.qtd_copos_pacote, 10) || 0,
+        precoPacote: parseFloat(p.preco_copos_pacote) || 0
+      };
+    });
+
     menuProdIds = menuProds.map(p => p.id);
     const menuRows = menuProds.map(p => {
       const qty = vendasBuf[prodIdKey(p.id)] || 0;
@@ -3816,65 +3884,30 @@ async function loadVendasMenu(turnoId, canEdit) {
       </div>`;
     }).join('');
 
-    const bebidaCopoProds = bebidaProds.filter((p) => isBebidaProdutoPorCopo(p));
-    const bebidaOutras = bebidaProds.filter((p) => !isBebidaProdutoPorCopo(p));
-    bebidaCopoProdIds = bebidaCopoProds.map((p) => prodIdKey(p.id)).filter(Boolean);
-    bebidaCopoCfg = {};
-    bebidaCopoProds.forEach((p) => {
-      const pid = prodIdKey(p.id);
-      if (!pid) return;
-      const nomeJoin = vendasProdNomes[pid];
-      bebidaCopoCfg[pid] = {
-        nome: nomeVendaBebidaLegivel(pid, nomeJoin || p.nome),
-        kgPorCopo: parseFloat(p.kg_por_copo) || 0,
-        preco: parseFloat(p.preco) || 0,
-        qtdPacote: parseInt(p.qtd_copos_pacote, 10) || 0,
-        precoPacote: parseFloat(p.preco_copos_pacote) || 0
-      };
-    });
-    /** Copos: preços efectivos da API (snapshot em turno fechado) para totais e linha. */
-    for (const v of vendas) {
-      const isCopo = !!v.venda_por_copo && parseFloat(v.kg_por_copo) > 0;
-      if (!isCopo) continue;
-      if (isFinoBarrilNome(v.produto_nome)) continue;
-      const pid = prodIdKey(v.produto_id);
-      if (!pid) continue;
-      if (!bebidaCopoCfg[pid]) {
-        bebidaCopoCfg[pid] = {
-          nome: nomeVendaBebidaLegivel(pid, v.produto_nome),
-          kgPorCopo: parseFloat(v.kg_por_copo) || 0,
-          preco: 0,
-          qtdPacote: 0,
-          precoPacote: 0
-        };
-      }
-      bebidaCopoCfg[pid].preco = parseFloat(v.preco) || 0;
-      bebidaCopoCfg[pid].qtdPacote = parseInt(v.qtd_copos_pacote, 10) || 0;
-      bebidaCopoCfg[pid].precoPacote = parseFloat(v.preco_copos_pacote) || 0;
-      if (!bebidaCopoProdIds.includes(pid)) bebidaCopoProdIds.push(pid);
-    }
-    bebidaProdIds = bebidaOutras.map((p) => p.id);
     bebidaProdPrecos = {};
+    bebidaOutras.forEach((p) => {
+      bebidaProdPrecos[p.id] = parseFloat(p.preco) || 0;
+    });
     const bebidaCopoRows = bebidaCopoProds.map((p) => {
-      const pid = prodIdKey(p.id);
-      const cfg = bebidaCopoCfg[pid];
-      const copos = vendasBuf[pid] || 0;
-      const b = getStockLineForProduto(p.id);
-      const kgStockRaw = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
-      const kgStock = Number.isFinite(kgStockRaw) ? Math.max(0, kgStockRaw) : 0;
+      const cfg = bebidaCopoCfg[p.id];
+      const copos = vendasBuf[p.id] || 0;
+      const kgStock = (() => {
+        const b = stockBuf[p.id] || { encontrado:0, entrada:0, deixado:0 };
+        return Math.max(0, b.encontrado + b.entrada - b.deixado);
+      })();
       const precoLinha =
         cfg.qtdPacote >= 2 && cfg.precoPacote > 0
           ? `${fmt(cfg.preco)}/copo · ${cfg.qtdPacote} copos ${fmt(cfg.precoPacote)}`
           : `${fmt(cfg.preco)}/copo`;
-      const qtyCopo = canEdit
+      const copoCtrl = canEdit
         ? `<input type="number" min="0" step="1" inputmode="numeric" autocomplete="off" class="venda-qty-input" id="venda-qty-${p.id}" data-venda-pid="${p.id}" data-venda-turno="${turnoId}" value="${copos}" onblur="vendaQtyInputBlur(this)"/>`
         : `<span id="venda-qty-${p.id}" style="min-width:28px;text-align:center;font-weight:700">${copos}</span>`;
-      return `<div class="produto-row">
+      return `<div class="produto-row" style="align-items:center">
         <div class="produto-info">
-          <div class="produto-nome">${cfg.nome} <span style="font-size:10px;color:#64748b;font-weight:600">(copos)</span></div>
-          <div class="produto-meta" style="line-height:1.35">${precoLinha} · ${fmtNum(cfg.kgPorCopo)} kg/copo · stock ~${fmtNum(kgStock)} kg</div>
+          <div class="produto-nome">${p.nome} <span style="font-size:10px;color:#64748b;font-weight:600">(copos)</span></div>
+          <div class="produto-meta">${precoLinha} · ${fmtNum(cfg.kgPorCopo)} kg/copo · stock ~${fmtNum(kgStock)} kg</div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">${qtyCopo}</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-top:2px">${copoCtrl}</div>
       </div>`;
     }).join('');
     const bebidaRows = bebidaOutras.map((p) => {
@@ -4058,64 +4091,52 @@ async function loadVendasMenu(turnoId, canEdit) {
   }
 }
 
-/** Aba Registos: card «Resumo de vendas» (HTML gerado em loadVendasMenu → lastResumoVendasCardHtml). */
-async function loadTurnoResumoTab(turnoId) {
-  const mount = document.getElementById('turno-resumo-mount');
-  if (!mount) return;
-  mount.innerHTML = '<span style="color:#64748b">A carregar…</span>';
-  if (!S.turnoData) {
-    mount.innerHTML = '<span style="color:#ef4444">Sem dados do turno.</span>';
-    return;
-  }
-
-  try {
-    await loadVendasMenu(turnoId, false);
-  } catch (e) {
-    mount.innerHTML = `<div class="card"><span style="color:#ef4444">${escapeHtml(e.message)}</span></div>`;
-    return;
-  }
-
-  let resumoVendasHtml = lastResumoVendasCardHtml
-    ? lastResumoVendasCardHtml.replace(/\bid="vendas-total-geral"/g, 'id="resumo-tab-total-vendas"')
-    : '<div class="card"><div class="card-title">Resumo de vendas</div><span style="color:#64748b">Sem linhas de resumo (regista vendas na aba Vendas ou pedidos na aba Pedidos ao balcão).</span></div>';
-
-  mount.innerHTML = resumoVendasHtml;
-}
-
-/** Grava quantidade de venda (menu ou bebida por copo) ao sair do input. */
-async function vendaQtyInputBlur(el) {
-  if (!el || el.disabled) return;
-  const prodIdRaw = el.getAttribute('data-venda-pid');
-  const turnoId = el.getAttribute('data-venda-turno');
-  if (!prodIdRaw || !turnoId) return;
-  const prodId = prodIdKey(prodIdRaw);
-  if (!prodId) return;
-  const isCopo = bebidaCopoCfg[prodId]?.kgPorCopo > 0;
-  let q = parseFloat(String(el.value).trim());
-  if (!Number.isFinite(q)) q = 0;
-  if (isCopo) q = Math.max(0, Math.floor(q));
-  else q = Math.max(0, Math.round(q * 1000) / 1000);
-  el.value = String(q);
+async function deltaVenda(turnoId, prodId, delta) {
   const prev = vendasBuf[prodId] || 0;
-  if (q === prev) return;
-  vendasBuf[prodId] = q;
+  vendasBuf[prodId] = Math.max(0, prev + delta);
+  const el = document.getElementById(`venda-qty-${prodId}`);
+  if (el) el.textContent = vendasBuf[prodId];
   refreshVendasTotal();
   try {
-    await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodIdRaw, quantidade: q });
+    await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: vendasBuf[prodId] });
     const cfg = bebidaCopoCfg[prodId];
     if (cfg && cfg.kgPorCopo > 0) {
-      const delta = q - prev;
-      if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado: null, entrada: 0, deixado: null, fechados: 0 };
-      const curD = stockBuf[prodId].deixado;
-      const base = curD == null || curD === '' ? 0 : parseFloat(curD);
-      stockBuf[prodId].deixado = Math.max(0, base - delta * cfg.kgPorCopo);
-      updateStock(prodIdRaw, 'deixado', fmtStockEncontradoAttr(stockBuf[prodId].deixado));
-    } else {
-      renderIrregularidadesTurno();
+      if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
+      const kgAdj = -delta * cfg.kgPorCopo;
+      stockBuf[prodId].deixado = Math.max(0, (parseFloat(stockBuf[prodId].deixado) || 0) + kgAdj);
+      updateStock(prodId, 'deixado', fmtNum(stockBuf[prodId].deixado));
     }
   } catch(e) {
     vendasBuf[prodId] = prev;
-    el.value = String(prev);
+    if (el) el.textContent = vendasBuf[prodId];
+    refreshVendasTotal();
+    alert('Erro ao registar venda: ' + e.message);
+  }
+}
+
+async function vendaQtyInputBlur(inp) {
+  const prodId = inp.dataset.vendaPid;
+  const turnoId = inp.dataset.vendaTurno;
+  if (!prodId || !turnoId) return;
+  const novaQty = Math.max(0, Math.floor(parseFloat(inp.value) || 0));
+  inp.value = novaQty;
+  const prev = vendasBuf[prodId] || 0;
+  if (novaQty === prev) return;
+  const delta = novaQty - prev;
+  vendasBuf[prodId] = novaQty;
+  refreshVendasTotal();
+  try {
+    await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: novaQty });
+    const cfg = bebidaCopoCfg[prodId];
+    if (cfg && cfg.kgPorCopo > 0) {
+      if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
+      const kgAdj = -delta * cfg.kgPorCopo;
+      stockBuf[prodId].deixado = Math.max(0, (parseFloat(stockBuf[prodId].deixado) || 0) + kgAdj);
+      updateStock(prodId, 'deixado', fmtNum(stockBuf[prodId].deixado));
+    }
+  } catch(e) {
+    vendasBuf[prodId] = prev;
+    inp.value = prev;
     refreshVendasTotal();
     alert('Erro ao registar venda: ' + e.message);
   }
@@ -4948,29 +4969,6 @@ async function fecharTurno(ev, id) {
     await focusTurnoFieldParaValidacao(missing[0]);
     return;
   }
-  let equipaReal = [];
-  try {
-    equipaReal = await api('GET', `/turnos/${id}/equipa-real`);
-  } catch (e) {
-    turnoMsgErr(e.message || 'Não foi possível verificar a equipa do turno.');
-    return;
-  }
-  if (!Array.isArray(equipaReal) || equipaReal.length === 0) {
-    turnoMsgErr(
-      'Regista pelo menos uma pessoa em «Quem realmente trabalhou» (separador Escala) antes de fechar o turno.',
-      true
-    );
-    const btnEscala = document.querySelector('.turno-tab[data-turno-tab="escala"]');
-    if (btnEscala) await switchTurnoTab('escala', btnEscala);
-    requestAnimationFrame(() => {
-      const sec = document.getElementById('turno-equipa-real-section');
-      if (sec) {
-        sec.classList.add('stock-caixa-required-missing');
-        sec.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      }
-    });
-    return;
-  }
   if (!confirm('Fechar este turno? Não poderá ser editado depois.')) return;
   await runAction(ev, async () => {
     try {
@@ -4980,7 +4978,18 @@ async function fecharTurno(ev, id) {
       clearStockCaixaValidationHighlight();
       await loadTurno();
     } catch (e) {
-      turnoMsgErr(e.message);
+      turnoMsgErr(e.message, true);
+      if (e.message && e.message.includes('Quem realmente trabalhou')) {
+        const btnEscala = document.querySelector('.turno-tab[data-turno-tab="escala"]');
+        if (btnEscala) await switchTurnoTab('escala', btnEscala);
+        requestAnimationFrame(() => {
+          const sec = document.getElementById('turno-equipa-real-section');
+          if (sec) {
+            sec.classList.add('stock-caixa-required-missing');
+            sec.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          }
+        });
+      }
     }
   });
 }
@@ -5342,6 +5351,22 @@ async function loadTurnoAreasEscalados() {
         return `<span class="turno-area-person"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${escapeHtml(nome)}</span>`;
       }).join('');
     });
+    bebidaCopoProdIds.forEach((pid) => {
+      const copos = vendasBuf[pid] || 0;
+      if (copos <= 0) return;
+      const cfg = bebidaCopoCfg[pid];
+      if (!cfg) return;
+      const val = precoVendaCopos(copos, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
+      totalVendasVal += val;
+      const si = stocks.find((s) => String(s.produto_id) === String(pid));
+      vendasLines.push({
+        nome: si?.produto_nome || `Produto ${pid}`,
+        qty: copos,
+        preco: cfg.preco,
+        total: val,
+        copo: true
+      });
+    });
 
     const semAreaCount = (porArea[0] || []).length;
     if (semAreaCount > 0 && origEl) {
@@ -5350,11 +5375,90 @@ async function loadTurnoAreasEscalados() {
         .join(', ');
       origEl.textContent = `${origem ? origem + ' · ' : ''}Sem área: ${nomes}`;
     }
-  } catch (e) {
-    AREAS_TRABALHO_META.forEach((area) => {
-      const slot = document.getElementById(`turno-area-people--${area.id}`);
-      if (slot) slot.innerHTML = '<span class="turno-area-empty">—</span>';
-    });
+
+    // 6. Compras registadas mas caixa não preenchida
+    if (totalCompras > 0 && totalGerado === 0) {
+      irr.push({ level:'warn', msg:`Compras de stock registadas (${fmt(totalCompras)}) mas caixa com valor zero` });
+    }
+
+    // 7. Possível desconto: valor do stock consumido > vendas registadas
+    if (totalValStock > 0 && totalVendasVal > 0 && totalValStock > totalVendasVal) {
+      const desconto = totalValStock - totalVendasVal;
+      const pct = desconto / totalValStock * 100;
+      irr.push({ level:'warn', msg:`Possível desconto aplicado: stock consumido (${fmt(totalValStock)}) superior às vendas registadas (${fmt(totalVendasVal)}) — diferença de ${fmt(desconto)} (${pct.toFixed(1)}%)` });
+    }
+
+    // — Helpers de render —
+    const icon  = { error:'🔴', warn:'🟡', info:'🔵' };
+    const color = { error:'#f87171', warn:'#fbbf24', info:'#60a5fa' };
+
+    const chip = (label, value, valueColor, bold) => `
+      <div style="background:#1e293b;border-radius:8px;padding:10px 12px">
+        <div style="color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">${label}</div>
+        <div style="font-weight:${bold?'700':'600'};font-size:${bold?'1.05rem':'0.95rem'};color:${valueColor||'#e2e8f0'}">${value}</div>
+      </div>`;
+
+    const financCard = `
+      <div class="card">
+        <div class="card-title">💰 Resumo Financeiro</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+          ${chip('TPA / Máquina', fmt(tpa))}
+          ${chip('Transferência', fmt(transf))}
+          ${chip('Dinheiro', fmt(din))}
+          ${chip('Total Gerado', fmt(totalGerado), '#4ade80', true)}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+          ${chip('Compras', fmt(totalCompras), '#fb923c')}
+          ${chip('Despesas', fmt(totalDespesas), '#f87171')}
+          ${chip('Total Saídas', fmt(totalSaidas), '#f87171', true)}
+        </div>
+        <div style="padding:12px 14px;background:#0f172a;border-radius:8px;display:flex;justify-content:space-between;align-items:center;border:1px solid #334155">
+          <span style="color:#94a3b8;font-weight:600;text-transform:uppercase;font-size:12px;letter-spacing:.05em">Total Final</span>
+          <span style="font-size:1.25rem;font-weight:700;color:${totalFinal >= 0 ? '#4ade80' : '#f87171'}">${fmt(totalFinal)}</span>
+        </div>
+      </div>`;
+
+    const stockCard = `
+      <div class="card mt-16">
+        <div class="card-title">📦 Resumo de Stock</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          ${chip('Total Vendido (und.)', fmtNum(totalVend))}
+          ${chip('Valor de Stock', fmt(totalValStock), '#4ade80', true)}
+        </div>
+      </div>`;
+
+    const vendasCard = vendasLines.length > 0 ? `
+      <div class="card mt-16">
+        <div class="card-title">🍽️ Resumo de Vendas</div>
+        ${vendasLines.map(v => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1e293b">
+            <span style="font-size:13px;color:#cbd5e1">${v.nome}</span>
+            <span style="display:flex;gap:14px;align-items:center">
+              <span style="color:#64748b;font-size:12px">${v.copo ? v.qty + ' copos' : v.qty + ' × ' + fmt(v.preco)}</span>
+              <span style="font-weight:600;color:#e2e8f0;min-width:72px;text-align:right">${fmt(v.total)}</span>
+            </span>
+          </div>`).join('')}
+        <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:2px solid #334155">
+          <span style="font-weight:600;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.05em">Total Vendas</span>
+          <span style="font-weight:700;color:#4ade80">${fmt(totalVendasVal)}</span>
+        </div>
+      </div>` : '';
+
+    const irrCard = `
+      <div class="card mt-16">
+        <div class="card-title">⚠️ Irregularidades</div>
+        ${irr.length === 0
+          ? '<div style="color:#4ade80;font-size:14px;padding:6px 0">✓ Nenhuma irregularidade detectada</div>'
+          : irr.map(i => `
+              <div style="display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid #1e293b">
+                <span style="flex-shrink:0;font-size:14px">${icon[i.level]}</span>
+                <span style="color:${color[i.level]};font-size:13px;line-height:1.45">${i.msg}</span>
+              </div>`).join('')}
+      </div>`;
+
+    el.innerHTML = financCard + stockCard + vendasCard + irrCard;
+  } catch(e) {
+    el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }
 }
 
@@ -5586,10 +5690,10 @@ async function drawHistorico() {
     </div>
     ${navBar()}
   `);
-  // Defaults: último mês
+  // Defaults: ontem-hoje
   const hoje = new Date().toISOString().split('T')[0];
-  const mes  = addDays(hoje, -30);
-  document.getElementById('h-inicio').value = mes;
+  const ontem = addDays(hoje, -1);
+  document.getElementById('h-inicio').value = ontem;
   document.getElementById('h-fim').value = hoje;
   await loadHistorico();
 }
@@ -5842,8 +5946,8 @@ async function drawIrregularidades() {
     ${navBar()}
   `);
   const hoje = new Date().toISOString().split('T')[0];
-  const mes = addDays(hoje, -30);
-  document.getElementById('ir-inicio').value = mes;
+  const ontem = addDays(hoje, -1);
+  document.getElementById('ir-inicio').value = ontem;
   document.getElementById('ir-fim').value = hoje;
   await loadIrregularidadesLista();
 }
@@ -6155,6 +6259,12 @@ async function drawAuditoria() {
           <div class="field" style="flex:2;min-width:200px;margin:0"><label>Pesquisar</label><input type="text" id="aud-q" placeholder="ex.: turno fechado, depósito, login" onkeydown="if(event.key==='Enter') runAction(event, loadAuditoria)"/></div>
           <button type="button" class="btn btn-primary" onclick="runAction(event, loadAuditoria)">Carregar</button>
         </div>
+        <div style="margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#94a3b8;cursor:pointer;user-select:none">
+            <input type="checkbox" id="aud-hide-stock" onchange="audApplyFilter()" style="accent-color:#3b82f6;width:14px;height:14px"/>
+            Ocultar «Stock do turno guardado»
+          </label>
+        </div>
         <p style="margin:10px 0 0;font-size:11px;color:#64748b;line-height:1.4">Horas em hora de Angola (UTC+1). Sem hora preenchida, <strong>De</strong> assume <code>00:00</code> e <strong>Até</strong> assume <code>23:59:59</code>. Ao mudar qualquer filtro a lista recarrega.</p>
       </div>
       <div id="aud-content"></div>
@@ -6205,6 +6315,55 @@ function audPayloadResumo(payload) {
   return partes.join(' · ');
 }
 
+let _audRows = [];
+
+function audApplyFilter() {
+  const hideStock = document.getElementById('aud-hide-stock')?.checked;
+  const rows = hideStock
+    ? _audRows.filter((r) => r.acao !== 'Stock do turno guardado')
+    : _audRows;
+  if (!rows.length) {
+    show('aud-content', '<div class="card"><p style="color:#94a3b8;margin:0">Sem registos no período/filtro' + (hideStock && _audRows.length ? ' (tudo oculto pelo filtro activo)' : '') + '.</p></div>');
+    return;
+  }
+  const trs = rows.map((r) => {
+    const payloadResumo = audPayloadResumo(r.payload);
+    const detalheLinha = [r.descricao, payloadResumo].filter(Boolean).join(' · ');
+    return `
+      <tr>
+        <td style="padding:8px 10px;color:#94a3b8;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:top">${escapeHtml(r.quando_local || '')}</td>
+        <td style="padding:8px 10px;color:#e2e8f0;vertical-align:top">
+          <div style="font-weight:600">${escapeHtml(r.utilizador_nome || '— anónimo —')}</div>
+          <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
+        </td>
+        <td style="padding:8px 10px;vertical-align:top">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${audMetodoBadge(r.metodo)} ${audStatusBadge(r.status)}</div>
+          <div style="font-size:13px;color:#cbd5e1;margin-top:3px;font-weight:500">${escapeHtml(r.acao || '')}</div>
+          ${detalheLinha ? `<div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.35">${escapeHtml(detalheLinha)}</div>` : ''}
+          <div style="font-size:10px;color:#475569;margin-top:2px;font-family:monospace">${escapeHtml(r.caminho || '')}</div>
+        </td>
+      </tr>`;
+  }).join('');
+  const ocultos = _audRows.length - rows.length;
+  show('aud-content', `
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px;white-space:nowrap">Quando</th>
+              <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Utilizador</th>
+              <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Atividade</th>
+            </tr>
+          </thead>
+          <tbody>${trs}</tbody>
+        </table>
+      </div>
+    </div>
+    <p style="margin:10px 0 0;font-size:11px;color:#64748b">A mostrar ${rows.length} registo${rows.length !== 1 ? 's' : ''}${ocultos > 0 ? ` (${ocultos} oculto${ocultos !== 1 ? 's' : ''} pelo filtro)` : ''} — até 300 mais recentes do período.</p>
+  `);
+}
+
 async function loadAuditoria() {
   const ini = val('aud-inicio');
   const fim = val('aud-fim');
@@ -6221,46 +6380,12 @@ async function loadAuditoria() {
     if (q) params.push(`acao=${encodeURIComponent(q)}`);
     params.push('limit=300');
     const data = await api('GET', `/auditoria?${params.join('&')}`);
-    const rows = (data && data.rows) || [];
-    if (!rows.length) {
+    _audRows = (data && data.rows) || [];
+    if (!_audRows.length) {
       show('aud-content', '<div class="card"><p style="color:#94a3b8;margin:0">Sem registos no período/filtro.</p></div>');
       return;
     }
-    const trs = rows.map((r) => {
-      const payloadResumo = audPayloadResumo(r.payload);
-      const detalheLinha = [r.descricao, payloadResumo].filter(Boolean).join(' · ');
-      return `
-        <tr>
-          <td style="padding:8px 10px;color:#94a3b8;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:top">${escapeHtml(r.quando_local || '')}</td>
-          <td style="padding:8px 10px;color:#e2e8f0;vertical-align:top">
-            <div style="font-weight:600">${escapeHtml(r.utilizador_nome || '— anónimo —')}</div>
-            <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
-          </td>
-          <td style="padding:8px 10px;vertical-align:top">
-            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${audMetodoBadge(r.metodo)} ${audStatusBadge(r.status)}</div>
-            <div style="font-size:13px;color:#cbd5e1;margin-top:3px;font-weight:500">${escapeHtml(r.acao || '')}</div>
-            ${detalheLinha ? `<div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.35">${escapeHtml(detalheLinha)}</div>` : ''}
-            <div style="font-size:10px;color:#475569;margin-top:2px;font-family:monospace">${escapeHtml(r.caminho || '')}</div>
-          </td>
-        </tr>`;
-    }).join('');
-    show('aud-content', `
-      <div class="card" style="padding:0;overflow:hidden">
-        <div class="table-wrap">
-          <table style="width:100%;border-collapse:collapse">
-            <thead>
-              <tr>
-                <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px;white-space:nowrap">Quando</th>
-                <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Utilizador</th>
-                <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Atividade</th>
-              </tr>
-            </thead>
-            <tbody>${trs}</tbody>
-          </table>
-        </div>
-      </div>
-      <p style="margin:10px 0 0;font-size:11px;color:#64748b">A mostrar até 300 registos mais recentes do período. Para ver mais antigos, restringe o intervalo.</p>
-    `);
+    audApplyFilter();
   } catch (e) {
     show('aud-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
   }
@@ -7200,8 +7325,8 @@ async function loadProdutos() {
           ${items.map(p => `
             <div class="produto-row">
               <div class="produto-info">
-                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${isBebidaProdutoPorCopo(p) ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : p.categoria === 'bebida' ? ' <span style="font-size:10px;background:#1e3a5f;color:#93c5fd;padding:1px 5px;border-radius:4px">unidade</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">só armazém</span>' : ''}</div>
-                <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'}${parseFloat(p.peso_tara_kg) > 0 ? ` · recipiente ${fmtNum(parseFloat(p.peso_tara_kg))} kg` : ''} · #${p.ordem}</div>
+                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.venda_por_copo && parseFloat(p.kg_por_copo) > 0 ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">só armazém</span>' : ''}</div>
+                <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
               </div>
               ${isAdmin ? `
               <div class="produto-actions">
@@ -7246,7 +7371,7 @@ function showProdutoForm(id) {
       '</div>' +
       '<div id="prod-form-msg"></div>' +
       '<div class="field"><label>Nome</label><input id="p-nome" value=""/></div>' +
-      '<div class="field"><label id="p-preco-label">Preço (Kz)</label><input id="p-preco" type="number" min="0" value="0"/></div>' +
+      '<div class="field"><label id="p-preco-label">Preço (Kz)</label><input id="p-preco" type="number" min="0" step="any" value="0"/></div>' +
       '<div class="field"><label>Medição</label><select id="p-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>' +
       '<div class="field" id="field-tara" style="display:none">' +
         '<label>Peso do recipiente (tara) kg</label>' +
@@ -7255,14 +7380,15 @@ function showProdutoForm(id) {
       '</div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
       '<div class="field" id="field-avulso"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso</label></div>' +
-      '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Folha de stock do turno</label><div id="p-stock-turno-hint-extra" style="font-size:11px;margin-top:4px;margin-left:24px"></div><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">A folha do turno inclui só <strong style="color:#cbd5e1">Menu</strong>, <strong style="color:#cbd5e1">Ingredientes</strong> e <strong style="color:#cbd5e1">Bebida</strong>. Categoria <strong>Outro</strong> não é controlada em stock no turno.</div></div>' +
-      '<div id="field-copo-bebida" style="display:none;margin-top:6px;border-left:2px solid #334155;padding-left:10px">' +
-        '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-copo" style="width:16px;height:16px"> Venda por copo</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Stock em kg no turno; registo de vendas em copos. O preço acima é por copo avulso.</div></div>' +
-        '<div id="field-copo-detalhes" style="display:none">' +
-          '<div class="field"><label>kg por copo</label><input id="p-kg-copo" type="number" step="0.001" min="0" value="0.27"/></div>' +
-          '<div class="field"><label>Preço do pacote (Kz)</label><input id="p-preco-pacote" type="number" min="0" step="1" value="0"/></div>' +
-          '<div class="field"><label>Nº copos no pacote</label><input id="p-qtd-pacote" type="number" min="1" step="1" value="3"/></div>' +
-        '</div></div>' +
+      '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Folha de stock do turno</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Se desmarcares, o produto não entra na contagem ao abrir turno (útil para consumíveis só de armazém).</div></div>' +
+      '<div class="field" id="field-copo-bebida" style="display:none">' +
+      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-venda-copo" style="width:16px;height:16px"/> Venda por copo (stock em kg, registo em copos)</label>' +
+      '<div id="field-copo-detalhe" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #334155">' +
+      '<div class="field"><label>Kg por copo servido</label><input id="p-kg-copo" type="number" min="0.001" step="0.001" value="0.27"/></div>' +
+      '<div class="field"><label>Preço do pacote (Kz) — ex. 1000 por 3 copos</label><input id="p-preco-pacote" type="number" min="0" step="1" value="0"/></div>' +
+      '<div class="field"><label>Número de copos no pacote — ex. 3</label><input id="p-qtd-pacote" type="number" min="0" step="1" value="0"/></div>' +
+      '<p style="font-size:11px;color:#64748b;margin:0;line-height:1.4">O campo «Preço» acima é o valor de <strong>1 copo</strong> (ex. 400 Kz). Se preencheres pacote (ex. 3 copos / 1000 Kz), o total usa pacotes completos + resto ao preço unitário.</p>' +
+      '</div></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
       (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +
@@ -7284,48 +7410,25 @@ function showProdutoForm(id) {
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
   if (p) document.getElementById('p-avulso').checked = !!p.venda_avulso;
   const st = document.getElementById('p-stock-turno');
-  if (st) {
-    const cat0 = p ? (p.categoria || 'outro') : 'outro';
-    if (cat0 === 'outro') st.checked = false;
-    else st.checked = p ? p.em_stock_turno !== false : true;
-  }
-  const pcopo = document.getElementById('p-copo');
+  if (st) st.checked = p ? p.em_stock_turno !== false : true;
+  const pvc = document.getElementById('p-venda-copo');
+  if (pvc) pvc.checked = !!(p && p.venda_por_copo && parseFloat(p.kg_por_copo) > 0);
   const pkg = document.getElementById('p-kg-copo');
-  const ppac = document.getElementById('p-preco-pacote');
-  const qpac = document.getElementById('p-qtd-pacote');
-  if (p && pcopo && pkg) {
-    const k = parseFloat(p.kg_por_copo) || 0;
-    pcopo.checked = !!(p.venda_por_copo && k > 0);
-    pkg.value = k > 0 ? k : 0.27;
-    if (ppac) ppac.value = p.preco_copos_pacote != null ? p.preco_copos_pacote : 0;
-    if (qpac) qpac.value = p.qtd_copos_pacote != null && parseInt(p.qtd_copos_pacote, 10) > 0 ? p.qtd_copos_pacote : 3;
-  } else if (pcopo) {
-    pcopo.checked = false;
-    if (pkg) pkg.value = 0.27;
-    if (ppac) ppac.value = 0;
-    if (qpac) qpac.value = 3;
-  }
+  if (pkg) pkg.value = p && parseFloat(p.kg_por_copo) > 0 ? p.kg_por_copo : 0.27;
+  const ppp = document.getElementById('p-preco-pacote');
+  if (ppp) ppp.value = p ? (p.preco_copos_pacote || 0) : 0;
+  const pqp = document.getElementById('p-qtd-pacote');
+  if (pqp) pqp.value = p ? (p.qtd_copos_pacote || 0) : 0;
 
-  function syncPrecoLabelCopo() {
-    const lbl = document.getElementById('p-preco-label');
-    if (!lbl) return;
-    const cat = document.getElementById('p-cat')?.value;
-    const c = document.getElementById('p-copo')?.checked;
-    lbl.textContent = (cat === 'bebida' && c) ? 'Preço por copo (Kz)' : 'Preço (Kz)';
-  }
-  function toggleTaraField() {
-    const ft = document.getElementById('field-tara');
-    if (ft) ft.style.display = document.getElementById('p-medicao')?.value === 'peso' ? '' : 'none';
-  }
   function toggleCopoBebida() {
+    const cat = document.getElementById('p-cat').value;
     const fb = document.getElementById('field-copo-bebida');
-    if (fb) fb.style.display = document.getElementById('p-cat')?.value === 'bebida' ? '' : 'none';
-    syncPrecoLabelCopo();
-  }
-  function toggleCopoDetalhes() {
-    const d = document.getElementById('field-copo-detalhes');
-    if (d) d.style.display = document.getElementById('p-copo')?.checked ? '' : 'none';
-    syncPrecoLabelCopo();
+    const fd = document.getElementById('field-copo-detalhe');
+    const pl = document.getElementById('p-preco-label');
+    if (fb) fb.style.display = cat === 'bebida' ? '' : 'none';
+    if (cat !== 'bebida' && document.getElementById('p-venda-copo')) document.getElementById('p-venda-copo').checked = false;
+    if (fd) fd.style.display = document.getElementById('p-venda-copo')?.checked && cat === 'bebida' ? '' : 'none';
+    if (pl) pl.textContent = cat === 'bebida' && document.getElementById('p-venda-copo')?.checked ? 'Preço 1 copo (Kz)' : 'Preço (Kz)';
   }
 
   function toggleAvulso() {
@@ -7358,20 +7461,15 @@ function showProdutoForm(id) {
       sec.style.display = 'none';
     }
   }
-  document.getElementById('p-medicao')?.addEventListener('change', toggleTaraField);
   document.getElementById('p-cat').addEventListener('change', () => {
     toggleAvulso();
     toggleCopoBebida();
-    toggleCopoDetalhes();
-    toggleStockTurnoPorCategoria();
     if (isEdit && canEditReceita) toggleReceita();
   });
-  document.getElementById('p-copo')?.addEventListener('change', toggleCopoDetalhes);
+  const pvcEl = document.getElementById('p-venda-copo');
+  if (pvcEl) pvcEl.addEventListener('change', toggleCopoBebida);
   toggleAvulso();
-  toggleTaraField();
   toggleCopoBebida();
-  toggleCopoDetalhes();
-  toggleStockTurnoPorCategoria();
   if (isEdit && canEditReceita) toggleReceita();
 
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
@@ -7385,20 +7483,27 @@ function showProdutoForm(id) {
   document.getElementById('p-nome').focus();
 }
 
+function payloadProdutoCopo() {
+  const cat = val('p-cat');
+  const copo = cat === 'bebida' && document.getElementById('p-venda-copo')?.checked;
+  return {
+    venda_por_copo: !!copo,
+    kg_por_copo: copo ? parseFloat(val('p-kg-copo')) || 0 : 0,
+    preco_copos_pacote: copo ? parseFloat(val('p-preco-pacote')) || 0 : 0,
+    qtd_copos_pacote: copo ? parseInt(val('p-qtd-pacote'), 10) || 0 : 0
+  };
+}
+
 async function createProduto() {
   try {
-    const copo = readProdutoCopoFields();
-    const med = copo.venda_por_copo && copo.kg_por_copo > 0 ? 'peso' : val('p-medicao');
-    const cat = val('p-cat');
     await api('POST','/produtos',{
-      nome: val('p-nome'),
-      preco: parseFloat(val('p-preco')) || 0,
-      tipo_medicao: med,
-      categoria: cat,
-      venda_avulso: document.getElementById('p-avulso')?.checked || false,
-      em_stock_turno: cat === 'outro' ? false : !!document.getElementById('p-stock-turno')?.checked,
-      peso_tara_kg: parseFloat(val('p-tara')) || 0,
-      ...copo
+      nome:val('p-nome'),
+      preco:parseFloat(val('p-preco'))||0,
+      tipo_medicao:val('p-medicao'),
+      categoria:val('p-cat'),
+      venda_avulso:document.getElementById('p-avulso')?.checked||false,
+      em_stock_turno:!!document.getElementById('p-stock-turno')?.checked,
+      ...payloadProdutoCopo()
     });
     closeProdutoModal();
     suc('prod-msg','Produto criado!');
@@ -7418,9 +7523,8 @@ async function saveProduto(id) {
       categoria: cat, ordem: parseInt(val('p-ordem'))||0,
       ativo: val('p-ativo')==='true',
       venda_avulso: document.getElementById('p-avulso')?.checked||false,
-      em_stock_turno: cat === 'outro' ? false : !!document.getElementById('p-stock-turno')?.checked,
-      peso_tara_kg: parseFloat(val('p-tara')) || 0,
-      ...copo
+      em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
+      ...payloadProdutoCopo()
     });
     closeProdutoModal();
     suc('prod-msg','Produto actualizado!');
@@ -7520,7 +7624,10 @@ async function loadUtilizadores() {
               <div class="produto-nome">${u.nome}</div>
               <div class="produto-meta">${u.username || '—'} · ${u.email} · ${u.role} ${!u.ativo?'· Inactivo':''}</div>
             </div>
-            <button class="btn btn-ghost btn-sm" onclick='showUserForm(${JSON.stringify(u)})'>Editar</button>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-ghost btn-sm" onclick='verPerfil("${u.id}")'>Perfil</button>
+              <button class="btn btn-ghost btn-sm" onclick='showUserForm(${JSON.stringify(u)})'>Editar</button>
+            </div>
           </div>`).join('')}
       </div>`);
   } catch(e) { show('admin-users',`<div class="alert alert-error">${e.message}</div>`); }
@@ -7577,6 +7684,43 @@ async function saveUser(id) {
     await loadUtilizadores();
   } catch(e) { err('user-form-msg',e.message); }
 }
+
+async function drawEquipa() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Equipa</div></div>
+    </div>
+    <div id="content">
+      <div id="equipa-users"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  try {
+    const lista = await api('GET', '/equipa');
+    // Guardar em S.equipaUsers para drawPerfil poder encontrar o utilizador
+    S.equipaUsers = lista;
+    const roleLabel = { gestor: 'Gestor', operador: 'Operador', compras: 'Compras' };
+    show('equipa-users', `
+      <div class="card">
+        <div class="card-title">Utilizadores</div>
+        ${lista.map(u => `
+          <div class="produto-row">
+            <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
+              ${u.face_foto_url
+                ? `<img src="${escapeHtml(u.face_foto_url)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;flex-shrink:0">`
+                : `<div style="width:36px;height:36px;border-radius:50%;background:#1e3a5f;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">${(u.nome||'?')[0].toUpperCase()}</div>`
+              }
+              <div class="produto-info">
+                <div class="produto-nome">${escapeHtml(u.nome)}</div>
+                <div class="produto-meta">${escapeHtml(u.username||'—')} · ${roleLabel[u.role]||u.role}${!u.ativo?' · Inactivo':''}</div>
+              </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick='verPerfil("${u.id}")'>Perfil</button>
+          </div>`).join('')}
+      </div>`);
+  } catch(e) { show('equipa-users', `<div class="alert alert-error">${e.message}</div>`); }
+}
+
 
 async function alterarPassword() {
   try {
@@ -7763,6 +7907,447 @@ document.addEventListener('keydown', (e) => {
   }
 });
 draw().catch(e => console.error(e));
+
+// ── RECONHECIMENTO FACIAL / PRESENÇA ─────────────────────────
+
+const FACEAPI_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js';
+const MODELS_URL  = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+let faceApiLoaded = false;
+let faceApiLoading = false;
+let presencaStream = null;
+let presencaLoop = null;
+let presencaFaceApi = null;
+let presencaDescriptors = [];   // [{id, nome, descriptor: Float32Array}]
+let presencaLocked = false;     // evita processar frames enquanto animação de confirmação
+
+async function loadFaceApi() {
+  if (faceApiLoaded) return presencaFaceApi;
+  if (faceApiLoading) { await new Promise(r => setTimeout(r, 200)); return loadFaceApi(); }
+  faceApiLoading = true;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = FACEAPI_CDN;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Falha ao carregar face-api.js'));
+    document.head.appendChild(s);
+  });
+  presencaFaceApi = window.faceapi;
+  const fa = presencaFaceApi;
+  if (fa.tf?.setBackend) await fa.tf.setBackend('webgl').catch(() => fa.tf.setBackend('cpu').catch(() => {}));
+  if (fa.tf?.ready) await fa.tf.ready();
+  await Promise.all([
+    fa.nets.tinyFaceDetector.loadFromUri(MODELS_URL),
+    fa.nets.faceLandmark68Net.loadFromUri(MODELS_URL),
+    fa.nets.faceRecognitionNet.loadFromUri(MODELS_URL),
+  ]);
+  faceApiLoaded = true;
+  faceApiLoading = false;
+  return fa;
+}
+
+async function loadPresencaDescriptors() {
+  try {
+    const data = await fetch('/api/face-descriptors').then(r => r.json());
+    presencaDescriptors = data.map(u => {
+      const raw = typeof u.descriptor === 'string' ? JSON.parse(u.descriptor) : u.descriptor;
+      return { id: u.id, nome: u.nome, descriptor: new Float32Array(raw) };
+    });
+  } catch(e) { console.warn('[presenca] descritores:', e.message); }
+}
+
+// ── PERFIL ────────────────────────────────────────────────────
+
+function verPerfil(uid) {
+  S.perfilUid = uid;
+  navigate('perfil');
+}
+
+async function drawPerfil() {
+  const isAdmin = S.user?.role === 'admin';
+  const isPriv = ['admin','gestor'].includes(S.user?.role);
+  const targetUid = S.perfilUid || null;
+  if (isPriv && !S.utilizadores.length) S.utilizadores = await api('GET','/utilizadores').catch(() => []);
+  const todasListas = [...(S.utilizadores || []), ...(S.equipaUsers || [])];
+  let u = todasListas.find(x => String(x.id) === String(targetUid || S.user?.id)) || S.user || {};
+  u = { has_face: false, face_foto_url: '', ...u };
+  const roleLabel = { admin: 'Admin', gestor: 'Gestor', operador: 'Operador', compras: 'Compras' }[u.role] || u.role;
+  render(`
+    <div id="header">
+      <div style="font-size:18px;font-weight:700;color:#f1f5f9">👤 Perfil</div>
+    </div>
+    <div id="content" style="padding-bottom:80px">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:16px;padding:4px 0 8px">
+          ${u.face_foto_url
+            ? `<img src="${escapeHtml(u.face_foto_url)}" style="width:56px;height:56px;border-radius:50%;object-fit:cover;flex-shrink:0;border:2px solid #1e3a5f">`
+            : `<div style="width:56px;height:56px;border-radius:50%;background:#1e3a5f;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">${(u.nome||'?')[0].toUpperCase()}</div>`
+          }
+          <div>
+            <div style="font-size:18px;font-weight:700;color:#f1f5f9">${escapeHtml(u.nome||'')}</div>
+            <div style="font-size:13px;color:#94a3b8;margin-top:2px">${escapeHtml(u.username||u.email||'')} · ${roleLabel}</div>
+          </div>
+        </div>
+        ${u.email ? `<div style="font-size:13px;color:#64748b;padding-top:8px;border-top:1px solid #1e293b">${escapeHtml(u.email)}</div>` : ''}
+      </div>
+      <div id="perfil-assiduidade"><div class="card"><div class="spinner" style="margin:16px auto"></div></div></div>
+      <div id="perfil-presencas"><div class="card"><div class="spinner" style="margin:16px auto"></div></div></div>
+      ${(isAdmin || !targetUid || String(targetUid) === String(S.user?.id)) ? `<div id="perfil-faces-mount"></div>` : ''}
+    </div>
+    ${navBar()}
+  `);
+  const isOwnProfile = !targetUid || String(targetUid) === String(S.user?.id);
+  carregarPerfilAssiduidade(isPriv ? targetUid : null);
+  carregarPerfilPresencas(isPriv ? targetUid : null);
+  if (isAdmin || isOwnProfile) desenharPerfilFace(u);
+}
+
+async function carregarPerfilAssiduidade(targetUid) {
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  const inicio = `${y}-${String(m+1).padStart(2,'0')}-01`;
+  const fim = `${y}-${String(m+1).padStart(2,'0')}-${String(new Date(y,m+1,0).getDate()).padStart(2,'0')}`;
+  const mesLabel = new Date(y, m, 1).toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
+  try {
+    const qs = targetUid ? `&utilizador_id=${targetUid}` : '';
+    const d = await api('GET', `/me/assiduidade?inicio=${inicio}&fim=${fim}${qs}`);
+    const esp = d.turnos_esperados_passados || 0;
+    const trab = d.turnos_trabalhados || 0;
+    const faltas = d.faltas || 0;
+    const taxa = esp > 0 ? Math.round(trab / esp * 100) : (trab > 0 ? 100 : 0);
+    const cor = taxa >= 90 ? '#4ade80' : taxa >= 70 ? '#facc15' : '#f87171';
+    const falhasHtml = (d.faltas_detalhe || []).slice(0, 5).map(f =>
+      `<div style="font-size:12px;color:#94a3b8;padding:2px 0">${f.data} · ${f.turno}</div>`
+    ).join('');
+    show('perfil-assiduidade', `
+      <div class="card">
+        <div class="card-title">📊 Assiduidade — ${mesLabel}</div>
+        <div style="display:flex;gap:16px;margin-bottom:12px">
+          <div style="flex:1;text-align:center">
+            <div style="font-size:28px;font-weight:700;color:${cor}">${taxa}%</div>
+            <div style="font-size:11px;color:#64748b">Taxa</div>
+          </div>
+          <div style="flex:1;text-align:center">
+            <div style="font-size:22px;font-weight:700;color:#f1f5f9">${trab}/${esp}</div>
+            <div style="font-size:11px;color:#64748b">Turnos</div>
+          </div>
+          <div style="flex:1;text-align:center">
+            <div style="font-size:22px;font-weight:700;color:${faltas>0?'#f87171':'#4ade80'}">${faltas}</div>
+            <div style="font-size:11px;color:#64748b">Faltas</div>
+          </div>
+        </div>
+        ${faltas > 0 ? `<div style="border-top:1px solid #1e293b;padding-top:8px"><div style="font-size:12px;color:#64748b;margin-bottom:4px">Faltas registadas:</div>${falhasHtml}</div>` : ''}
+      </div>`);
+  } catch(e) { show('perfil-assiduidade', `<div class="alert alert-error">${e.message}</div>`); }
+}
+
+async function carregarPerfilPresencas(targetUid) {
+  try {
+    const qs = targetUid ? `?utilizador_id=${targetUid}` : '';
+    const lista = await api('GET', `/me/presencas${qs}`);
+    if (!lista.length) {
+      show('perfil-presencas', `<div class="card"><div class="card-title">📷 Presenças Biométricas</div><div style="color:#64748b;font-size:13px;padding:8px 0">Nenhum registo nos últimos 60 dias.</div></div>`);
+      return;
+    }
+    const rows = lista.slice(0, 30).map(p => {
+      const dt = new Date(p.criado_em);
+      const dataStr = dt.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' });
+      const horaStr = dt.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+      const icone = p.tipo === 'entrada' ? '✅' : '🚪';
+      const cor = p.tipo === 'entrada' ? '#4ade80' : '#f87171';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1e293b">
+        <div style="font-size:13px;color:#cbd5e1">${icone} <span style="color:${cor};font-weight:600">${p.tipo === 'entrada' ? 'Entrada' : 'Saída'}</span></div>
+        <div style="font-size:12px;color:#64748b">${dataStr} ${horaStr}</div>
+      </div>`;
+    }).join('');
+    show('perfil-presencas', `
+      <div class="card">
+        <div class="card-title">📷 Presenças Biométricas</div>
+        ${rows}
+      </div>`);
+  } catch(e) { show('perfil-presencas', `<div class="alert alert-error">${e.message}</div>`); }
+}
+
+async function drawPresenca() {
+  render(`
+    <div id="header">
+      <div id="header-h1" style="font-size:18px;font-weight:700;color:#f1f5f9">📷 Presença</div>
+    </div>
+    <div id="content">
+      <div id="presenca-screen">
+        <div id="presenca-video-wrap">
+          <video id="presenca-video" autoplay muted playsinline></video>
+          <canvas id="presenca-canvas"></canvas>
+        </div>
+        <div id="presenca-status">A carregar modelos…</div>
+        <div id="presenca-result">
+          <div class="p-nome" id="p-nome"></div>
+          <div class="p-sub" id="p-sub"></div>
+          <div class="presenca-btns">
+            <button class="btn-entrada" onclick="registarPresenca('entrada')">✅ Entrada</button>
+            <button class="btn-saida"   onclick="registarPresenca('saida')">🚪 Saída</button>
+          </div>
+        </div>
+        <div id="presenca-confirm"></div>
+      </div>
+    </div>
+    ${navBar()}
+  `);
+  iniciarPresencaCamera();
+}
+
+async function openPresencaModal() {
+  render(`
+    <div id="presenca-screen" style="min-height:100vh">
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 0 4px;width:100%;max-width:400px">
+        <button class="btn btn-ghost btn-sm" onclick="draw()">‹ Voltar</button>
+        <span style="font-size:17px;font-weight:700;color:#f1f5f9">📷 Presença</span>
+      </div>
+      <div id="presenca-video-wrap">
+        <video id="presenca-video" autoplay muted playsinline></video>
+        <canvas id="presenca-canvas"></canvas>
+      </div>
+      <div id="presenca-status">A carregar modelos…</div>
+      <div id="presenca-result">
+        <div class="p-nome" id="p-nome"></div>
+        <div class="p-sub" id="p-sub"></div>
+        <div class="presenca-btns">
+          <button class="btn-entrada" onclick="registarPresenca('entrada')">✅ Entrada</button>
+          <button class="btn-saida"   onclick="registarPresenca('saida')">🚪 Saída</button>
+        </div>
+      </div>
+      <div id="presenca-confirm"></div>
+    </div>
+  `);
+  iniciarPresencaCamera();
+}
+
+async function iniciarPresencaCamera() {
+  pararPresencaCamera();
+  const statusEl = () => document.getElementById('presenca-status');
+  try {
+    const fa = await loadFaceApi();
+    if (statusEl()) statusEl().textContent = 'A aceder à câmara…';
+    presencaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } });
+    const video = document.getElementById('presenca-video');
+    if (!video) { pararPresencaCamera(); return; }
+    video.srcObject = presencaStream;
+    await new Promise(r => video.addEventListener('loadedmetadata', r, { once: true }));
+    const canvas = document.getElementById('presenca-canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    await loadPresencaDescriptors();
+    if (statusEl()) statusEl().textContent = presencaDescriptors.length
+      ? 'Coloca o rosto em frente à câmara…'
+      : '⚠️ Nenhuma face registada. Vai a Admin → Gerir Faces.';
+    const opts = new fa.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 });
+    presencaLoop = setInterval(async () => {
+      const v = document.getElementById('presenca-video');
+      if (!v || !presencaDescriptors.length || presencaLocked) return;
+      const st = statusEl();
+      try {
+        const det = await fa.detectSingleFace(v, opts).withFaceLandmarks().withFaceDescriptor();
+        if (!det) { if (st) st.textContent = 'Coloca o rosto em frente à câmara…'; return; }
+        if (st) st.textContent = '🔍 A identificar…';
+        const matcher = new fa.FaceMatcher(
+          presencaDescriptors.map(u => new fa.LabeledFaceDescriptors(u.id + '|' + u.nome, [u.descriptor])),
+          0.6
+        );
+        const match = matcher.findBestMatch(det.descriptor);
+        if (match.label !== 'unknown') {
+          const [uid, nome] = match.label.split('|');
+          mostrarResultadoPresenca(uid, nome, match.distance);
+        } else {
+          if (st) st.textContent = '❓ Rosto não reconhecido';
+        }
+      } catch(e) { if (st) st.textContent = '⚠️ ' + e.message; }
+    }, 900);
+  } catch(e) {
+    if (statusEl()) statusEl().textContent = '⚠️ Câmara não disponível: ' + e.message;
+  }
+}
+
+function mostrarResultadoPresenca(uid, nome, distancia) {
+  presencaLocked = true;
+  clearInterval(presencaLoop);
+  const result = document.getElementById('presenca-result');
+  const statusEl = document.getElementById('presenca-status');
+  if (!result) return;
+  document.getElementById('p-nome').textContent = nome;
+  document.getElementById('p-sub').textContent = `Reconhecido (${Math.round((1 - distancia) * 100)}% confiança)`;
+  result.style.display = 'block';
+  if (statusEl) statusEl.textContent = '';
+  result._uid = uid;
+  result._nome = nome;
+}
+
+async function registarPresenca(tipo) {
+  const result = document.getElementById('presenca-result');
+  if (!result) return;
+  const uid = result._uid;
+  const nome = result._nome;
+  try {
+    await fetch('/api/presencas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ utilizador_id: uid, tipo }),
+    }).then(r => r.json());
+    const label = tipo === 'entrada' ? '✅ Entrada registada' : '🚪 Saída registada';
+    const confirm = document.getElementById('presenca-confirm');
+    result.style.display = 'none';
+    if (confirm) {
+      confirm.style.display = 'block';
+      confirm.innerHTML = `<div style="font-size:20px;font-weight:700;color:#4ade80">${label}</div>
+        <div style="color:#94a3b8;margin-top:4px">${nome}</div>
+        <div style="color:#475569;font-size:12px;margin-top:4px">${new Date().toLocaleTimeString('pt-PT')}</div>`;
+    }
+    setTimeout(() => retomarPresencaCamera(), 3000);
+  } catch(e) {
+    alert('Erro: ' + e.message);
+    retomarPresencaCamera();
+  }
+}
+
+function retomarPresencaCamera() {
+  presencaLocked = false;
+  const result = document.getElementById('presenca-result');
+  const confirm = document.getElementById('presenca-confirm');
+  const statusEl = document.getElementById('presenca-status');
+  if (result) result.style.display = 'none';
+  if (confirm) { confirm.style.display = 'none'; confirm.innerHTML = ''; }
+  if (statusEl) statusEl.textContent = 'Coloca o rosto em frente à câmara…';
+  const fa = presencaFaceApi;
+  if (!fa || !presencaStream) return;
+  const opts = new fa.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+  presencaLoop = setInterval(async () => {
+    const v = document.getElementById('presenca-video');
+    if (!v || !presencaDescriptors.length || presencaLocked) return;
+    try {
+      const det = await fa.detectSingleFace(v, opts).withFaceLandmarks().withFaceDescriptor();
+      if (!det) return;
+      const matcher = new fa.FaceMatcher(
+        presencaDescriptors.map(u => new fa.LabeledFaceDescriptors(u.id + '|' + u.nome, [u.descriptor]))
+      );
+      const match = matcher.findBestMatch(det.descriptor);
+      if (match.distance < 0.5) mostrarResultadoPresenca(match.label.split('|')[0], match.label.split('|')[1], match.distance);
+    } catch(e) { /* silent */ }
+  }, 900);
+}
+
+function pararPresencaCamera() {
+  clearInterval(presencaLoop);
+  if (presencaStream) { presencaStream.getTracks().forEach(t => t.stop()); presencaStream = null; }
+  presencaLocked = false;
+}
+
+// Parar câmara ao navegar para outra página
+const _origNavigate = navigate;
+window.navigate = async function(page, params) {
+  if (page !== 'presenca') pararPresencaCamera();
+  return _origNavigate(page, params);
+};
+
+// ── FACE BIOMÉTRICA NO PERFIL ────────────────────────────────
+
+function desenharPerfilFace(u) {
+  const mount = document.getElementById('perfil-faces-mount');
+  if (!mount) return;
+  const hasFace = !!u.has_face;
+  mount.innerHTML = `
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px">🪪 Face Biométrica</div>
+      ${u.face_foto_url ? `<img src="${escapeHtml(u.face_foto_url)}" style="width:80px;height:80px;border-radius:50%;object-fit:cover;display:block;margin:0 auto 12px;border:2px solid #1e3a5f">` : ''}
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:14px;color:${hasFace ? '#4ade80' : '#94a3b8'}">
+          ${hasFace ? '✅ Face registada' : '⬜ Sem face registada'}
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="enrollFace('${u.id}','${escapeHtml(u.nome)}')">
+            ${hasFace ? 'Atualizar' : 'Registar'}
+          </button>
+          ${hasFace ? `<button class="btn btn-ghost btn-sm" style="color:#f87171" onclick="removeFace('${u.id}')">Remover</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
+let enrollStream = null;
+let enrollCapturing = false;
+
+async function enrollFace(uid, nome) {
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px';
+  modal.innerHTML = `
+    <div style="color:#f1f5f9;font-size:18px;font-weight:700">Registar face — ${escapeHtml(nome)}</div>
+    <div class="face-enroll-wrap">
+      <video id="enroll-video" autoplay muted playsinline></video>
+    </div>
+    <div id="enroll-status" style="color:#94a3b8;font-size:14px">A carregar câmara…</div>
+    <div style="display:flex;gap:12px">
+      <button class="btn btn-primary" id="enroll-capture-btn" disabled onclick="captureEnrollFace('${uid}')">📸 Capturar</button>
+      <button class="btn btn-ghost" onclick="closeEnrollModal()">Cancelar</button>
+    </div>`;
+  document.body.appendChild(modal);
+  window._enrollModal = modal;
+  try {
+    const fa = await loadFaceApi();
+    enrollStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+    const video = document.getElementById('enroll-video');
+    video.srcObject = enrollStream;
+    await new Promise(r => video.addEventListener('loadedmetadata', r, { once: true }));
+    document.getElementById('enroll-status').textContent = 'Posiciona o rosto no centro e clica Capturar.';
+    document.getElementById('enroll-capture-btn').disabled = false;
+  } catch(e) {
+    document.getElementById('enroll-status').textContent = 'Erro: ' + e.message;
+  }
+}
+
+async function captureEnrollFace(uid) {
+  if (enrollCapturing) return;
+  enrollCapturing = true;
+  const statusEl = document.getElementById('enroll-status');
+  const btn = document.getElementById('enroll-capture-btn');
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.textContent = 'A processar…';
+  try {
+    const fa = presencaFaceApi;
+    const video = document.getElementById('enroll-video');
+    const opts = new fa.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.4 });
+    const det = await fa.detectSingleFace(video, opts).withFaceLandmarks().withFaceDescriptor();
+    if (!det) {
+      if (statusEl) statusEl.textContent = '⚠️ Nenhuma face detectada. Ajusta a posição.';
+      if (btn) btn.disabled = false;
+      enrollCapturing = false;
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 320;
+    canvas.height = video.videoHeight || 240;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const foto_base64 = canvas.toDataURL('image/jpeg', 0.85);
+    await api('PUT', `/utilizadores/${uid}/face-descriptor`, { descriptor: Array.from(det.descriptor), foto_base64 });
+    if (statusEl) statusEl.textContent = '✅ Face registada com sucesso!';
+    setTimeout(() => { closeEnrollModal(); navigate('perfil'); }, 1200);
+  } catch(e) {
+    if (statusEl) statusEl.textContent = 'Erro: ' + e.message;
+    if (btn) btn.disabled = false;
+    enrollCapturing = false;
+  }
+}
+
+async function removeFace(uid) {
+  if (!confirm('Remover face registada?')) return;
+  try {
+    await api('DELETE', `/utilizadores/${uid}/face-descriptor`, null);
+    navigate('perfil');
+  } catch(e) { alert('Erro: ' + e.message); }
+}
+
+function closeEnrollModal() {
+  if (enrollStream) { enrollStream.getTracks().forEach(t => t.stop()); enrollStream = null; }
+  enrollCapturing = false;
+  if (window._enrollModal) { window._enrollModal.remove(); window._enrollModal = null; }
+}
+
 </script>
 </body>
 </html>

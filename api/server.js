@@ -14,6 +14,53 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'stockos-secret-2025';
 const PWD_SALT   = 'stockos-pwd-salt-2025';
 
+const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
+const SQL_P_STOCK_CATEGORIAS = "p.categoria IN ('menu','ingredientes','bebida')";
+const SQL_ORD_H = `(CASE h.valid_from_turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 0 END)`;
+let _sqlUsePrecoHistorico = true;
+
+function sqlWhereHistLteTurno(turnAlias) {
+  const ordT = `(CASE ${turnAlias}.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 0 END)`;
+  return `(h.valid_from < ${turnAlias}.data OR (h.valid_from = ${turnAlias}.data AND ${SQL_ORD_H} <= ${ordT}))`;
+}
+function sqlPPrecoNaData() {
+  if (!_sqlUsePrecoHistorico) return `p.preco::numeric`;
+  return `COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+}
+function sqlGteStockVendido() {
+  return `GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric)`;
+}
+function sqlTsValorVendaLinha() {
+  if (!_sqlUsePrecoHistorico) {
+    return `CASE WHEN ts.valor_vendas_reportado_kz IS NOT NULL THEN ts.valor_vendas_reportado_kz::numeric ELSE GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric) * p.preco::numeric END`;
+  }
+  return `CASE WHEN ts.valor_vendas_reportado_kz IS NOT NULL THEN ts.valor_vendas_reportado_kz::numeric ELSE GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric) * ${sqlPPrecoNaData()} END`;
+}
+function sqlBackfillTurnoStockValorKz() {
+  const g = sqlGteStockVendido();
+  if (!_sqlUsePrecoHistorico) return `${g} * p.preco::numeric`;
+  return `${g} * COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+}
+function sqlFechoTurnoStockValorKz() {
+  const g = sqlGteStockVendido();
+  if (!_sqlUsePrecoHistorico) return `${g} * p.preco::numeric`;
+  return `${g} * COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('tu')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+}
+// SET clause para snapshot de preços em turno_vendas — alias 't' (backfill de fechados antigos)
+function sqlBackfillTurnoVendasSnapshotsSet() {
+  const precoUnit = !_sqlUsePrecoHistorico
+    ? `p.preco::numeric`
+    : `COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+  return `preco_unit_snapshot = ${precoUnit}, preco_copos_pacote_snapshot = p.preco_copos_pacote, qtd_copos_pacote_snapshot = p.qtd_copos_pacote`;
+}
+// SET clause para snapshot de preços em turno_vendas — alias 'tu' (fecho em tempo real)
+function sqlFechoTurnoVendasSnapshotsSet() {
+  const precoUnit = !_sqlUsePrecoHistorico
+    ? `p.preco::numeric`
+    : `COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
+  return `preco_unit_snapshot = ${precoUnit}, preco_copos_pacote_snapshot = p.preco_copos_pacote, qtd_copos_pacote_snapshot = p.qtd_copos_pacote`;
+}
+
 const _dbUrlRaw = process.env.DATABASE_URL;
 if (!_dbUrlRaw) { console.error('[FATAL] DATABASE_URL não definida'); process.exit(1); }
 
@@ -74,11 +121,14 @@ const _dbUrl = normalizeSupabasePoolerUrl(_dbUrlRaw);
 const _sqlOpts = {
   ssl: 'require',
   prepare: false,
-  /** Serverless + pooler em modo transacção: mais slots reduzem filas quando há vários GET em paralelo. */
-  max: Math.min(10, Math.max(3, parseInt(process.env.PG_POOL_MAX || '6', 10) || 6)),
-  idle_timeout: 20,
+  /** Serverless + pooler em modo transacção: poucos slots por instância (limite Supavisor 200 client conns). */
+  max: Math.min(10, Math.max(1, parseInt(process.env.PG_POOL_MAX || '2', 10) || 2)),
+  /** Compromisso: manter warm o suficiente para reusar entre requests próximos sem saturar o pooler. */
+  idle_timeout: 30,
   max_lifetime: 60 * 30,
-  connect_timeout: 15
+  /** Era 15s — em cold start várias candidates falham × 15s → curl atinge 60s.
+   *  6s é suficiente para handshake SSL ao Supabase quando a rede está ok. */
+  connect_timeout: 6
 };
 let _activeDbUrl = _dbUrl;
 /** Instância única do cliente postgres (reutiliza ligações TCP/TLS). */
@@ -147,10 +197,11 @@ function getDbCandidates() {
   return out;
 }
 
-async function resetPgSingleton() {
+function resetPgSingleton() {
   const s = _pgSingleton;
   _pgSingleton = null;
-  if (s) await s.end({ timeout: 5 }).catch(() => {});
+  // fire-and-forget: não aguardar end() para não bloquear o retry durante 5s extra.
+  if (s) s.end({ timeout: 3 }).catch(() => {});
 }
 
 /** Garante uma ligação persistente; tenta URLs candidatas só até a primeira funcionar. */
@@ -162,7 +213,13 @@ async function ensurePgSingleton() {
       let sqlConn = null;
       try {
         sqlConn = postgres(url, _sqlOpts);
-        await sqlConn`SELECT 1`;
+        // Timeout explícito: connect_timeout cobre o handshake TCP/SSL mas não a execução do SELECT.
+        // Se o Supavisor aceitar TCP mas não responder à query, pendurava indefinidamente.
+        // 4s é suficiente: SELECT 1 numa ligação sã demora < 1s; zombie falha em 4s vs 10s antes.
+        await Promise.race([
+          sqlConn`SELECT 1`,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('SELECT 1 timeout (4s)')), 4000))
+        ]);
         _pgSingleton = sqlConn;
         _activeDbUrl = url;
         return _pgSingleton;
@@ -178,21 +235,30 @@ async function ensurePgSingleton() {
 
 const query = async (text, params) => {
   let lastErr = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const sql = await ensurePgSingleton();
-      const rows = await sql.unsafe(text, params || []);
+      // Timeout de 6s: zombies detectados rapidamente; queries sãs terminam em < 2s.
+      // "query timeout" casa com o regex transient → resetPgSingleton() + retry com ligação nova.
+      const rows = await Promise.race([
+        sql.unsafe(text, params || []),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('query timeout (6s)')), 6000))
+      ]);
       return { rows: Array.from(rows) };
     } catch (e) {
       lastErr = e;
       const msg = String(e && e.message ? e.message : e);
       const transient =
-        attempt === 0 &&
-        (/ECONNRESET|ECONNREFUSED|ENETUNREACH|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03|MaxClientsInSessionMode|pool_size/i.test(msg) ||
+        attempt < 2 &&
+        (/ECONNRESET|ECONNREFUSED|ENETUNREACH|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03|MaxClientsInSessionMode|pool_size|EMAXCONN|max client connections/i.test(msg) ||
           e.code === 'ECONNRESET' ||
           e.code === 'ENETUNREACH');
       if (transient) {
         await resetPgSingleton();
+        // backoff curto para EMAXCONN (esperar conexões libertarem no pooler)
+        if (/EMAXCONN|max client connections/i.test(msg)) {
+          await new Promise((r) => setTimeout(r, 250 + Math.floor(Math.random() * 250)));
+        }
         continue;
       }
       throw e;
@@ -205,7 +271,18 @@ const pool = {
   query,
   connect: async () => {
     const sql = await ensurePgSingleton();
-    const reserved = await sql.reserve();
+    // Timeout de 10s: se o pool estiver esgotado sql.reserve() pendura indefinidamente sem isto.
+    let reserved;
+    try {
+      reserved = await Promise.race([
+        sql.reserve(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Pool connection timeout (10s) — servidor ocupado, tenta de novo')), 10000)
+        )
+      ]);
+    } catch (e) {
+      throw e;
+    }
     return {
       query: async (text, params) => {
         const rows = await reserved.unsafe(text, params || []);
@@ -220,8 +297,41 @@ const pool = {
 
 /** Evita correr a migração de depósitos em cada pedido (scan completo à BD). */
 let depositosSaidasMigrationDone = false;
+let depositosBancoReady = false;
+let fornecedoresReady = false;
+let armazemTablesReady = false;
+let turnoEntradasReady = false;
+let turnoSaidasReady = false;
+let turnoPedidosReady = false;
+let presencasReady = false;
+let precosVendasSnapshotsReady = false;
 /** ALTER/enum de utilizadores só na primeira vez por processo. */
 let usernameColumnEnsured = false;
+
+/**
+ * Garante que lock e unlock correm na mesma sessão PostgreSQL (pool.connect → conexão dedicada).
+ * Com Supavisor em transaction mode, cada query() pode ir a um backend diferente — advisory locks
+ * de sessão só funcionam se lock e unlock usam o mesmo cliente reservado.
+ * Retorna true se o lock foi adquirido e fn() correu; false se outra instância detinha o lock.
+ */
+async function withAdvisoryLock(lockId, fn) {
+  let client;
+  try { client = await pool.connect(); } catch (e) {
+    console.warn('[advisory lock] connect:', e.message);
+    return false;
+  }
+  let locked = false;
+  try {
+    const r = await client.query(`SELECT pg_try_advisory_lock($1)`, [lockId]);
+    locked = r.rows[0].pg_try_advisory_lock;
+    if (!locked) return false;
+    await fn();
+    return true;
+  } finally {
+    if (locked) await client.query(`SELECT pg_advisory_unlock($1)`, [lockId]).catch(() => {});
+    await client.release().catch(() => {});
+  }
+}
 
 async function qry(sql, params, label) {
   try { await query(sql, params); }
@@ -230,6 +340,11 @@ async function qry(sql, params, label) {
 
 /** Índices leves (IF NOT EXISTS) — aceleram /dia, escala. Corre após init. */
 async function ensureStockosPerfIndexes() {
+  // Fast path: já feito numa cold start anterior — evita 6 CREATE INDEX + advisory lock por arranque.
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='perf_indexes_v1'`);
+    if (r.rows.length) return;
+  } catch (_) {}
   const stmts = [
     'CREATE INDEX IF NOT EXISTS idx_turnos_data ON turnos (data)',
     'CREATE INDEX IF NOT EXISTS idx_turno_stock_turno_id ON turno_stock (turno_id)',
@@ -238,13 +353,17 @@ async function ensureStockosPerfIndexes() {
     'CREATE INDEX IF NOT EXISTS idx_turno_caixa_turno_id ON turno_caixa (turno_id)',
     'CREATE INDEX IF NOT EXISTS idx_escala_data ON escala (data)'
   ];
-  for (let i = 0; i < stmts.length; i++) {
+  await withAdvisoryLock(7654321001, async () => {
+    // Re-verificar dentro do lock (outra instância pode ter terminado enquanto esperávamos).
     try {
-      await query(stmts[i]);
-    } catch (e) {
-      console.warn('[idx]', i, (e && e.message) || e);
+      const r2 = await query(`SELECT v FROM stockos_meta WHERE k='perf_indexes_v1'`);
+      if (r2.rows.length) return;
+    } catch (_) {}
+    for (let i = 0; i < stmts.length; i++) {
+      try { await query(stmts[i]); } catch (e) { console.warn('[idx]', i, (e && e.message) || e); }
     }
-  }
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('perf_indexes_v1','done') ON CONFLICT (k) DO NOTHING`);
+  }).catch(e => console.warn('[idx setup]', e && e.message));
 }
 
 let resolveLoginReady;
@@ -281,30 +400,26 @@ function markDbReady() {
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
  */
-const STOCKOS_BOOTSTRAP_VERSION = '2026-04-01-pedidos-tbl';
+const STOCKOS_BOOTSTRAP_VERSION = '2026-05-12-perf-fix';
 
 async function initDB() {
   await qry(`CREATE TABLE IF NOT EXISTS stockos_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`, [], 'stockos_meta');
   try {
     const chk = await query(`SELECT v FROM stockos_meta WHERE k = $1`, ['bootstrap']);
     if (chk.rows.length && chk.rows[0].v === STOCKOS_BOOTSTRAP_VERSION) {
-      /** Login só precisa de SELECT em utilizadores — não esperar pelo DO/ALTER do enum «compras». */
+      /** Fast-path bootstrap-skip: o esquema já está aplicado. Marca login E db como prontos
+       *  IMEDIATAMENTE e move TODAS as verificações idempotentes para background.
+       *  Endpoints (/dia, /produtos, …) deixam de esperar 30-60s no primeiro pedido após cold start. */
       markLoginReady();
-      /** Em background: preencher `username` para utilizadores antigos (admin, etc.) para que o login por username funcione. */
-      ensureUsernameColumn().catch((e) => console.warn('[initDB] ensureUsernameColumn (bootstrap skip):', e && e.message));
-      await ensureRoleEnumCompras();
-      await ensurePrecosVendasSnapshots();
-      try {
-        await ensureTurnoPedidos();
-      } catch (e) {
-        console.error('[initDB] ensureTurnoPedidos (bootstrap skip):', e && e.message, e && e.stack);
-      }
       markDbReady();
-      console.log('DB ready (bootstrap skip)');
+      console.log('DB ready (bootstrap skip — optimized fast-path without background DDLs)');
       return;
     }
   } catch (e) {
     console.warn('[initDB] bootstrap check:', e && e.message);
+    // Erro de ligação → não correr 70+ DDL queries com uma BD inacessível.
+    const msg = (e && e.message) || '';
+    if (/ECONNREFUSED|ECONNRESET|ENOTFOUND|timeout|EMAXCONN|pool|connect/i.test(msg)) throw e;
   }
 
   await qry(`CREATE TABLE IF NOT EXISTS utilizadores (
@@ -351,43 +466,28 @@ async function initDB() {
   await qry(
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_copo BOOLEAN NOT NULL DEFAULT FALSE`,
     [],
-    'produtos-venda-copo'
+    'produtos-venda-por-copo'
   );
   await qry(
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS kg_por_copo NUMERIC(10,4) NOT NULL DEFAULT 0`,
     [],
-    'produtos-kg-copo'
+    'produtos-kg-por-copo'
   );
   await qry(
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0`,
     [],
-    'produtos-preco-pacote-copo'
+    'produtos-preco-copos-pacote'
   );
   await qry(
-    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote SMALLINT NOT NULL DEFAULT 0`,
     [],
-    'produtos-qtd-pacote-copo'
+    'produtos-qtd-copos-pacote'
   );
   await qry(
-    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS peso_tara_kg NUMERIC(10,3) NOT NULL DEFAULT 0`,
+    `UPDATE produtos SET venda_por_copo = true, kg_por_copo = 0.27, preco = 400, preco_copos_pacote = 1000, qtd_copos_pacote = 3, tipo_medicao = 'peso'
+     WHERE lower(trim(nome)) = 'fino' AND categoria = 'bebida' AND COALESCE(kg_por_copo, 0) = 0`,
     [],
-    'produtos-peso-tara-kg'
-  );
-  await qry(
-    `UPDATE produtos SET venda_por_copo=true, kg_por_copo=0.27, preco=400, preco_copos_pacote=1000, qtd_copos_pacote=3, tipo_medicao='peso'
-     WHERE LOWER(TRIM(nome))='fino' AND categoria='bebida' AND COALESCE(kg_por_copo,0)=0`,
-    [],
-    'produtos-seed-fino-copo'
-  );
-  await qry(
-    `UPDATE produtos SET peso_tara_kg = 12.9 WHERE LOWER(TRIM(nome)) = 'fino barril'`,
-    [],
-    'produtos-seed-fino-barril-tara'
-  );
-  await qry(
-    `UPDATE produtos SET em_stock_turno = false WHERE categoria = 'outro'`,
-    [],
-    'produtos-outro-sem-folha-stock'
+    'produtos-fino-copo-default'
   );
   /** Sem ALTER em utilizadores aqui: em BD restaurada o role da app não é owner → must be owner. criado_em já está no CREATE TABLE acima. */
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'alter-notas');
@@ -530,6 +630,7 @@ async function initDB() {
   } catch (e) {
     console.error('[initDB] ensureTurnoPedidos (full init):', e && e.message, e && e.stack);
   }
+  await ensurePresencas();
   /** Dedup/seed abaixo podem correr em paralelo com tráfego; schema crítico para /dia já está garantido. */
   markDbReady();
   // Remover duplicados de produtos (manter o de menor id por nome)
@@ -557,6 +658,18 @@ async function initDB() {
   );
   console.log('DB ready');
 }
+/** Pré-aquecer o singleton postgres no top-level. Evita que o primeiro pedido após
+ *  cold start espere pelo handshake SSL ao Supabase. Não bloqueia initDB nem o app.listen. */
+ensurePgSingleton().catch((e) => console.warn('[boot] ensurePgSingleton prewarm:', e && e.message));
+
+/** Optimistic ready: assume que o esquema já está aplicado (caso normal em produção)
+ *  e desbloqueia o login + endpoints imediatamente. initDB() corre em background para
+ *  validar e aplicar migrações se necessário. Se o esquema realmente faltar, as queries
+ *  individuais dão erro com a mensagem específica (melhor do que pendurar 60s+ esperando
+ *  pelo handshake do pool em cold start). */
+markLoginReady();
+markDbReady();
+
 initDB()
   .then(() => {
     markDbReady();
@@ -582,137 +695,7 @@ initDB()
   });
 
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
-const STOCKOS_API_BUILD = '2026-04-01-pedidos-fk-produto-type';
-
-/** Folha de stock do turno: só Menu, Ingredientes e Bebidas — categoria «outro» não entra. */
-const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
-const SQL_P_STOCK_CATEGORIAS = "p.categoria IN ('menu','ingredientes','bebida')";
-
-const SQL_ORD_H = `(CASE h.valid_from_turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 0 END)`;
-
-function sqlWhereHistLteTurno(turnAlias) {
-  const ordT = `(CASE ${turnAlias}.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 0 END)`;
-  return `(h.valid_from < ${turnAlias}.data OR (h.valid_from = ${turnAlias}.data AND ${SQL_ORD_H} <= ${ordT}))`;
-}
-
-/**
- * Após init: se a tabela não existir (migração bloqueada no pooler), leituras usam só produtos.preco.
- */
-let _sqlUsePrecoHistorico = true;
-
-/**
- * Preço unitário vigente para o turno `t` (histórico por calendário + manhã/tarde/noite); fallback `produtos.preco`.
- * Requer JOIN `turnos t ON t.id = ts.turno_id`.
- */
-function sqlPPrecoNaData() {
-  if (!_sqlUsePrecoHistorico) return `p.preco::numeric`;
-  return `COALESCE((SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`;
-}
-
-/** Valor de vendas por linha: snapshot ao fecho ou vendido × preço vigente na data/turno. */
-function sqlTsValorVendaLinha() {
-  if (!_sqlUsePrecoHistorico) {
-    return `CASE WHEN ts.valor_vendas_reportado_kz IS NOT NULL THEN ts.valor_vendas_reportado_kz::numeric ELSE GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric) * p.preco::numeric END`;
-  }
-  return `CASE WHEN ts.valor_vendas_reportado_kz IS NOT NULL THEN ts.valor_vendas_reportado_kz::numeric ELSE GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric) * ${sqlPPrecoNaData()} END`;
-}
-
-function sqlGteStockVendido() {
-  return `GREATEST(0::numeric, COALESCE(ts.encontrado,0)::numeric + COALESCE(ts.entrada,0)::numeric - COALESCE(ts.deixado,0)::numeric)`;
-}
-
-function sqlBackfillTurnoStockValorKz() {
-  const g = sqlGteStockVendido();
-  if (!_sqlUsePrecoHistorico) return `${g} * p.preco::numeric`;
-  return `${g} * COALESCE((
-          SELECT h.preco FROM produto_preco_historico h
-          WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('t')}
-          ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-        ), p.preco)::numeric`;
-}
-
-function sqlBackfillTurnoVendasSnapshotsSet() {
-  if (!_sqlUsePrecoHistorico) {
-    return `preco_unit_snapshot = p.preco,
-          preco_copos_pacote_snapshot = p.preco_copos_pacote,
-          qtd_copos_pacote_snapshot = p.qtd_copos_pacote`;
-  }
-  return `preco_unit_snapshot = COALESCE((
-            SELECT h.preco FROM produto_preco_historico h
-            WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('t')}
-            ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-          ), p.preco),
-          preco_copos_pacote_snapshot = COALESCE((
-            SELECT h.preco_copos_pacote FROM produto_preco_historico h
-            WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('t')}
-            ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-          ), p.preco_copos_pacote),
-          qtd_copos_pacote_snapshot = COALESCE((
-            SELECT h.qtd_copos_pacote FROM produto_preco_historico h
-            WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('t')}
-            ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-          ), p.qtd_copos_pacote)`;
-}
-
-function sqlFechoTurnoStockValorKz() {
-  const g = sqlGteStockVendido();
-  if (!_sqlUsePrecoHistorico) return `${g} * p.preco::numeric`;
-  return `${g} * COALESCE((
-           SELECT h.preco FROM produto_preco_historico h
-           WHERE h.produto_id = ts.produto_id AND ${sqlWhereHistLteTurno('tu')}
-           ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-         ), p.preco)::numeric`;
-}
-
-function sqlFechoTurnoVendasSnapshotsSet() {
-  if (!_sqlUsePrecoHistorico) {
-    return `preco_unit_snapshot = p.preco,
-           preco_copos_pacote_snapshot = p.preco_copos_pacote,
-           qtd_copos_pacote_snapshot = p.qtd_copos_pacote`;
-  }
-  return `preco_unit_snapshot = COALESCE((
-             SELECT h.preco FROM produto_preco_historico h
-             WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('tu')}
-             ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-           ), p.preco),
-           preco_copos_pacote_snapshot = COALESCE((
-             SELECT h.preco_copos_pacote FROM produto_preco_historico h
-             WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('tu')}
-             ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-           ), p.preco_copos_pacote),
-           qtd_copos_pacote_snapshot = COALESCE((
-             SELECT h.qtd_copos_pacote FROM produto_preco_historico h
-             WHERE h.produto_id = tv.produto_id AND ${sqlWhereHistLteTurno('tu')}
-             ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-           ), p.qtd_copos_pacote)`;
-}
-
-function sqlVendaListaPrecoUnit() {
-  if (!_sqlUsePrecoHistorico) return `COALESCE(tv.preco_unit_snapshot, p.preco)::numeric`;
-  return `COALESCE(tv.preco_unit_snapshot, COALESCE((
-                SELECT h.preco FROM produto_preco_historico h
-                WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')}
-                ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-              ), p.preco))::numeric`;
-}
-
-function sqlVendaListaPrecoCopoPacote() {
-  if (!_sqlUsePrecoHistorico) return `COALESCE(tv.preco_copos_pacote_snapshot, p.preco_copos_pacote)::numeric`;
-  return `COALESCE(tv.preco_copos_pacote_snapshot, COALESCE((
-                SELECT h.preco_copos_pacote FROM produto_preco_historico h
-                WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')}
-                ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-              ), p.preco_copos_pacote))::numeric`;
-}
-
-function sqlVendaListaQtdCoposPacote() {
-  if (!_sqlUsePrecoHistorico) return `COALESCE(tv.qtd_copos_pacote_snapshot, p.qtd_copos_pacote)::integer`;
-  return `COALESCE(tv.qtd_copos_pacote_snapshot, COALESCE((
-                SELECT h.qtd_copos_pacote FROM produto_preco_historico h
-                WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('tu')}
-                ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1
-              ), p.qtd_copos_pacote))::integer`;
-}
+const STOCKOS_API_BUILD = '2026-03-31-venda-copo-fino';
 
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
@@ -800,7 +783,7 @@ app.post('/api/auth/login', async (req, res) => {
     auditLoginAttempt(req, res, 200, login, user);
     res.json({
       token,
-      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username }
+      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username, has_face: user.face_descriptor != null, face_foto_url: user.face_foto_url || '' }
     });
   } catch (e) {
     console.error('[auth/login]', pgErrText(e));
@@ -848,23 +831,37 @@ app.use(async (req, res, next) => { try { await dbReady; next(); } catch(e) { re
 let auditoriaReady = false;
 async function ensureAuditoria() {
   if (auditoriaReady) return;
+  // Fast path via meta flag — evita CREATE INDEX em auditoria (avg 21s) em cada cold start.
   try {
-    await query(`CREATE TABLE IF NOT EXISTS auditoria (
-      id BIGSERIAL PRIMARY KEY,
-      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      utilizador_id TEXT,
-      utilizador_nome TEXT,
-      utilizador_role TEXT,
-      metodo VARCHAR(8) NOT NULL,
-      caminho TEXT NOT NULL,
-      acao TEXT NOT NULL,
-      descricao TEXT NOT NULL DEFAULT '',
-      status SMALLINT NOT NULL DEFAULT 0,
-      ip TEXT,
-      payload JSONB
-    )`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON auditoria (criado_em DESC)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_auditoria_utilizador ON auditoria (utilizador_id, criado_em DESC)`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='auditoria_ddl_v1'`);
+    if (r.rows.length) { auditoriaReady = true; return; }
+  } catch (_) {}
+  try {
+    await withAdvisoryLock(7654321002, async () => {
+      // Re-verificar dentro do lock.
+      try {
+        const r2 = await query(`SELECT v FROM stockos_meta WHERE k='auditoria_ddl_v1'`);
+        if (r2.rows.length) { auditoriaReady = true; return; }
+      } catch (_) {}
+      await query(`CREATE TABLE IF NOT EXISTS auditoria (
+        id BIGSERIAL PRIMARY KEY,
+        criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        utilizador_id TEXT,
+        utilizador_nome TEXT,
+        utilizador_role TEXT,
+        metodo VARCHAR(8) NOT NULL,
+        caminho TEXT NOT NULL,
+        acao TEXT NOT NULL,
+        descricao TEXT NOT NULL DEFAULT '',
+        status SMALLINT NOT NULL DEFAULT 0,
+        ip TEXT,
+        payload JSONB
+      )`);
+      await query(`CREATE INDEX IF NOT EXISTS idx_auditoria_criado_em ON auditoria (criado_em DESC)`);
+      await query(`CREATE INDEX IF NOT EXISTS idx_auditoria_utilizador ON auditoria (utilizador_id, criado_em DESC)`);
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('auditoria_ddl_v1','done') ON CONFLICT (k) DO NOTHING`);
+    });
+    // ok=false: outra instância detinha o lock — marcar ready na mesma
     auditoriaReady = true;
   } catch (e) {
     console.warn('[auditoria] ensure:', e && e.message);
@@ -1033,10 +1030,18 @@ function verifyToken(token) {
   } catch { return null; }
 }
 function hashPassword(p) { return crypto.createHash('sha256').update(p + PWD_SALT).digest('hex'); }
-function auth(req, res, next) {
+async function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ','');
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ erro: 'Não autenticado' });
+  try {
+    const r = await query(`SELECT ativo FROM utilizadores WHERE id=$1`, [payload.id]);
+    if (!r.rows.length || !r.rows[0].ativo) {
+      return res.status(401).json({ erro: 'Conta inactiva' });
+    }
+  } catch (e) {
+    console.warn('[auth] verificação ativo falhou:', e.message);
+  }
   req.user = payload; next();
 }
 function requireRole(...roles) {
@@ -1200,6 +1205,40 @@ function getDirectSupabasePostgresUrl() {
   return null;
 }
 
+/** Detecta em runtime o tipo PG de produtos.id (UUID ou INTEGER) e devolve as DDLs adequadas. */
+async function pphDdlStatementsForCurrentDb() {
+  let pidType = 'INTEGER';
+  try {
+    const r = await query(
+      `SELECT data_type FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
+    );
+    const dt = r.rows[0]?.data_type ? String(r.rows[0].data_type).toLowerCase() : '';
+    if (dt === 'uuid') pidType = 'UUID';
+    else if (dt === 'text') pidType = 'TEXT';
+    else if (dt === 'integer' || dt === 'bigint' || dt === 'smallint') pidType = dt.toUpperCase();
+  } catch (e) {
+    console.warn('[pphDdlStatementsForCurrentDb] não consegui detectar produtos.id, assumo INTEGER:', e && e.message);
+  }
+  return [
+    `CREATE TABLE IF NOT EXISTS produto_preco_historico (
+        id SERIAL PRIMARY KEY,
+        produto_id ${pidType} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+        valid_from DATE NOT NULL,
+        valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha' CHECK (valid_from_turno IN ('manha','tarde','noite')),
+        preco NUMERIC(15,2) NOT NULL DEFAULT 0,
+        preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0,
+        qtd_copos_pacote INTEGER NOT NULL DEFAULT 0
+      )`,
+    `ALTER TABLE produto_preco_historico ADD COLUMN IF NOT EXISTS valid_from_turno VARCHAR(10) NOT NULL DEFAULT 'manha'`,
+    `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_produto_id_valid_from_key`,
+    `ALTER TABLE produto_preco_historico DROP CONSTRAINT IF EXISTS produto_preco_historico_prod_vig_key`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS produto_preco_historico_prod_vig_uidx ON produto_preco_historico (produto_id, valid_from, valid_from_turno)`,
+    `CREATE INDEX IF NOT EXISTS idx_produto_preco_hist_lookup ON produto_preco_historico (produto_id, valid_from DESC)`
+  ];
+}
+
+/** Mantido para compatibilidade — usado em legacy paths que esperam um array fixo. */
 const PPH_DDL_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS produto_preco_historico (
       id SERIAL PRIMARY KEY,
@@ -1216,6 +1255,28 @@ const PPH_DDL_STATEMENTS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS produto_preco_historico_prod_vig_uidx ON produto_preco_historico (produto_id, valid_from, valid_from_turno)`,
   `CREATE INDEX IF NOT EXISTS idx_produto_preco_hist_lookup ON produto_preco_historico (produto_id, valid_from DESC)`
 ];
+
+/**
+ * Verifica em runtime se a tabela `produto_preco_historico` existe e atualiza a flag.
+ * Se não existir, tenta cria-la (idempotente). Útil em cold-starts no fast-path em que
+ * `preco_snap_ddl_v1` está em meta mas a tabela foi entretanto removida ou nunca criada.
+ */
+async function ensureProdutoPrecoHistoricoLive() {
+  let exists = await produtoPrecoHistoricoTableExists();
+  if (!exists) {
+    console.warn('[ensureProdutoPrecoHistoricoLive] tabela ausente — tentar criar com tipo correcto de produtos.id.');
+    const ddls = await pphDdlStatementsForCurrentDb();
+    for (const ddl of ddls) {
+      try { await query(ddl); }
+      catch (e) { console.warn('[ensureProdutoPrecoHistoricoLive] DDL falhou:', e && e.message); }
+    }
+    exists = await produtoPrecoHistoricoTableExists();
+  }
+  _sqlUsePrecoHistorico = exists;
+  if (!exists) {
+    console.warn('[StockOS] produto_preco_historico continua ausente — leituras usam só produtos.preco.');
+  }
+}
 
 async function produtoPrecoHistoricoTableExists() {
   try {
@@ -1369,93 +1430,99 @@ async function ensureTurnoCaixaEntradasNullable() {
 }
 
 async function ensurePrecosVendasSnapshots() {
-  await ensureProdutoPrecoHistorico();
-  await ensureTurnoStockEncontradoNullable();
-  await ensureTurnoStockDeixadoNullable();
-  await ensureTurnoCaixaEntradasNullable();
-  await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS valor_vendas_reportado_kz NUMERIC(15,2)`, [], 'turno_stock-valor-snap');
-  await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2)`, [], 'turno_vendas-precio-snap');
-  await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2)`, [], 'turno_vendas-preco-copo-snap');
-  await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTEGER`, [], 'turno_vendas-qtd-copo-snap');
+  if (precosVendasSnapshotsReady) return;
+  // Fast path: meta flag set by a previous successful run — avoids 24+ DDL queries on every cold-start
   try {
-    await query(`
-      UPDATE turno_stock ts
-      SET valor_vendas_reportado_kz = (${sqlBackfillTurnoStockValorKz()})
-      FROM produtos p, turnos t
-      WHERE ts.produto_id = p.id AND ts.turno_id = t.id AND t.estado = 'fechado' AND ts.valor_vendas_reportado_kz IS NULL
-    `);
-  } catch (e) {
-    console.warn('[ensurePrecosVendasSnapshots ts]', e.message);
-  }
-  try {
-    await query(`
-      UPDATE turno_vendas tv
-      SET ${sqlBackfillTurnoVendasSnapshotsSet()}
-      FROM produtos p, turnos t
-      WHERE tv.produto_id = p.id AND tv.turno_id = t.id AND t.estado = 'fechado' AND tv.preco_unit_snapshot IS NULL
-    `);
-  } catch (e) {
-    console.warn('[ensurePrecosVendasSnapshots tv]', e.message);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='preco_snap_ddl_v1'`);
+    if (r.rows.length) { precosVendasSnapshotsReady = true; return; }
+  } catch (_) {}
+  await withAdvisoryLock(7654321007, async () => {
+    // Re-check inside lock (another instance may have set the flag while we waited)
+    try {
+      const r2 = await query(`SELECT v FROM stockos_meta WHERE k='preco_snap_ddl_v1'`);
+      if (r2.rows.length) { precosVendasSnapshotsReady = true; return; }
+    } catch (_) {}
+    await ensureProdutoPrecoHistorico();
+    await ensureTurnoStockEncontradoNullable();
+    await ensureTurnoStockDeixadoNullable();
+    await ensureTurnoCaixaEntradasNullable();
+    await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS valor_vendas_reportado_kz NUMERIC(15,2)`, [], 'turno_stock-valor-snap');
+    await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2)`, [], 'turno_vendas-precio-snap');
+    await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2)`, [], 'turno_vendas-preco-copo-snap');
+    await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTEGER`, [], 'turno_vendas-qtd-copo-snap');
+    await qry(`INSERT INTO stockos_meta(k,v) VALUES('preco_snap_ddl_v1','done') ON CONFLICT(k) DO UPDATE SET v='done'`, [], 'preco-snap-meta');
+    precosVendasSnapshotsReady = true;
+    // Backfill runs in background — never blocks markDbReady()
+    setImmediate(async () => {
+      try {
+        await query(`UPDATE turno_stock ts SET valor_vendas_reportado_kz = (${sqlBackfillTurnoStockValorKz()}) FROM produtos p, turnos t WHERE ts.produto_id = p.id AND ts.turno_id = t.id AND t.estado = 'fechado' AND ts.valor_vendas_reportado_kz IS NULL`);
+      } catch (e) { console.warn('[ensurePrecosVendasSnapshots ts backfill]', e.message); }
+      try {
+        await query(`UPDATE turno_vendas tv SET ${sqlBackfillTurnoVendasSnapshotsSet()} FROM produtos p, turnos t WHERE tv.produto_id = p.id AND tv.turno_id = t.id AND t.estado = 'fechado' AND tv.preco_unit_snapshot IS NULL`);
+      } catch (e) { console.warn('[ensurePrecosVendasSnapshots tv backfill]', e.message); }
+    });
+  });
+  if (!precosVendasSnapshotsReady) {
+    try { _sqlUsePrecoHistorico = await produtoPrecoHistoricoTableExists(); } catch (_) {}
   }
 }
 
 async function ensureTurnoPedidos() {
-  /** Alinhar produto_id ao tipo de produtos.id (INTEGER vs UUID — FK falha se diferir). */
-  const _pidCheck = await query(
-    `SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
-  ).catch(() => ({ rows: [] }));
-  const _pidType = _pidCheck.rows.length > 0 ? String(_pidCheck.rows[0].data_type).toLowerCase() : 'integer';
-  const pidSql =
-    _pidType === 'uuid'
-      ? 'UUID'
-      : _pidType === 'bigint'
-        ? 'BIGINT'
-        : 'INTEGER';
+  if (turnoPedidosReady) return;
+  // Fast path: meta flag set by a previous successful run
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_pedidos_ddl_v1'`);
+    if (r.rows.length) { turnoPedidosReady = true; return; }
+  } catch (_) {}
+  try {
+    await withAdvisoryLock(7654321005, async () => {
+      // Re-check inside lock
+      try {
+        const r2 = await query(`SELECT v FROM stockos_meta WHERE k='turno_pedidos_ddl_v1'`);
+        if (r2.rows.length) { turnoPedidosReady = true; return; }
+      } catch (_) {}
+      /** Alinhar produto_id ao tipo de produtos.id (INTEGER vs UUID — FK falha se diferir). */
+      const _pidCheck = await query(
+        `SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
+      ).catch(() => ({ rows: [] }));
+      const _pidType = _pidCheck.rows.length > 0 ? String(_pidCheck.rows[0].data_type).toLowerCase() : 'integer';
+      const pidSql = _pidType === 'uuid' ? 'UUID' : _pidType === 'bigint' ? 'BIGINT' : 'INTEGER';
 
-  const _tplCheck = await query(
-    `SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='turno_pedido_linhas' AND column_name='produto_id'`
-  ).catch(() => ({ rows: [] }));
-  if (_tplCheck.rows.length > 0) {
-    const cur = String(_tplCheck.rows[0].data_type).toLowerCase();
-    if (cur !== _pidType) {
-      await query(`DROP TABLE IF EXISTS turno_pedido_linhas CASCADE`);
-      await query(`DROP TABLE IF EXISTS turno_pedidos CASCADE`);
-    }
+      const _tplCheck = await query(
+        `SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='turno_pedido_linhas' AND column_name='produto_id'`
+      ).catch(() => ({ rows: [] }));
+      if (_tplCheck.rows.length > 0) {
+        const cur = String(_tplCheck.rows[0].data_type).toLowerCase();
+        if (cur !== _pidType) {
+          await query(`DROP TABLE IF EXISTS turno_pedido_linhas CASCADE`);
+          await query(`DROP TABLE IF EXISTS turno_pedidos CASCADE`);
+        }
+      }
+      await query(`CREATE TABLE IF NOT EXISTS turno_pedidos (
+        id SERIAL PRIMARY KEY,
+        turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+        cliente_nome TEXT NOT NULL DEFAULT '',
+        tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro',
+        com_entrega BOOLEAN NOT NULL DEFAULT FALSE,
+        criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`);
+      await query(`ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro'`, []);
+      await query(`ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS com_entrega BOOLEAN NOT NULL DEFAULT FALSE`, []);
+      await query(`CREATE TABLE IF NOT EXISTS turno_pedido_linhas (
+        id SERIAL PRIMARY KEY,
+        pedido_id INTEGER NOT NULL REFERENCES turno_pedidos(id) ON DELETE CASCADE,
+        produto_id ${pidSql} NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+        quantidade NUMERIC(10,3) NOT NULL DEFAULT 0
+      )`);
+      await query(`CREATE INDEX IF NOT EXISTS idx_turno_pedidos_turno ON turno_pedidos(turno_id)`);
+      await query(`CREATE INDEX IF NOT EXISTS idx_turno_pedido_linhas_pedido ON turno_pedido_linhas(pedido_id)`);
+      await qry(`INSERT INTO stockos_meta(k,v) VALUES('turno_pedidos_ddl_v1','done') ON CONFLICT(k) DO UPDATE SET v='done'`, [], 'turno-pedidos-meta');
+      turnoPedidosReady = true;
+    });
+    turnoPedidosReady = true; // if lock not acquired, another instance is running DDL — treat as ready
+  } catch (e) {
+    console.error('[ensureTurnoPedidos]', e && e.message, e && e.stack);
   }
-
-  /** Usar query() — qry() engolia falhas e as tabelas nunca eram criadas. */
-  await query(
-    `CREATE TABLE IF NOT EXISTS turno_pedidos (
-      id SERIAL PRIMARY KEY,
-      turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
-      cliente_nome TEXT NOT NULL DEFAULT '',
-      tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro',
-      com_entrega BOOLEAN NOT NULL DEFAULT FALSE,
-      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`
-  );
-  await query(
-    `ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro'`,
-    []
-  );
-  await query(
-    `ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS com_entrega BOOLEAN NOT NULL DEFAULT FALSE`,
-    []
-  );
-  await query(
-    `CREATE TABLE IF NOT EXISTS turno_pedido_linhas (
-      id SERIAL PRIMARY KEY,
-      pedido_id INTEGER NOT NULL REFERENCES turno_pedidos(id) ON DELETE CASCADE,
-      produto_id ${pidSql} NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
-      quantidade NUMERIC(10,3) NOT NULL DEFAULT 0
-    )`
-  );
-  await query(
-    `CREATE INDEX IF NOT EXISTS idx_turno_pedidos_turno ON turno_pedidos(turno_id)`
-  );
-  await query(
-    `CREATE INDEX IF NOT EXISTS idx_turno_pedido_linhas_pedido ON turno_pedido_linhas(pedido_id)`
-  );
 }
 
 /**
@@ -1634,6 +1701,7 @@ async function ensureUsernameColumn() {
     console.warn('[ensureUsernameColumn] Coluna username ausente — aplica supabase/grant_stockos_app.sql e migrações como postgres, ou POST /api/migrate.');
   }
 
+  await query(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
   usernameColumnEnsured = true;
 }
 
@@ -1643,36 +1711,43 @@ function loginFromBody(req) {
 }
 
 async function ensureDepositosBanco() {
-  await query(`CREATE TABLE IF NOT EXISTS depositos_banco (
-    id SERIAL PRIMARY KEY,
-    data_referencia DATE,
-    data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
-    valor NUMERIC(15,2) NOT NULL,
-    referencia TEXT NOT NULL DEFAULT '',
-    notas TEXT NOT NULL DEFAULT '',
-    criado_por TEXT NOT NULL DEFAULT '',
-    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )`);
-  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS turno_id INTEGER REFERENCES turnos(id) ON DELETE CASCADE`).catch(() => {});
-  await query(`DELETE FROM depositos_banco WHERE turno_id IS NULL`).catch(() => {});
-  await query(`ALTER TABLE depositos_banco DROP COLUMN IF EXISTS data_referencia`).catch(() => {});
+  if (depositosBancoReady) return;
   try {
-    await query(`ALTER TABLE depositos_banco ALTER COLUMN turno_id SET NOT NULL`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='depositos_banco_ddl_v1'`);
+    if (r.rows.length) { depositosBancoReady = true; depositosSaidasMigrationDone = true; return; }
   } catch (_) {}
   try {
-    await query(`CREATE UNIQUE INDEX IF NOT EXISTS depositos_banco_turno_id_key ON depositos_banco(turno_id)`);
-  } catch (_) {}
-  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
-  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
-  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
-  await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS bordero_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
-  if (!depositosSaidasMigrationDone) {
-    try {
-      await migrateDepositosSaidasAntigasAgrupadas();
-      depositosSaidasMigrationDone = true;
-    } catch (e) {
-      console.error('migrateDepositosSaidasAntigasAgrupadas', e);
+    await query(`CREATE TABLE IF NOT EXISTS depositos_banco (
+      id SERIAL PRIMARY KEY,
+      data_referencia DATE,
+      data_deposito DATE NOT NULL DEFAULT CURRENT_DATE,
+      valor NUMERIC(15,2) NOT NULL,
+      referencia TEXT NOT NULL DEFAULT '',
+      notas TEXT NOT NULL DEFAULT '',
+      criado_por TEXT NOT NULL DEFAULT '',
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS turno_id INTEGER REFERENCES turnos(id) ON DELETE CASCADE`).catch(() => {});
+    await query(`DELETE FROM depositos_banco WHERE turno_id IS NULL`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco DROP COLUMN IF EXISTS data_referencia`).catch(() => {});
+    try { await query(`ALTER TABLE depositos_banco ALTER COLUMN turno_id SET NOT NULL`); } catch (_) {}
+    try { await query(`CREATE UNIQUE INDEX IF NOT EXISTS depositos_banco_turno_id_key ON depositos_banco(turno_id)`); } catch (_) {}
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS bordero_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
+    if (!depositosSaidasMigrationDone) {
+      try {
+        await migrateDepositosSaidasAntigasAgrupadas();
+        depositosSaidasMigrationDone = true;
+      } catch (e) {
+        console.error('migrateDepositosSaidasAntigasAgrupadas', e);
+      }
     }
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('depositos_banco_ddl_v1','done') ON CONFLICT (k) DO NOTHING`);
+    depositosBancoReady = true;
+  } catch (e) {
+    console.warn('[ensureDepositosBanco]', e && e.message);
   }
 }
 
@@ -1683,6 +1758,7 @@ function sanitizeSaidasDestino(s) {
 }
 
 const BORDERO_BUCKET = 'depositos-bordero';
+const FACE_FOTO_PREFIX = 'faces';
 
 function detectSupabaseUrlFromDatabaseUrl() {
   try {
@@ -1731,6 +1807,34 @@ async function uploadBorderoToSupabase(buffer, key, contentType) {
     throw err;
   }
   return `${base}/storage/v1/object/public/${BORDERO_BUCKET}/${key}`;
+}
+
+async function uploadFaceFotoToSupabase(buffer, uid, contentType, ext) {
+  const { url: base, key: serviceKey } = getSupabaseEnv();
+  if (!base || !serviceKey) return null;
+  const key = `${FACE_FOTO_PREFIX}/${uid}.${ext}`;
+  const uploadUrl = `${base}/storage/v1/object/${BORDERO_BUCKET}/${key}`;
+  const r = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey, 'Content-Type': contentType, 'x-upsert': 'true' },
+    body: buffer
+  });
+  if (!r.ok) return null;
+  return `${base}/storage/v1/object/public/${BORDERO_BUCKET}/${key}`;
+}
+
+async function deleteFaceFotoFromSupabase(publicUrl) {
+  const { url: base, key: serviceKey } = getSupabaseEnv();
+  if (!base || !serviceKey || !publicUrl) return;
+  const marker = `/storage/v1/object/public/${BORDERO_BUCKET}/`;
+  const i = publicUrl.indexOf(marker);
+  if (i < 0) return;
+  const path = publicUrl.slice(i + marker.length);
+  if (!path) return;
+  await fetch(`${base}/storage/v1/object/${BORDERO_BUCKET}/${path}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey }
+  }).catch(() => {});
 }
 
 async function deleteBorderoFromSupabaseStorage(publicUrl) {
@@ -2030,36 +2134,19 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   );
   await run(
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_copo BOOLEAN NOT NULL DEFAULT FALSE`,
-    'produtos-venda-copo'
+    'produtos-venda-por-copo'
   );
   await run(
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS kg_por_copo NUMERIC(10,4) NOT NULL DEFAULT 0`,
-    'produtos-kg-copo'
+    'produtos-kg-por-copo'
   );
   await run(
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0`,
-    'produtos-preco-pacote-copo'
+    'produtos-preco-copos-pacote'
   );
   await run(
-    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote INTEGER NOT NULL DEFAULT 0`,
-    'produtos-qtd-pacote-copo'
-  );
-  await run(
-    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS peso_tara_kg NUMERIC(10,3) NOT NULL DEFAULT 0`,
-    'produtos-peso-tara-kg'
-  );
-  await run(
-    `UPDATE produtos SET venda_por_copo=true, kg_por_copo=0.27, preco=400, preco_copos_pacote=1000, qtd_copos_pacote=3, tipo_medicao='peso'
-     WHERE LOWER(TRIM(nome))='fino' AND categoria='bebida' AND COALESCE(kg_por_copo,0)=0`,
-    'produtos-seed-fino-copo'
-  );
-  await run(
-    `UPDATE produtos SET peso_tara_kg = 12.9 WHERE LOWER(TRIM(nome)) = 'fino barril'`,
-    'produtos-seed-fino-barril-tara'
-  );
-  await run(
-    `UPDATE produtos SET em_stock_turno = false WHERE categoria = 'outro'`,
-    'produtos-outro-sem-folha-stock'
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote SMALLINT NOT NULL DEFAULT 0`,
+    'produtos-qtd-copos-pacote'
   );
   await run(`CREATE TABLE IF NOT EXISTS armazem_stock (
     id SERIAL PRIMARY KEY,
@@ -2255,32 +2342,23 @@ app.get('/api/produtos', auth, async (req, res) => {
 
 app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
+    const { nome, preco, categoria, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
     const {
-      nome,
-      preco,
-      categoria,
-      venda_avulso,
-      tipo_medicao,
-      em_stock_turno,
       venda_por_copo,
       kg_por_copo,
       preco_copos_pacote,
-      qtd_copos_pacote,
-      peso_tara_kg
+      qtd_copos_pacote
     } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
     const noTurno = em_stock_turno === undefined || em_stock_turno === null ? true : !!em_stock_turno;
-    const vpc = !!venda_por_copo && (categoria || 'outro') === 'bebida';
-    const kgc = vpc ? parseFloat(kg_por_copo) || 0 : 0;
-    const kgcF = kgc > 0 ? kgc : 0;
-    const pcp = kgcF > 0 ? parseFloat(preco_copos_pacote) || 0 : 0;
-    const qcp = kgcF > 0 ? parseInt(qtd_copos_pacote, 10) || 0 : 0;
-    const pt = parseFloat(peso_tara_kg);
-    const pTara = Number.isFinite(pt) && pt >= 0 ? pt : 0;
+    const vpc = !!venda_por_copo;
+    const kgc = parseFloat(kg_por_copo) || 0;
+    const pcp = parseFloat(preco_copos_pacote) || 0;
+    const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
     const r = await query(
-      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,peso_tara_kg)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [
         nome,
         preco || 0,
@@ -2289,11 +2367,10 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
         !!venda_avulso,
         medicao,
         noTurno,
-        kgcF > 0,
-        kgcF,
+        vpc,
+        kgc,
         pcp,
-        qcp,
-        pTara
+        qcp
       ]
     );
     const row = r.rows[0];
@@ -2318,55 +2395,59 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
 
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
+    const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
     const {
-      nome,
-      preco,
-      categoria,
-      ordem,
-      ativo,
-      venda_avulso,
-      tipo_medicao,
-      em_stock_turno,
       venda_por_copo,
       kg_por_copo,
       preco_copos_pacote,
-      qtd_copos_pacote,
-      peso_tara_kg
+      qtd_copos_pacote
     } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const noTurno =
       em_stock_turno === undefined || em_stock_turno === null ? undefined : !!em_stock_turno;
-    const vpc = !!venda_por_copo && (categoria || '') === 'bebida';
-    const kgc = vpc ? parseFloat(kg_por_copo) || 0 : 0;
-    const kgcF = kgc > 0 ? kgc : 0;
-    const pcp = kgcF > 0 ? parseFloat(preco_copos_pacote) || 0 : 0;
-    const qcp = kgcF > 0 ? parseInt(qtd_copos_pacote, 10) || 0 : 0;
-    const pt = parseFloat(peso_tara_kg);
-    const pTara = Number.isFinite(pt) && pt >= 0 ? pt : 0;
-    const copoVals = [kgcF > 0, kgcF, pcp, qcp, pTara];
-    const prev = await query(
-      'SELECT preco, preco_copos_pacote, qtd_copos_pacote FROM produtos WHERE id=$1',
-      [req.params.id]
-    );
-    if (!prev.rows.length) return res.status(404).json({ erro: 'Produto não encontrado' });
-    const old = prev.rows[0];
-    const np = parseFloat(preco) || 0;
-    const r = noTurno === undefined
-      ? await query(
-          `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
-           venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11,peso_tara_kg=$12 WHERE id=$13 RETURNING *`,
-          [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, ...copoVals, req.params.id]
-        )
-      : await query(
-          `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
-           venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12,peso_tara_kg=$13 WHERE id=$14 RETURNING *`,
-          [nome, preco, categoria, ordem, ativo, !!venda_avulso, medicao, noTurno, ...copoVals, req.params.id]
-        );
-    try {
-      await recordProdutoPrecoHistoricoIfChanged(parseInt(req.params.id, 10), old, np, pcp, qcp, req.body);
-    } catch (e) {
-      console.warn('[PUT produtos hist]', e.message);
-    }
+    const vpc = !!venda_por_copo;
+    const kgc = parseFloat(kg_por_copo) || 0;
+    const pcp = parseFloat(preco_copos_pacote) || 0;
+    const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
+    const r =
+      noTurno === undefined
+        ? await query(
+            `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
+             venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11 WHERE id=$12 RETURNING *`,
+            [
+              nome,
+              preco,
+              categoria,
+              ordem,
+              ativo,
+              !!venda_avulso,
+              medicao,
+              vpc,
+              kgc,
+              pcp,
+              qcp,
+              req.params.id
+            ]
+          )
+        : await query(
+            `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
+             venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12 WHERE id=$13 RETURNING *`,
+            [
+              nome,
+              preco,
+              categoria,
+              ordem,
+              ativo,
+              !!venda_avulso,
+              medicao,
+              noTurno,
+              vpc,
+              kgc,
+              pcp,
+              qcp,
+              req.params.id
+            ]
+          );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -2483,21 +2564,32 @@ async function refreshFaturaTotalAgg(client, faturaId) {
 }
 
 async function ensureFornecedores() {
-  await query(`CREATE TABLE IF NOT EXISTS fornecedores (
-    id SERIAL PRIMARY KEY,
-    nome TEXT NOT NULL,
-    notas TEXT NOT NULL DEFAULT '',
-    ativo BOOLEAN NOT NULL DEFAULT true,
-    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    criado_por TEXT NOT NULL DEFAULT ''
-  )`);
-  await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS fornecedor_id INTEGER`).catch(() => {});
-  await query(`DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_fornecedor_id_fkey') THEN
-      ALTER TABLE armazem_faturas ADD CONSTRAINT armazem_faturas_fornecedor_id_fkey
-      FOREIGN KEY (fornecedor_id) REFERENCES fornecedores(id) ON DELETE SET NULL;
-    END IF;
-  END $$`).catch(() => {});
+  if (fornecedoresReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='fornecedores_ddl_v1'`);
+    if (r.rows.length) { fornecedoresReady = true; return; }
+  } catch (_) {}
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS fornecedores (
+      id SERIAL PRIMARY KEY,
+      nome TEXT NOT NULL,
+      notas TEXT NOT NULL DEFAULT '',
+      ativo BOOLEAN NOT NULL DEFAULT true,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      criado_por TEXT NOT NULL DEFAULT ''
+    )`);
+    await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS fornecedor_id INTEGER`).catch(() => {});
+    await query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_fornecedor_id_fkey') THEN
+        ALTER TABLE armazem_faturas ADD CONSTRAINT armazem_faturas_fornecedor_id_fkey
+        FOREIGN KEY (fornecedor_id) REFERENCES fornecedores(id) ON DELETE SET NULL;
+      END IF;
+    END $$`).catch(() => {});
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('fornecedores_ddl_v1','done') ON CONFLICT (k) DO NOTHING`);
+    fornecedoresReady = true;
+  } catch (e) {
+    console.warn('[ensureFornecedores]', e && e.message);
+  }
 }
 
 app.get('/api/fornecedores', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
@@ -2552,6 +2644,11 @@ app.put('/api/fornecedores/:id', auth, requireRole('admin', 'gestor', 'compras')
 });
 
 async function ensureArmazemTables() {
+  if (armazemTablesReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='armazem_tables_ddl_v1'`);
+    if (r.rows.length) { armazemTablesReady = true; return; }
+  } catch (_) {}
   const pidCheck = await query(
     `SELECT data_type
      FROM information_schema.columns
@@ -2649,6 +2746,8 @@ async function ensureArmazemTables() {
     UNIQUE(data, produto_id)
   )`).catch(() => {});
   await ensureFornecedores();
+  await query(`INSERT INTO stockos_meta (k,v) VALUES ('armazem_tables_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+  armazemTablesReady = true;
 }
 
 app.get('/api/armazem/saldo', auth, requireRole('admin','gestor','compras'), async (req, res) => {
@@ -3455,6 +3554,11 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
 
 // ── TURNO: entradas de stock + saídas de caixa (caixa.saida = despesas + compras stock) ──
 async function ensureTurnoEntradas() {
+  if (turnoEntradasReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_entradas_ddl_v1'`);
+    if (r.rows.length) { turnoEntradasReady = true; return; }
+  } catch (_) {}
   await query(`CREATE TABLE IF NOT EXISTS turno_entradas (
     id SERIAL PRIMARY KEY,
     turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
@@ -3469,6 +3573,8 @@ async function ensureTurnoEntradas() {
   await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS tipo VARCHAR(10) NOT NULL DEFAULT 'entrada'`).catch(()=>{});
   await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS origem VARCHAR(10) NOT NULL DEFAULT 'armazem'`).catch(()=>{});
   await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(()=>{});
+  await query(`INSERT INTO stockos_meta (k,v) VALUES ('turno_entradas_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+  turnoEntradasReady = true;
 }
 
 app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
@@ -3585,6 +3691,11 @@ app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
 });
 
 async function ensureTurnoSaidas() {
+  if (turnoSaidasReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_saidas_ddl_v1'`);
+    if (r.rows.length) { turnoSaidasReady = true; return; }
+  } catch (_) {}
   await query(`CREATE TABLE IF NOT EXISTS turno_saidas (
     id SERIAL PRIMARY KEY,
     turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
@@ -3593,6 +3704,8 @@ async function ensureTurnoSaidas() {
     notas TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  await query(`INSERT INTO stockos_meta (k,v) VALUES ('turno_saidas_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+  turnoSaidasReady = true;
 }
 
 app.get('/api/turnos/:id/saidas', auth, async (req, res) => {
@@ -3993,16 +4106,8 @@ app.delete('/api/receitas/:id', auth, requireRole('admin','gestor'), async (req,
 app.get('/api/turnos/:id/vendas', auth, async (req, res) => {
   try {
     const r = await query(
-      `SELECT tv.id, tv.turno_id, tv.produto_id, tv.quantidade,
-              tv.preco_unit_snapshot, tv.preco_copos_pacote_snapshot, tv.qtd_copos_pacote_snapshot,
-              p.nome AS produto_nome,
-              ${sqlVendaListaPrecoUnit()} AS preco,
-              p.venda_por_copo, p.kg_por_copo,
-              ${sqlVendaListaPrecoCopoPacote()} AS preco_copos_pacote,
-              ${sqlVendaListaQtdCoposPacote()} AS qtd_copos_pacote
-       FROM turno_vendas tv
-       JOIN produtos p ON tv.produto_id=p.id
-       JOIN turnos tu ON tu.id = tv.turno_id
+      `SELECT tv.*, p.nome as produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo, p.preco_copos_pacote, p.qtd_copos_pacote
+       FROM turno_vendas tv JOIN produtos p ON tv.produto_id=p.id
        WHERE tv.turno_id=$1 ORDER BY p.nome`,
       [req.params.id]
     );
@@ -4184,18 +4289,72 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
     const turnoId = req.params.id;
     const { produto_id, quantidade } = req.body;
 
-    const prodInfo = await client.query(
-      'SELECT venda_por_copo, kg_por_copo FROM produtos WHERE id=$1',
+    const prodRow = await client.query(
+      `SELECT venda_por_copo, kg_por_copo FROM produtos WHERE id=$1`,
       [produto_id]
     );
-    const prow = prodInfo.rows[0];
-    const isCopo =
-      prow && prow.venda_por_copo === true && parseFloat(prow.kg_por_copo) > 0;
+    if (!prodRow.rows.length) throw new Error('Produto não encontrado');
+    const vendeCopo =
+      prodRow.rows[0].venda_por_copo === true && parseFloat(prodRow.rows[0].kg_por_copo) > 0;
+    const kgPorCopo = parseFloat(prodRow.rows[0].kg_por_copo) || 0;
 
-    let newQty = parseFloat(quantidade);
-    if (isCopo) newQty = Math.max(0, Math.floor(newQty));
+    const qtyCopos = vendeCopo
+      ? Math.max(0, Math.floor(parseFloat(quantidade) || 0))
+      : parseFloat(quantidade) || 0;
 
-    await applyTurnoVendaQuantity(client, turnoId, produto_id, newQty);
+    const old = await client.query(
+      'SELECT quantidade FROM turno_vendas WHERE turno_id=$1 AND produto_id=$2',
+      [turnoId, produto_id]
+    );
+    const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
+    const delta = qtyCopos - oldQty;
+
+    await client.query(
+      `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
+       ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
+      [turnoId, produto_id, qtyCopos]
+    );
+
+    if (delta !== 0) {
+      if (vendeCopo) {
+        const kgDelta = delta * kgPorCopo;
+        await client.query(
+          `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
+           WHERE turno_id=$2 AND produto_id=$3`,
+          [kgDelta, turnoId, produto_id]
+        );
+      } else {
+        // Expand recipe recursively: if a component itself has a recipe, use its ingredients instead
+        async function expandIngredientes(prodId, fator) {
+          const r = await client.query(
+            'SELECT componente_id, quantidade FROM receitas WHERE produto_id=$1',
+            [prodId]
+          );
+          if (r.rows.length === 0) {
+            return [{ componente_id: prodId, quantidade: fator }];
+          }
+          const ingredientes = [];
+          for (const comp of r.rows) {
+            const sub = await expandIngredientes(comp.componente_id, fator * parseFloat(comp.quantidade));
+            ingredientes.push(...sub);
+          }
+          return ingredientes;
+        }
+
+        const ingredientes = await expandIngredientes(produto_id, delta);
+        const totais = {};
+        for (const ing of ingredientes) {
+          totais[ing.componente_id] = (totais[ing.componente_id] || 0) + ing.quantidade;
+        }
+        for (const [compId, qtd] of Object.entries(totais)) {
+          await client.query(
+            `UPDATE turno_stock SET deixado=GREATEST(0, deixado - $1)
+             WHERE turno_id=$2 AND produto_id=$3`,
+            [qtd, turnoId, compId]
+          );
+        }
+      }
+    }
 
     await client.query('COMMIT');
     res.json({ sucesso: true });
@@ -4209,7 +4368,16 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
 app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const r = await query('SELECT id,email,nome,username,role,ativo FROM utilizadores ORDER BY nome');
+    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url FROM utilizadores ORDER BY nome");
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Equipa — utilizadores não-admin (gestor e admin podem consultar). */
+app.get('/api/equipa', auth, requireRole('admin','gestor','operador','compras'), async (req, res) => {
+  try {
+    await ensureUsernameColumn();
+    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url FROM utilizadores WHERE role != 'admin' ORDER BY nome");
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -4264,6 +4432,178 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
           [nome, role, ativo, req.params.id]
         );
     res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── PRESENÇAS / RECONHECIMENTO FACIAL ────────────────────────
+async function ensurePresencas() {
+  if (presencasReady) return;
+  // Fast path: meta flag set by a previous successful run
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='presencas_ddl_v1'`);
+    if (r.rows.length) { presencasReady = true; return; }
+  } catch (_) {}
+  try {
+    await withAdvisoryLock(7654321006, async () => {
+      // Re-check inside lock
+      try {
+        const r2 = await query(`SELECT v FROM stockos_meta WHERE k='presencas_ddl_v1'`);
+        if (r2.rows.length) { presencasReady = true; return; }
+      } catch (_) {}
+      await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_descriptor JSONB`, [], 'utilizadores-face-descriptor');
+      await qry(`CREATE TABLE IF NOT EXISTS presencas (
+        id SERIAL PRIMARY KEY,
+        utilizador_id UUID NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+        tipo VARCHAR(10) NOT NULL CHECK (tipo IN ('entrada', 'saida')),
+        criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`, [], 'presencas');
+      await qry(`CREATE INDEX IF NOT EXISTS idx_presencas_criado ON presencas(criado_em DESC)`, [], 'idx-presencas-criado');
+      await qry(`INSERT INTO stockos_meta(k,v) VALUES('presencas_ddl_v1','done') ON CONFLICT(k) DO UPDATE SET v='done'`, [], 'presencas-meta');
+      presencasReady = true;
+    });
+    presencasReady = true; // if lock not acquired, another instance is running DDL — treat as ready
+  } catch (e) {
+    console.warn('[ensurePresencas]', e && e.message);
+  }
+}
+
+/** Descritores faciais de todos os utilizadores activos (sem auth — necessário no ecrã de presença). */
+app.get('/api/face-descriptors', async (req, res) => {
+  try {
+    await dbReady;
+    const r = await query(`SELECT id, nome, face_descriptor FROM utilizadores WHERE ativo=true AND face_descriptor IS NOT NULL`);
+    res.json(r.rows.map(u => ({ id: u.id, nome: u.nome, descriptor: u.face_descriptor })));
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Guardar descritor facial — admin pode registar qualquer utilizador; outros só o próprio. */
+app.put('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
+  if (req.user.role !== 'admin' && String(req.user.id) !== String(req.params.id)) {
+    return res.status(403).json({ erro: 'Sem permissão para registar a face de outro utilizador' });
+  }
+  try {
+    const { descriptor, foto_base64 } = req.body;
+    if (!Array.isArray(descriptor) || descriptor.length !== 128) {
+      return res.status(400).json({ erro: 'Descritor inválido (array de 128 números)' });
+    }
+    let fotoUrl = null;
+    if (foto_base64) {
+      const parsed = parseDataUrlFoto(foto_base64);
+      if (parsed) fotoUrl = await uploadFaceFotoToSupabase(parsed.buffer, req.params.id, parsed.contentType, parsed.ext).catch(() => null);
+    }
+    if (fotoUrl) {
+      await query(`UPDATE utilizadores SET face_descriptor=$1::jsonb, face_foto_url=$2 WHERE id=$3`, [JSON.stringify(descriptor), fotoUrl, req.params.id]);
+    } else {
+      await query(`UPDATE utilizadores SET face_descriptor=$1::jsonb WHERE id=$2`, [JSON.stringify(descriptor), req.params.id]);
+    }
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Remover descritor facial — admin pode remover qualquer; outros só o próprio. */
+app.delete('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
+  if (req.user.role !== 'admin' && String(req.user.id) !== String(req.params.id)) {
+    return res.status(403).json({ erro: 'Sem permissão para remover a face de outro utilizador' });
+  }
+  try {
+    const r = await query(`SELECT face_foto_url FROM utilizadores WHERE id=$1`, [req.params.id]);
+    const oldUrl = r.rows[0]?.face_foto_url;
+    await query(`UPDATE utilizadores SET face_descriptor=NULL, face_foto_url='' WHERE id=$1`, [req.params.id]);
+    if (oldUrl) deleteFaceFotoFromSupabase(oldUrl).catch(() => {});
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Registar presença (entrada/saída) — sem auth pois o funcionário não está logado. */
+app.post('/api/presencas', async (req, res) => {
+  try {
+    await dbReady;
+    const { utilizador_id, tipo } = req.body;
+    if (!utilizador_id || !['entrada','saida'].includes(tipo)) {
+      return res.status(400).json({ erro: 'Parâmetros inválidos' });
+    }
+    const u = await query(`SELECT id, nome FROM utilizadores WHERE id=$1 AND ativo=true`, [utilizador_id]);
+    if (!u.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
+    const r = await query(
+      `INSERT INTO presencas (utilizador_id, tipo) VALUES ($1, $2) RETURNING id, criado_em`,
+      [utilizador_id, tipo]
+    );
+    res.json({ ok: true, id: r.rows[0].id, nome: u.rows[0].nome, tipo, criado_em: r.rows[0].criado_em });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Listar presenças (admin/gestor). */
+app.get('/api/presencas', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    const { data, utilizador_id } = req.query;
+    let sql = `SELECT p.id, p.utilizador_id, u.nome, p.tipo, p.criado_em
+               FROM presencas p JOIN utilizadores u ON u.id = p.utilizador_id WHERE 1=1`;
+    const params = [];
+    if (data) { params.push(data); sql += ` AND p.criado_em::date = $${params.length}`; }
+    if (utilizador_id) { params.push(utilizador_id); sql += ` AND p.utilizador_id = $${params.length}`; }
+    sql += ` ORDER BY p.criado_em DESC LIMIT 500`;
+    const r = await query(sql, params);
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Presenças biométricas — próprio utilizador ou qualquer um se admin/gestor (?utilizador_id=). */
+app.get('/api/me/presencas', auth, async (req, res) => {
+  try {
+    const isPriv = ['admin','gestor'].includes(req.user.role);
+    const uid = (isPriv && req.query.utilizador_id) ? req.query.utilizador_id : req.user.id;
+    const r = await query(
+      `SELECT id, tipo, criado_em FROM presencas
+       WHERE utilizador_id = $1 AND criado_em >= NOW() - INTERVAL '60 days'
+       ORDER BY criado_em DESC LIMIT 200`,
+      [uid]
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Assiduidade — próprio utilizador ou qualquer um se admin/gestor (?utilizador_id=). */
+app.get('/api/me/assiduidade', auth, async (req, res) => {
+  try {
+    const isPriv = ['admin','gestor'].includes(req.user.role);
+    const uid = (isPriv && req.query.utilizador_id) ? req.query.utilizador_id : req.user.id;
+    const { inicio, fim } = req.query;
+    if (!inicio || !fim) return res.status(400).json({ erro: 'inicio e fim obrigatórios' });
+    const sql = `
+      WITH hoje AS (SELECT (NOW() AT TIME ZONE 'Africa/Luanda')::date AS d),
+      dias AS (SELECT generate_series($1::date, $2::date, INTERVAL '1 day')::date AS d),
+      dias_com_escala_dia AS (
+        SELECT DISTINCT data::date AS d FROM escala WHERE data BETWEEN $1::date AND $2::date
+      ),
+      esperados AS (
+        SELECT data::date AS d, turno FROM escala
+        WHERE data BETWEEN $1::date AND $2::date AND utilizador_id = $3
+        UNION
+        SELECT dias.d, et.turno FROM dias
+        JOIN escala_template et ON et.dia_semana = ((EXTRACT(ISODOW FROM dias.d)::int) - 1)
+        WHERE et.utilizador_id = $3
+          AND NOT EXISTS (SELECT 1 FROM dias_com_escala_dia x WHERE x.d = dias.d)
+      ),
+      trabalhados AS (
+        SELECT t.data::date AS d, t.nome AS turno
+        FROM turno_equipa_real er
+        JOIN turnos t ON t.id = er.turno_id
+        WHERE t.data BETWEEN $1::date AND $2::date AND er.utilizador_id = $3
+      )
+      SELECT
+        (SELECT COUNT(*) FROM (SELECT DISTINCT d,turno FROM esperados) x)::int AS turnos_esperados,
+        (SELECT COUNT(*) FROM (SELECT DISTINCT d,turno FROM esperados WHERE d < (SELECT d FROM hoje)) x)::int AS turnos_esperados_passados,
+        (SELECT COUNT(*) FROM (SELECT DISTINCT d,turno FROM trabalhados) x)::int AS turnos_trabalhados,
+        (SELECT COUNT(*) FROM (
+          SELECT DISTINCT e.d,e.turno FROM esperados e WHERE e.d < (SELECT d FROM hoje)
+          EXCEPT SELECT DISTINCT d,turno FROM trabalhados
+        ) x)::int AS faltas,
+        (SELECT COALESCE(json_agg(json_build_object('data',to_char(x.d,'YYYY-MM-DD'),'turno',x.turno) ORDER BY x.d,x.turno),'[]'::json)
+         FROM (SELECT DISTINCT e.d,e.turno FROM esperados e WHERE e.d < (SELECT d FROM hoje)
+               EXCEPT SELECT DISTINCT d,turno FROM trabalhados) x) AS faltas_detalhe
+    `;
+    const r = await query(sql, [inicio, fim, uid]);
+    res.json(r.rows[0] || {});
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -4481,7 +4821,7 @@ app.get('/api/equipa/pessoas', auth, async (req, res) => {
 });
 
 app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
-  try {
+  const selectEquipa = async (id) => {
     const r = await query(
       `SELECT er.*,
               u.nome AS utilizador_nome, u.role AS utilizador_role,
@@ -4491,12 +4831,18 @@ app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
        LEFT JOIN utilizadores uc ON er.cobrindo_utilizador_id::text = uc.id::text
        WHERE er.turno_id=$1
        ORDER BY er.criado_em ASC`,
-      [req.params.id]
+      [id]
     );
-    res.json(r.rows);
+    return r.rows;
+  };
+  try {
+    res.json(await selectEquipa(req.params.id));
   } catch (e) {
-    if (e.message.includes('does not exist')) {
-      try {
+    if (!e.message.includes('does not exist')) {
+      return res.status(500).json({ erro: e.message });
+    }
+    try {
+      await withAdvisoryLock(7654321008, async () => {
         await query(`CREATE TABLE IF NOT EXISTS turno_equipa_real (
           id SERIAL PRIMARY KEY,
           turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
@@ -4511,21 +4857,9 @@ app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
         await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT`).catch(()=>{});
         await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE`).catch(()=>{});
         await query(`ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT ''`).catch(()=>{});
-        const r2 = await query(
-          `SELECT er.*,
-                  u.nome AS utilizador_nome, u.role AS utilizador_role,
-                  uc.nome AS cobrindo_utilizador_nome
-           FROM turno_equipa_real er
-           LEFT JOIN utilizadores u ON er.utilizador_id::text = u.id::text
-           LEFT JOIN utilizadores uc ON er.cobrindo_utilizador_id::text = uc.id::text
-           WHERE er.turno_id=$1
-           ORDER BY er.criado_em ASC`,
-          [req.params.id]
-        );
-        return res.json(r2.rows);
-      } catch (e2) { return res.status(500).json({ erro: e2.message }); }
-    }
-    res.status(500).json({ erro: e.message });
+      });
+      res.json(await selectEquipa(req.params.id));
+    } catch (e2) { res.status(500).json({ erro: e2.message }); }
   }
 });
 
@@ -4770,7 +5104,8 @@ app.get('/api/auditoria', auth, requireRole('admin','gestor'), async (req, res) 
   try {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     await ensureAuditoria();
-    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '200', 10)));
+    /** Limite mais conservador (era 200/500) — auditoria pode crescer rápido. */
+    const limit = Math.min(300, Math.max(1, parseInt(req.query.limit || '100', 10)));
     const params = [];
     const where = [];
     /** Datas e horas são sempre interpretadas em Africa/Luanda. */
@@ -4821,12 +5156,21 @@ app.get('/api/auditoria', auth, requireRole('admin','gestor'), async (req, res) 
       ORDER BY a.criado_em DESC, a.id DESC
       LIMIT ${limit}
     `;
-    const r = await query(sql, params);
-    res.json({ rows: r.rows, limit });
+    /** statement_timeout (15s) na conexão reservada — em pool exausto o cliente vê erro claro em vez de pendurar. */
+    const client = await pool.connect();
+    try {
+      try { await client.query(`SET statement_timeout = '15s'`); } catch (_) {}
+      const r = await client.query(sql, params);
+      res.json({ rows: r.rows, limit });
+    } finally {
+      try { await client.query(`SET statement_timeout = 0`); } catch (_) {}
+      client.release();
+    }
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
 });
-
-app.listen(PORT, () => console.log(`StockOS v3 na porta ${PORT}`));
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`StockOS v3 na porta ${PORT}`));
+}
 module.exports = app;

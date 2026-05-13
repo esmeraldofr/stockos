@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-13-6740c12">
+<html lang="pt" data-stockos-ui="2026-05-13-hist-sections">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5713,13 +5713,6 @@ function histVendasProdutosCardHtml(rows) {
     const v = parseFloat(r.valor_vendas) || 0;
     return q > 0 || v > 0;
   }) : [];
-  if (!list.length) {
-    return `
-    <div class="card" style="margin-bottom:16px">
-      <div class="card-title" style="margin-bottom:8px">🍽️ Quantidade vendida por produto</div>
-      <div style="color:#64748b;font-size:13px">Sem vendas de produtos no período.</div>
-    </div>`;
-  }
   const porCat = {};
   let totalQtd = 0;
   let totalValor = 0;
@@ -5732,6 +5725,9 @@ function histVendasProdutosCardHtml(rows) {
     totalValor += parseFloat(r.valor_vendas) || 0;
   }
   const ordemCats = ['menu', 'bebida_copo', 'bebida', 'ingredientes', 'outro'];
+  // Garantir que «Menu» e «Bebidas (por copo)» aparecem sempre, mesmo sem vendas.
+  const catsSempre = ['menu', 'bebida_copo'];
+  for (const c of catsSempre) if (!porCat[c]) porCat[c] = [];
   const catsOrdenadas = Object.keys(porCat).sort((a, b) => {
     const ia = ordemCats.indexOf(a);
     const ib = ordemCats.indexOf(b);
@@ -5761,9 +5757,13 @@ function histVendasProdutosCardHtml(rows) {
       </tr>`;
     }).join('');
     const label = HIST_CAT_LABEL[cat] || cat;
+    const trsRender = rowsCat.length ? trs : `
+      <tr>
+        <td colspan="4" style="padding:8px 10px;color:#475569;font-size:12px;font-style:italic">Sem vendas no período</td>
+      </tr>`;
     return `
       <tr><td colspan="4" class="section-header" style="background:#0f172a;color:#94a3b8;font-size:11px;padding:8px 10px;text-transform:uppercase;letter-spacing:0.06em">${escapeHtml(label)}</td></tr>
-      ${trs}
+      ${trsRender}
       <tr>
         <td style="padding:6px 8px;color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Subtotal ${escapeHtml(label.toLowerCase())}</td>
         <td style="padding:6px 8px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;font-weight:600">${fmtNum(qCat)}</td>

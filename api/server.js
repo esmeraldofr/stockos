@@ -4034,6 +4034,7 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
          p.nome AS produto_nome,
          p.categoria,
          p.tipo_medicao,
+         p.venda_por_copo,
          p.ordem,
          COALESCE(SUM(${sqlGteStockVendido()}), 0)::numeric AS qtd_vendida,
          COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS valor_vendas,
@@ -4042,7 +4043,7 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
        INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
        INNER JOIN turnos t ON t.id = ts.turno_id
        WHERE t.data BETWEEN $1::date AND $2::date
-       GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.ordem
+       GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.ordem
        HAVING COALESCE(SUM(${sqlGteStockVendido()}), 0) > 0
           OR COALESCE(SUM(${sqlTsValorVendaLinha()}), 0) > 0
        ORDER BY p.categoria, p.ordem NULLS LAST, p.nome`,

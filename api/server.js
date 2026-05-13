@@ -4032,6 +4032,19 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
     const precoUnitDirecto = _sqlUsePrecoHistorico
       ? `COALESCE(tv.preco_unit_snapshot, (SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`
       : `COALESCE(tv.preco_unit_snapshot, p.preco)::numeric`;
+    // Para bebidas por copo com pacote (ex. Fino 1000: 3 copos = 1000 Kz):
+    //   valor = pacotes_completos × preço_pacote + copos_restantes × preço_unitário
+    // Usa snapshot ao tempo da venda; fallback nos valores actuais do produto.
+    const qtdPac   = `COALESCE(tv.qtd_copos_pacote_snapshot, p.qtd_copos_pacote, 0)::numeric`;
+    const precoPac = `COALESCE(tv.preco_copos_pacote_snapshot, p.preco_copos_pacote, 0)::numeric`;
+    const valorLinhaDirecto = `
+      CASE
+        WHEN ${qtdPac} > 0 AND ${precoPac} > 0 THEN
+          FLOOR(tv.quantidade / ${qtdPac}) * ${precoPac}
+          + (tv.quantidade - FLOOR(tv.quantidade / ${qtdPac}) * ${qtdPac}) * (${precoUnitDirecto})
+        ELSE
+          tv.quantidade * (${precoUnitDirecto})
+      END`;
     const r = await query(
       `WITH stock_sales AS (
          SELECT
@@ -4059,7 +4072,7 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
            p.venda_por_copo,
            p.ordem,
            COALESCE(SUM(tv.quantidade), 0)::numeric AS qtd_vendida,
-           COALESCE(SUM(tv.quantidade * ${precoUnitDirecto}), 0)::numeric AS valor_vendas,
+           COALESCE(SUM(${valorLinhaDirecto}), 0)::numeric AS valor_vendas,
            COUNT(DISTINCT tv.turno_id)::int AS turnos
          FROM turno_vendas tv
          INNER JOIN produtos p ON p.id = tv.produto_id AND p.em_stock_turno IS FALSE AND ${"p.categoria IN ('menu','ingredientes','bebida')"}

@@ -5690,10 +5690,10 @@ async function drawHistorico() {
     </div>
     ${navBar()}
   `);
-  // Defaults: último mês
+  // Defaults: ontem-hoje
   const hoje = new Date().toISOString().split('T')[0];
-  const mes  = addDays(hoje, -30);
-  document.getElementById('h-inicio').value = mes;
+  const ontem = addDays(hoje, -1);
+  document.getElementById('h-inicio').value = ontem;
   document.getElementById('h-fim').value = hoje;
   await loadHistorico();
 }

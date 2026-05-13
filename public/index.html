@@ -5702,6 +5702,7 @@ async function drawHistorico() {
 const HIST_CAT_LABEL = {
   menu: 'Menu',
   ingredientes: 'Ingredientes',
+  bebida_copo: 'Bebidas (por copo)',
   bebida: 'Bebidas',
   outro: 'Outros'
 };
@@ -5723,13 +5724,14 @@ function histVendasProdutosCardHtml(rows) {
   let totalQtd = 0;
   let totalValor = 0;
   for (const r of list) {
-    const cat = r.categoria || 'outro';
+    let cat = r.categoria || 'outro';
+    if (cat === 'bebida' && r.venda_por_copo === true) cat = 'bebida_copo';
     if (!porCat[cat]) porCat[cat] = [];
     porCat[cat].push(r);
     totalQtd += parseFloat(r.qtd_vendida) || 0;
     totalValor += parseFloat(r.valor_vendas) || 0;
   }
-  const ordemCats = ['menu', 'bebida', 'ingredientes', 'outro'];
+  const ordemCats = ['menu', 'bebida_copo', 'bebida', 'ingredientes', 'outro'];
   const catsOrdenadas = Object.keys(porCat).sort((a, b) => {
     const ia = ordemCats.indexOf(a);
     const ib = ordemCats.indexOf(b);

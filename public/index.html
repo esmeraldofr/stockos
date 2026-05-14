@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-13-hist-copos">
+<html lang="pt" data-stockos-ui="2026-05-13-face-all-roles">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7969,6 +7969,7 @@ async function drawPerfil() {
   const isPriv = ['admin','gestor'].includes(S.user?.role);
   const targetUid = S.perfilUid || null;
   if (isPriv && !S.utilizadores.length) S.utilizadores = await api('GET','/utilizadores').catch(() => []);
+  if (!isPriv && targetUid && !(S.equipaUsers || []).length) S.equipaUsers = await api('GET','/equipa').catch(() => []);
   const todasListas = [...(S.utilizadores || []), ...(S.equipaUsers || [])];
   let u = todasListas.find(x => String(x.id) === String(targetUid || S.user?.id)) || S.user || {};
   u = { has_face: false, face_foto_url: '', ...u };
@@ -7993,14 +7994,13 @@ async function drawPerfil() {
       </div>
       <div id="perfil-assiduidade"><div class="card"><div class="spinner" style="margin:16px auto"></div></div></div>
       <div id="perfil-presencas"><div class="card"><div class="spinner" style="margin:16px auto"></div></div></div>
-      ${(isAdmin || !targetUid || String(targetUid) === String(S.user?.id)) ? `<div id="perfil-faces-mount"></div>` : ''}
+      <div id="perfil-faces-mount"></div>
     </div>
     ${navBar()}
   `);
-  const isOwnProfile = !targetUid || String(targetUid) === String(S.user?.id);
   carregarPerfilAssiduidade(isPriv ? targetUid : null);
   carregarPerfilPresencas(isPriv ? targetUid : null);
-  if (isAdmin || isOwnProfile) desenharPerfilFace(u);
+  desenharPerfilFace(u);
 }
 
 async function carregarPerfilAssiduidade(targetUid) {

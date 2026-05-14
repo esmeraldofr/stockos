@@ -3078,7 +3078,7 @@ app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor','compras'
 async function callClaudeOcr(parsed) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) { const e = new Error('claude key missing'); e.code = 'KEY_MISSING'; throw e; }
-  const promptText = `Estás a analisar uma FATURA (Angola, em português). Devolve APENAS um objecto JSON válido — sem qualquer texto fora do JSON, sem markdown — com este schema:
+  const promptText = `Estás a analisar uma FATURA / FATURA-RECIBO ANGOLANA (em português, valores em Kwanzas/AOA). Devolve APENAS um objecto JSON válido — sem qualquer texto fora do JSON, sem markdown — com este schema:
 {
   "fornecedor": {"nome": string, "nif": string, "telefone": string, "email": string, "morada": string},
   "numero_fatura": string,
@@ -3095,12 +3095,23 @@ async function callClaudeOcr(parsed) {
   ]
 }
 
-Regras:
-- Os números são em Kwanzas (AOA). Usa ponto decimal (1234.56). Sem separadores de milhar.
+Regras específicas de Angola:
+- "Nr. Contribuinte" / "NIF" / "Contribuinte" que aparece junto ao NOME DO FORNECEDOR (ex.: TotalEnergies, Refriango) é o NIF do fornecedor — usa-o em fornecedor.nif.
+- Se a fatura mostrar um segundo "Contribuinte: 999999990" (ou similar) associado a "Nome: Consumidor Final" / "Cliente", isso é o COMPRADOR — IGNORA, não confundir com o fornecedor.
+- Layouts comuns de linha: "Qnt | Produto | Unit | Subt | Tx" → Qnt=quantidade, Unit=preço unitário, Subt=subtotal da linha, Tx=taxa de IVA (%, não usar). Outras variações: "Qtde", "Quant", "PVU", "PVP", "Valor".
+- Números de fatura típicos: "FR-FR x/yyyyy", "FT 1/2026", "FT-AB 2026/123" — mantém formato original.
+- "data_emissao" no formato ISO (YYYY-MM-DD). Hora deve ser ignorada.
+- Sem separadores de milhar nos números devolvidos. Usa ponto decimal: 1234.56.
+
+Regras de unidade:
+- Se a descrição inclui "1L", "500g", "5 kg" → extrai a unidade correspondente e a quantidade reflecte UNIDADES VENDIDAS (ex.: 2 garrafas de 1L = quantidade 2, unidade_medida "garrafa" ou "L" se for a granel).
+- Se a descrição não tem unidade explícita (ex.: "CERVEJA CUCA", "AGUA MINERAL", "ARROZ AGULHA") → unidade_medida = "un".
+- Se vir "kg/g/L/ml" explicitamente como unidade da coluna Qnt → usa essa.
+
+Regras gerais:
 - Se um campo não existe na fatura, devolve string vazia "" (ou 0 para números, [] para linhas).
-- "preco_unit" é o preço por unidade tal como aparece na fatura (não normalizes a kg aqui).
-- "data_emissao" no formato ISO. Se não conseguires, devolve string vazia.
-- NÃO inventes informação. Se uma linha parece confusa, devolve-a com os campos vazios.`;
+- "preco_unit" é o valor da coluna Unit/PVU/preço unitário tal como aparece na fatura.
+- NÃO inventes informação. Se uma linha for ilegível, devolve descricao com os campos numéricos a 0.`;
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': apiKey },

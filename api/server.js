@@ -3077,7 +3077,10 @@ app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor','compras'
 app.post('/api/armazem/ocr-fatura', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return res.status(500).json({ erro: 'ANTHROPIC_API_KEY não configurada no servidor' });
+    if (!apiKey) {
+      console.error('[ocr-fatura] ANTHROPIC_API_KEY não configurada');
+      return res.status(503).json({ erro: 'Serviço de importação de fatura indisponível. Contacta o administrador.' });
+    }
     const parsed = parseDataUrlFoto(req.body && req.body.foto_base64);
     if (!parsed) return res.status(400).json({ erro: 'Foto inválida (JPEG/PNG/WebP até 5 MB)' });
     await ensureFornecedores();
@@ -3127,7 +3130,8 @@ Regras:
     });
     if (!anth.ok) {
       const errTxt = await anth.text().catch(() => '');
-      return res.status(502).json({ erro: 'Falha no OCR: ' + (errTxt || anth.statusText) });
+      console.error('[ocr-fatura] falha externa:', anth.status, errTxt.slice(0, 500));
+      return res.status(502).json({ erro: 'Não foi possível processar a fatura. Tenta outra foto.' });
     }
     const data = await anth.json();
     const rawText = (data && Array.isArray(data.content) && data.content[0] && data.content[0].text) || '';
@@ -3136,7 +3140,8 @@ Regras:
       const m = rawText.match(/\{[\s\S]*\}/);
       extr = JSON.parse(m ? m[0] : rawText);
     } catch (_) {
-      return res.status(502).json({ erro: 'OCR devolveu resposta não-JSON', detalhe: rawText.slice(0, 500) });
+      console.error('[ocr-fatura] resposta não-JSON:', rawText.slice(0, 500));
+      return res.status(502).json({ erro: 'Não foi possível interpretar a fatura. Tenta outra foto mais nítida.' });
     }
 
     // Normalizar unidade → tipo_medicao + converter g/ml para kg/L

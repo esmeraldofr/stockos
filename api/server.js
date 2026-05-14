@@ -3067,25 +3067,18 @@ app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor','compras'
 });
 
 /**
- * OCR de fatura — recebe foto base64 (image/jpeg|png|webp), chama Anthropic Vision e devolve JSON estruturado:
+ * OCR de fatura — recebe foto base64 (image/jpeg|png|webp), chama o provider escolhido
+ * (req.body.provider = 'claude' | 'mindee', default 'claude') e devolve JSON estruturado:
  *  { fornecedor: {nome, nif, telefone, email, morada, match: {id, nome} | null},
  *    numero_fatura, data_emissao, total_estimado,
  *    linhas: [{ descricao, quantidade, unidade_medida, preco_unit, tipo_medicao_detectado,
- *               match: {id, nome, tipo_medicao} | null, aviso? }] }
- * Auto-mapeia fornecedor/produto contra a BD por NIF/nome (ILIKE). Não cria nada — só sugere.
+ *               match: {id, nome, tipo_medicao} | null, aviso? }],
+ *    provider }
  */
-app.post('/api/armazem/ocr-fatura', auth, requireRole('admin','gestor','compras'), async (req, res) => {
-  try {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      console.error('[ocr-fatura] ANTHROPIC_API_KEY não configurada');
-      return res.status(503).json({ erro: 'Serviço de importação de fatura indisponível. Contacta o administrador.' });
-    }
-    const parsed = parseDataUrlFoto(req.body && req.body.foto_base64);
-    if (!parsed) return res.status(400).json({ erro: 'Foto inválida (JPEG/PNG/WebP até 5 MB)' });
-    await ensureFornecedores();
-
-    const promptText = `Estás a analisar uma FATURA (Angola, em português). Devolve APENAS um objecto JSON válido — sem qualquer texto fora do JSON, sem markdown — com este schema:
+async function callClaudeOcr(parsed) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) { const e = new Error('claude key missing'); e.code = 'KEY_MISSING'; throw e; }
+  const promptText = `Estás a analisar uma FATURA (Angola, em português). Devolve APENAS um objecto JSON válido — sem qualquer texto fora do JSON, sem markdown — com este schema:
 {
   "fornecedor": {"nome": string, "nif": string, "telefone": string, "email": string, "morada": string},
   "numero_fatura": string,
@@ -3108,45 +3101,121 @@ Regras:
 - "preco_unit" é o preço por unidade tal como aparece na fatura (não normalizes a kg aqui).
 - "data_emissao" no formato ISO. Se não conseguires, devolve string vazia.
 - NÃO inventes informação. Se uma linha parece confusa, devolve-a com os campos vazios.`;
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': apiKey },
+    body: JSON.stringify({
+      model: process.env.OCR_MODEL || 'claude-haiku-4-5',
+      max_tokens: 4096,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: parsed.contentType, data: parsed.buffer.toString('base64') } },
+          { type: 'text', text: promptText }
+        ]
+      }]
+    })
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    console.error('[ocr-claude] request failed:', r.status, t.slice(0, 500));
+    const e = new Error('claude request failed'); e.code = 'PROVIDER_FAILED'; throw e;
+  }
+  const data = await r.json();
+  const rawText = (data && Array.isArray(data.content) && data.content[0] && data.content[0].text) || '';
+  try {
+    const m = rawText.match(/\{[\s\S]*\}/);
+    return JSON.parse(m ? m[0] : rawText);
+  } catch (_) {
+    console.error('[ocr-claude] non-JSON:', rawText.slice(0, 500));
+    const e = new Error('claude non-json'); e.code = 'PROVIDER_PARSE'; throw e;
+  }
+}
 
-    const anth = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        'x-api-key': apiKey
-      },
-      body: JSON.stringify({
-        model: process.env.OCR_MODEL || 'claude-haiku-4-5',
-        max_tokens: 4096,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: parsed.contentType, data: parsed.buffer.toString('base64') } },
-            { type: 'text', text: promptText }
-          ]
-        }]
-      })
-    });
-    if (!anth.ok) {
-      const errTxt = await anth.text().catch(() => '');
-      console.error('[ocr-fatura] falha externa:', anth.status, errTxt.slice(0, 500));
-      return res.status(502).json({ erro: 'Não foi possível processar a fatura. Tenta outra foto.' });
-    }
-    const data = await anth.json();
-    const rawText = (data && Array.isArray(data.content) && data.content[0] && data.content[0].text) || '';
+async function callMindeeOcr(parsed) {
+  const apiKey = process.env.MINDEE_API_KEY;
+  if (!apiKey) { const e = new Error('mindee key missing'); e.code = 'KEY_MISSING'; throw e; }
+  const form = new FormData();
+  const blob = new Blob([parsed.buffer], { type: parsed.contentType });
+  form.append('document', blob, 'fatura.' + parsed.ext);
+  const r = await fetch('https://api.mindee.net/v1/products/mindee/invoices/v4/predict', {
+    method: 'POST',
+    headers: { Authorization: `Token ${apiKey}` },
+    body: form
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    console.error('[ocr-mindee] request failed:', r.status, t.slice(0, 500));
+    const e = new Error('mindee request failed'); e.code = 'PROVIDER_FAILED'; throw e;
+  }
+  const data = await r.json();
+  const pred = (data && data.document && data.document.inference && data.document.inference.prediction) || {};
+  const sup = pred.supplier_address || {};
+  const regs = Array.isArray(pred.supplier_company_registrations) ? pred.supplier_company_registrations : [];
+  const nif = regs.map(x => String(x.value || '').trim()).filter(Boolean).join('; ');
+  const fornecedor = {
+    nome: (pred.supplier_name && pred.supplier_name.value) || '',
+    nif,
+    telefone: (pred.supplier_phone_number && pred.supplier_phone_number.value) || '',
+    email: (pred.supplier_email && pred.supplier_email.value) || '',
+    morada: (typeof sup === 'string' ? sup : (sup && sup.value)) || ''
+  };
+  const items = Array.isArray(pred.line_items) ? pred.line_items : [];
+  const linhas = items.map(li => ({
+    descricao: String(li.description || '').trim(),
+    quantidade: parseFloat(li.quantity) || 0,
+    unidade_medida: '', // Mindee não devolve unidade — vamos tentar inferir da descrição
+    preco_unit: parseFloat(li.unit_price) || 0,
+    total: parseFloat(li.total_amount) || 0
+  }));
+  return {
+    fornecedor,
+    numero_fatura: (pred.invoice_number && pred.invoice_number.value) || '',
+    data_emissao: (pred.date && pred.date.value) || '',
+    total_estimado: parseFloat(pred.total_amount && pred.total_amount.value) || 0,
+    linhas
+  };
+}
+
+/** Tenta inferir unidade da descrição (ex.: "Arroz 5 kg" → kg). */
+function inferirUnidadeMedida(descricao) {
+  const d = String(descricao || '').toLowerCase();
+  if (/\b(kg|quilo|quilos|kilo|kilos)\b/.test(d)) return 'kg';
+  if (/\b(g|gramas)\b/.test(d)) return 'g';
+  if (/\b(l|litro|litros)\b/.test(d)) return 'l';
+  if (/\bml\b/.test(d)) return 'ml';
+  if (/\b(un|und|unidade|unidades|pcs)\b/.test(d)) return 'un';
+  if (/\b(caixa|cx)\b/.test(d)) return 'caixa';
+  if (/\bgarrafa\b/.test(d)) return 'garrafa';
+  if (/\blata\b/.test(d)) return 'lata';
+  if (/\bpack\b/.test(d)) return 'pack';
+  return '';
+}
+
+app.post('/api/armazem/ocr-fatura', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    const parsed = parseDataUrlFoto(req.body && req.body.foto_base64);
+    if (!parsed) return res.status(400).json({ erro: 'Foto inválida (JPEG/PNG/WebP até 5 MB)' });
+    await ensureFornecedores();
+    const provider = String((req.body && req.body.provider) || 'claude').toLowerCase() === 'mindee' ? 'mindee' : 'claude';
+
     let extr;
     try {
-      const m = rawText.match(/\{[\s\S]*\}/);
-      extr = JSON.parse(m ? m[0] : rawText);
-    } catch (_) {
-      console.error('[ocr-fatura] resposta não-JSON:', rawText.slice(0, 500));
-      return res.status(502).json({ erro: 'Não foi possível interpretar a fatura. Tenta outra foto mais nítida.' });
+      extr = provider === 'mindee' ? await callMindeeOcr(parsed) : await callClaudeOcr(parsed);
+    } catch (e) {
+      if (e.code === 'KEY_MISSING') {
+        return res.status(503).json({ erro: 'Serviço de importação de fatura indisponível. Contacta o administrador.' });
+      }
+      if (e.code === 'PROVIDER_PARSE') {
+        return res.status(502).json({ erro: 'Não foi possível interpretar a fatura. Tenta outra foto mais nítida.' });
+      }
+      return res.status(502).json({ erro: 'Não foi possível processar a fatura. Tenta outra foto.' });
     }
 
     // Normalizar unidade → tipo_medicao + converter g/ml para kg/L
     const normaliza = (linha) => {
-      const um = String(linha.unidade_medida || '').toLowerCase().trim();
+      let um = String(linha.unidade_medida || '').toLowerCase().trim();
+      if (!um) um = inferirUnidadeMedida(linha.descricao);
       let qty = parseFloat(linha.quantidade) || 0;
       let pu  = parseFloat(linha.preco_unit) || 0;
       let tipo = 'unidade';
@@ -3156,7 +3225,7 @@ Regras:
       else if (um === 'ml') { tipo = 'peso'; if (qty > 0) { pu = pu * 1000; qty = qty / 1000; } }
       else if (['un','und','unidade','unidades','caixa','garrafa','lata','pack','pcs'].includes(um)) tipo = 'unidade';
       else aviso = 'unidade incerta';
-      return { ...linha, quantidade: qty, preco_unit: pu, tipo_medicao_detectado: tipo, ...(aviso ? { aviso } : {}) };
+      return { ...linha, unidade_medida: um, quantidade: qty, preco_unit: pu, tipo_medicao_detectado: tipo, ...(aviso ? { aviso } : {}) };
     };
     const linhasNorm = Array.isArray(extr.linhas) ? extr.linhas.map(normaliza) : [];
 
@@ -3203,6 +3272,7 @@ Regras:
     }
 
     res.json({
+      provider,
       fornecedor: { ...fornBody, match: fornMatch },
       numero_fatura: String(extr.numero_fatura || ''),
       data_emissao: String(extr.data_emissao || ''),

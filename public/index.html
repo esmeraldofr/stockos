@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-13-face-all-roles">
+<html lang="pt" data-stockos-ui="2026-05-13-ocr-fatura">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6464,12 +6464,25 @@ async function drawArmazem() {
       <div class="card">
         <div class="card-title">📄 Fatura de compra</div>
         <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha. Anexa a <strong>foto da fatura</strong> (obrigatório). Se o total exceder o saldo do dia, deves justificar a origem do dinheiro (podes associar uma saída de caixa do mesmo dia).</p>
+        <div style="margin-bottom:10px">
+          <button type="button" class="btn btn-primary btn-sm" onclick="abrirOcrFatura()">📷 Importar fatura (OCR)</button>
+          <span style="font-size:11px;color:#64748b;margin-left:8px">Tira uma foto da fatura e a IA preenche o formulário.</span>
+        </div>
         <div id="fatura-form-msg"></div>
         <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="STK-20260405-001 (automático)"/>
           <div style="font-size:11px;color:#64748b;margin-top:4px">Gerado automaticamente (STK-data do dia-sequência); podes editar.</div></div>
         <div class="field"><label>Fornecedor</label>
           <select id="fx-fornecedor-id" style="width:100%;max-width:100%;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:14px"></select>
           <input id="fx-fornecedor-livre" type="text" placeholder="Nome se escolheste «Outro nome…»" style="display:none;margin-top:8px;width:100%;box-sizing:border-box;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:14px"/>
+          <div id="fx-ocr-contacto-wrap" style="display:none;margin-top:8px;padding:10px;background:#0b1322;border:1px dashed #1e3a5f;border-radius:8px">
+            <div style="font-size:11px;color:#93c5fd;margin-bottom:6px">🆕 Será criado novo fornecedor (revise os contactos extraídos da fatura):</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+              <input id="fx-ocr-fornecedor-nif" type="text" placeholder="NIF" style="padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#f1f5f9;font-size:13px"/>
+              <input id="fx-ocr-fornecedor-tel" type="text" placeholder="Telefone" style="padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#f1f5f9;font-size:13px"/>
+              <input id="fx-ocr-fornecedor-email" type="email" placeholder="Email" style="padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#f1f5f9;font-size:13px"/>
+              <input id="fx-ocr-fornecedor-morada" type="text" placeholder="Morada" style="padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#f1f5f9;font-size:13px"/>
+            </div>
+          </div>
           <div style="font-size:11px;color:#64748b;margin-top:4px">Selecciona um fornecedor ou «Outro nome…». <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;vertical-align:baseline" onclick="runAction(event, () => navigate('fornecedores'))">Gerir fornecedores</button></div></div>
         <div class="field"><label>Notas (opcional)</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
         <div class="field">
@@ -7186,6 +7199,15 @@ async function submitFaturaArmazem() {
       foto_fatura_base64: fotoB64
     };
     if (fornecedor_id) payload.fornecedor_id = fornecedor_id;
+    if (!fornecedor_id && fornecedorTxt) {
+      const ocrNif = val('fx-ocr-fornecedor-nif');
+      const ocrTel = val('fx-ocr-fornecedor-tel');
+      const ocrEmail = val('fx-ocr-fornecedor-email');
+      const ocrMorada = val('fx-ocr-fornecedor-morada');
+      if (ocrNif || ocrTel || ocrEmail || ocrMorada) {
+        payload.novo_fornecedor = { nome: fornecedorTxt, nif: ocrNif, telefone: ocrTel, email: ocrEmail, morada: ocrMorada };
+      }
+    }
     if (totalEst > saldo + 0.01) {
       payload.justificacao_excesso = val('fx-justificacao');
       const ts = val('fx-turno-saida');
@@ -7201,6 +7223,9 @@ async function submitFaturaArmazem() {
       livR.value = '';
       livR.style.display = 'none';
     }
+    ['fx-ocr-fornecedor-nif','fx-ocr-fornecedor-tel','fx-ocr-fornecedor-email','fx-ocr-fornecedor-morada'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    const ocrWrap = document.getElementById('fx-ocr-contacto-wrap');
+    if (ocrWrap) ocrWrap.style.display = 'none';
     document.getElementById('fx-notas').value = '';
     const jf = document.getElementById('fx-justificacao');
     if (jf) jf.value = '';
@@ -7214,6 +7239,135 @@ async function submitFaturaArmazem() {
   } catch(e) {
     if (msg) msg.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }
+}
+
+// ── OCR DE FATURA ────────────────────────────────────────────
+function abrirOcrFatura() {
+  if (document.getElementById('ocr-fatura-modal')) return;
+  const modal = document.createElement('div');
+  modal.id = 'ocr-fatura-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px';
+  modal.innerHTML = `
+    <div style="color:#f1f5f9;font-size:18px;font-weight:700">📷 Importar fatura (OCR)</div>
+    <div style="color:#94a3b8;font-size:13px;max-width:420px;text-align:center;line-height:1.5">Tira uma foto nítida da fatura ou escolhe um ficheiro. A IA extrai fornecedor, contactos, linhas e totais. Tu revês antes de gravar.</div>
+    <input type="file" id="ocr-fatura-file" accept="image/jpeg,image/png,image/webp" capture="environment" style="color:#cbd5e1"/>
+    <div id="ocr-fatura-msg" style="color:#94a3b8;font-size:13px;min-height:18px;text-align:center;max-width:480px"></div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-primary" id="ocr-fatura-btn" onclick="runAction(event, analisarOcrFatura)">Analisar</button>
+      <button class="btn btn-ghost" onclick="fecharOcrFatura()">Cancelar</button>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+function fecharOcrFatura() {
+  const m = document.getElementById('ocr-fatura-modal');
+  if (m) m.remove();
+}
+
+async function resizeImageForOcr(file, maxDim = 1800, quality = 0.85) {
+  const dataUrl = await fileToDataUrl(file);
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = reject;
+    i.src = dataUrl;
+  });
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+async function analisarOcrFatura() {
+  const inp = document.getElementById('ocr-fatura-file');
+  const msg = document.getElementById('ocr-fatura-msg');
+  const btn = document.getElementById('ocr-fatura-btn');
+  if (!inp || !inp.files || !inp.files[0]) { if (msg) msg.textContent = 'Escolhe uma imagem.'; return; }
+  if (btn) btn.disabled = true;
+  if (msg) msg.textContent = '⏳ A analisar fatura com IA…';
+  try {
+    const b64 = await resizeImageForOcr(inp.files[0]);
+    const data = await api('POST', '/armazem/ocr-fatura', { foto_base64: b64 });
+    aplicarOcrAoFormulario(data);
+    fecharOcrFatura();
+    const fMsg = document.getElementById('fatura-form-msg');
+    const avisos = (data.linhas || []).filter(l => l.aviso).length;
+    const novosForn = data.fornecedor && !data.fornecedor.match ? 1 : 0;
+    const novosProd = (data.linhas || []).filter(l => !l.match).length;
+    if (fMsg) {
+      fMsg.innerHTML = `<div class="alert alert-success">Fatura analisada. Revê os campos antes de gravar.${
+        novosForn ? ' 🆕 Fornecedor novo será criado.' : ''
+      }${novosProd ? ` 🆕 ${novosProd} produto(s) novo(s) serão criados.` : ''}${
+        avisos ? ` ⚠️ ${avisos} linha(s) com aviso.` : ''
+      }</div>`;
+    }
+  } catch (e) {
+    if (msg) msg.textContent = '⚠️ ' + e.message;
+    if (btn) btn.disabled = false;
+  }
+}
+
+function aplicarOcrAoFormulario(data) {
+  const f = data.fornecedor || {};
+  const selF = document.getElementById('fx-fornecedor-id');
+  const livF = document.getElementById('fx-fornecedor-livre');
+  const ocrWrap = document.getElementById('fx-ocr-contacto-wrap');
+  if (selF) {
+    if (f.match && f.match.id) {
+      selF.value = String(f.match.id);
+      if (livF) { livF.value = ''; livF.style.display = 'none'; }
+      if (ocrWrap) ocrWrap.style.display = 'none';
+    } else {
+      selF.value = 'livre';
+      if (livF) { livF.style.display = ''; livF.value = String(f.nome || ''); }
+      if (ocrWrap) ocrWrap.style.display = '';
+      const set = (id, v) => { const e = document.getElementById(id); if (e) e.value = String(v || ''); };
+      set('fx-ocr-fornecedor-nif', f.nif);
+      set('fx-ocr-fornecedor-tel', f.telefone);
+      set('fx-ocr-fornecedor-email', f.email);
+      set('fx-ocr-fornecedor-morada', f.morada);
+    }
+    selF.dispatchEvent(new Event('change'));
+  }
+  const num = document.getElementById('fx-numero');
+  if (num && data.numero_fatura) num.value = data.numero_fatura;
+  const body = document.getElementById('fatura-linhas-body');
+  if (body) body.innerHTML = '';
+  for (const l of (data.linhas || [])) {
+    addFaturaLinha();
+    const lastLine = body && body.lastElementChild;
+    if (!lastLine) continue;
+    const sel = lastLine.querySelector('.af-prod');
+    if (l.match && l.match.id && sel) {
+      renderArmazemProdutoOptions(sel, String(l.match.id), '', true);
+      sel.value = String(l.match.id);
+      toggleFaturaLinhaNovo(sel);
+    } else if (sel) {
+      renderArmazemProdutoOptions(sel, '__novo__', '', true);
+      sel.value = '__novo__';
+      toggleFaturaLinhaNovo(sel);
+      const nomeEl = lastLine.querySelector('.af-nome');
+      if (nomeEl) nomeEl.value = String(l.descricao || '');
+      const medSel = lastLine.querySelector('.af-medicao');
+      if (medSel && l.tipo_medicao_detectado) medSel.value = l.tipo_medicao_detectado;
+      const catSel = lastLine.querySelector('.af-categoria');
+      if (catSel) catSel.value = 'ingredientes';
+    }
+    const qtyEl = lastLine.querySelector('.af-qty');
+    if (qtyEl && l.quantidade) qtyEl.value = String(l.quantidade);
+    const pEl = lastLine.querySelector('.af-preco');
+    if (pEl && l.preco_unit) pEl.value = String(l.preco_unit);
+    if (l.aviso) {
+      const av = document.createElement('div');
+      av.style.cssText = 'margin-top:6px;padding:6px 8px;background:#451a03;color:#fb923c;border-radius:6px;font-size:11px';
+      av.textContent = '⚠️ ' + l.aviso;
+      lastLine.appendChild(av);
+    }
+  }
+  if (typeof updateFaturaExcessoUI === 'function') updateFaturaExcessoUI();
 }
 
 // ── FORNECEDORES ─────────────────────────────────────────────

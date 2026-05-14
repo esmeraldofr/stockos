@@ -3149,7 +3149,11 @@ async function callMindeeOcr(parsed) {
   const form = new FormData();
   const blob = new Blob([parsed.buffer], { type: parsed.contentType });
   form.append('document', blob, 'fatura.' + parsed.ext);
-  const r = await fetch('https://api.mindee.net/v1/products/mindee/invoices/v4/predict', {
+  // Usa Financial Document (suporta faturas E recibos térmicos angolanos).
+  // Pode ser sobreposto via env MINDEE_ENDPOINT (ex.: invoices/v4) para fallback.
+  const endpoint = process.env.MINDEE_ENDPOINT
+    || 'https://api.mindee.net/v1/products/mindee/financial_document/v1/predict';
+  const r = await fetch(endpoint, {
     method: 'POST',
     headers: { Authorization: `Token ${apiKey}` },
     body: form

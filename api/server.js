@@ -4411,11 +4411,11 @@ app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-/** Equipa — utilizadores não-admin (gestor e admin podem consultar). */
+/** Equipa — todos os utilizadores activos/inactivos, para qualquer role autenticado registar/atualizar face. */
 app.get('/api/equipa', auth, requireRole('admin','gestor','operador','compras'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url FROM utilizadores WHERE role != 'admin' ORDER BY nome");
+    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url FROM utilizadores ORDER BY nome");
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -4514,11 +4514,8 @@ app.get('/api/face-descriptors', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-/** Guardar descritor facial — admin pode registar qualquer utilizador; outros só o próprio. */
+/** Guardar descritor facial — qualquer utilizador autenticado pode registar (próprio ou de outro). */
 app.put('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
-  if (req.user.role !== 'admin' && String(req.user.id) !== String(req.params.id)) {
-    return res.status(403).json({ erro: 'Sem permissão para registar a face de outro utilizador' });
-  }
   try {
     const { descriptor, foto_base64 } = req.body;
     if (!Array.isArray(descriptor) || descriptor.length !== 128) {
@@ -4538,11 +4535,8 @@ app.put('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-/** Remover descritor facial — admin pode remover qualquer; outros só o próprio. */
+/** Remover descritor facial — qualquer utilizador autenticado pode remover. */
 app.delete('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
-  if (req.user.role !== 'admin' && String(req.user.id) !== String(req.params.id)) {
-    return res.status(403).json({ erro: 'Sem permissão para remover a face de outro utilizador' });
-  }
   try {
     const r = await query(`SELECT face_foto_url FROM utilizadores WHERE id=$1`, [req.params.id]);
     const oldUrl = r.rows[0]?.face_foto_url;

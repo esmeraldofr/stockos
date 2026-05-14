@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-13-importar-fatura">
+<html lang="pt" data-stockos-ui="2026-05-13-importar-fatura-AB">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7251,6 +7251,14 @@ function abrirOcrFatura() {
     <div style="color:#f1f5f9;font-size:18px;font-weight:700">📷 Importar fatura</div>
     <div style="color:#94a3b8;font-size:13px;max-width:420px;text-align:center;line-height:1.5">Tira uma foto nítida da fatura ou escolhe um ficheiro. O sistema extrai fornecedor, contactos, linhas e totais. Tu revês antes de gravar.</div>
     <input type="file" id="ocr-fatura-file" accept="image/jpeg,image/png,image/webp" capture="environment" style="color:#cbd5e1"/>
+    <div style="display:flex;gap:18px;font-size:13px;color:#cbd5e1;background:#0b1322;border:1px solid #334155;border-radius:8px;padding:8px 14px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="radio" name="ocr-metodo" value="claude" checked> Método A
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="radio" name="ocr-metodo" value="mindee"> Método B
+      </label>
+    </div>
     <div id="ocr-fatura-msg" style="color:#94a3b8;font-size:13px;min-height:18px;text-align:center;max-width:480px"></div>
     <div style="display:flex;gap:10px">
       <button class="btn btn-primary" id="ocr-fatura-btn" onclick="runAction(event, analisarOcrFatura)">Analisar</button>
@@ -7289,16 +7297,18 @@ async function analisarOcrFatura() {
   if (btn) btn.disabled = true;
   if (msg) msg.textContent = '⏳ A processar fatura…';
   try {
+    const provider = document.querySelector('input[name="ocr-metodo"]:checked')?.value || 'claude';
     const b64 = await resizeImageForOcr(inp.files[0]);
-    const data = await api('POST', '/armazem/ocr-fatura', { foto_base64: b64 });
+    const data = await api('POST', '/armazem/ocr-fatura', { foto_base64: b64, provider });
     aplicarOcrAoFormulario(data);
     fecharOcrFatura();
     const fMsg = document.getElementById('fatura-form-msg');
     const avisos = (data.linhas || []).filter(l => l.aviso).length;
     const novosForn = data.fornecedor && !data.fornecedor.match ? 1 : 0;
     const novosProd = (data.linhas || []).filter(l => !l.match).length;
+    const metodoLabel = provider === 'mindee' ? 'Método B' : 'Método A';
     if (fMsg) {
-      fMsg.innerHTML = `<div class="alert alert-success">Fatura analisada. Revê os campos antes de gravar.${
+      fMsg.innerHTML = `<div class="alert alert-success">Fatura analisada (${metodoLabel}). Revê os campos antes de gravar.${
         novosForn ? ' 🆕 Fornecedor novo será criado.' : ''
       }${novosProd ? ` 🆕 ${novosProd} produto(s) novo(s) serão criados.` : ''}${
         avisos ? ` ⚠️ ${avisos} linha(s) com aviso.` : ''

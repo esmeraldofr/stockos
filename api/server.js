@@ -2578,6 +2578,10 @@ async function ensureFornecedores() {
       criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       criado_por TEXT NOT NULL DEFAULT ''
     )`);
+    await query(`ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS telefone TEXT NOT NULL DEFAULT ''`).catch(() => {});
+    await query(`ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`).catch(() => {});
+    await query(`ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT ''`).catch(() => {});
+    await query(`ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS nif TEXT NOT NULL DEFAULT ''`).catch(() => {});
     await query(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS fornecedor_id INTEGER`).catch(() => {});
     await query(`DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armazem_faturas_fornecedor_id_fkey') THEN
@@ -2608,12 +2612,15 @@ app.get('/api/fornecedores', auth, requireRole('admin', 'gestor', 'compras'), as
 app.post('/api/fornecedores', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
   try {
     await ensureFornecedores();
-    const { nome, notas } = req.body || {};
+    const { nome, notas, telefone, email, morada, nif } = req.body || {};
     const n = String(nome || '').trim();
     if (!n) return res.status(400).json({ erro: 'Nome é obrigatório' });
     const r = await query(
-      `INSERT INTO fornecedores (nome, notas, criado_por) VALUES ($1, $2, $3) RETURNING *`,
-      [n, String(notas || '').trim(), String(req.user.id || '')]
+      `INSERT INTO fornecedores (nome, notas, criado_por, telefone, email, morada, nif)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [n, String(notas || '').trim(), String(req.user.id || ''),
+       String(telefone || '').trim(), String(email || '').trim(),
+       String(morada || '').trim(), String(nif || '').trim()]
     );
     res.json(r.rows[0]);
   } catch (e) {
@@ -2626,16 +2633,20 @@ app.put('/api/fornecedores/:id', auth, requireRole('admin', 'gestor', 'compras')
     await ensureFornecedores();
     const id = parseInt(req.params.id, 10);
     if (Number.isNaN(id)) return res.status(400).json({ erro: 'ID inválido' });
-    const { nome, notas, ativo } = req.body || {};
+    const { nome, notas, ativo, telefone, email, morada, nif } = req.body || {};
     const row = await query('SELECT * FROM fornecedores WHERE id=$1', [id]);
     if (!row.rows.length) return res.status(404).json({ erro: 'Fornecedor não encontrado' });
     const nomeF = nome != null ? String(nome).trim() : row.rows[0].nome;
     if (!nomeF) return res.status(400).json({ erro: 'Nome é obrigatório' });
     const notasF = notas != null ? String(notas).trim() : row.rows[0].notas;
     const ativoF = ativo !== undefined && ativo !== null ? !!ativo : row.rows[0].ativo;
+    const telF = telefone != null ? String(telefone).trim() : (row.rows[0].telefone || '');
+    const emailF = email != null ? String(email).trim() : (row.rows[0].email || '');
+    const moradaF = morada != null ? String(morada).trim() : (row.rows[0].morada || '');
+    const nifF = nif != null ? String(nif).trim() : (row.rows[0].nif || '');
     const r = await query(
-      `UPDATE fornecedores SET nome=$1, notas=$2, ativo=$3 WHERE id=$4 RETURNING *`,
-      [nomeF, notasF, ativoF, id]
+      `UPDATE fornecedores SET nome=$1, notas=$2, ativo=$3, telefone=$4, email=$5, morada=$6, nif=$7 WHERE id=$8 RETURNING *`,
+      [nomeF, notasF, ativoF, telF, emailF, moradaF, nifF, id]
     );
     res.json(r.rows[0]);
   } catch (e) {
@@ -3055,6 +3066,149 @@ app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor','compras'
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+/**
+ * OCR de fatura — recebe foto base64 (image/jpeg|png|webp), chama Anthropic Vision e devolve JSON estruturado:
+ *  { fornecedor: {nome, nif, telefone, email, morada, match: {id, nome} | null},
+ *    numero_fatura, data_emissao, total_estimado,
+ *    linhas: [{ descricao, quantidade, unidade_medida, preco_unit, tipo_medicao_detectado,
+ *               match: {id, nome, tipo_medicao} | null, aviso? }] }
+ * Auto-mapeia fornecedor/produto contra a BD por NIF/nome (ILIKE). Não cria nada — só sugere.
+ */
+app.post('/api/armazem/ocr-fatura', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(500).json({ erro: 'ANTHROPIC_API_KEY não configurada no servidor' });
+    const parsed = parseDataUrlFoto(req.body && req.body.foto_base64);
+    if (!parsed) return res.status(400).json({ erro: 'Foto inválida (JPEG/PNG/WebP até 5 MB)' });
+    await ensureFornecedores();
+
+    const promptText = `Estás a analisar uma FATURA (Angola, em português). Devolve APENAS um objecto JSON válido — sem qualquer texto fora do JSON, sem markdown — com este schema:
+{
+  "fornecedor": {"nome": string, "nif": string, "telefone": string, "email": string, "morada": string},
+  "numero_fatura": string,
+  "data_emissao": "YYYY-MM-DD",
+  "total_estimado": number,
+  "linhas": [
+    {
+      "descricao": string,
+      "quantidade": number,
+      "unidade_medida": "kg" | "g" | "L" | "ml" | "un" | "caixa" | "garrafa" | "lata" | "pack",
+      "preco_unit": number,
+      "total": number
+    }
+  ]
+}
+
+Regras:
+- Os números são em Kwanzas (AOA). Usa ponto decimal (1234.56). Sem separadores de milhar.
+- Se um campo não existe na fatura, devolve string vazia "" (ou 0 para números, [] para linhas).
+- "preco_unit" é o preço por unidade tal como aparece na fatura (não normalizes a kg aqui).
+- "data_emissao" no formato ISO. Se não conseguires, devolve string vazia.
+- NÃO inventes informação. Se uma linha parece confusa, devolve-a com os campos vazios.`;
+
+    const anth = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'x-api-key': apiKey
+      },
+      body: JSON.stringify({
+        model: process.env.OCR_MODEL || 'claude-haiku-4-5',
+        max_tokens: 4096,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: parsed.contentType, data: parsed.buffer.toString('base64') } },
+            { type: 'text', text: promptText }
+          ]
+        }]
+      })
+    });
+    if (!anth.ok) {
+      const errTxt = await anth.text().catch(() => '');
+      return res.status(502).json({ erro: 'Falha no OCR: ' + (errTxt || anth.statusText) });
+    }
+    const data = await anth.json();
+    const rawText = (data && Array.isArray(data.content) && data.content[0] && data.content[0].text) || '';
+    let extr;
+    try {
+      const m = rawText.match(/\{[\s\S]*\}/);
+      extr = JSON.parse(m ? m[0] : rawText);
+    } catch (_) {
+      return res.status(502).json({ erro: 'OCR devolveu resposta não-JSON', detalhe: rawText.slice(0, 500) });
+    }
+
+    // Normalizar unidade → tipo_medicao + converter g/ml para kg/L
+    const normaliza = (linha) => {
+      const um = String(linha.unidade_medida || '').toLowerCase().trim();
+      let qty = parseFloat(linha.quantidade) || 0;
+      let pu  = parseFloat(linha.preco_unit) || 0;
+      let tipo = 'unidade';
+      let aviso = '';
+      if (['kg','quilo','quilos','kilo','kilos','l','litro','litros'].includes(um)) tipo = 'peso';
+      else if (um === 'g' || um === 'gramas') { tipo = 'peso'; if (qty > 0) { pu = pu * 1000; qty = qty / 1000; } }
+      else if (um === 'ml') { tipo = 'peso'; if (qty > 0) { pu = pu * 1000; qty = qty / 1000; } }
+      else if (['un','und','unidade','unidades','caixa','garrafa','lata','pack','pcs'].includes(um)) tipo = 'unidade';
+      else aviso = 'unidade incerta';
+      return { ...linha, quantidade: qty, preco_unit: pu, tipo_medicao_detectado: tipo, ...(aviso ? { aviso } : {}) };
+    };
+    const linhasNorm = Array.isArray(extr.linhas) ? extr.linhas.map(normaliza) : [];
+
+    // Matching fornecedor (NIF exacto → senão ILIKE nome)
+    const fornBody = extr.fornecedor || {};
+    let fornMatch = null;
+    const nifIn = String(fornBody.nif || '').trim();
+    const nomeIn = String(fornBody.nome || '').trim();
+    if (nifIn) {
+      const fr = await query(`SELECT id, nome FROM fornecedores WHERE nif = $1 LIMIT 1`, [nifIn]);
+      if (fr.rows.length) fornMatch = fr.rows[0];
+    }
+    if (!fornMatch && nomeIn) {
+      const fr = await query(
+        `SELECT id, nome FROM fornecedores
+         WHERE LOWER(nome) = LOWER($1) OR LOWER(nome) LIKE LOWER($2)
+         ORDER BY (LOWER(nome) = LOWER($1)) DESC, length(nome) ASC LIMIT 1`,
+        [nomeIn, '%' + nomeIn + '%']
+      );
+      if (fr.rows.length) fornMatch = fr.rows[0];
+    }
+
+    // Matching produto por linha (nome ILIKE)
+    const linhasOut = [];
+    for (const l of linhasNorm) {
+      const desc = String(l.descricao || '').trim();
+      let prodMatch = null;
+      if (desc) {
+        const pr = await query(
+          `SELECT id, nome, tipo_medicao FROM produtos
+           WHERE LOWER(nome) = LOWER($1)
+              OR LOWER(nome) LIKE LOWER($2)
+              OR LOWER($1) LIKE '%' || LOWER(nome) || '%'
+           ORDER BY (LOWER(nome) = LOWER($1)) DESC, length(nome) ASC LIMIT 1`,
+          [desc, '%' + desc + '%']
+        );
+        if (pr.rows.length) prodMatch = pr.rows[0];
+      }
+      let aviso = l.aviso;
+      if (prodMatch && prodMatch.tipo_medicao && l.tipo_medicao_detectado && prodMatch.tipo_medicao !== l.tipo_medicao_detectado) {
+        aviso = (aviso ? aviso + '; ' : '') + 'unidade diferente do produto existente';
+      }
+      linhasOut.push({ ...l, match: prodMatch, ...(aviso ? { aviso } : {}) });
+    }
+
+    res.json({
+      fornecedor: { ...fornBody, match: fornMatch },
+      numero_fatura: String(extr.numero_fatura || ''),
+      data_emissao: String(extr.data_emissao || ''),
+      total_estimado: parseFloat(extr.total_estimado) || 0,
+      linhas: linhasOut
+    });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   await ensureArmazemTables();
   let fid = null;
@@ -3070,7 +3224,8 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
       justificacao_excesso,
       turno_saida_id,
       foto_fatura_base64,
-      fornecedor_id: fornecedorIdBody
+      fornecedor_id: fornecedorIdBody,
+      novo_fornecedor
     } = req.body || {};
     if (!Array.isArray(linhas) || !linhas.length) throw new Error('Adicione pelo menos uma linha à fatura');
     const dataFat = (data_emissao || new Date().toISOString().split('T')[0]).trim();
@@ -3088,6 +3243,36 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
           fornecedorId = fr.rows[0].id;
           fornecedorNome = String(fr.rows[0].nome || '').trim();
         }
+      }
+    }
+    if (!fornecedorId && novo_fornecedor && String(novo_fornecedor.nome || '').trim()) {
+      await ensureFornecedores();
+      const nfNome = String(novo_fornecedor.nome).trim();
+      const dup = await client.query(
+        `SELECT id, nome FROM fornecedores
+         WHERE LOWER(nome) = LOWER($1)
+            OR (NULLIF($2,'') IS NOT NULL AND nif = $2)
+         LIMIT 1`,
+        [nfNome, String(novo_fornecedor.nif || '').trim()]
+      );
+      if (dup.rows.length) {
+        fornecedorId = dup.rows[0].id;
+        fornecedorNome = dup.rows[0].nome;
+      } else {
+        const ins = await client.query(
+          `INSERT INTO fornecedores (nome, telefone, email, morada, nif, criado_por)
+           VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, nome`,
+          [
+            nfNome,
+            String(novo_fornecedor.telefone || '').trim(),
+            String(novo_fornecedor.email || '').trim(),
+            String(novo_fornecedor.morada || '').trim(),
+            String(novo_fornecedor.nif || '').trim(),
+            String(req.user.id || '')
+          ]
+        );
+        fornecedorId = ins.rows[0].id;
+        fornecedorNome = ins.rows[0].nome;
       }
     }
     const libRow = await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);

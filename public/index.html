@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-13-ocr-fatura">
+<html lang="pt" data-stockos-ui="2026-05-13-importar-fatura">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6465,8 +6465,8 @@ async function drawArmazem() {
         <div class="card-title">📄 Fatura de compra</div>
         <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha. Anexa a <strong>foto da fatura</strong> (obrigatório). Se o total exceder o saldo do dia, deves justificar a origem do dinheiro (podes associar uma saída de caixa do mesmo dia).</p>
         <div style="margin-bottom:10px">
-          <button type="button" class="btn btn-primary btn-sm" onclick="abrirOcrFatura()">📷 Importar fatura (OCR)</button>
-          <span style="font-size:11px;color:#64748b;margin-left:8px">Tira uma foto da fatura e a IA preenche o formulário.</span>
+          <button type="button" class="btn btn-primary btn-sm" onclick="abrirOcrFatura()">📷 Importar fatura</button>
+          <span style="font-size:11px;color:#64748b;margin-left:8px">Tira uma foto da fatura e o formulário é preenchido automaticamente.</span>
         </div>
         <div id="fatura-form-msg"></div>
         <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="STK-20260405-001 (automático)"/>
@@ -7248,8 +7248,8 @@ function abrirOcrFatura() {
   modal.id = 'ocr-fatura-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px';
   modal.innerHTML = `
-    <div style="color:#f1f5f9;font-size:18px;font-weight:700">📷 Importar fatura (OCR)</div>
-    <div style="color:#94a3b8;font-size:13px;max-width:420px;text-align:center;line-height:1.5">Tira uma foto nítida da fatura ou escolhe um ficheiro. A IA extrai fornecedor, contactos, linhas e totais. Tu revês antes de gravar.</div>
+    <div style="color:#f1f5f9;font-size:18px;font-weight:700">📷 Importar fatura</div>
+    <div style="color:#94a3b8;font-size:13px;max-width:420px;text-align:center;line-height:1.5">Tira uma foto nítida da fatura ou escolhe um ficheiro. O sistema extrai fornecedor, contactos, linhas e totais. Tu revês antes de gravar.</div>
     <input type="file" id="ocr-fatura-file" accept="image/jpeg,image/png,image/webp" capture="environment" style="color:#cbd5e1"/>
     <div id="ocr-fatura-msg" style="color:#94a3b8;font-size:13px;min-height:18px;text-align:center;max-width:480px"></div>
     <div style="display:flex;gap:10px">
@@ -7287,7 +7287,7 @@ async function analisarOcrFatura() {
   const btn = document.getElementById('ocr-fatura-btn');
   if (!inp || !inp.files || !inp.files[0]) { if (msg) msg.textContent = 'Escolhe uma imagem.'; return; }
   if (btn) btn.disabled = true;
-  if (msg) msg.textContent = '⏳ A analisar fatura com IA…';
+  if (msg) msg.textContent = '⏳ A processar fatura…';
   try {
     const b64 = await resizeImageForOcr(inp.files[0]);
     const data = await api('POST', '/armazem/ocr-fatura', { foto_base64: b64 });

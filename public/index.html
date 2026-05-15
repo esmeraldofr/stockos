@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-15-irreg-decidir">
+<html lang="pt" data-stockos-ui="2026-05-15-print-help">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3441,10 +3441,17 @@ function pedidoBalcaoB64Latin1(s) {
 
 function pedidoBalcaoImprimirTalao(pedido) {
   if (!pedido) return false;
+  if (!pedidoBalcaoIsAndroid()) {
+    pedidoBalcaoMostrarAjudaImpressao('Esta funcionalidade só está disponível no Android (com a app RawBT). No iPhone/iPad, usa o botão «Fatura» que abre a vista para imprimir.');
+    return false;
+  }
   const text = pedidoBalcaoBuildTalaoEscPos(pedido);
   const b64 = pedidoBalcaoB64Latin1(text);
   if (!b64) return false;
   const url = `rawbt:base64,${b64}`;
+  let pageHidden = false;
+  const onVis = () => { if (document.visibilityState === 'hidden') pageHidden = true; };
+  document.addEventListener('visibilitychange', onVis);
   try {
     const a = document.createElement('a');
     a.href = url;
@@ -3453,15 +3460,52 @@ function pedidoBalcaoImprimirTalao(pedido) {
     document.body.appendChild(a);
     a.click();
     setTimeout(() => a.remove(), 800);
-    return true;
   } catch (_) {
-    try {
-      window.location.href = url;
-      return true;
-    } catch (__) {
-      return false;
-    }
+    try { window.location.href = url; } catch (__) {}
   }
+  // Se ao fim de 1.5s a página continua visível, RawBT provavelmente não abriu.
+  setTimeout(() => {
+    document.removeEventListener('visibilitychange', onVis);
+    if (!pageHidden && document.visibilityState === 'visible') {
+      pedidoBalcaoMostrarAjudaImpressao();
+    }
+  }, 1500);
+  return true;
+}
+
+/** Modal explicando como configurar a impressão (RawBT + Bluetooth). */
+function pedidoBalcaoMostrarAjudaImpressao(msgExtra) {
+  if (document.getElementById('pedido-print-help-modal')) return;
+  const div = document.createElement('div');
+  div.id = 'pedido-print-help-modal';
+  div.className = 'modal-overlay';
+  div.style.zIndex = '300';
+  div.innerHTML = `
+    <div class="modal" style="max-width:min(480px,94vw)">
+      <div class="modal-header">
+        <div class="modal-title">🖨️ Configurar impressora térmica</div>
+        <button type="button" class="modal-close" onclick="document.getElementById('pedido-print-help-modal').remove()" aria-label="Fechar">×</button>
+      </div>
+      <div style="padding:0 4px;font-size:13px;color:#cbd5e1;line-height:1.5">
+        ${msgExtra ? `<div class="alert alert-error" style="margin-bottom:12px">${escapeHtml(msgExtra)}</div>` : `<div class="alert alert-error" style="margin-bottom:12px">O navegador não consegue falar directamente com a impressora Bluetooth. É preciso uma app intermediária — a RawBT (gratuita).</div>`}
+        <p style="margin:0 0 8px"><strong>Como configurar (uma vez):</strong></p>
+        <ol style="margin:0 0 12px;padding-left:20px;line-height:1.7">
+          <li>Liga a impressora e empareha-a no <strong>Bluetooth do Android</strong> (Definições → Bluetooth → emparelhar)</li>
+          <li>Instala a app <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:#60a5fa">RawBT (Play Store)</a></li>
+          <li>Abre a RawBT → <em>Settings → Connection method</em> → escolhe <strong>Bluetooth</strong> e selecciona a tua impressora</li>
+          <li>Volta ao StockOS e clica em «🖨️ Talão» novamente</li>
+        </ol>
+        <div style="font-size:11px;color:#94a3b8;padding:8px 10px;background:#0f172a;border-radius:6px;border:1px solid #1e293b">
+          Funciona com impressoras térmicas de 58 mm (e maiores). Se já tens RawBT instalada e mesmo assim não imprime, abre a RawBT manualmente e confirma que a impressora está conectada.
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+          <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="text-decoration:none">Instalar RawBT</a>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('pedido-print-help-modal').remove()">Fechar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+  div.addEventListener('click', (e) => { if (e.target === div) div.remove(); });
 }
 
 function pedidoBalcaoImprimirTalaoPorId(pedidoId) {
@@ -3795,6 +3839,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           } onchange="pedidoBalcaoToggleAutoPrint(this)" style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer"/>
           <span>🖨️ Imprimir talão automaticamente (RawBT · Bluetooth)</span>
         </label>
+        <div style="margin:-4px 0 10px;font-size:11px;color:#94a3b8">
+          A impressão térmica precisa da app <strong>RawBT</strong> no Android com a impressora emparelhada.
+          <a href="#" onclick="event.preventDefault();pedidoBalcaoMostrarAjudaImpressao()" style="color:#60a5fa">ⓘ Como configurar</a>
+        </div>
         <details style="margin-bottom:12px;font-size:12px;color:#cbd5e1" ${
           pedidoBalcaoLogoGetPreview() ? '' : ''
         }>

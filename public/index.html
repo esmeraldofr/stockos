@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-14-foto-auto">
+<html lang="pt" data-stockos-ui="2026-05-15-faltas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -654,7 +654,9 @@ const S = {
   utilizadores: [],
   turnosDia: [],
   /** YYYY-MM do mês visível na página Calendário */
-  calYM: null
+  calYM: null,
+  /** Contador de avisos «em falta» pendentes, para o badge do menu. */
+  faltasPendentes: 0
 };
 
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
@@ -1167,7 +1169,7 @@ async function navigate(page, params) {
 async function draw() {
   document.body.classList.toggle('has-auth', !!S.token);
   if (!S.token) { document.body.classList.remove('menu-open'); drawLogin(); return; }
-  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario', 'irregularidades', 'assiduidade', 'equipa', 'presenca', 'perfil'].includes(S.page)) {
+  if (S.user?.role === 'compras' && !['dia', 'turno', 'armazem', 'produtos', 'fornecedores', 'depositos', 'calendario', 'irregularidades', 'assiduidade', 'equipa', 'presenca', 'perfil', 'faltas'].includes(S.page)) {
     S.page = 'dia';
   }
   if (S.page === 'admin' && S.user?.role !== 'admin') {
@@ -1217,6 +1219,7 @@ async function draw() {
       case 'equipa':   await drawEquipa(); break;
       case 'presenca': await drawPresenca(); break;
       case 'perfil':   await drawPerfil(); break;
+      case 'faltas':   await drawFaltas(); break;
       default:         await drawDia();
     }
   } finally {
@@ -1269,6 +1272,7 @@ async function doLogin() {
     navigate('dia').catch((e) =>
       err('login-msg', sanitizeLoginErr(e && e.message != null ? e.message : String(e)))
     );
+    refreshFaltasBadge();
   } catch (e) { err('login-msg', sanitizeLoginErr(e && e.message != null ? e.message : String(e))); }
 }
 
@@ -1317,6 +1321,9 @@ function menuEntries() {
   }
   entries.push({ page: 'produtos', label: 'Produtos',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>' });
+  entries.push({ page: 'faltas', label: 'Em Falta',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+      badge: () => S.faltasPendentes });
   if (showArmazem) {
     entries.push({ page: 'fornecedores', label: 'Fornecedores',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 18V6a2 2 0 00-2-2H4a2 2 0 00-2 2v11a1 1 0 001 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 001-1v-3.65a1 1 0 00-.22-.624l-3.48-4.35A1 1 0 0017.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>' });
@@ -1367,10 +1374,14 @@ function renderMenuDrawer() {
   const nome = S.user?.nome || '';
   const role = S.user?.role ? String(S.user.role).toUpperCase() : '';
   if (userEl) userEl.textContent = nome ? `${nome}${role ? ` · ${role}` : ''}` : (role || '');
-  const items = menuEntries().map((e) => `
+  const items = menuEntries().map((e) => {
+    const n = (typeof e.badge === 'function') ? (parseInt(e.badge(), 10) || 0) : 0;
+    const badge = n > 0 ? ` <span style="display:inline-block;min-width:18px;padding:1px 6px;border-radius:9px;background:#dc2626;color:#fff;font-size:11px;font-weight:700;margin-left:auto">${n > 99 ? '99+' : n}</span>` : '';
+    return `
     <button type="button" class="menu-item${S.page === e.page ? ' active' : ''}" onclick="menuDrawerNavigate('${e.page}')">
-      ${e.svg}<span>${e.label}</span>
-    </button>`).join('');
+      ${e.svg}<span style="flex:1">${e.label}</span>${badge}
+    </button>`;
+  }).join('');
   cont.innerHTML = `${items}
     <button type="button" class="menu-item menu-item-logout" onclick="menuDrawerLogout()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
@@ -7896,6 +7907,118 @@ async function drawEquipa() {
   } catch(e) { show('equipa-users', `<div class="alert alert-error">${e.message}</div>`); }
 }
 
+// ── EM FALTA ──────────────────────────────────────────────────
+async function drawFaltas() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">🚨 Em Falta</div>
+        <div class="header-sub">Avisos de produtos esgotados — qualquer pessoa pode reportar</div>
+      </div>
+    </div>
+    <div id="content">
+      <div id="faltas-msg"></div>
+      <div class="card">
+        <div class="card-title">+ Reportar produto em falta</div>
+        <div class="field"><label>Produto</label>
+          <select id="falta-produto" style="width:100%;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:14px"></select>
+        </div>
+        <div class="field"><label>Notas (opcional)</label>
+          <input id="falta-notas" type="text" placeholder="Ex.: acabou agora, precisamos urgente"/>
+        </div>
+        <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, submitFalta)">Reportar</button>
+      </div>
+      <div class="card">
+        <div class="card-title" id="faltas-pendentes-title">Pendentes</div>
+        <div id="faltas-pendentes"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Histórico (últimos 30 dias)</div>
+        <div id="faltas-historico"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+    </div>
+    ${navBar()}
+  `);
+  await loadFaltasProdutosSelect();
+  await loadFaltas();
+}
+
+async function loadFaltasProdutosSelect() {
+  try {
+    const produtos = S.produtos && S.produtos.length ? S.produtos : (await api('GET', '/produtos'));
+    S.produtos = produtos;
+    const sel = document.getElementById('falta-produto');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— Seleciona um produto —</option>' +
+      produtos.filter(p => p.ativo).map(p => `<option value="${p.id}">${escapeHtml(p.nome)}</option>`).join('');
+  } catch (e) { /* ignora — o select fica vazio mas a página carrega */ }
+}
+
+async function loadFaltas() {
+  try {
+    const [pend, hist] = await Promise.all([
+      api('GET', '/faltas?status=pendentes'),
+      api('GET', '/faltas?status=resolvidas')
+    ]);
+    S.faltasPendentes = pend.length;
+    const titulo = document.getElementById('faltas-pendentes-title');
+    if (titulo) titulo.textContent = `Pendentes (${pend.length})`;
+    const pCont = document.getElementById('faltas-pendentes');
+    if (pCont) pCont.innerHTML = pend.length ? pend.map(faltaRowHtml).join('') :
+      '<div style="color:#64748b;font-size:13px;padding:8px 0">Sem avisos pendentes 🎉</div>';
+    const hCont = document.getElementById('faltas-historico');
+    if (hCont) hCont.innerHTML = hist.length ? hist.map(faltaRowHtml).join('') :
+      '<div style="color:#64748b;font-size:13px;padding:8px 0">Sem registos nos últimos 30 dias.</div>';
+  } catch (e) { err('faltas-msg', e.message); }
+}
+
+function faltaRowHtml(f) {
+  const pendente = !f.resolvido_em;
+  const quando = new Date(f.reportado_em);
+  const dataStr = quando.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' }) + ' ' + quando.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+  const resolvidoStr = !pendente
+    ? `<div style="font-size:11px;color:#4ade80;margin-top:2px">✓ Resolvido ${new Date(f.resolvido_em).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })} por ${escapeHtml(f.resolvido_por_nome || '—')}</div>`
+    : '';
+  const notasStr = f.notas ? `<div style="font-size:12px;color:#94a3b8;margin-top:4px">${escapeHtml(f.notas)}</div>` : '';
+  return `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #1e293b">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;color:${pendente ? '#fbbf24' : '#94a3b8'}">${pendente ? '🚨 ' : '✓ '}${escapeHtml(f.produto_nome || '—')}</div>
+        <div style="font-size:11px;color:#64748b;margin-top:2px">Reportado por ${escapeHtml(f.reportado_por_nome || '—')} · ${dataStr}</div>
+        ${notasStr}
+        ${resolvidoStr}
+      </div>
+      ${pendente ? `<button class="btn btn-success btn-sm" onclick="runAction(event, () => resolverFalta(${f.id}))">✓ Resolvido</button>` : ''}
+    </div>`;
+}
+
+async function submitFalta() {
+  const pid = val('falta-produto');
+  const notas = val('falta-notas');
+  if (!pid) return err('faltas-msg', 'Seleciona um produto');
+  try {
+    await api('POST', '/faltas', { produto_id: pid, notas });
+    document.getElementById('falta-produto').value = '';
+    document.getElementById('falta-notas').value = '';
+    suc('faltas-msg', 'Aviso registado.');
+    setTimeout(() => show('faltas-msg', ''), 2000);
+    await loadFaltas();
+  } catch (e) { err('faltas-msg', e.message); }
+}
+
+async function resolverFalta(id) {
+  try {
+    await api('PATCH', '/faltas/' + id);
+    await loadFaltas();
+    await refreshFaltasBadge();
+  } catch (e) { err('faltas-msg', e.message); }
+}
+
+async function refreshFaltasBadge() {
+  try {
+    const r = await api('GET', '/faltas/pendentes-count');
+    S.faltasPendentes = parseInt(r.pendentes, 10) || 0;
+  } catch (_) {}
+}
 
 async function alterarPassword() {
   try {
@@ -8082,6 +8205,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 draw().catch(e => console.error(e));
+if (S.token) refreshFaltasBadge();
 
 // ── RECONHECIMENTO FACIAL / PRESENÇA ─────────────────────────
 

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-14-gallery-fix">
+<html lang="pt" data-stockos-ui="2026-05-14-foto-auto">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7300,6 +7300,15 @@ async function analisarOcrFatura() {
     const provider = document.querySelector('input[name="ocr-metodo"]:checked')?.value || 'claude';
     const b64 = await resizeImageForOcr(inp.files[0]);
     const data = await api('POST', '/armazem/ocr-fatura', { foto_base64: b64, provider });
+    // Transferir a foto carregada para o input «Foto da fatura» — fica anexada quando o utilizador gravar.
+    try {
+      const fxFoto = document.getElementById('fx-foto-fatura');
+      if (fxFoto && typeof DataTransfer !== 'undefined') {
+        const dt = new DataTransfer();
+        dt.items.add(inp.files[0]);
+        fxFoto.files = dt.files;
+      }
+    } catch (_) { /* navegadores antigos: utilizador anexa manualmente */ }
     aplicarOcrAoFormulario(data);
     fecharOcrFatura();
     const fMsg = document.getElementById('fatura-form-msg');

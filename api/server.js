@@ -1714,7 +1714,7 @@ function loginFromBody(req) {
 async function ensureDepositosBanco() {
   if (depositosBancoReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='depositos_banco_ddl_v1'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='depositos_banco_ddl_v2'`);
     if (r.rows.length) { depositosBancoReady = true; depositosSaidasMigrationDone = true; return; }
   } catch (_) {}
   try {
@@ -1734,6 +1734,7 @@ async function ensureDepositosBanco() {
     try { await query(`ALTER TABLE depositos_banco ALTER COLUMN turno_id SET NOT NULL`); } catch (_) {}
     try { await query(`CREATE UNIQUE INDEX IF NOT EXISTS depositos_banco_turno_id_key ON depositos_banco(turno_id)`); } catch (_) {}
     await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_tpa NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_transferencia NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
     await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
     await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
     await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS bordero_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
@@ -1745,7 +1746,7 @@ async function ensureDepositosBanco() {
         console.error('migrateDepositosSaidasAntigasAgrupadas', e);
       }
     }
-    await query(`INSERT INTO stockos_meta (k,v) VALUES ('depositos_banco_ddl_v1','done') ON CONFLICT (k) DO NOTHING`);
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('depositos_banco_ddl_v2','done') ON CONFLICT (k) DO NOTHING`);
     depositosBancoReady = true;
   } catch (e) {
     console.warn('[ensureDepositosBanco]', e && e.message);
@@ -3933,8 +3934,9 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
     const dataFim = `${y}-${pad(m)}-${pad(lastDay)}`;
     const r = await query(
       `SELECT t.id, t.data, t.nome, t.estado,
-              COALESCE(d.valor, 0) AS dep_liquido,
+              COALESCE(d.valor, 0) AS dep_dinheiro,
               COALESCE(d.valor_tpa, 0) AS dep_tpa,
+              COALESCE(d.valor_transferencia, 0) AS dep_transferencia,
               COALESCE(d.valor_saidas, 0) AS dep_saidas
        FROM turnos t
        LEFT JOIN depositos_banco d ON d.turno_id = t.id
@@ -3947,8 +3949,9 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
       data: normDataPostgres(row.data),
       nome: row.nome,
       estado: row.estado,
-      dep_liquido: parseFloat(row.dep_liquido) || 0,
+      dep_dinheiro: parseFloat(row.dep_dinheiro) || 0,
       dep_tpa: parseFloat(row.dep_tpa) || 0,
+      dep_transferencia: parseFloat(row.dep_transferencia) || 0,
       dep_saidas: parseFloat(row.dep_saidas) || 0
     }));
     res.json(rows);
@@ -4365,15 +4368,18 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), asyn
     }
     const vtpa = parseFloat(valor_tpa);
     if (Number.isNaN(vtpa) || vtpa < 0) return res.status(400).json({ erro: 'Indique o valor registado no TPA (≥ 0).' });
+    const vtransfRaw = parseFloat(req.body?.valor_transferencia);
+    const vtransf = Number.isNaN(vtransfRaw) ? 0 : Math.max(0, vtransfRaw);
     await assertTurnoFechado(turno_id);
     const ddep = (data_deposito || new Date().toISOString().split('T')[0]).trim();
     const r = await query(
-      `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, saidas_destino, referencia, notas, criado_por)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_transferencia, valor_saidas, saidas_destino, referencia, notas, criado_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT (turno_id) DO UPDATE SET
          data_deposito = EXCLUDED.data_deposito,
          valor = EXCLUDED.valor,
          valor_tpa = EXCLUDED.valor_tpa,
+         valor_transferencia = EXCLUDED.valor_transferencia,
          valor_saidas = EXCLUDED.valor_saidas,
          saidas_destino = EXCLUDED.saidas_destino,
          referencia = EXCLUDED.referencia,
@@ -4385,6 +4391,7 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), asyn
         ddep,
         v,
         vtpa,
+        vtransf,
         vsaida,
         vsaida > 0 ? saidasDestino : '',
         String(referencia || '').trim(),
@@ -4436,6 +4443,8 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
       if (Number.isNaN(vtpa) || vtpa < 0) {
         return res.status(400).json({ erro: 'Indica o valor registado no TPA (≥ 0) em cada turno com depósito.' });
       }
+      const vtransfRaw = parseFloat(raw.valor_transferencia);
+      const vtransf = Number.isNaN(vtransfRaw) ? 0 : Math.max(0, vtransfRaw);
       await assertTurnoFechado(tid);
       valid.push({
         turno_id: tid,
@@ -4444,6 +4453,7 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
         valor_saidas: 0,
         saidas_destino: '',
         valor_tpa: vtpa,
+        valor_transferencia: vtransf,
         referencia: String(raw.referencia || '').trim(),
         notas: String(raw.notas || '').trim()
       });
@@ -4476,12 +4486,13 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
       await client.query('BEGIN');
       for (const row of dedup) {
         const r = await client.query(
-          `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_saidas, saidas_destino, referencia, notas, criado_por)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_transferencia, valor_saidas, saidas_destino, referencia, notas, criado_por)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
            ON CONFLICT (turno_id) DO UPDATE SET
              data_deposito = EXCLUDED.data_deposito,
              valor = EXCLUDED.valor,
              valor_tpa = EXCLUDED.valor_tpa,
+             valor_transferencia = EXCLUDED.valor_transferencia,
              valor_saidas = EXCLUDED.valor_saidas,
              saidas_destino = EXCLUDED.saidas_destino,
              referencia = EXCLUDED.referencia,
@@ -4493,6 +4504,7 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
             row.data_deposito,
             row.valor,
             row.valor_tpa,
+            row.valor_transferencia,
             row.valor_saidas,
             row.saidas_destino || '',
             row.referencia,

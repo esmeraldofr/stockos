@@ -2475,7 +2475,8 @@ async function ensureProdutoFaltas() {
   const pidCol = pidType === 'uuid' ? 'UUID' : 'INTEGER';
   await query(`CREATE TABLE IF NOT EXISTS produto_faltas (
     id SERIAL PRIMARY KEY,
-    produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    produto_id ${pidCol} REFERENCES produtos(id) ON DELETE SET NULL,
+    produto_nome_livre TEXT NOT NULL DEFAULT '',
     notas TEXT NOT NULL DEFAULT '',
     reportado_por TEXT NOT NULL DEFAULT '',
     reportado_por_nome TEXT NOT NULL DEFAULT '',
@@ -2484,6 +2485,8 @@ async function ensureProdutoFaltas() {
     resolvido_por TEXT NOT NULL DEFAULT '',
     resolvido_por_nome TEXT NOT NULL DEFAULT ''
   )`).catch(() => {});
+  await query(`ALTER TABLE produto_faltas ALTER COLUMN produto_id DROP NOT NULL`).catch(() => {});
+  await query(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS produto_nome_livre TEXT NOT NULL DEFAULT ''`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS produto_faltas_pendentes_idx ON produto_faltas (resolvido_em) WHERE resolvido_em IS NULL`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS produto_faltas_reportado_idx ON produto_faltas (reportado_em DESC)`).catch(() => {});
   await query(`INSERT INTO stockos_meta (k,v) VALUES ('produto_faltas_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
@@ -2499,9 +2502,11 @@ app.get('/api/faltas', auth, async (req, res) => {
     if (status === 'pendentes') where = 'WHERE f.resolvido_em IS NULL';
     else if (status === 'resolvidas') where = "WHERE f.resolvido_em IS NOT NULL AND f.resolvido_em > NOW() - INTERVAL '30 days'";
     const r = await query(
-      `SELECT f.*, p.nome AS produto_nome, p.categoria AS produto_categoria, p.tipo_medicao AS produto_tipo_medicao
+      `SELECT f.*, COALESCE(p.nome, f.produto_nome_livre) AS produto_nome,
+              p.categoria AS produto_categoria, p.tipo_medicao AS produto_tipo_medicao,
+              (f.produto_id IS NULL) AS produto_livre
        FROM produto_faltas f
-       JOIN produtos p ON p.id = f.produto_id
+       LEFT JOIN produtos p ON p.id = f.produto_id
        ${where}
        ORDER BY (f.resolvido_em IS NULL) DESC, f.reportado_em DESC
        LIMIT 200`
@@ -2523,17 +2528,29 @@ app.get('/api/faltas/pendentes-count', auth, async (req, res) => {
 app.post('/api/faltas', auth, async (req, res) => {
   try {
     await ensureProdutoFaltas();
-    const { produto_id, notas } = req.body || {};
-    if (!produto_id) return res.status(400).json({ erro: 'produto_id é obrigatório' });
-    const dup = await query(
-      `SELECT id FROM produto_faltas WHERE produto_id = $1 AND resolvido_em IS NULL LIMIT 1`,
-      [produto_id]
-    );
-    if (dup.rows.length) return res.status(400).json({ erro: 'Já existe um aviso pendente para este produto' });
+    const { produto_id, produto_nome_livre, notas } = req.body || {};
+    const nomeLivre = String(produto_nome_livre || '').trim();
+    if (!produto_id && !nomeLivre) {
+      return res.status(400).json({ erro: 'Indica um produto (existente ou um nome livre)' });
+    }
+    if (produto_id) {
+      const dup = await query(
+        `SELECT id FROM produto_faltas WHERE produto_id = $1 AND resolvido_em IS NULL LIMIT 1`,
+        [produto_id]
+      );
+      if (dup.rows.length) return res.status(400).json({ erro: 'Já existe um aviso pendente para este produto' });
+    } else {
+      const dup = await query(
+        `SELECT id FROM produto_faltas
+         WHERE produto_id IS NULL AND LOWER(produto_nome_livre) = LOWER($1) AND resolvido_em IS NULL LIMIT 1`,
+        [nomeLivre]
+      );
+      if (dup.rows.length) return res.status(400).json({ erro: 'Já existe um aviso pendente para este produto' });
+    }
     const r = await query(
-      `INSERT INTO produto_faltas (produto_id, notas, reportado_por, reportado_por_nome)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [produto_id, String(notas || '').trim(), String(req.user.id || ''), String(req.user.nome || '')]
+      `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [produto_id || null, produto_id ? '' : nomeLivre, String(notas || '').trim(), String(req.user.id || ''), String(req.user.nome || '')]
     );
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }

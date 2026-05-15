@@ -319,6 +319,7 @@ let turnoSaidasReady = false;
 let turnoPedidosReady = false;
 let presencasReady = false;
 let precosVendasSnapshotsReady = false;
+let irregularidadeDecisoesReady = false;
 /** ALTER/enum de utilizadores só na primeira vez por processo. */
 let usernameColumnEnsured = false;
 
@@ -4582,6 +4583,102 @@ app.delete('/api/depositos/bordero-dia', auth, requireRole('admin', 'gestor', 'c
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ erro: e.message });
+  }
+});
+
+// ── IRREGULARIDADES — DECISÕES (aceite / pendente) ───────────────
+const IRREG_CATS = new Set(['caixa', 'banco', 'stock', 'fino', 'batata', 'coxa']);
+
+async function ensureIrregularidadeDecisoes() {
+  if (irregularidadeDecisoesReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='irreg_decisoes_ddl_v1'`);
+    if (r.rows.length) { irregularidadeDecisoesReady = true; return; }
+  } catch (_) {}
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS irregularidade_decisoes (
+      id SERIAL PRIMARY KEY,
+      turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+      categoria VARCHAR(20) NOT NULL,
+      aceite BOOLEAN NOT NULL DEFAULT TRUE,
+      justificacao TEXT NOT NULL DEFAULT '',
+      decidido_por TEXT NOT NULL DEFAULT '',
+      decidido_por_nome TEXT NOT NULL DEFAULT '',
+      decidido_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(turno_id, categoria)
+    )`);
+    await query(`CREATE INDEX IF NOT EXISTS irreg_decisoes_turno_idx ON irregularidade_decisoes(turno_id)`).catch(() => {});
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('irreg_decisoes_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+    irregularidadeDecisoesReady = true;
+  } catch (e) {
+    console.warn('[ensureIrregularidadeDecisoes]', e && e.message);
+  }
+}
+
+/** GET decisões por turno(s). Aceita ?turno_id=1,2,3 ou ?turno_id=1 */
+app.get('/api/irregularidades/decisoes', auth, async (req, res) => {
+  try {
+    await ensureIrregularidadeDecisoes();
+    const raw = String(req.query.turno_id || '').trim();
+    if (!raw) return res.json([]);
+    const ids = raw.split(',').map(x => parseInt(x, 10)).filter(Number.isFinite);
+    if (!ids.length) return res.json([]);
+    const r = await query(
+      `SELECT d.*, u.nome AS decidido_por_nome
+       FROM irregularidade_decisoes d
+       LEFT JOIN utilizadores u ON u.id::text = d.decidido_por::text
+       WHERE d.turno_id = ANY($1::int[])`,
+      [ids]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** POST decidir (upsert). { turno_id, categoria, aceite=true, justificacao='' } */
+app.post('/api/irregularidades/decisao', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+  try {
+    await ensureIrregularidadeDecisoes();
+    const tid = parseInt(req.body?.turno_id, 10);
+    const cat = String(req.body?.categoria || '').trim().toLowerCase();
+    if (!tid || !IRREG_CATS.has(cat)) {
+      return res.status(400).json({ erro: 'turno_id e categoria (caixa/banco/stock/fino/batata/coxa) obrigatórios.' });
+    }
+    const aceite = req.body?.aceite !== false;
+    const just = String(req.body?.justificacao || '').trim();
+    const uNome = await query('SELECT nome FROM utilizadores WHERE id=$1', [req.user.id]).catch(() => ({ rows: [] }));
+    const r = await query(
+      `INSERT INTO irregularidade_decisoes (turno_id, categoria, aceite, justificacao, decidido_por, decidido_por_nome, decidido_em)
+       VALUES ($1,$2,$3,$4,$5,$6,NOW())
+       ON CONFLICT (turno_id, categoria) DO UPDATE SET
+         aceite = EXCLUDED.aceite,
+         justificacao = EXCLUDED.justificacao,
+         decidido_por = EXCLUDED.decidido_por,
+         decidido_por_nome = EXCLUDED.decidido_por_nome,
+         decidido_em = NOW()
+       RETURNING *`,
+      [tid, cat, aceite, just, String(req.user.id || ''), uNome.rows[0]?.nome || '']
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** DELETE — remover decisão (volta a pendente). */
+app.delete('/api/irregularidades/decisao', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+  try {
+    await ensureIrregularidadeDecisoes();
+    const tid = parseInt(req.query.turno_id, 10);
+    const cat = String(req.query.categoria || '').trim().toLowerCase();
+    if (!tid || !IRREG_CATS.has(cat)) {
+      return res.status(400).json({ erro: 'turno_id e categoria obrigatórios.' });
+    }
+    await query('DELETE FROM irregularidade_decisoes WHERE turno_id=$1 AND categoria=$2', [tid, cat]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
   }
 });
 

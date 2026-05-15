@@ -3146,28 +3146,142 @@ Regras gerais:
 async function callMindeeOcr(parsed) {
   const apiKey = process.env.MINDEE_API_KEY;
   if (!apiKey) { const e = new Error('mindee key missing'); e.code = 'KEY_MISSING'; throw e; }
+  const modelId = (process.env.MINDEE_MODEL_ID || '').trim();
+  const useV2 = !!modelId;
+  const v2Base = process.env.MINDEE_V2_BASE || 'https://api-v2.mindee.net/v2';
+
+  if (useV2) return callMindeeV2(parsed, apiKey, modelId, v2Base);
+  return callMindeeV1(parsed, apiKey);
+}
+
+async function callMindeeV1(parsed, apiKey) {
   const form = new FormData();
-  const blob = new Blob([parsed.buffer], { type: parsed.contentType });
-  form.append('document', blob, 'fatura.' + parsed.ext);
-  // Usa Financial Document (suporta faturas E recibos térmicos angolanos).
-  // Pode ser sobreposto via env MINDEE_ENDPOINT (ex.: invoices/v4) para fallback.
+  form.append('document', new Blob([parsed.buffer], { type: parsed.contentType }), 'fatura.' + parsed.ext);
   const endpoint = process.env.MINDEE_ENDPOINT
     || 'https://api.mindee.net/v1/products/mindee/financial_document/v1/predict';
-  const r = await fetch(endpoint, {
-    method: 'POST',
-    headers: { Authorization: `Token ${apiKey}` },
-    body: form
-  });
-  if (!r.ok) {
-    const t = await r.text().catch(() => '');
-    console.error('[ocr-mindee] request failed:', r.status, 'endpoint=', endpoint, 'body=', t.slice(0, 1000));
-    const e = new Error('mindee request failed'); e.code = 'PROVIDER_FAILED'; e.providerStatus = r.status; e.providerBody = t.slice(0, 400); throw e;
-  }
+  const r = await fetch(endpoint, { method: 'POST', headers: { Authorization: `Token ${apiKey}` }, body: form });
+  if (!r.ok) throwMindee('[ocr-mindee-v1] request failed', r);
   const data = await r.json();
+  return normalizeMindeeV1(data);
+}
+
+async function callMindeeV2(parsed, apiKey, modelId, base) {
+  // 1) Enqueue.
+  const form = new FormData();
+  form.append('model_id', modelId);
+  form.append('file', new Blob([parsed.buffer], { type: parsed.contentType }), 'fatura.' + parsed.ext);
+  const enq = await fetch(`${base}/inferences/enqueue`, {
+    method: 'POST',
+    headers: { Authorization: apiKey },
+    body: form,
+    redirect: 'manual'
+  });
+  if (!enq.ok && enq.status !== 202) throwMindee('[ocr-mindee-v2] enqueue failed', enq);
+  const enqData = await enq.json();
+  const jobId = (enqData && enqData.job && enqData.job.id) || '';
+  if (!jobId) {
+    const e = new Error('mindee v2 missing job id'); e.code = 'PROVIDER_FAILED'; e.providerStatus = 502;
+    e.providerBody = JSON.stringify(enqData).slice(0, 400); throw e;
+  }
+  // 2) Polling. Job status: "Processing" → "Success" / "Failed".
+  const pollUrl = (enqData.job.polling_url) || `${base}/jobs/${jobId}`;
+  let inference = null;
+  const start = Date.now();
+  while (Date.now() - start < 28000) {
+    await new Promise((rr) => setTimeout(rr, 1500));
+    const pr = await fetch(pollUrl, { headers: { Authorization: apiKey }, redirect: 'follow' });
+    if (!pr.ok) throwMindee('[ocr-mindee-v2] poll failed', pr);
+    const pdata = await pr.json();
+    if (pdata && pdata.inference) { inference = pdata.inference; break; }
+    const st = String((pdata && pdata.job && pdata.job.status) || pdata.status || '').toLowerCase();
+    if (st === 'failed' || st === 'error') {
+      const e = new Error('mindee inference failed'); e.code = 'PROVIDER_FAILED'; e.providerStatus = 502;
+      e.providerBody = JSON.stringify(pdata).slice(0, 400); throw e;
+    }
+    if (st === 'success' || st === 'done' || st === 'completed') {
+      // Fetch the inference object explicitly.
+      const ir = await fetch(`${base}/inferences/${jobId}`, { headers: { Authorization: apiKey } });
+      if (!ir.ok) throwMindee('[ocr-mindee-v2] inference fetch failed', ir);
+      const idata = await ir.json();
+      inference = idata.inference || idata;
+      break;
+    }
+  }
+  if (!inference) {
+    const e = new Error('mindee v2 timeout'); e.code = 'PROVIDER_FAILED'; e.providerStatus = 504;
+    e.providerBody = 'Tempo de espera excedido a aguardar a Mindee'; throw e;
+  }
+  return normalizeMindeeV2(inference);
+}
+
+function throwMindee(prefix, r) {
+  return (async () => {
+    const t = await r.text().catch(() => '');
+    console.error(prefix + ':', r.status, t.slice(0, 1000));
+    const e = new Error('mindee request failed'); e.code = 'PROVIDER_FAILED';
+    e.providerStatus = r.status; e.providerBody = t.slice(0, 400); throw e;
+  })();
+}
+
+function v2Val(field) {
+  if (field == null) return '';
+  if (typeof field === 'string' || typeof field === 'number') return field;
+  if (field.value != null) {
+    if (typeof field.value === 'object' && field.value.value != null) return field.value.value;
+    return field.value;
+  }
+  return '';
+}
+
+function normalizeMindeeV2(inference) {
+  const fields = (inference && inference.result && inference.result.fields) || {};
+  // supplier_company_registrations: list of {fields: {value: {value: '...'}, type: {...}}}
+  const regsObj = fields.supplier_company_registrations;
+  const regsItems = (regsObj && Array.isArray(regsObj.items)) ? regsObj.items : (Array.isArray(regsObj) ? regsObj : []);
+  const nif = regsItems
+    .map(it => {
+      const inner = (it && it.fields) ? it.fields : it;
+      return v2Val(inner && (inner.value || inner.registration_number || inner));
+    })
+    .map(x => String(x || '').trim())
+    .filter(Boolean)
+    .join('; ');
+
+  const fornecedor = {
+    nome: String(v2Val(fields.supplier_name) || '').trim(),
+    nif,
+    telefone: String(v2Val(fields.supplier_phone_number) || '').trim(),
+    email: String(v2Val(fields.supplier_email) || '').trim(),
+    morada: String(v2Val(fields.supplier_address) || '').trim()
+  };
+
+  const liObj = fields.line_items;
+  const liItems = (liObj && Array.isArray(liObj.items)) ? liObj.items : (Array.isArray(liObj) ? liObj : []);
+  const linhas = liItems.map((it) => {
+    const f = (it && it.fields) ? it.fields : it;
+    return {
+      descricao: String(v2Val(f && f.description) || '').trim(),
+      quantidade: parseFloat(v2Val(f && f.quantity)) || 0,
+      unidade_medida: '',
+      preco_unit: parseFloat(v2Val(f && f.unit_price)) || 0,
+      total: parseFloat(v2Val(f && f.total_amount)) || 0
+    };
+  });
+
+  return {
+    fornecedor,
+    numero_fatura: String(v2Val(fields.invoice_number) || '').trim(),
+    data_emissao: String(v2Val(fields.date) || v2Val(fields.invoice_date) || '').trim(),
+    total_estimado: parseFloat(v2Val(fields.total_amount)) || 0,
+    linhas
+  };
+}
+
+function normalizeMindeeV1(data) {
   const pred = (data && data.document && data.document.inference && data.document.inference.prediction) || {};
   const sup = pred.supplier_address || {};
   const regs = Array.isArray(pred.supplier_company_registrations) ? pred.supplier_company_registrations : [];
-  const nif = regs.map(x => String(x.value || '').trim()).filter(Boolean).join('; ');
+  const nif = regs.map(x => String((x && x.value) || '').trim()).filter(Boolean).join('; ');
   const fornecedor = {
     nome: (pred.supplier_name && pred.supplier_name.value) || '',
     nif,
@@ -3177,11 +3291,11 @@ async function callMindeeOcr(parsed) {
   };
   const items = Array.isArray(pred.line_items) ? pred.line_items : [];
   const linhas = items.map(li => ({
-    descricao: String(li.description || '').trim(),
-    quantidade: parseFloat(li.quantity) || 0,
-    unidade_medida: '', // Mindee não devolve unidade — vamos tentar inferir da descrição
-    preco_unit: parseFloat(li.unit_price) || 0,
-    total: parseFloat(li.total_amount) || 0
+    descricao: String((li && li.description) || '').trim(),
+    quantidade: parseFloat(li && li.quantity) || 0,
+    unidade_medida: '',
+    preco_unit: parseFloat(li && li.unit_price) || 0,
+    total: parseFloat(li && li.total_amount) || 0
   }));
   return {
     fornecedor,

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-15-produto-tags">
+<html lang="pt" data-stockos-ui="2026-05-15-fix-total-vendas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2388,10 +2388,6 @@ function getTotalVendasTurnoKz() {
     if (!cfg) continue;
     const copos = vendasBuf[prodId] || 0;
     total += precoVendaCopos(copos, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
-  }
-  for (const prodId of bebidaProdIds) {
-    const b = stockBuf[prodId] || { encontrado:0, entrada:0, deixado:0 };
-    total += Math.max(0, b.encontrado + b.entrada - b.deixado) * (vendasProdPrecos[prodId] || 0);
   }
   forEachBebidaUnidadeVendidaLinha(({ sub }) => {
     total += sub;

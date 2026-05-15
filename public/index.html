@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-15-faltas">
+<html lang="pt" data-stockos-ui="2026-05-15-faltas-livre">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7920,7 +7920,9 @@ async function drawFaltas() {
       <div class="card">
         <div class="card-title">+ Reportar produto em falta</div>
         <div class="field"><label>Produto</label>
-          <select id="falta-produto" style="width:100%;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:14px"></select>
+          <input id="falta-produto-nome" type="text" list="falta-produtos-datalist" placeholder="Digita o nome (qualquer texto, mesmo se não estiver na lista)" autocomplete="off" style="width:100%;box-sizing:border-box;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:14px"/>
+          <datalist id="falta-produtos-datalist"></datalist>
+          <div id="falta-produto-hint" style="font-size:11px;color:#64748b;margin-top:4px">Escolhe da lista ou escreve um nome livre se não estiver registado.</div>
         </div>
         <div class="field"><label>Notas (opcional)</label>
           <input id="falta-notas" type="text" placeholder="Ex.: acabou agora, precisamos urgente"/>
@@ -7946,11 +7948,23 @@ async function loadFaltasProdutosSelect() {
   try {
     const produtos = S.produtos && S.produtos.length ? S.produtos : (await api('GET', '/produtos'));
     S.produtos = produtos;
-    const sel = document.getElementById('falta-produto');
-    if (!sel) return;
-    sel.innerHTML = '<option value="">— Seleciona um produto —</option>' +
-      produtos.filter(p => p.ativo).map(p => `<option value="${p.id}">${escapeHtml(p.nome)}</option>`).join('');
-  } catch (e) { /* ignora — o select fica vazio mas a página carrega */ }
+    const dl = document.getElementById('falta-produtos-datalist');
+    if (!dl) return;
+    // O datalist aceita qualquer texto livre; só os <option> alimentam o autocomplete.
+    dl.innerHTML = produtos.filter(p => p.ativo)
+      .map(p => `<option value="${escapeHtml(p.nome)}" data-id="${p.id}"></option>`).join('');
+    const inp = document.getElementById('falta-produto-nome');
+    const hint = document.getElementById('falta-produto-hint');
+    if (inp && hint) {
+      inp.addEventListener('input', () => {
+        const v = inp.value.trim();
+        if (!v) { hint.textContent = 'Escolhe da lista ou escreve um nome livre se não estiver registado.'; hint.style.color = '#64748b'; return; }
+        const match = (S.produtos || []).find(p => p.ativo && String(p.nome).toLowerCase() === v.toLowerCase());
+        if (match) { hint.textContent = '✓ Produto encontrado: ' + match.nome; hint.style.color = '#4ade80'; }
+        else { hint.textContent = '✏️ Será reportado como nome livre (não existe na lista)'; hint.style.color = '#fbbf24'; }
+      });
+    }
+  } catch (e) { /* ignora — o input fica sem autocomplete mas continua a aceitar texto livre */ }
 }
 
 async function loadFaltas() {
@@ -7979,10 +7993,11 @@ function faltaRowHtml(f) {
     ? `<div style="font-size:11px;color:#4ade80;margin-top:2px">✓ Resolvido ${new Date(f.resolvido_em).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })} por ${escapeHtml(f.resolvido_por_nome || '—')}</div>`
     : '';
   const notasStr = f.notas ? `<div style="font-size:12px;color:#94a3b8;margin-top:4px">${escapeHtml(f.notas)}</div>` : '';
+  const livreBadge = f.produto_livre ? ' <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:#451a03;color:#fb923c;vertical-align:middle">não listado</span>' : '';
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #1e293b">
       <div style="flex:1;min-width:0">
-        <div style="font-weight:600;color:${pendente ? '#fbbf24' : '#94a3b8'}">${pendente ? '🚨 ' : '✓ '}${escapeHtml(f.produto_nome || '—')}</div>
+        <div style="font-weight:600;color:${pendente ? '#fbbf24' : '#94a3b8'}">${pendente ? '🚨 ' : '✓ '}${escapeHtml(f.produto_nome || '—')}${livreBadge}</div>
         <div style="font-size:11px;color:#64748b;margin-top:2px">Reportado por ${escapeHtml(f.reportado_por_nome || '—')} · ${dataStr}</div>
         ${notasStr}
         ${resolvidoStr}
@@ -7992,13 +8007,19 @@ function faltaRowHtml(f) {
 }
 
 async function submitFalta() {
-  const pid = val('falta-produto');
+  const nome = (val('falta-produto-nome') || '').trim();
   const notas = val('falta-notas');
-  if (!pid) return err('faltas-msg', 'Seleciona um produto');
+  if (!nome) return err('faltas-msg', 'Indica o produto (nome ou da lista)');
+  const match = (S.produtos || []).find(p => p.ativo && String(p.nome).toLowerCase() === nome.toLowerCase());
+  const payload = match
+    ? { produto_id: match.id, notas }
+    : { produto_nome_livre: nome, notas };
   try {
-    await api('POST', '/faltas', { produto_id: pid, notas });
-    document.getElementById('falta-produto').value = '';
+    await api('POST', '/faltas', payload);
+    document.getElementById('falta-produto-nome').value = '';
     document.getElementById('falta-notas').value = '';
+    const hint = document.getElementById('falta-produto-hint');
+    if (hint) { hint.textContent = 'Escolhe da lista ou escreve um nome livre se não estiver registado.'; hint.style.color = '#64748b'; }
     suc('faltas-msg', 'Aviso registado.');
     setTimeout(() => show('faltas-msg', ''), 2000);
     await loadFaltas();

@@ -3307,18 +3307,38 @@ function normalizeMindeeV1(data) {
   };
 }
 
+/** Normaliza variantes de unidade (singular/plural/abrev) para forma canónica. */
+function canonUnidade(u) {
+  const s = String(u || '').toLowerCase().trim().replace(/\./g, '');
+  if (!s) return '';
+  if (/^(kg|quilos?|kilos?)$/.test(s)) return 'kg';
+  if (/^g(ramas?)?$/.test(s)) return 'g';
+  if (/^(l|litros?)$/.test(s)) return 'l';
+  if (/^ml$/.test(s)) return 'ml';
+  if (/^(un|und|unds|unidades?|pcs|pe[cç]as?)$/.test(s)) return 'un';
+  if (/^(caixas?|cx|cxs)$/.test(s)) return 'caixa';
+  if (/^garrafas?$/.test(s)) return 'garrafa';
+  if (/^latas?$/.test(s)) return 'lata';
+  if (/^packs?$/.test(s)) return 'pack';
+  if (/^sacos?$/.test(s)) return 'saco';
+  if (/^fardos?$/.test(s)) return 'fardo';
+  return s;
+}
+
 /** Tenta inferir unidade da descrição (ex.: "Arroz 5 kg" → kg). */
 function inferirUnidadeMedida(descricao) {
   const d = String(descricao || '').toLowerCase();
-  if (/\b(kg|quilo|quilos|kilo|kilos)\b/.test(d)) return 'kg';
-  if (/\b(g|gramas)\b/.test(d)) return 'g';
-  if (/\b(l|litro|litros)\b/.test(d)) return 'l';
+  if (/\b(kg|quilos?|kilos?)\b/.test(d)) return 'kg';
+  if (/\b(g|gramas?)\b/.test(d)) return 'g';
+  if (/\b(l|litros?)\b/.test(d)) return 'l';
   if (/\bml\b/.test(d)) return 'ml';
-  if (/\b(un|und|unidade|unidades|pcs)\b/.test(d)) return 'un';
-  if (/\b(caixa|cx)\b/.test(d)) return 'caixa';
-  if (/\bgarrafa\b/.test(d)) return 'garrafa';
-  if (/\blata\b/.test(d)) return 'lata';
-  if (/\bpack\b/.test(d)) return 'pack';
+  if (/\b(un|und|unidades?|pcs|pe[cç]as?)\b/.test(d)) return 'un';
+  if (/\b(caixas?|cx|cxs)\b/.test(d)) return 'caixa';
+  if (/\bgarrafas?\b/.test(d)) return 'garrafa';
+  if (/\blatas?\b/.test(d)) return 'lata';
+  if (/\bpacks?\b/.test(d)) return 'pack';
+  if (/\bsacos?\b/.test(d)) return 'saco';
+  if (/\bfardos?\b/.test(d)) return 'fardo';
   return '';
 }
 
@@ -3345,16 +3365,16 @@ app.post('/api/armazem/ocr-fatura', auth, requireRole('admin','gestor','compras'
 
     // Normalizar unidade → tipo_medicao + converter g/ml para kg/L
     const normaliza = (linha) => {
-      let um = String(linha.unidade_medida || '').toLowerCase().trim();
+      let um = canonUnidade(linha.unidade_medida);
       if (!um) um = inferirUnidadeMedida(linha.descricao);
       let qty = parseFloat(linha.quantidade) || 0;
       let pu  = parseFloat(linha.preco_unit) || 0;
       let tipo = 'unidade';
       let aviso = '';
-      if (['kg','quilo','quilos','kilo','kilos','l','litro','litros'].includes(um)) tipo = 'peso';
-      else if (um === 'g' || um === 'gramas') { tipo = 'peso'; if (qty > 0) { pu = pu * 1000; qty = qty / 1000; } }
+      if (um === 'kg' || um === 'l') tipo = 'peso';
+      else if (um === 'g') { tipo = 'peso'; if (qty > 0) { pu = pu * 1000; qty = qty / 1000; } }
       else if (um === 'ml') { tipo = 'peso'; if (qty > 0) { pu = pu * 1000; qty = qty / 1000; } }
-      else if (['un','und','unidade','unidades','caixa','garrafa','lata','pack','pcs'].includes(um)) tipo = 'unidade';
+      else if (['un','caixa','garrafa','lata','pack','saco','fardo'].includes(um)) tipo = 'unidade';
       else aviso = 'unidade incerta';
       return { ...linha, unidade_medida: um, quantidade: qty, preco_unit: pu, tipo_medicao_detectado: tipo, ...(aviso ? { aviso } : {}) };
     };

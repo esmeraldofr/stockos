@@ -300,6 +300,7 @@ let depositosSaidasMigrationDone = false;
 let depositosBancoReady = false;
 let fornecedoresReady = false;
 let armazemTablesReady = false;
+let produtoFaltasReady = false;
 let turnoEntradasReady = false;
 let turnoSaidasReady = false;
 let turnoPedidosReady = false;
@@ -2457,6 +2458,109 @@ app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => 
     await query('UPDATE produtos SET ativo=false WHERE id=$1', [req.params.id]);
     res.json({ sucesso: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── EM FALTA ──────────────────────────────────────────────────
+async function ensureProdutoFaltas() {
+  if (produtoFaltasReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='produto_faltas_ddl_v1'`);
+    if (r.rows.length) { produtoFaltasReady = true; return; }
+  } catch (_) {}
+  const pidCheck = await query(
+    `SELECT data_type FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
+  ).catch(() => ({ rows: [] }));
+  const pidType = (pidCheck.rows[0] && pidCheck.rows[0].data_type) || 'integer';
+  const pidCol = pidType === 'uuid' ? 'UUID' : 'INTEGER';
+  await query(`CREATE TABLE IF NOT EXISTS produto_faltas (
+    id SERIAL PRIMARY KEY,
+    produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+    notas TEXT NOT NULL DEFAULT '',
+    reportado_por TEXT NOT NULL DEFAULT '',
+    reportado_por_nome TEXT NOT NULL DEFAULT '',
+    reportado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolvido_em TIMESTAMPTZ,
+    resolvido_por TEXT NOT NULL DEFAULT '',
+    resolvido_por_nome TEXT NOT NULL DEFAULT ''
+  )`).catch(() => {});
+  await query(`CREATE INDEX IF NOT EXISTS produto_faltas_pendentes_idx ON produto_faltas (resolvido_em) WHERE resolvido_em IS NULL`).catch(() => {});
+  await query(`CREATE INDEX IF NOT EXISTS produto_faltas_reportado_idx ON produto_faltas (reportado_em DESC)`).catch(() => {});
+  await query(`INSERT INTO stockos_meta (k,v) VALUES ('produto_faltas_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+  produtoFaltasReady = true;
+}
+
+/** Lista de avisos «em falta». status=pendentes (default) | resolvidas | todas. */
+app.get('/api/faltas', auth, async (req, res) => {
+  try {
+    await ensureProdutoFaltas();
+    const status = String(req.query.status || 'pendentes').toLowerCase();
+    let where = '';
+    if (status === 'pendentes') where = 'WHERE f.resolvido_em IS NULL';
+    else if (status === 'resolvidas') where = "WHERE f.resolvido_em IS NOT NULL AND f.resolvido_em > NOW() - INTERVAL '30 days'";
+    const r = await query(
+      `SELECT f.*, p.nome AS produto_nome, p.categoria AS produto_categoria, p.tipo_medicao AS produto_tipo_medicao
+       FROM produto_faltas f
+       JOIN produtos p ON p.id = f.produto_id
+       ${where}
+       ORDER BY (f.resolvido_em IS NULL) DESC, f.reportado_em DESC
+       LIMIT 200`
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Contagem de pendentes (para o badge no menu). */
+app.get('/api/faltas/pendentes-count', auth, async (req, res) => {
+  try {
+    await ensureProdutoFaltas();
+    const r = await query(`SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL`);
+    res.json({ pendentes: r.rows[0].n });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Reportar novo aviso — qualquer utilizador autenticado. */
+app.post('/api/faltas', auth, async (req, res) => {
+  try {
+    await ensureProdutoFaltas();
+    const { produto_id, notas } = req.body || {};
+    if (!produto_id) return res.status(400).json({ erro: 'produto_id é obrigatório' });
+    const dup = await query(
+      `SELECT id FROM produto_faltas WHERE produto_id = $1 AND resolvido_em IS NULL LIMIT 1`,
+      [produto_id]
+    );
+    if (dup.rows.length) return res.status(400).json({ erro: 'Já existe um aviso pendente para este produto' });
+    const r = await query(
+      `INSERT INTO produto_faltas (produto_id, notas, reportado_por, reportado_por_nome)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [produto_id, String(notas || '').trim(), String(req.user.id || ''), String(req.user.nome || '')]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Marcar como resolvido — qualquer utilizador autenticado. */
+app.patch('/api/faltas/:id', auth, async (req, res) => {
+  try {
+    await ensureProdutoFaltas();
+    const r = await query(
+      `UPDATE produto_faltas
+       SET resolvido_em = NOW(), resolvido_por = $1, resolvido_por_nome = $2
+       WHERE id = $3 AND resolvido_em IS NULL RETURNING *`,
+      [String(req.user.id || ''), String(req.user.nome || ''), req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado ou já resolvido' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Apagar — só admin. */
+app.delete('/api/faltas/:id', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureProdutoFaltas();
+    await query(`DELETE FROM produto_faltas WHERE id = $1`, [req.params.id]);
+    res.json({ sucesso: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // ── ARMAZÉM ────────────────────────────────────────────────────

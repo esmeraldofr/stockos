@@ -3934,11 +3934,16 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
     const dataFim = `${y}-${pad(m)}-${pad(lastDay)}`;
     const r = await query(
       `SELECT t.id, t.data, t.nome, t.estado,
-              COALESCE(d.valor, 0) AS dep_dinheiro,
-              COALESCE(d.valor_tpa, 0) AS dep_tpa,
+              COALESCE(c.dinheiro, 0)      AS caixa_dinheiro,
+              COALESCE(c.transferencia, 0) AS caixa_transferencia,
+              COALESCE(c.tpa, 0)           AS caixa_tpa,
+              COALESCE(d.valor, 0)               AS dep_dinheiro,
+              COALESCE(d.valor_tpa, 0)           AS dep_tpa,
               COALESCE(d.valor_transferencia, 0) AS dep_transferencia,
-              COALESCE(d.valor_saidas, 0) AS dep_saidas
+              COALESCE(d.valor_saidas, 0)        AS dep_saidas,
+              (d.id IS NOT NULL)                 AS tem_deposito
        FROM turnos t
+       LEFT JOIN turno_caixa c     ON c.turno_id = t.id
        LEFT JOIN depositos_banco d ON d.turno_id = t.id
        WHERE t.data >= $1::date AND t.data <= $2::date
        ORDER BY t.data, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`,
@@ -3949,10 +3954,14 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
       data: normDataPostgres(row.data),
       nome: row.nome,
       estado: row.estado,
+      caixa_dinheiro: parseFloat(row.caixa_dinheiro) || 0,
+      caixa_transferencia: parseFloat(row.caixa_transferencia) || 0,
+      caixa_tpa: parseFloat(row.caixa_tpa) || 0,
       dep_dinheiro: parseFloat(row.dep_dinheiro) || 0,
       dep_tpa: parseFloat(row.dep_tpa) || 0,
       dep_transferencia: parseFloat(row.dep_transferencia) || 0,
-      dep_saidas: parseFloat(row.dep_saidas) || 0
+      dep_saidas: parseFloat(row.dep_saidas) || 0,
+      tem_deposito: !!row.tem_deposito
     }));
     res.json(rows);
   } catch (e) {

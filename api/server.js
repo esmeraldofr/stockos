@@ -3160,8 +3160,8 @@ async function callMindeeOcr(parsed) {
   });
   if (!r.ok) {
     const t = await r.text().catch(() => '');
-    console.error('[ocr-mindee] request failed:', r.status, t.slice(0, 500));
-    const e = new Error('mindee request failed'); e.code = 'PROVIDER_FAILED'; throw e;
+    console.error('[ocr-mindee] request failed:', r.status, 'endpoint=', endpoint, 'body=', t.slice(0, 1000));
+    const e = new Error('mindee request failed'); e.code = 'PROVIDER_FAILED'; e.providerStatus = r.status; e.providerBody = t.slice(0, 400); throw e;
   }
   const data = await r.json();
   const pred = (data && data.document && data.document.inference && data.document.inference.prediction) || {};
@@ -3224,7 +3224,8 @@ app.post('/api/armazem/ocr-fatura', auth, requireRole('admin','gestor','compras'
       if (e.code === 'PROVIDER_PARSE') {
         return res.status(502).json({ erro: 'Não foi possível interpretar a fatura. Tenta outra foto mais nítida.' });
       }
-      return res.status(502).json({ erro: 'Não foi possível processar a fatura. Tenta outra foto.' });
+      const debug = e.providerStatus ? ` (código ${e.providerStatus}${e.providerBody ? ': ' + String(e.providerBody).replace(/\s+/g, ' ').slice(0, 200) : ''})` : '';
+      return res.status(502).json({ erro: 'Não foi possível processar a fatura. Tenta outra foto.' + debug });
     }
 
     // Normalizar unidade → tipo_medicao + converter g/ml para kg/L

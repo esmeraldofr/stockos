@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-15-faltas-livre">
+<html lang="pt" data-stockos-ui="2026-05-15-dia-pendentes">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1733,6 +1733,46 @@ function escalaRowDataStr(r) {
   return String(r.data).slice(0, 10);
 }
 
+/** Card de avisos «Em Falta» pendentes na página Dia. */
+function htmlPendentesDia(lista) {
+  const n = lista.length;
+  const linhas = n
+    ? lista.slice(0, 10).map(f => {
+        const livreBadge = f.produto_livre ? ' <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:#451a03;color:#fb923c;vertical-align:middle">não listado</span>' : '';
+        const notas = f.notas ? `<div style="font-size:12px;color:#94a3b8;margin-top:2px">${escapeHtml(f.notas)}</div>` : '';
+        const quando = new Date(f.reportado_em);
+        const dataStr = quando.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' }) + ' ' + quando.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+        return `
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #1e293b">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;color:#fbbf24">🚨 ${escapeHtml(f.produto_nome || '—')}${livreBadge}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px">Reportado por ${escapeHtml(f.reportado_por_nome || '—')} · ${dataStr}</div>
+            ${notas}
+          </div>
+          <button class="btn btn-success btn-sm" onclick="runAction(event, () => resolverFaltaDia(${f.id}))">✓ Resolvido</button>
+        </div>`;
+      }).join('')
+    : '<div style="color:#64748b;font-size:13px;padding:8px 0">Sem avisos pendentes 🎉</div>';
+  const verMais = n > 10 ? `<div style="margin-top:8px;text-align:center"><button class="btn btn-ghost btn-sm" onclick="runAction(event, () => navigate('faltas'))">Ver todos (${n})</button></div>` : '';
+  return `
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+        <div class="card-title" style="margin:0">🚨 Em Falta — Pendentes${n > 0 ? ` (${n})` : ''}</div>
+        <button class="btn btn-ghost btn-sm" onclick="runAction(event, () => navigate('faltas'))">+ Reportar</button>
+      </div>
+      ${linhas}
+      ${verMais}
+    </div>`;
+}
+
+async function resolverFaltaDia(id) {
+  try {
+    await api('PATCH', '/faltas/' + id);
+    await loadDia();
+    await refreshFaltasBadge();
+  } catch (e) { alert(e.message); }
+}
+
 /** Escala da semana na página Dia: grelha dias × turnos (só leitura; chips como referência visual). */
 function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
   const week = Array.isArray(rowsWeek) ? rowsWeek : [];
@@ -1850,31 +1890,30 @@ async function loadDia() {
         </div>`;
     }).join('');
 
-    const escalaLoading = `<div id="dia-escala-slot" class="card"><div class="text-center" style="padding:28px;color:#64748b"><div class="spinner"></div><div style="margin-top:10px;font-size:12px">A carregar escala…</div></div></div>`;
+    const pendentesLoading = `<div id="dia-pendentes-slot" class="card"><div class="text-center" style="padding:28px;color:#64748b"><div class="spinner"></div><div style="margin-top:10px;font-size:12px">A carregar avisos…</div></div></div>`;
 
     show('dia-content', `
       <div class="turno-cards">${cards}</div>
-      ${escalaLoading}
+      ${pendentesLoading}
     `);
 
-    api('GET', `/escala/semana?data_inicio=${qMon}&data_fim=${qDom}`)
-      .catch(() => ({ semana: [], template: [] }))
-      .then((escalaPack) => {
-      if (S.page !== 'dia') return;
-      try {
-        const escRowsWeek = escalaPack?.semana || [];
-        const escTpl = escalaPack?.template || [];
-        const slotE = document.getElementById('dia-escala-slot');
-        if (slotE) slotE.outerHTML = htmlEscalaSemanaReadonly(escRowsWeek, escTpl, S.date);
-      } catch (err) {
-        const slotE = document.getElementById('dia-escala-slot');
-        if (slotE) slotE.innerHTML = `<div class="alert alert-error" style="margin:12px">${err && err.message ? err.message : String(err)}</div>`;
-      }
-    }).catch((e) => {
-      if (S.page !== 'dia') return;
-      const slotE = document.getElementById('dia-escala-slot');
-      if (slotE) slotE.innerHTML = `<div class="alert alert-error" style="margin:12px">${e.message}</div>`;
-    });
+    api('GET', '/faltas?status=pendentes')
+      .catch(() => [])
+      .then((lista) => {
+        if (S.page !== 'dia') return;
+        try {
+          S.faltasPendentes = (lista || []).length;
+          const slot = document.getElementById('dia-pendentes-slot');
+          if (slot) slot.outerHTML = htmlPendentesDia(lista || []);
+        } catch (err) {
+          const slot = document.getElementById('dia-pendentes-slot');
+          if (slot) slot.innerHTML = `<div class="alert alert-error" style="margin:12px">${err && err.message ? err.message : String(err)}</div>`;
+        }
+      }).catch((e) => {
+        if (S.page !== 'dia') return;
+        const slot = document.getElementById('dia-pendentes-slot');
+        if (slot) slot.innerHTML = `<div class="alert alert-error" style="margin:12px">${e.message}</div>`;
+      });
   } catch(e) {
     show('dia-content', `<div class="alert alert-error">${e.message}</div>`);
   }

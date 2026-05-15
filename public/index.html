@@ -1575,14 +1575,14 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
               <span style="color:#64748b">Caixa do turno:</span>
               TPA <strong style="color:#cbd5e1">${fmt(caixaTpa)}</strong> ·
               Transf <strong style="color:#cbd5e1">${fmt(caixaTransf)}</strong> ·
-              Dinheiro <strong style="color:#cbd5e1">${fmt(caixaDin)}</strong> ·
-              <span style="color:#64748b">Total bruto</span> <strong style="color:#86efac">${fmt(caixaBruto)}</strong>
+              Dinheiro <strong style="color:#86efac">${fmt(caixaDin)}</strong> ·
+              <span style="color:#64748b">Total</span> <strong style="color:#cbd5e1">${fmt(caixaBruto)}</strong>
             </div>` : ''}
             ${!pode ? `<div class="alert alert-error" style="margin-bottom:8px;padding:8px;font-size:12px">Fecha este turno para incluir no registo.</div>` : ''}
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
               <div class="field">
-                <label>Valor bruto (Kz) <span style="font-size:10px;color:#64748b;font-weight:400">(esperado: ${fmt(caixaBruto)})</span></label>
-                <input id="${bid}" type="number" min="0.01" step="any" placeholder="0" value="${brutoVal.replace(/"/g, '&quot;')}" data-caixa-bruto="${caixaBruto}" oninput="validateDepCaixa(${t.id});updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/>
+                <label>Valor bruto (Kz) <span style="font-size:10px;color:#64748b;font-weight:400">(esperado: ${fmt(caixaDin)} — dinheiro)</span></label>
+                <input id="${bid}" type="number" min="0.01" step="any" placeholder="0" value="${brutoVal.replace(/"/g, '&quot;')}" data-caixa-bruto="${caixaDin}" oninput="validateDepCaixa(${t.id});updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/>
                 <div id="${bid}-diff" style="font-size:11px;margin-top:4px;min-height:14px"></div>
               </div>
               <div class="field">

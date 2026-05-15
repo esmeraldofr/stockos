@@ -3146,48 +3146,97 @@ Regras gerais:
 async function callMindeeOcr(parsed) {
   const apiKey = process.env.MINDEE_API_KEY;
   if (!apiKey) { const e = new Error('mindee key missing'); e.code = 'KEY_MISSING'; throw e; }
+
+  const modelId = (process.env.MINDEE_MODEL_ID || '').trim();
+  const useV2 = !!modelId;
+
   const form = new FormData();
   const blob = new Blob([parsed.buffer], { type: parsed.contentType });
-  form.append('document', blob, 'fatura.' + parsed.ext);
-  // Usa Financial Document (suporta faturas E recibos térmicos angolanos).
-  // Pode ser sobreposto via env MINDEE_ENDPOINT (ex.: invoices/v4) para fallback.
-  const endpoint = process.env.MINDEE_ENDPOINT
-    || 'https://api.mindee.net/v1/products/mindee/financial_document/v1/predict';
-  const r = await fetch(endpoint, {
-    method: 'POST',
-    headers: { Authorization: `Token ${apiKey}` },
-    body: form
-  });
+  let endpoint, headers;
+
+  if (useV2) {
+    // Mindee Document AI v2 — requer model_id (criado em app.mindee.com).
+    endpoint = process.env.MINDEE_ENDPOINT
+      || 'https://api-v2.mindee.net/v2/inferences/enqueue';
+    headers = { Authorization: apiKey };
+    form.append('model_id', modelId);
+    form.append('file', blob, 'fatura.' + parsed.ext);
+  } else {
+    // Mindee v1 — pre-built Financial Document, sem model_id.
+    endpoint = process.env.MINDEE_ENDPOINT
+      || 'https://api.mindee.net/v1/products/mindee/financial_document/v1/predict';
+    headers = { Authorization: `Token ${apiKey}` };
+    form.append('document', blob, 'fatura.' + parsed.ext);
+  }
+
+  const r = await fetch(endpoint, { method: 'POST', headers, body: form });
   if (!r.ok) {
     const t = await r.text().catch(() => '');
     console.error('[ocr-mindee] request failed:', r.status, 'endpoint=', endpoint, 'body=', t.slice(0, 1000));
     const e = new Error('mindee request failed'); e.code = 'PROVIDER_FAILED'; e.providerStatus = r.status; e.providerBody = t.slice(0, 400); throw e;
   }
-  const data = await r.json();
-  const pred = (data && data.document && data.document.inference && data.document.inference.prediction) || {};
+  let data = await r.json();
+
+  // Em v2 a resposta pode vir assíncrona (job enqueued). Faz polling até COMPLETED.
+  if (useV2 && data && data.job && data.job.id && data.job.status !== 'completed') {
+    const jobId = data.job.id;
+    const pollUrl = `https://api-v2.mindee.net/v2/inferences/${jobId}`;
+    const start = Date.now();
+    while (Date.now() - start < 25000) {
+      await new Promise(r => setTimeout(r, 1500));
+      const pr = await fetch(pollUrl, { headers: { Authorization: apiKey } });
+      if (!pr.ok) {
+        const tt = await pr.text().catch(() => '');
+        console.error('[ocr-mindee] poll failed:', pr.status, tt.slice(0, 500));
+        const e = new Error('mindee poll failed'); e.code = 'PROVIDER_FAILED'; e.providerStatus = pr.status; e.providerBody = tt.slice(0, 400); throw e;
+      }
+      data = await pr.json();
+      const status = (data.job && data.job.status) || data.status || '';
+      if (status === 'failed' || status === 'error') {
+        const e = new Error('mindee inference failed'); e.code = 'PROVIDER_FAILED'; e.providerStatus = 500; e.providerBody = JSON.stringify(data).slice(0, 400); throw e;
+      }
+      if (status === 'completed' || data.inference) break;
+    }
+  }
+
+  // Suporta tanto shape v1 (document.inference.prediction) como v2 (inference.result.fields).
+  const v2Fields = data && data.inference && (data.inference.result || data.inference.prediction || data.inference);
+  const v2Has = v2Fields && (v2Fields.fields || v2Fields.supplier_name || v2Fields.line_items);
+  const pred = v2Has
+    ? (v2Fields.fields || v2Fields)
+    : ((data && data.document && data.document.inference && data.document.inference.prediction) || {});
+
+  const fieldVal = (k) => {
+    const f = pred[k];
+    if (!f) return '';
+    if (typeof f === 'string' || typeof f === 'number') return f;
+    if (f.value != null) return f.value;
+    return '';
+  };
+
   const sup = pred.supplier_address || {};
   const regs = Array.isArray(pred.supplier_company_registrations) ? pred.supplier_company_registrations : [];
-  const nif = regs.map(x => String(x.value || '').trim()).filter(Boolean).join('; ');
+  const nif = regs.map(x => String((x && x.value) || x || '').trim()).filter(Boolean).join('; ');
   const fornecedor = {
-    nome: (pred.supplier_name && pred.supplier_name.value) || '',
+    nome: fieldVal('supplier_name'),
     nif,
-    telefone: (pred.supplier_phone_number && pred.supplier_phone_number.value) || '',
-    email: (pred.supplier_email && pred.supplier_email.value) || '',
+    telefone: fieldVal('supplier_phone_number'),
+    email: fieldVal('supplier_email'),
     morada: (typeof sup === 'string' ? sup : (sup && sup.value)) || ''
   };
   const items = Array.isArray(pred.line_items) ? pred.line_items : [];
   const linhas = items.map(li => ({
-    descricao: String(li.description || '').trim(),
-    quantidade: parseFloat(li.quantity) || 0,
-    unidade_medida: '', // Mindee não devolve unidade — vamos tentar inferir da descrição
-    preco_unit: parseFloat(li.unit_price) || 0,
-    total: parseFloat(li.total_amount) || 0
+    descricao: String((li && (li.description || (li.value && li.value.description))) || '').trim(),
+    quantidade: parseFloat(li && (li.quantity || (li.value && li.value.quantity))) || 0,
+    unidade_medida: '',
+    preco_unit: parseFloat(li && (li.unit_price || (li.value && li.value.unit_price))) || 0,
+    total: parseFloat(li && (li.total_amount || (li.value && li.value.total_amount))) || 0
   }));
   return {
     fornecedor,
-    numero_fatura: (pred.invoice_number && pred.invoice_number.value) || '',
-    data_emissao: (pred.date && pred.date.value) || '',
-    total_estimado: parseFloat(pred.total_amount && pred.total_amount.value) || 0,
+    numero_fatura: fieldVal('invoice_number'),
+    data_emissao: fieldVal('date') || fieldVal('invoice_date'),
+    total_estimado: parseFloat(fieldVal('total_amount')) || 0,
     linhas
   };
 }

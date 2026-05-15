@@ -437,11 +437,13 @@ CREATE TABLE IF NOT EXISTS depositos_banco (
   saidas_destino    TEXT            NOT NULL DEFAULT '',
   bordero_foto_url  TEXT            NOT NULL DEFAULT '',
   valor_tpa         NUMERIC(15,2)   NOT NULL DEFAULT 0,
+  valor_transferencia NUMERIC(15,2) NOT NULL DEFAULT 0,
   referencia        TEXT            NOT NULL DEFAULT '',
   notas             TEXT            NOT NULL DEFAULT '',
   criado_por        TEXT            NOT NULL DEFAULT '',
   criado_em         TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
+ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_transferencia NUMERIC(15,2) NOT NULL DEFAULT 0;
 
 -- ============================================================
 --  RECEITAS (composição de produtos de menu)

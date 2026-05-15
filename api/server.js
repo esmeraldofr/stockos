@@ -3144,11 +3144,12 @@ Regras gerais:
 }
 
 async function callMindeeOcr(parsed) {
-  const apiKey = process.env.MINDEE_API_KEY;
+  const apiKey = (process.env.MINDEE_API_KEY || '').trim();
   if (!apiKey) { const e = new Error('mindee key missing'); e.code = 'KEY_MISSING'; throw e; }
   const modelId = (process.env.MINDEE_MODEL_ID || '').trim();
   const useV2 = !!modelId;
-  const v2Base = process.env.MINDEE_V2_BASE || 'https://api-v2.mindee.net/v2';
+  const v2Base = (process.env.MINDEE_V2_BASE || 'https://api-v2.mindee.net/v2').trim();
+  console.log('[ocr-mindee] config: useV2=', useV2, 'modelIdLen=', modelId.length, 'keyLen=', apiKey.length, 'keyPrefix=', apiKey.slice(0, 3));
 
   if (useV2) return callMindeeV2(parsed, apiKey, modelId, v2Base);
   return callMindeeV1(parsed, apiKey);

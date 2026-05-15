@@ -3154,13 +3154,21 @@ async function callMindeeOcr(parsed) {
   return callMindeeV1(parsed, apiKey);
 }
 
+async function mindeeError(prefix, r) {
+  const t = await r.text().catch(() => '');
+  console.error(prefix + ':', r.status, t.slice(0, 1000));
+  const e = new Error('mindee request failed'); e.code = 'PROVIDER_FAILED';
+  e.providerStatus = r.status; e.providerBody = t.slice(0, 400);
+  return e;
+}
+
 async function callMindeeV1(parsed, apiKey) {
   const form = new FormData();
   form.append('document', new Blob([parsed.buffer], { type: parsed.contentType }), 'fatura.' + parsed.ext);
   const endpoint = process.env.MINDEE_ENDPOINT
     || 'https://api.mindee.net/v1/products/mindee/financial_document/v1/predict';
   const r = await fetch(endpoint, { method: 'POST', headers: { Authorization: `Token ${apiKey}` }, body: form });
-  if (!r.ok) throwMindee('[ocr-mindee-v1] request failed', r);
+  if (!r.ok) throw await mindeeError('[ocr-mindee-v1] request failed', r);
   const data = await r.json();
   return normalizeMindeeV1(data);
 }
@@ -3176,10 +3184,11 @@ async function callMindeeV2(parsed, apiKey, modelId, base) {
     body: form,
     redirect: 'manual'
   });
-  if (!enq.ok && enq.status !== 202) throwMindee('[ocr-mindee-v2] enqueue failed', enq);
-  const enqData = await enq.json();
+  if (!enq.ok && enq.status !== 202) throw await mindeeError('[ocr-mindee-v2] enqueue failed', enq);
+  const enqData = await enq.json().catch(() => ({}));
   const jobId = (enqData && enqData.job && enqData.job.id) || '';
   if (!jobId) {
+    console.error('[ocr-mindee-v2] enqueue missing job id, body=', JSON.stringify(enqData).slice(0, 500));
     const e = new Error('mindee v2 missing job id'); e.code = 'PROVIDER_FAILED'; e.providerStatus = 502;
     e.providerBody = JSON.stringify(enqData).slice(0, 400); throw e;
   }
@@ -3190,37 +3199,28 @@ async function callMindeeV2(parsed, apiKey, modelId, base) {
   while (Date.now() - start < 28000) {
     await new Promise((rr) => setTimeout(rr, 1500));
     const pr = await fetch(pollUrl, { headers: { Authorization: apiKey }, redirect: 'follow' });
-    if (!pr.ok) throwMindee('[ocr-mindee-v2] poll failed', pr);
-    const pdata = await pr.json();
+    if (!pr.ok) throw await mindeeError('[ocr-mindee-v2] poll failed', pr);
+    const pdata = await pr.json().catch(() => ({}));
     if (pdata && pdata.inference) { inference = pdata.inference; break; }
     const st = String((pdata && pdata.job && pdata.job.status) || pdata.status || '').toLowerCase();
     if (st === 'failed' || st === 'error') {
+      console.error('[ocr-mindee-v2] inference failed, body=', JSON.stringify(pdata).slice(0, 500));
       const e = new Error('mindee inference failed'); e.code = 'PROVIDER_FAILED'; e.providerStatus = 502;
       e.providerBody = JSON.stringify(pdata).slice(0, 400); throw e;
     }
     if (st === 'success' || st === 'done' || st === 'completed') {
-      // Fetch the inference object explicitly.
       const ir = await fetch(`${base}/inferences/${jobId}`, { headers: { Authorization: apiKey } });
-      if (!ir.ok) throwMindee('[ocr-mindee-v2] inference fetch failed', ir);
-      const idata = await ir.json();
+      if (!ir.ok) throw await mindeeError('[ocr-mindee-v2] inference fetch failed', ir);
+      const idata = await ir.json().catch(() => ({}));
       inference = idata.inference || idata;
       break;
     }
   }
   if (!inference) {
     const e = new Error('mindee v2 timeout'); e.code = 'PROVIDER_FAILED'; e.providerStatus = 504;
-    e.providerBody = 'Tempo de espera excedido a aguardar a Mindee'; throw e;
+    e.providerBody = 'Tempo de espera excedido'; throw e;
   }
   return normalizeMindeeV2(inference);
-}
-
-function throwMindee(prefix, r) {
-  return (async () => {
-    const t = await r.text().catch(() => '');
-    console.error(prefix + ':', r.status, t.slice(0, 1000));
-    const e = new Error('mindee request failed'); e.code = 'PROVIDER_FAILED';
-    e.providerStatus = r.status; e.providerBody = t.slice(0, 400); throw e;
-  })();
 }
 
 function v2Val(field) {

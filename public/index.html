@@ -1390,80 +1390,27 @@ function renderMenuDrawer() {
 }
 
 function navBar() {
-  const isAdmin = S.user?.role === 'admin';
-  const showHistorico = S.user?.role !== 'compras';
-  const showIrregularidades = !!S.user?.role;
-  const showAssiduidade = ['admin','gestor','compras'].includes(S.user?.role);
-  const showAuditoria = ['admin','gestor'].includes(S.user?.role);
-  const showArmazem = ['admin', 'gestor', 'compras'].includes(S.user?.role);
-  const showEscala = S.user?.role === 'admin' || S.user?.role === 'gestor';
-  const showDepositos = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   return `
     <div id="navbar">
       <button class="nav-btn ${S.page==='dia'?'active':''}" onclick="runAction(event, () => navigate('dia'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         Dia
       </button>
-      <button class="nav-btn ${S.page==='calendario'?'active':''}" onclick="runAction(event, () => navigate('calendario'))">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/><line x1="8" y1="18" x2="8" y2="18.01"/><line x1="12" y1="18" x2="12" y2="18.01"/><line x1="16" y1="18" x2="16" y2="18.01"/></svg>
-        Calendário
-      </button>
-      ${showDepositos ? `
       <button class="nav-btn ${S.page==='depositos'?'active':''}" onclick="runAction(event, () => navigate('depositos'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h3l2-7h8l2 7h3"/><path d="M5 10v10a2 2 0 002 2h10a2 2 0 002-2V10"/><rect x="9" y="14" width="6" height="4" rx="1"/></svg>
         Banco
-      </button>` : ''}
-      ${showHistorico ? `
-      <button class="nav-btn ${S.page==='historico'?'active':''}" onclick="runAction(event, () => navigate('historico'))">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        Histórico
-      </button>` : ''}
-      ${showIrregularidades ? `
-      <button class="nav-btn ${S.page==='irregularidades'?'active':''}" onclick="runAction(event, () => navigate('irregularidades'))">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        Irregularidades
-      </button>` : ''}
-      ${showAssiduidade ? `
+      </button>
       <button class="nav-btn ${S.page==='assiduidade'?'active':''}" onclick="runAction(event, () => navigate('assiduidade'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 7-7"/><path d="M21 12v6a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/></svg>
         Assiduidade
-      </button>` : ''}
-      ${showAuditoria ? `
-      <button class="nav-btn ${S.page==='auditoria'?'active':''}" onclick="runAction(event, () => navigate('auditoria'))">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>
-        Auditoria
-      </button>` : ''}
-      <button class="nav-btn ${S.page==='produtos'?'active':''}" onclick="runAction(event, () => navigate('produtos'))">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
-        Produtos
       </button>
-      ${showArmazem ? `
-      <button class="nav-btn ${S.page==='fornecedores'?'active':''}" onclick="runAction(event, () => navigate('fornecedores'))">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 18V6a2 2 0 00-2-2H4a2 2 0 00-2 2v11a1 1 0 001 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 001-1v-3.65a1 1 0 00-.22-.624l-3.48-4.35A1 1 0 0017.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>
-        Fornecedores
-      </button>` : ''}
-      ${showArmazem ? `
       <button class="nav-btn ${S.page==='armazem'?'active':''}" onclick="runAction(event, () => navigate('armazem'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>
         Armazém
-      </button>` : ''}
-      ${showEscala ? `
-      <button class="nav-btn ${S.page==='escala'?'active':''}" onclick="runAction(event, () => navigate('escala'))">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>
-        Escala
-      </button>` : ''}
-      ${isAdmin ? `
-      <button class="nav-btn ${S.page==='admin'?'active':''}" onclick="runAction(event, () => navigate('admin'))">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
-        Admin
-      </button>` : ''}
+      </button>
       <button class="nav-btn ${S.page==='equipa'?'active':''}" onclick="runAction(event, () => navigate('equipa'))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
         Equipa
-      </button>
-      <button class="nav-btn" onclick="doLogout()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-        Sair
       </button>
     </div>
   `;

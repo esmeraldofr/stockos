@@ -205,6 +205,9 @@ ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_copo BOOLEAN NOT NULL DE
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS kg_por_copo NUMERIC(10,4) NOT NULL DEFAULT 0;
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco_copos_pacote NUMERIC(15,2) NOT NULL DEFAULT 0;
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS vendavel BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE produtos SET vendavel = TRUE
+  WHERE vendavel = FALSE AND (categoria IN ('menu','bebida') OR venda_avulso = TRUE);
 CREATE TABLE IF NOT EXISTS armazem_stock (
   id            SERIAL          PRIMARY KEY,
   produto_id    INTEGER         NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,

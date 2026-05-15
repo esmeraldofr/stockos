@@ -2149,6 +2149,21 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote SMALLINT NOT NULL DEFAULT 0`,
     'produtos-qtd-copos-pacote'
   );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS vendavel BOOLEAN NOT NULL DEFAULT FALSE`,
+    'produtos-vendavel'
+  );
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='produtos_vendavel_backfill_v1'`);
+    if (!r.rows.length) {
+      await query(
+        `UPDATE produtos SET vendavel = TRUE
+         WHERE vendavel = FALSE
+           AND (categoria IN ('menu','bebida') OR venda_avulso = TRUE)`
+      );
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('produtos_vendavel_backfill_v1','done') ON CONFLICT (k) DO NOTHING`);
+    }
+  } catch (e) { console.warn('[vendavel backfill]', e.message); }
   await run(`CREATE TABLE IF NOT EXISTS armazem_stock (
     id SERIAL PRIMARY KEY,
     produto_id INTEGER NOT NULL UNIQUE REFERENCES produtos(id) ON DELETE CASCADE,
@@ -2343,7 +2358,7 @@ app.get('/api/produtos', auth, async (req, res) => {
 
 app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    const { nome, preco, categoria, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
+    const { nome, preco, categoria, venda_avulso, tipo_medicao, em_stock_turno, vendavel } = req.body;
     const {
       venda_por_copo,
       kg_por_copo,
@@ -2353,17 +2368,21 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
     const noTurno = em_stock_turno === undefined || em_stock_turno === null ? true : !!em_stock_turno;
+    const cat = categoria || 'outro';
+    const vendavelFinal = vendavel === undefined || vendavel === null
+      ? (cat === 'menu' || cat === 'bebida' || !!venda_avulso)
+      : !!vendavel;
     const vpc = !!venda_por_copo;
     const kgc = parseFloat(kg_por_copo) || 0;
     const pcp = parseFloat(preco_copos_pacote) || 0;
     const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
     const r = await query(
-      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [
         nome,
         preco || 0,
-        categoria || 'outro',
+        cat,
         maxOrdem.rows[0].n,
         !!venda_avulso,
         medicao,
@@ -2371,7 +2390,8 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
         vpc,
         kgc,
         pcp,
-        qcp
+        qcp,
+        vendavelFinal
       ]
     );
     const row = r.rows[0];
@@ -2396,7 +2416,7 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
 
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno } = req.body;
+    const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno, vendavel } = req.body;
     const {
       venda_por_copo,
       kg_por_copo,
@@ -2406,6 +2426,10 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const noTurno =
       em_stock_turno === undefined || em_stock_turno === null ? undefined : !!em_stock_turno;
+    const vendavelFinal =
+      vendavel === undefined || vendavel === null
+        ? (categoria === 'menu' || categoria === 'bebida' || !!venda_avulso)
+        : !!vendavel;
     const vpc = !!venda_por_copo;
     const kgc = parseFloat(kg_por_copo) || 0;
     const pcp = parseFloat(preco_copos_pacote) || 0;
@@ -2414,7 +2438,7 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
       noTurno === undefined
         ? await query(
             `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
-             venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11 WHERE id=$12 RETURNING *`,
+             venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11,vendavel=$12 WHERE id=$13 RETURNING *`,
             [
               nome,
               preco,
@@ -2427,12 +2451,13 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               kgc,
               pcp,
               qcp,
+              vendavelFinal,
               req.params.id
             ]
           )
         : await query(
             `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
-             venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12 WHERE id=$13 RETURNING *`,
+             venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12,vendavel=$13 WHERE id=$14 RETURNING *`,
             [
               nome,
               preco,
@@ -2446,6 +2471,7 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               kgc,
               pcp,
               qcp,
+              vendavelFinal,
               req.params.id
             ]
           );

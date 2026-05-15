@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-14-mindee-financial">
+<html lang="pt" data-stockos-ui="2026-05-14-gallery-fix">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6487,7 +6487,7 @@ async function drawArmazem() {
         <div class="field"><label>Notas (opcional)</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
         <div class="field">
           <label>Foto da fatura</label>
-          <input type="file" id="fx-foto-fatura" accept="image/jpeg,image/png,image/webp" capture="environment"/>
+          <input type="file" id="fx-foto-fatura" accept="image/jpeg,image/png,image/webp"/>
           <div style="font-size:11px;color:#64748b;margin-top:4px">JPEG, PNG ou WebP. Obrigatório para registar.</div>
         </div>
         <div id="fx-excesso-wrap" style="display:none;border:1px solid #d97706;border-radius:10px;padding:12px;margin-bottom:10px;background:#1c1917">
@@ -7250,7 +7250,7 @@ function abrirOcrFatura() {
   modal.innerHTML = `
     <div style="color:#f1f5f9;font-size:18px;font-weight:700">📷 Importar fatura</div>
     <div style="color:#94a3b8;font-size:13px;max-width:420px;text-align:center;line-height:1.5">Tira uma foto nítida da fatura ou escolhe um ficheiro. O sistema extrai fornecedor, contactos, linhas e totais. Tu revês antes de gravar.</div>
-    <input type="file" id="ocr-fatura-file" accept="image/jpeg,image/png,image/webp" capture="environment" style="color:#cbd5e1"/>
+    <input type="file" id="ocr-fatura-file" accept="image/jpeg,image/png,image/webp" style="color:#cbd5e1"/>
     <div style="display:flex;gap:18px;font-size:13px;color:#cbd5e1;background:#0b1322;border:1px solid #334155;border-radius:8px;padding:8px 14px">
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
         <input type="radio" name="ocr-metodo" value="claude" checked> Método A

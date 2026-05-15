@@ -3926,21 +3926,30 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
     if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) {
       return res.status(400).json({ erro: 'Parâmetros ano e mes (1–12) são obrigatórios.' });
     }
+    await ensureDepositosBanco().catch(() => {});
     const pad = (n) => String(n).padStart(2, '0');
     const dataIni = `${y}-${pad(m)}-01`;
     const lastDay = new Date(y, m, 0).getDate();
     const dataFim = `${y}-${pad(m)}-${pad(lastDay)}`;
     const r = await query(
-      `SELECT id, data, nome, estado FROM turnos
-       WHERE data >= $1::date AND data <= $2::date
-       ORDER BY data, CASE nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`,
+      `SELECT t.id, t.data, t.nome, t.estado,
+              COALESCE(d.valor, 0) AS dep_liquido,
+              COALESCE(d.valor_tpa, 0) AS dep_tpa,
+              COALESCE(d.valor_saidas, 0) AS dep_saidas
+       FROM turnos t
+       LEFT JOIN depositos_banco d ON d.turno_id = t.id
+       WHERE t.data >= $1::date AND t.data <= $2::date
+       ORDER BY t.data, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`,
       [dataIni, dataFim]
     );
     const rows = r.rows.map((row) => ({
       id: row.id,
       data: normDataPostgres(row.data),
       nome: row.nome,
-      estado: row.estado
+      estado: row.estado,
+      dep_liquido: parseFloat(row.dep_liquido) || 0,
+      dep_tpa: parseFloat(row.dep_tpa) || 0,
+      dep_saidas: parseFloat(row.dep_saidas) || 0
     }));
     res.json(rows);
   } catch (e) {

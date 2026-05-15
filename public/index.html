@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-15-dia-pendentes">
+<html lang="pt" data-stockos-ui="2026-05-15-produto-vendavel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7480,45 +7480,105 @@ async function drawProdutos() {
   await loadProdutos();
 }
 
+function classificarProduto(p) {
+  if (p.vendavel) return 'vendemos';
+  if (p.categoria === 'ingredientes') return 'ingrediente';
+  return 'consumivel';
+}
+
 async function loadProdutos() {
   try {
     const isAdmin = ['admin', 'gestor', 'compras'].includes(S.user?.role);
     S.produtos = await api('GET', '/produtos' + (isAdmin ? '?todos=1' : ''));
-    const menu   = S.produtos.filter(p => p.categoria==='menu');
-    const comida = S.produtos.filter(p => p.categoria==='ingredientes');
-    const bebida = S.produtos.filter(p => p.categoria==='bebida');
-    const outro  = S.produtos.filter(p => !['menu','ingredientes','bebida'].includes(p.categoria));
+    if (!S.produtosFiltro) S.produtosFiltro = 'todos';
+    renderProdutos();
+  } catch(e) { show('prod-list',`<div class="alert alert-error">${e.message}</div>`); }
+}
 
-    function prodList(items, label) {
-      if (!items.length) return '';
-      return `
-        <div class="card">
-          <div class="card-title">${label}</div>
-          ${items.map(p => `
-            <div class="produto-row">
-              <div class="produto-info">
-                <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.venda_por_copo && parseFloat(p.kg_por_copo) > 0 ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">só armazém</span>' : ''}</div>
-                <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
-              </div>
-              ${isAdmin ? `
-              <div class="produto-actions">
-                <button class="btn btn-ghost btn-sm" data-edit-id="${p.id}">Editar</button>
-              </div>` : ''}
-            </div>`).join('')}
-        </div>`;
-    }
+function setProdutoFiltro(f) {
+  S.produtosFiltro = f;
+  renderProdutos();
+}
 
-    show('prod-list',
-      prodList(menu,'🍽️ Menu') +
+function renderProdutos() {
+  const isAdmin = ['admin', 'gestor', 'compras'].includes(S.user?.role);
+  const filtro = S.produtosFiltro || 'todos';
+  const todos = S.produtos || [];
+  const contagem = {
+    todos: todos.length,
+    vendemos: todos.filter(p => classificarProduto(p)==='vendemos').length,
+    ingrediente: todos.filter(p => classificarProduto(p)==='ingrediente').length,
+    consumivel: todos.filter(p => classificarProduto(p)==='consumivel').length,
+    sem_stock: todos.filter(p => p.em_stock_turno === false).length
+  };
+  let lista = todos;
+  if (filtro === 'vendemos') lista = todos.filter(p => classificarProduto(p) === 'vendemos');
+  else if (filtro === 'ingrediente') lista = todos.filter(p => classificarProduto(p) === 'ingrediente');
+  else if (filtro === 'consumivel') lista = todos.filter(p => classificarProduto(p) === 'consumivel');
+  else if (filtro === 'sem_stock') lista = todos.filter(p => p.em_stock_turno === false);
+
+  const chip = (id, label, count) => `
+    <button type="button" class="prod-chip ${filtro===id?'active':''}" data-filtro="${id}"
+      style="padding:6px 12px;border-radius:999px;border:1px solid ${filtro===id?'#3b82f6':'#334155'};background:${filtro===id?'#1e3a8a':'#0f172a'};color:${filtro===id?'#dbeafe':'#94a3b8'};font-size:12px;cursor:pointer;white-space:nowrap">
+      ${label} <span style="opacity:.7">${count}</span>
+    </button>`;
+
+  const chips = `
+    <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px;-webkit-overflow-scrolling:touch">
+      ${chip('todos','Todos', contagem.todos)}
+      ${chip('vendemos','Vendemos', contagem.vendemos)}
+      ${chip('ingrediente','Ingredientes', contagem.ingrediente)}
+      ${chip('consumivel','Consumíveis', contagem.consumivel)}
+      ${chip('sem_stock','Sem stock', contagem.sem_stock)}
+    </div>`;
+
+  const menu   = lista.filter(p => p.categoria==='menu');
+  const comida = lista.filter(p => p.categoria==='ingredientes');
+  const bebida = lista.filter(p => p.categoria==='bebida');
+  const outro  = lista.filter(p => !['menu','ingredientes','bebida'].includes(p.categoria));
+
+  function badgeClass(p) {
+    const cls = classificarProduto(p);
+    if (cls === 'vendemos') return '<span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">vendemos</span>';
+    if (cls === 'ingrediente') return '<span style="font-size:10px;background:#3f2d01;color:#fcd34d;padding:1px 5px;border-radius:4px">ingrediente</span>';
+    return '<span style="font-size:10px;background:#334155;color:#cbd5e1;padding:1px 5px;border-radius:4px">consumível</span>';
+  }
+
+  function prodList(items, label) {
+    if (!items.length) return '';
+    return `
+      <div class="card">
+        <div class="card-title">${label}</div>
+        ${items.map(p => `
+          <div class="produto-row">
+            <div class="produto-info">
+              <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome} ${badgeClass(p)}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.venda_por_copo && parseFloat(p.kg_por_copo) > 0 ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">sem stock</span>' : ''}</div>
+              <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
+            </div>
+            ${isAdmin ? `
+            <div class="produto-actions">
+              <button class="btn btn-ghost btn-sm" data-edit-id="${p.id}">Editar</button>
+            </div>` : ''}
+          </div>`).join('')}
+      </div>`;
+  }
+
+  const corpo = lista.length === 0
+    ? '<div class="text-center" style="padding:32px;color:#64748b">Nenhum produto nesta categoria.</div>'
+    : prodList(menu,'🍽️ Menu') +
       prodList(comida,'🧂 Ingredientes') +
       prodList(bebida,'🥤 Bebidas') +
-      prodList(outro,'📦 Outros')
-    );
-    document.getElementById('prod-list').addEventListener('click', function(e) {
-      const btn = e.target.closest('[data-edit-id]');
-      if (btn) showProdutoForm(btn.getAttribute('data-edit-id'));
-    });
-  } catch(e) { show('prod-list',`<div class="alert alert-error">${e.message}</div>`); }
+      prodList(outro,'📦 Outros');
+
+  show('prod-list', chips + corpo);
+
+  const root = document.getElementById('prod-list');
+  root.onclick = function(e) {
+    const chipBtn = e.target.closest('[data-filtro]');
+    if (chipBtn) { setProdutoFiltro(chipBtn.getAttribute('data-filtro')); return; }
+    const btn = e.target.closest('[data-edit-id]');
+    if (btn) showProdutoForm(btn.getAttribute('data-edit-id'));
+  };
 }
 
 function closeProdutoModal() {
@@ -7551,8 +7611,9 @@ function showProdutoForm(id) {
         '<div style="font-size:11px;color:#64748b;margin-top:4px">Peso vazio do barril/vasilhame na balança. Na folha regista o <strong>peso líquido</strong> (peso na balança − tara).</div>' +
       '</div>' +
       '<div class="field"><label>Categoria</label><select id="p-cat"><option value="menu">Menu</option><option value="ingredientes">Ingredientes</option><option value="bebida">Bebida</option><option value="outro">Outro</option></select></div>' +
+      '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-vendavel" style="width:16px;height:16px"> Vende-se ao cliente</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Marca se este produto é vendido (avulso ou via menu). Desmarca se é apenas ingrediente ou consumível interno.</div></div>' +
       '<div class="field" id="field-avulso"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-avulso" style="width:16px;height:16px"> Venda avulso</label></div>' +
-      '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Folha de stock do turno</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Se desmarcares, o produto não entra na contagem ao abrir turno (útil para consumíveis só de armazém).</div></div>' +
+      '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-stock-turno" style="width:16px;height:16px" checked> Monitorar stock (armazém / turno)</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px" id="p-stock-turno-hint-extra"></div><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Se desmarcares, o produto não aparece na folha do turno nem no armazém.</div></div>' +
       '<div class="field" id="field-copo-bebida" style="display:none">' +
       '<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-venda-copo" style="width:16px;height:16px"/> Venda por copo (stock em kg, registo em copos)</label>' +
       '<div id="field-copo-detalhe" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #334155">' +
@@ -7581,6 +7642,11 @@ function showProdutoForm(id) {
   document.getElementById('p-ordem').value = p ? (p.ordem || 0) : 0;
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
   if (p) document.getElementById('p-avulso').checked = !!p.venda_avulso;
+  const pv = document.getElementById('p-vendavel');
+  if (pv) {
+    if (p) pv.checked = !!p.vendavel;
+    else pv.checked = true;
+  }
   const st = document.getElementById('p-stock-turno');
   if (st) st.checked = p ? p.em_stock_turno !== false : true;
   const pvc = document.getElementById('p-venda-copo');
@@ -7674,6 +7740,7 @@ async function createProduto() {
       tipo_medicao:val('p-medicao'),
       categoria:val('p-cat'),
       venda_avulso:document.getElementById('p-avulso')?.checked||false,
+      vendavel:!!document.getElementById('p-vendavel')?.checked,
       em_stock_turno:!!document.getElementById('p-stock-turno')?.checked,
       ...payloadProdutoCopo()
     });
@@ -7695,6 +7762,7 @@ async function saveProduto(id) {
       categoria: cat, ordem: parseInt(val('p-ordem'))||0,
       ativo: val('p-ativo')==='true',
       venda_avulso: document.getElementById('p-avulso')?.checked||false,
+      vendavel: !!document.getElementById('p-vendavel')?.checked,
       em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
       ...payloadProdutoCopo()
     });

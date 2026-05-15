@@ -2464,7 +2464,7 @@ app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => 
 async function ensureProdutoFaltas() {
   if (produtoFaltasReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='produto_faltas_ddl_v1'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='produto_faltas_ddl_v2'`);
     if (r.rows.length) { produtoFaltasReady = true; return; }
   } catch (_) {}
   const pidCheck = await query(
@@ -2489,7 +2489,7 @@ async function ensureProdutoFaltas() {
   await query(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS produto_nome_livre TEXT NOT NULL DEFAULT ''`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS produto_faltas_pendentes_idx ON produto_faltas (resolvido_em) WHERE resolvido_em IS NULL`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS produto_faltas_reportado_idx ON produto_faltas (reportado_em DESC)`).catch(() => {});
-  await query(`INSERT INTO stockos_meta (k,v) VALUES ('produto_faltas_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+  await query(`INSERT INTO stockos_meta (k,v) VALUES ('produto_faltas_ddl_v2','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
   produtoFaltasReady = true;
 }
 

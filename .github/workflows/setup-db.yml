@@ -39,6 +39,6 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
             UPDATE utilizadores SET senha_hash = encode(
               digest('admin123' || 'stockos-pwd-salt-2025', 'sha256'), 'hex'
-            ), ativo = TRUE WHERE email = 'admin@stockos.ao';
+            ) WHERE email = 'admin@stockos.ao';
           "
           echo "Admin password set."

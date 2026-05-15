@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-15-produto-vendavel">
+<html lang="pt" data-stockos-ui="2026-05-15-produto-tags">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7480,10 +7480,12 @@ async function drawProdutos() {
   await loadProdutos();
 }
 
-function classificarProduto(p) {
-  if (p.vendavel) return 'vendemos';
-  if (p.categoria === 'ingredientes') return 'ingrediente';
-  return 'consumivel';
+function tagsProduto(p) {
+  const tags = [];
+  if (p.vendavel) tags.push('vendemos');
+  if (p.is_ingrediente) tags.push('ingrediente');
+  if (!p.vendavel && !p.is_ingrediente) tags.push('consumivel');
+  return tags;
 }
 
 async function loadProdutos() {
@@ -7506,15 +7508,15 @@ function renderProdutos() {
   const todos = S.produtos || [];
   const contagem = {
     todos: todos.length,
-    vendemos: todos.filter(p => classificarProduto(p)==='vendemos').length,
-    ingrediente: todos.filter(p => classificarProduto(p)==='ingrediente').length,
-    consumivel: todos.filter(p => classificarProduto(p)==='consumivel').length,
+    vendemos: todos.filter(p => p.vendavel).length,
+    ingrediente: todos.filter(p => p.is_ingrediente).length,
+    consumivel: todos.filter(p => !p.vendavel && !p.is_ingrediente).length,
     sem_stock: todos.filter(p => p.em_stock_turno === false).length
   };
   let lista = todos;
-  if (filtro === 'vendemos') lista = todos.filter(p => classificarProduto(p) === 'vendemos');
-  else if (filtro === 'ingrediente') lista = todos.filter(p => classificarProduto(p) === 'ingrediente');
-  else if (filtro === 'consumivel') lista = todos.filter(p => classificarProduto(p) === 'consumivel');
+  if (filtro === 'vendemos') lista = todos.filter(p => p.vendavel);
+  else if (filtro === 'ingrediente') lista = todos.filter(p => p.is_ingrediente);
+  else if (filtro === 'consumivel') lista = todos.filter(p => !p.vendavel && !p.is_ingrediente);
   else if (filtro === 'sem_stock') lista = todos.filter(p => p.em_stock_turno === false);
 
   const chip = (id, label, count) => `
@@ -7537,11 +7539,13 @@ function renderProdutos() {
   const bebida = lista.filter(p => p.categoria==='bebida');
   const outro  = lista.filter(p => !['menu','ingredientes','bebida'].includes(p.categoria));
 
-  function badgeClass(p) {
-    const cls = classificarProduto(p);
-    if (cls === 'vendemos') return '<span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">vendemos</span>';
-    if (cls === 'ingrediente') return '<span style="font-size:10px;background:#3f2d01;color:#fcd34d;padding:1px 5px;border-radius:4px">ingrediente</span>';
-    return '<span style="font-size:10px;background:#334155;color:#cbd5e1;padding:1px 5px;border-radius:4px">consumível</span>';
+  function badgesAll(p) {
+    const tags = tagsProduto(p);
+    return tags.map(t => {
+      if (t === 'vendemos') return '<span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">vendemos</span>';
+      if (t === 'ingrediente') return '<span style="font-size:10px;background:#3f2d01;color:#fcd34d;padding:1px 5px;border-radius:4px">ingrediente</span>';
+      return '<span style="font-size:10px;background:#334155;color:#cbd5e1;padding:1px 5px;border-radius:4px">consumível</span>';
+    }).join(' ');
   }
 
   function prodList(items, label) {
@@ -7552,7 +7556,7 @@ function renderProdutos() {
         ${items.map(p => `
           <div class="produto-row">
             <div class="produto-info">
-              <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome} ${badgeClass(p)}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.venda_por_copo && parseFloat(p.kg_por_copo) > 0 ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">sem stock</span>' : ''}</div>
+              <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome} ${badgesAll(p)}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.venda_por_copo && parseFloat(p.kg_por_copo) > 0 ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">sem stock</span>' : ''}</div>
               <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
             </div>
             ${isAdmin ? `

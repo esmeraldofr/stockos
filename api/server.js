@@ -2350,7 +2350,8 @@ app.get('/api/produtos', auth, async (req, res) => {
   try {
     const todos = req.query.todos === '1';
     const r = await query(
-      `SELECT * FROM produtos ${todos ? '' : 'WHERE ativo=true'} ORDER BY ordem, nome`
+      `SELECT p.*, EXISTS(SELECT 1 FROM receitas r WHERE r.componente_id = p.id) AS is_ingrediente
+       FROM produtos p ${todos ? '' : 'WHERE p.ativo=true'} ORDER BY p.ordem, p.nome`
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }

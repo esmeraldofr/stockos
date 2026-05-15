@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-15-fix-total-vendas">
+<html lang="pt" data-stockos-ui="2026-05-15-cal-depositos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -413,9 +413,11 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .cal-pill--livre{background:#1e293b;color:#64748b;border:1px dashed #475569}
 .cal-pill--aberto{background:#14532d;color:#86efac}
 .cal-pill--fechado{background:#292524;color:#a8a29e}
+.cal-dep{margin-top:6px;font-size:10px;font-weight:600;color:#86efac;background:#0f1f15;border:1px solid #14532d;border-radius:5px;padding:2px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
 @media(max-width:400px){
   .cal-cell{min-height:68px;padding:4px}
   .cal-pill{font-size:8px;padding:2px 3px}
+  .cal-dep{font-size:9px;padding:1px 4px}
 }
 
 /* Alert */
@@ -1935,10 +1937,13 @@ async function loadCalendarioTurnos() {
     const m = parseInt(parts[1], 10);
     const rows = await api('GET', `/calendario-turnos?ano=${y}&mes=${m}`);
     const byDay = {};
+    const depByDay = {};
     for (const r of rows) {
       const dk = String(r.data).slice(0, 10);
       if (!byDay[dk]) byDay[dk] = {};
       byDay[dk][r.nome] = { estado: r.estado, id: r.id };
+      const liq = parseFloat(r.dep_liquido) || 0;
+      if (liq > 0) depByDay[dk] = (depByDay[dk] || 0) + liq;
     }
     const pad = (n) => String(n).padStart(2, '0');
     const lastDay = new Date(y, m, 0).getDate();
@@ -1949,6 +1954,7 @@ async function loadCalendarioTurnos() {
     const jsDow1 = new Date(y, m - 1, 1).getDay();
     const lead = (jsDow1 + 6) % 7;
     let cells = '';
+    let totalMes = 0;
     for (let i = 0; i < lead; i++) cells += '<div class="cal-cell cal-cell--empty"></div>';
     for (let d = 1; d <= lastDay; d++) {
       const iso = `${y}-${pad(m)}-${pad(d)}`;
@@ -1962,14 +1968,26 @@ async function loadCalendarioTurnos() {
         const st = t.estado === 'aberto' ? 'aberto' : 'fechado';
         return `<span class="cal-pill ${cls}" title="${turnoLabel(nome)}: ${st}">${L}</span>`;
       }).join('');
+      const dep = depByDay[iso] || 0;
+      if (dep > 0) totalMes += dep;
+      const depLine = dep > 0
+        ? `<div class="cal-dep" title="Depósito no banco (líquido)">💰 ${fmt(dep)}</div>`
+        : '';
       cells += `
         <div class="cal-cell${isToday ? ' cal-cell--today' : ''}" role="button" tabindex="0"
           onclick="runAction(event, () => goDiaFromCal('${iso}'))"
           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();runAction(event, () => goDiaFromCal('${iso}'))}">
           <div class="cal-daynum">${d}</div>
           <div class="cal-shifts">${pills}</div>
+          ${depLine}
         </div>`;
     }
+    const totalLine = totalMes > 0
+      ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding:8px 12px;background:#0f172a;border-radius:8px;border:1px solid #334155">
+          <span style="color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.05em">💰 Total depositado no mês</span>
+          <span style="font-weight:700;color:#4ade80">${fmt(totalMes)}</span>
+        </div>`
+      : '';
     wrap.innerHTML = `
       <div class="card">
         <p class="cal-legend-intro">Cada dia: <strong>M</strong> manhã, <strong>T</strong> tarde, <strong>N</strong> noite.
@@ -1978,6 +1996,7 @@ async function loadCalendarioTurnos() {
         <span class="cal-pill cal-pill--fechado" style="margin:0 4px">M</span> fechado.
         Toque num dia para ver a vista <strong>Dia</strong>.</p>
         <div class="cal-grid">${weekHtml}${cells}</div>
+        ${totalLine}
       </div>`;
   } catch (e) {
     wrap.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;

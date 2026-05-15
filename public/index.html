@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-15-cal-depositos">
+<html lang="pt" data-stockos-ui="2026-05-15-dep-validacao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1558,6 +1558,9 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
           const bid = `dep-bruto-${t.id}`;
           const tid = `dep-tpa-${t.id}`;
           const caixaTpa = parseFloat(t.caixa?.tpa) || 0;
+          const caixaTransf = parseFloat(t.caixa?.transferencia) || 0;
+          const caixaDin = parseFloat(t.caixa?.dinheiro) || 0;
+          const caixaBruto = caixaTpa + caixaTransf + caixaDin;
           const brutoNum = dep ? (parseFloat(dep.valor) || 0) : 0;
           const brutoVal = dep ? String(brutoNum) : '';
           const tpaVal = dep && dep.valor_tpa != null && dep.valor_tpa !== ''
@@ -1568,10 +1571,25 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
             <div style="margin-bottom:8px">
               <span style="font-weight:600;color:#e2e8f0">${turnoLabel(t.nome)}</span>
             </div>
+            ${pode ? `<div style="font-size:11px;color:#94a3b8;margin-bottom:8px;padding:6px 8px;background:#0f172a;border:1px solid #1e293b;border-radius:6px;line-height:1.5">
+              <span style="color:#64748b">Caixa do turno:</span>
+              TPA <strong style="color:#cbd5e1">${fmt(caixaTpa)}</strong> ·
+              Transf <strong style="color:#cbd5e1">${fmt(caixaTransf)}</strong> ·
+              Dinheiro <strong style="color:#cbd5e1">${fmt(caixaDin)}</strong> ·
+              <span style="color:#64748b">Total bruto</span> <strong style="color:#86efac">${fmt(caixaBruto)}</strong>
+            </div>` : ''}
             ${!pode ? `<div class="alert alert-error" style="margin-bottom:8px;padding:8px;font-size:12px">Fecha este turno para incluir no registo.</div>` : ''}
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <div class="field"><label>Valor bruto (Kz)</label><input id="${bid}" type="number" min="0.01" step="any" placeholder="0" value="${brutoVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
-              <div class="field"><label>Valor registado no TPA (Kz)</label><input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" oninput="updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/></div>
+              <div class="field">
+                <label>Valor bruto (Kz) <span style="font-size:10px;color:#64748b;font-weight:400">(esperado: ${fmt(caixaBruto)})</span></label>
+                <input id="${bid}" type="number" min="0.01" step="any" placeholder="0" value="${brutoVal.replace(/"/g, '&quot;')}" data-caixa-bruto="${caixaBruto}" oninput="validateDepCaixa(${t.id});updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/>
+                <div id="${bid}-diff" style="font-size:11px;margin-top:4px;min-height:14px"></div>
+              </div>
+              <div class="field">
+                <label>Valor registado no TPA (Kz) <span style="font-size:10px;color:#64748b;font-weight:400">(esperado: ${fmt(caixaTpa)})</span></label>
+                <input id="${tid}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" data-caixa-tpa="${caixaTpa}" oninput="validateDepCaixa(${t.id});updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/>
+                <div id="${tid}-diff" style="font-size:11px;margin-top:4px;min-height:14px"></div>
+              </div>
             </div>
           </div>`;
         }).join('')}
@@ -1628,7 +1646,11 @@ async function loadDepositos() {
     const turnos = await api('GET', `/dia?data=${S.date}&resumo=1`);
     S.turnosDia = turnos;
     show('depositos-content', renderDepositosSection(turnos, depositos, depositosErro));
-    queueMicrotask(() => { updateDepPreviewTotal(); updateDepSaidasDestinoRequired(); });
+    queueMicrotask(() => {
+      updateDepPreviewTotal();
+      updateDepSaidasDestinoRequired();
+      (turnos || []).forEach(t => { if (t.estado === 'fechado') validateDepCaixa(t.id); });
+    });
   } catch (e) {
     show('depositos-content', `<div class="alert alert-error">${e.message}</div>`);
   }
@@ -2003,6 +2025,40 @@ async function loadCalendarioTurnos() {
   }
 }
 
+/** Valida bruto/TPA do depósito contra o caixa registado no turno. */
+function validateDepCaixa(turnoId) {
+  const bid = `dep-bruto-${turnoId}`;
+  const tid = `dep-tpa-${turnoId}`;
+  const bInp = document.getElementById(bid);
+  const tInp = document.getElementById(tid);
+  const bDiff = document.getElementById(`${bid}-diff`);
+  const tDiff = document.getElementById(`${tid}-diff`);
+  function fmtDiff(actual, expected) {
+    const a = parseFloat(actual) || 0;
+    const e = parseFloat(expected) || 0;
+    const d = a - e;
+    if (Math.abs(d) < 1) return { ok: true, html: a > 0 ? '<span style="color:#4ade80">✓ bate com a caixa</span>' : '' };
+    const sinal = d > 0 ? '+' : '−';
+    const cor = '#fb923c';
+    const msg = d > 0
+      ? `<span style="color:${cor}">⚠ ${sinal}${fmt(Math.abs(d))} acima da caixa</span>`
+      : `<span style="color:${cor}">⚠ ${sinal}${fmt(Math.abs(d))} abaixo da caixa</span>`;
+    return { ok: false, html: msg };
+  }
+  if (bInp && bDiff) {
+    const expected = parseFloat(bInp.getAttribute('data-caixa-bruto')) || 0;
+    const r = fmtDiff(bInp.value, expected);
+    bInp.style.borderColor = r.ok ? '' : '#fb923c';
+    bDiff.innerHTML = r.html;
+  }
+  if (tInp && tDiff) {
+    const expected = parseFloat(tInp.getAttribute('data-caixa-tpa')) || 0;
+    const r = fmtDiff(tInp.value, expected);
+    tInp.style.borderColor = r.ok ? '' : '#fb923c';
+    tDiff.innerHTML = r.html;
+  }
+}
+
 function updateDepSaidasDestinoRequired() {
   const inp = document.getElementById('dep-saidas-dia');
   const ta = document.getElementById('dep-saidas-destino-dia');
@@ -2077,6 +2133,27 @@ async function submitDepositosDia() {
     if (sumB - saidasUnica <= 0) {
       alert('O líquido depositado (brutos menos compras de armazém) tem de ser positivo.');
       return;
+    }
+    // Validação caixa vs depósito
+    const divergencias = [];
+    for (const t of turnos) {
+      if (t.estado !== 'fechado') continue;
+      const bInp = document.getElementById('dep-bruto-' + t.id);
+      const tInp = document.getElementById('dep-tpa-' + t.id);
+      if (!bInp || !tInp || bInp.disabled) continue;
+      const bAtual = parseRaw(bInp.value);
+      if (!bAtual || bAtual <= 0) continue;
+      const bEsp = parseFloat(bInp.getAttribute('data-caixa-bruto')) || 0;
+      const tAtual = parseRaw(tInp.value) || 0;
+      const tEsp = parseFloat(tInp.getAttribute('data-caixa-tpa')) || 0;
+      const dB = Math.abs(bAtual - bEsp);
+      const dT = Math.abs(tAtual - tEsp);
+      if (dB >= 1) divergencias.push(`${turnoLabel(t.nome)}: bruto ${fmt(bAtual)} ≠ caixa ${fmt(bEsp)} (diff ${fmt(dB)})`);
+      if (dT >= 1) divergencias.push(`${turnoLabel(t.nome)}: TPA ${fmt(tAtual)} ≠ caixa ${fmt(tEsp)} (diff ${fmt(dT)})`);
+    }
+    if (divergencias.length) {
+      const ok = confirm('⚠️ Divergências entre o caixa do turno e o depósito:\n\n' + divergencias.join('\n') + '\n\nConfirmar mesmo assim?');
+      if (!ok) return;
     }
     const itens = rows.map((r) => ({
       turno_id: r.turno_id,

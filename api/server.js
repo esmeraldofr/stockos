@@ -123,9 +123,9 @@ const _sqlOpts = {
   prepare: false,
   /** Serverless + pooler em modo transacção: poucos slots por instância (limite Supavisor 200 client conns). */
   max: Math.min(10, Math.max(1, parseInt(process.env.PG_POOL_MAX || '2', 10) || 2)),
-  /** Compromisso: manter warm o suficiente para reusar entre requests próximos sem saturar o pooler. */
-  idle_timeout: 30,
-  max_lifetime: 60 * 30,
+  /** Liberta ligações ociosas rapidamente para não saturar o pooler (200 conns globais). */
+  idle_timeout: 10,
+  max_lifetime: 60 * 5,
   /** Era 15s — em cold start várias candidates falham × 15s → curl atinge 60s.
    *  6s é suficiente para handshake SSL ao Supabase quando a rede está ok. */
   connect_timeout: 6
@@ -270,28 +270,41 @@ const query = async (text, params) => {
 const pool = {
   query,
   connect: async () => {
-    const sql = await ensurePgSingleton();
-    // Timeout de 10s: se o pool estiver esgotado sql.reserve() pendura indefinidamente sem isto.
-    let reserved;
-    try {
-      reserved = await Promise.race([
-        sql.reserve(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Pool connection timeout (10s) — servidor ocupado, tenta de novo')), 10000)
-        )
-      ]);
-    } catch (e) {
-      throw e;
-    }
-    return {
-      query: async (text, params) => {
-        const rows = await reserved.unsafe(text, params || []);
-        return { rows: Array.from(rows) };
-      },
-      release: async () => {
-        await reserved.release().catch(() => {});
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const sql = await ensurePgSingleton();
+      let reserved;
+      try {
+        reserved = await Promise.race([
+          sql.reserve(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Pool connection timeout (10s) — servidor ocupado, tenta de novo')), 10000)
+          )
+        ]);
+        return {
+          query: async (text, params) => {
+            const rows = await reserved.unsafe(text, params || []);
+            return { rows: Array.from(rows) };
+          },
+          release: async () => {
+            await reserved.release().catch(() => {});
+          }
+        };
+      } catch (e) {
+        lastErr = e;
+        const msg = String(e && e.message ? e.message : e);
+        const transient =
+          attempt < 2 &&
+          /EMAXCONN|max client connections|MaxClientsInSessionMode|pool_size|ECONNRESET|terminated|closed/i.test(msg);
+        if (transient) {
+          await resetPgSingleton();
+          await new Promise((r) => setTimeout(r, 300 + Math.floor(Math.random() * 400)));
+          continue;
+        }
+        throw e;
       }
-    };
+    }
+    throw lastErr;
   }
 };
 

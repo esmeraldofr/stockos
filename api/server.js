@@ -4637,7 +4637,7 @@ app.get('/api/irregularidades/decisoes', auth, async (req, res) => {
 });
 
 /** POST decidir (upsert). { turno_id, categoria, aceite=true, justificacao='' } */
-app.post('/api/irregularidades/decisao', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+app.post('/api/irregularidades/decisao', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureIrregularidadeDecisoes();
     const tid = parseInt(req.body?.turno_id, 10);
@@ -4667,7 +4667,7 @@ app.post('/api/irregularidades/decisao', auth, requireRole('admin', 'gestor', 'c
 });
 
 /** DELETE — remover decisão (volta a pendente). */
-app.delete('/api/irregularidades/decisao', auth, requireRole('admin', 'gestor', 'compras'), async (req, res) => {
+app.delete('/api/irregularidades/decisao', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureIrregularidadeDecisoes();
     const tid = parseInt(req.query.turno_id, 10);

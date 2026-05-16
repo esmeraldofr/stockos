@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-16-print-bluetooth">
+<html lang="pt" data-stockos-ui="2026-05-16-print-rawbt-only">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3311,27 +3311,6 @@ function pedidoBalcaoToggleAutoPrint(el) {
   pedidoBalcaoSetAutoPrint(!!el.checked);
 }
 
-/** Métodos de impressão suportados: 'bluetooth' | 'rawbt' | 'share' | 'download'. */
-function pedidoBalcaoPrintMethod() {
-  try {
-    const v = localStorage.getItem('stockos.pedidoPrintMethod');
-    if (v === 'bluetooth' || v === 'rawbt' || v === 'share' || v === 'download') return v;
-  } catch (_) {}
-  return 'share';
-}
-function pedidoBalcaoSetPrintMethod(m) {
-  if (m !== 'bluetooth' && m !== 'rawbt' && m !== 'share' && m !== 'download') return;
-  try { localStorage.setItem('stockos.pedidoPrintMethod', m); } catch (_) {}
-}
-function pedidoBalcaoOnChangePrintMethod(el) {
-  if (!el) return;
-  pedidoBalcaoSetPrintMethod(el.value);
-}
-function pedidoBalcaoRefreshBtBtn() {
-  const btn = document.getElementById('pedido-bt-pair');
-  if (btn) btn.style.display = pedidoBalcaoPrintMethod() === 'bluetooth' ? 'inline-block' : 'none';
-}
-
 function pedidoBalcaoAsciiFold(s) {
   return String(s == null ? '' : s)
     .normalize('NFD')
@@ -3473,154 +3452,7 @@ function pedidoBalcaoImprimirTalao(pedido) {
     pedidoBalcaoMostrarAjudaImpressao('Esta funcionalidade só está disponível no Android. No iPhone/iPad, usa o botão «Fatura» que abre a vista para imprimir.');
     return false;
   }
-  const method = pedidoBalcaoPrintMethod();
-  // O Web Share API requer um gesto recente do utilizador. Se não houver,
-  // mostra um toast com botão para o utilizador disparar a partilha.
-  if (method === 'share' && !pedidoBalcaoHasUserGesture()) {
-    pedidoBalcaoMostrarToastImpressao(pedido);
-    return true;
-  }
-  if (method === 'bluetooth') return pedidoBalcaoImprimirBluetooth(pedido);
-  if (method === 'rawbt') return pedidoBalcaoImprimirRawBT(pedido);
-  if (method === 'download') return pedidoBalcaoImprimirDownload(pedido);
-  return pedidoBalcaoImprimirShare(pedido);
-}
-
-// ─── Bluetooth directo (Web Bluetooth) ──────────────────────────────────
-// Liga directamente à impressora BLE, sem app intermediária nem menu Partilhar.
-// Requer impressora compatível com Bluetooth Low Energy.
-
-const PED_BT_SERVICES = [
-  '000018f0-0000-1000-8000-00805f9b34fb', // Serial Port (impressoras térmicas BLE comuns)
-  '0000ff00-0000-1000-8000-00805f9b34fb', // Variante de algumas impressoras
-  '49535343-fe7d-4ae5-8fa9-9fafd205e455', // Microchip RN4870/71
-  'e7810a71-73ae-499d-8c15-faa9aef0c3f2'  // Bluefruit-like
-];
-const PED_BT_WRITE_CHARS = [
-  '00002af1-0000-1000-8000-00805f9b34fb',
-  '0000ff02-0000-1000-8000-00805f9b34fb',
-  '49535343-8841-43f4-a8d4-ecbe34729bb3',
-  'bef8d6c4-9fdc-4fa8-b6cd-37dbd1c8d9d3'
-];
-
-async function pedidoBalcaoBtConectar(forcePicker) {
-  if (!navigator.bluetooth) {
-    throw new Error('Este browser não suporta Web Bluetooth. Usa o Chrome em Android.');
-  }
-  let device = window.__pedidoBalcaoBtDevice;
-  if (!device || forcePicker) {
-    device = await navigator.bluetooth.requestDevice({
-      filters: PED_BT_SERVICES.map((s) => ({ services: [s] }))
-        .concat([{ namePrefix: 'Printer' }, { namePrefix: 'POS' }, { namePrefix: 'BT' }, { namePrefix: 'MTP' }, { namePrefix: 'MPT' }]),
-      optionalServices: PED_BT_SERVICES
-    });
-    window.__pedidoBalcaoBtDevice = device;
-  }
-  if (device.gatt.connected && window.__pedidoBalcaoBtChar) {
-    return window.__pedidoBalcaoBtChar;
-  }
-  const server = await device.gatt.connect();
-  let lastErr = null;
-  for (const svcUuid of PED_BT_SERVICES) {
-    try {
-      const svc = await server.getPrimaryService(svcUuid);
-      for (const chUuid of PED_BT_WRITE_CHARS) {
-        try {
-          const ch = await svc.getCharacteristic(chUuid);
-          if (ch.properties.write || ch.properties.writeWithoutResponse) {
-            window.__pedidoBalcaoBtChar = ch;
-            return ch;
-          }
-        } catch (e) { lastErr = e; }
-      }
-      // Se não há characteristic conhecida, procurar a primeira escrita
-      const chars = await svc.getCharacteristics();
-      for (const ch of chars) {
-        if (ch.properties.write || ch.properties.writeWithoutResponse) {
-          window.__pedidoBalcaoBtChar = ch;
-          return ch;
-        }
-      }
-    } catch (e) { lastErr = e; }
-  }
-  throw lastErr || new Error('Não foi encontrada uma característica de escrita compatível.');
-}
-
-async function pedidoBalcaoBtEscrever(ch, bytes) {
-  const CHUNK = 180; // BLE MTU seguro
-  const useWWOR = ch.properties.writeWithoutResponse;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    const slice = bytes.slice(i, i + CHUNK);
-    if (useWWOR && ch.writeValueWithoutResponse) {
-      await ch.writeValueWithoutResponse(slice);
-    } else {
-      await ch.writeValue(slice);
-    }
-  }
-}
-
-async function pedidoBalcaoImprimirBluetooth(pedido) {
-  const text = pedidoBalcaoBuildTalaoEscPos(pedido);
-  const bytes = pedidoBalcaoEscPosBytes(text);
-  try {
-    const ch = await pedidoBalcaoBtConectar(false);
-    await pedidoBalcaoBtEscrever(ch, bytes);
-    return true;
-  } catch (e) {
-    console.warn('Impressão Bluetooth falhou:', e);
-    const msg = (e && e.message) || String(e);
-    pedidoBalcaoMostrarAjudaImpressao(
-      'Falha ao imprimir por Bluetooth: ' + msg +
-      '\n\nVerifica que a impressora está ligada e usa o botão «Emparelhar impressora» nas opções de impressão.'
-    );
-    return false;
-  }
-}
-
-async function pedidoBalcaoBtEmparelhar() {
-  try {
-    window.__pedidoBalcaoBtChar = null;
-    window.__pedidoBalcaoBtDevice = null;
-    await pedidoBalcaoBtConectar(true);
-    const nome = (window.__pedidoBalcaoBtDevice && window.__pedidoBalcaoBtDevice.name) || 'Impressora';
-    pedidoBalcaoMostrarAjudaImpressao(`Impressora «${nome}» emparelhada. As próximas impressões serão automáticas.`);
-  } catch (e) {
-    const msg = (e && e.message) || String(e);
-    if (e && e.name === 'NotFoundError') return; // utilizador cancelou
-    pedidoBalcaoMostrarAjudaImpressao('Falha ao emparelhar: ' + msg);
-  }
-}
-
-function pedidoBalcaoHasUserGesture() {
-  try {
-    if (navigator.userActivation && typeof navigator.userActivation.isActive === 'boolean') {
-      return navigator.userActivation.isActive;
-    }
-  } catch (_) {}
-  return true; // fallback optimista
-}
-
-function pedidoBalcaoMostrarToastImpressao(pedido) {
-  const id = 'pedido-print-toast';
-  const existing = document.getElementById(id);
-  if (existing) existing.remove();
-  const div = document.createElement('div');
-  div.id = id;
-  div.style.cssText = 'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#0f172a;border:1px solid #22c55e;border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);z-index:400;max-width:92vw;font-size:13px;color:#e2e8f0';
-  div.innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:2px">
-      <div style="font-weight:600;color:#22c55e">Pedido #${pedido.id || '—'} guardado</div>
-      <div style="font-size:11px;color:#94a3b8">Toque para imprimir o talão</div>
-    </div>
-    <button type="button" class="btn btn-primary btn-sm" style="white-space:nowrap" data-action="print">🖨️ Imprimir</button>
-    <button type="button" class="btn btn-ghost btn-sm" aria-label="Fechar" data-action="close">×</button>`;
-  document.body.appendChild(div);
-  div.querySelector('[data-action="print"]').addEventListener('click', async () => {
-    div.remove();
-    await pedidoBalcaoImprimirShare(pedido);
-  });
-  div.querySelector('[data-action="close"]').addEventListener('click', () => div.remove());
-  setTimeout(() => { if (document.getElementById(id)) document.getElementById(id).remove(); }, 15000);
+  return pedidoBalcaoImprimirRawBT(pedido);
 }
 
 function pedidoBalcaoImprimirRawBT(pedido) {
@@ -3651,63 +3483,7 @@ function pedidoBalcaoImprimirRawBT(pedido) {
   return true;
 }
 
-async function pedidoBalcaoImprimirShare(pedido) {
-  const text = pedidoBalcaoBuildTalaoEscPos(pedido);
-  const bytes = pedidoBalcaoEscPosBytes(text);
-  const base = `talao-${pedido.id || 'novo'}`;
-  if (typeof File === 'undefined' || !navigator.canShare || !navigator.share) {
-    return pedidoBalcaoImprimirDownload(pedido);
-  }
-  // Chrome Android tem uma allowlist restrita de MIME types para Web Share.
-  // Tentamos várias combinações até uma passar em canShare().
-  const tentativas = [
-    { mime: 'application/octet-stream', name: `${base}.bin` },
-    { mime: 'text/plain', name: `${base}.bin` },
-    { mime: 'text/plain', name: `${base}.txt` },
-  ];
-  let lastErr = null;
-  for (const t of tentativas) {
-    let file;
-    try {
-      file = new File([bytes], t.name, { type: t.mime });
-    } catch (e) { lastErr = e; continue; }
-    try {
-      if (!navigator.canShare({ files: [file] })) continue;
-    } catch (e) { lastErr = e; continue; }
-    try {
-      await navigator.share({ files: [file], title: 'Talão' });
-      return true;
-    } catch (e) {
-      lastErr = e;
-      if (e && e.name === 'AbortError') return true;
-      // NotAllowedError = gesto perdido → mostra toast
-      if (e && e.name === 'NotAllowedError') {
-        pedidoBalcaoMostrarToastImpressao(pedido);
-        return true;
-      }
-      // Outros erros: tenta próximo MIME
-    }
-  }
-  console.warn('Web Share indisponível, a fazer download:', lastErr);
-  return pedidoBalcaoImprimirDownload(pedido);
-}
-
-function pedidoBalcaoImprimirDownload(pedido) {
-  const text = pedidoBalcaoBuildTalaoEscPos(pedido);
-  const bytes = pedidoBalcaoEscPosBytes(text);
-  const blob = new Blob([bytes], { type: 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `talao-${pedido.id || 'novo'}.bin`;
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
-  return true;
-}
-
-/** Modal explicando como configurar a impressão (RawBT + Bluetooth). */
+/** Modal explicando como configurar a impressão via RawBT. */
 function pedidoBalcaoMostrarAjudaImpressao(msgExtra) {
   if (document.getElementById('pedido-print-help-modal')) return;
   const div = document.createElement('div');
@@ -3721,30 +3497,15 @@ function pedidoBalcaoMostrarAjudaImpressao(msgExtra) {
         <button type="button" class="modal-close" onclick="document.getElementById('pedido-print-help-modal').remove()" aria-label="Fechar">×</button>
       </div>
       <div style="padding:0 4px;font-size:13px;color:#cbd5e1;line-height:1.5;max-height:70vh;overflow-y:auto">
-        ${msgExtra ? `<div class="alert alert-error" style="margin-bottom:12px">${escapeHtml(msgExtra)}</div>` : `<div class="alert" style="margin-bottom:12px;background:#1e293b;border:1px solid #334155;color:#cbd5e1">O navegador não fala directamente com a impressora Bluetooth. Escolhe um dos métodos abaixo conforme a app que tens instalada.</div>`}
-        <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px">
-          <div style="padding:10px 12px;background:#0f172a;border:1px solid #1e293b;border-radius:8px">
-            <div style="font-weight:600;color:#e2e8f0;margin-bottom:4px">📤 Partilhar (recomendado)</div>
-            <div style="font-size:12px;color:#94a3b8;line-height:1.5">Abre o menu de partilha do Android e escolhes a app de impressão (POS Printer, ESC POS Printer, etc.). Funciona com qualquer app que aceite ficheiros .bin de ESC/POS.</div>
-          </div>
-          <div style="padding:10px 12px;background:#0f172a;border:1px solid #1e293b;border-radius:8px">
-            <div style="font-weight:600;color:#e2e8f0;margin-bottom:4px">⚡ RawBT (link directo)</div>
-            <div style="font-size:12px;color:#94a3b8;line-height:1.5">Envia directamente para a app <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:#60a5fa">RawBT</a> (gratuita) sem passar pelo menu Partilhar. Mais rápido, mas só funciona com a RawBT.</div>
-          </div>
-          <div style="padding:10px 12px;background:#0f172a;border:1px solid #1e293b;border-radius:8px">
-            <div style="font-weight:600;color:#e2e8f0;margin-bottom:4px">💾 Transferir ficheiro .bin</div>
-            <div style="font-size:12px;color:#94a3b8;line-height:1.5">Descarrega o talão para o telemóvel. Depois abres com a app de impressão. Útil como último recurso.</div>
-          </div>
-        </div>
-        <p style="margin:0 0 6px;color:#cbd5e1"><strong>Antes de imprimir (qualquer método):</strong></p>
+        ${msgExtra ? `<div class="alert alert-error" style="margin-bottom:12px">${escapeHtml(msgExtra)}</div>` : ''}
+        <p style="margin:0 0 6px;color:#cbd5e1"><strong>Como configurar a impressão:</strong></p>
         <ol style="margin:0 0 12px;padding-left:20px;line-height:1.7;color:#cbd5e1">
           <li>Liga a impressora e empareha-a no <strong>Bluetooth do Android</strong></li>
-          <li>Abre a app de impressão (RawBT / POS Printer / outra) e configura a tua impressora dentro dela</li>
-          <li>Selecciona o método correspondente no menu acima e clica em «🖨️ Talão»</li>
+          <li>Instala a app <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:#60a5fa">RawBT</a> e escolhe a tua impressora nas definições</li>
+          <li>No StockOS, activa «Imprimir talão automaticamente» — cada pedido imprime sozinho</li>
         </ol>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">
-          <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none">RawBT</a>
-          <a href="https://play.google.com/store/search?q=pos%20printer%20escpos&c=apps" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none">Procurar POS Printer</a>
+          <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none">Instalar RawBT</a>
           <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('pedido-print-help-modal').remove()">Fechar</button>
         </div>
       </div>
@@ -4104,20 +3865,9 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           } onchange="pedidoBalcaoToggleAutoPrint(this)" style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer"/>
           <span>🖨️ Imprimir talão automaticamente</span>
         </label>
-        <div style="margin:-4px 0 10px;display:flex;flex-direction:column;gap:4px">
-          <label style="font-size:11px;color:#94a3b8">Método de impressão</label>
-          <select onchange="pedidoBalcaoOnChangePrintMethod(this);pedidoBalcaoRefreshBtBtn()" id="pedido-print-method" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:6px;padding:6px 8px;font-size:12px">
-            <option value="bluetooth" ${pedidoBalcaoPrintMethod() === 'bluetooth' ? 'selected' : ''}>📡 Bluetooth directo (recomendado)</option>
-            <option value="share" ${pedidoBalcaoPrintMethod() === 'share' ? 'selected' : ''}>Partilhar (POS Printer, ESC POS, etc.)</option>
-            <option value="rawbt" ${pedidoBalcaoPrintMethod() === 'rawbt' ? 'selected' : ''}>RawBT (link directo)</option>
-            <option value="download" ${pedidoBalcaoPrintMethod() === 'download' ? 'selected' : ''}>Transferir ficheiro .bin</option>
-          </select>
-          <button type="button" id="pedido-bt-pair" onclick="pedidoBalcaoBtEmparelhar()" style="display:${pedidoBalcaoPrintMethod() === 'bluetooth' ? 'inline-block' : 'none'};margin-top:6px;background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer">
-            📡 Emparelhar impressora Bluetooth
-          </button>
-          <span style="font-size:11px;color:#94a3b8">
-            <a href="#" onclick="event.preventDefault();pedidoBalcaoMostrarAjudaImpressao()" style="color:#60a5fa">ⓘ Como configurar</a>
-          </span>
+        <div style="margin:-4px 0 10px;font-size:11px;color:#94a3b8">
+          Imprime via <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:#60a5fa">RawBT</a> ·
+          <a href="#" onclick="event.preventDefault();pedidoBalcaoMostrarAjudaImpressao()" style="color:#60a5fa">ⓘ Como configurar</a>
         </div>
         <details style="margin-bottom:12px;font-size:12px;color:#cbd5e1" ${
           pedidoBalcaoLogoGetPreview() ? '' : ''

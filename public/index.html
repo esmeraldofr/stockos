@@ -3322,6 +3322,28 @@ function pedidoBalcaoAsciiFold(s) {
     .replace(/[^\x20-\x7E\n]/g, '?');
 }
 
+/** Imprime N caixas \u00ab[ ]\u00bb para riscar \u00e0 medida que entrega cada unidade. */
+function pedidoBalcaoCaixasEntrega(n, w) {
+  const W = w || 32;
+  const INDENT = '  ';
+  const BOX = '[ ]';
+  const SEP = ' ';
+  const lines = [];
+  let cur = INDENT + BOX;
+  for (let i = 1; i < n; i++) {
+    const nxt = cur + SEP + BOX;
+    if (nxt.length > W) {
+      lines.push(cur);
+      cur = INDENT + BOX;
+    } else {
+      cur = nxt;
+    }
+  }
+  lines.push(cur);
+  return lines.join('\n');
+}
+
+
 function pedidoBalcaoBuildTalaoEscPos(pedido) {
   const W = 32; // 58 mm @ Font A
   const ESC = '\x1B';
@@ -3362,7 +3384,7 @@ function pedidoBalcaoBuildTalaoEscPos(pedido) {
   for (const ln of linhas) {
     const copo = !!ln.venda_por_copo && parseFloat(ln.kg_por_copo) > 0;
     const nome = ln.produto_nome || 'Item';
-    let qtyLabel, sub, unitLine;
+    let qtyLabel, sub, unitLine, nUnits;
     if (copo) {
       const copos = Math.floor(parseFloat(ln.quantidade));
       const u = parseFloat(ln.preco) || 0;
@@ -3370,6 +3392,7 @@ function pedidoBalcaoBuildTalaoEscPos(pedido) {
       const pp = parseFloat(ln.preco_copos_pacote) || 0;
       sub = precoVendaCopos(copos, u, n, pp);
       qtyLabel = `${copos}x`;
+      nUnits = copos;
       unitLine =
         n >= 2 && pp > 0
           ? `  pac.${n}=${fmt(pp)} | un.${fmt(u)}`
@@ -3379,6 +3402,7 @@ function pedidoBalcaoBuildTalaoEscPos(pedido) {
       const u = parseFloat(ln.preco) || 0;
       sub = q * u;
       qtyLabel = `${fmtNum(q)}x`;
+      nUnits = Math.floor(q);
       unitLine = `  ${fmt(u)} / un.`;
     }
     total += sub;
@@ -3389,6 +3413,9 @@ function pedidoBalcaoBuildTalaoEscPos(pedido) {
       body += padR('', subFmt) + '\n';
     } else {
       body += padR(unitLine, subFmt) + '\n';
+    }
+    if (nUnits > 0) {
+      body += pedidoBalcaoCaixasEntrega(nUnits, W) + '\n';
     }
   }
 

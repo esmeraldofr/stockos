@@ -1236,6 +1236,10 @@ async function draw() {
       case 'presenca': await drawPresenca(); break;
       case 'perfil':   await drawPerfil(); break;
       case 'faltas':   await drawFaltas(); break;
+      case 'comissoes':
+        if (!['admin','gestor'].includes(S.user?.role)) { await navigate('dia'); return; }
+        await drawComissoes();
+        break;
       default:         await drawDia();
     }
   } finally {
@@ -1334,6 +1338,8 @@ function menuEntries() {
   if (showAuditoria) {
     entries.push({ page: 'auditoria', label: 'Auditoria',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>' });
+    entries.push({ page: 'comissoes', label: 'Comissões',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>' });
   }
   entries.push({ page: 'produtos', label: 'Produtos',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>' });
@@ -3642,6 +3648,7 @@ function pedidoBalcaoRefreshDraftLineTotals() {
   });
   const totalEl = document.getElementById('pedido-draft-total');
   if (totalEl) totalEl.textContent = fmt(sum);
+  pedidoBalcaoRefreshComissao();
 }
 
 function pedidoBalcaoRecalcDraftTotal() {
@@ -3720,6 +3727,7 @@ function pedidoBalcaoSyncDraftUI() {
   }
   tbody.innerHTML = rows;
   if (totalEl) totalEl.textContent = fmt(sum);
+  pedidoBalcaoRefreshComissao();
 }
 
 function pedidoBalcaoKeypad(v) {
@@ -3756,6 +3764,69 @@ function pedidoBalcaoAddLinha() {
   wrap.appendChild(row);
 }
 
+function pedidoBalcaoCalcComissao() {
+  const catalog = window.__pedidoProdutosOpts || [];
+  const map = {};
+  catalog.forEach((o) => { map[String(o.id)] = o; });
+  const draft = window.__pedidoBalcaoDraft || {};
+  let total = 0;
+  let perProduto = 0;
+  for (const [pid, qty] of Object.entries(draft)) {
+    const o = map[String(pid)];
+    const q = parseFloat(qty);
+    if (!o || !Number.isFinite(q) || q <= 0) continue;
+    const { line } = pedidoBalcaoValorLinha(o, q);
+    total += line;
+    perProduto += line * (parseFloat(o.comissao_pct) || 0) / 100;
+  }
+  const promSel = document.getElementById('pedido-promotor');
+  const pid = promSel ? promSel.value : '';
+  const list = window.__promotoresList || [];
+  const prom = pid ? list.find((p) => String(p.id) === String(pid)) : null;
+  let valor = 0;
+  let modo = null;
+  if (prom) {
+    modo = prom.comissao_modo === 'total' ? 'total' : 'produto';
+    if (modo === 'total') {
+      valor = total * (parseFloat(prom.comissao_pct_total) || 0) / 100;
+    } else {
+      valor = perProduto;
+    }
+  }
+  return { total, valor, potencial: perProduto, promotor: prom, modo };
+}
+
+function pedidoBalcaoRefreshComissao() {
+  const el = document.getElementById('pedido-comissao-valor');
+  const nota = document.getElementById('pedido-comissao-nota');
+  if (!el) return;
+  const c = pedidoBalcaoCalcComissao();
+  if (c.promotor) {
+    el.textContent = fmt(c.valor);
+    if (nota) nota.textContent = `Atribuída a ${c.promotor.nome} (${c.modo === 'total' ? (parseFloat(c.promotor.comissao_pct_total) || 0).toFixed(1) + '% do total' : '% por produto'}).`;
+  } else {
+    el.textContent = fmt(c.potencial);
+    if (nota) nota.textContent = 'Sem promotor — valor calculado pelas % por produto (não atribuído).';
+  }
+}
+
+async function pedidoBalcaoLoadPromotores() {
+  try {
+    const list = await api('GET', '/promotores');
+    window.__promotoresList = Array.isArray(list) ? list : [];
+  } catch (_) {
+    window.__promotoresList = [];
+  }
+  const sel = document.getElementById('pedido-promotor');
+  if (!sel) return;
+  const current = sel.value;
+  const opts = ['<option value="">— Sem promotor —</option>']
+    .concat((window.__promotoresList || []).map((p) => `<option value="${escapeHtml(String(p.id))}">${escapeHtml(p.nome)}${p.comissao_modo === 'total' ? ` · ${(parseFloat(p.comissao_pct_total) || 0).toFixed(1)}% total` : ' · % produto'}</option>`));
+  sel.innerHTML = opts.join('');
+  if (current) sel.value = current;
+  pedidoBalcaoRefreshComissao();
+}
+
 async function registarPedidoBalcao(turnoId) {
   const draft = window.__pedidoBalcaoDraft || {};
   const linhas = [];
@@ -3772,6 +3843,7 @@ async function registarPedidoBalcao(turnoId) {
   const tipoPag =
     document.getElementById('pedido-tipo-pagamento')?.value || 'dinheiro';
   const comEntrega = !!document.getElementById('pedido-com-entrega')?.checked;
+  const promotorId = document.getElementById('pedido-promotor')?.value || '';
   const tid = String(turnoId);
   const idsAntes = new Set(
     (window.__stockosPedidosBalcao || []).map((p) => String(p.id))
@@ -3816,6 +3888,7 @@ async function registarPedidoBalcao(turnoId) {
     cliente_nome: cliente,
     tipo_pagamento: tipoPag,
     com_entrega: comEntrega,
+    promotor_id: promotorId || null,
     linhas
   });
   window.__pedidoBalcaoDraft = {};
@@ -3899,6 +3972,17 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             <option value="outro">Outro</option>
           </select>
         </div>
+        <div class="field" style="margin-bottom:8px">
+          <label style="font-size:11px;color:#94a3b8">Promotor (opcional)</label>
+          <select id="pedido-promotor" onchange="pedidoBalcaoRefreshComissao()"
+            style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px;cursor:pointer">
+            <option value="">— Sem promotor —</option>
+          </select>
+          <div id="pedido-comissao-info" style="margin-top:6px;font-size:12px;color:#94a3b8;padding:6px 10px;border:1px dashed #334155;border-radius:8px;background:#0b1322">
+            <span>Comissão calculada: </span><strong id="pedido-comissao-valor" style="color:#fbbf24">0 Kz</strong>
+            <span id="pedido-comissao-nota" style="display:block;font-size:11px;color:#64748b;margin-top:2px">Sem promotor — valor não atribuído.</span>
+          </div>
+        </div>
         <label style="display:flex;align-items:center;gap:10px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#e2e8f0;user-select:none">
           <input type="checkbox" id="pedido-com-entrega" style="width:18px;height:18px;accent-color:#0ea5e9;cursor:pointer"/>
           <span>Entrega ao domicílio / fora do balcão</span>
@@ -3960,6 +4044,13 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             const cli = p.cliente_nome ? escapeHtml(p.cliente_nome) : '—';
             const tp = escapeHtml(pedidoTipoPagamentoLabel(p.tipo_pagamento));
             const ent = escapeHtml(pedidoEntregaLabel(!!p.com_entrega));
+            const comissao = parseFloat(p.comissao_valor) || 0;
+            const comissaoPot = parseFloat(p.comissao_valor_potencial) || 0;
+            const comissaoLinha = p.promotor_id
+              ? `<div style="font-size:12px;color:#94a3b8;margin-top:2px">Comissão: <strong style="color:#fbbf24">${escapeHtml(fmt(comissao))}</strong> · ${escapeHtml(p.promotor_nome || '—')}</div>`
+              : (comissaoPot > 0
+                  ? `<div style="font-size:12px;color:#64748b;margin-top:2px">Comissão potencial: <strong style="color:#a16207">${escapeHtml(fmt(comissaoPot))}</strong> (sem promotor)</div>`
+                  : '');
             return `<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #334155">
       <div>
         <div style="font-weight:600;color:#e2e8f0">Pedido #${p.id}</div>
@@ -3967,6 +4058,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">Pagamento: <strong style="color:#cbd5e1">${tp}</strong></div>
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">Entrega: <strong style="color:#cbd5e1">${ent}</strong></div>
         <div style="font-size:13px;color:#94a3b8;margin-top:4px">Total <strong style="color:#4ade80">${tot}</strong></div>
+        ${comissaoLinha}
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
         <button type="button" class="btn btn-ghost btn-sm" onclick="pedidoBalcaoImprimirTalaoPorId(${p.id})" title="Imprimir talão na impressora térmica (Bluetooth)">🖨️ Talão</button>
@@ -3981,6 +4073,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     `<div class="pedidos-balcao-lista-turno"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px">Pedidos do turno</div>${listHtml}</div>`;
   pedidoBalcaoSyncDraftUI();
   pedidoBalcaoLogoRefreshUI();
+  if (canEdit) { pedidoBalcaoLoadPromotores().catch(() => {}); }
 }
 
 function closeFaturaVendaModal() {
@@ -4320,7 +4413,8 @@ async function loadVendasMenu(turnoId, canEdit) {
         id: p.id,
         nome: p.nome,
         grupo: 'Menu',
-        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0
+        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0,
+        comissao_pct: parseFloat(p.comissao_pct) || 0
       });
     }
     for (const p of avulsoProds) {
@@ -4328,7 +4422,8 @@ async function loadVendasMenu(turnoId, canEdit) {
         id: p.id,
         nome: p.nome,
         grupo: 'Avulso',
-        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0
+        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0,
+        comissao_pct: parseFloat(p.comissao_pct) || 0
       });
     }
     for (const p of bebidaCopoProds) {
@@ -4338,7 +4433,10 @@ async function loadVendasMenu(turnoId, canEdit) {
         grupo: 'BebidaCopo',
         preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0,
         qtd_copos_pacote: parseInt(p.qtd_copos_pacote, 10) || 0,
-        preco_copos_pacote: parseFloat(p.preco_copos_pacote) || 0
+        preco_copos_pacote: parseFloat(p.preco_copos_pacote) || 0,
+        venda_por_copo: true,
+        kg_por_copo: parseFloat(p.kg_por_copo) || 0,
+        comissao_pct: parseFloat(p.comissao_pct) || 0
       });
     }
     for (const p of bebidaOutras) {
@@ -4346,7 +4444,8 @@ async function loadVendasMenu(turnoId, canEdit) {
         id: p.id,
         nome: `${p.nome} (unidade)`,
         grupo: 'BebidaUnidade',
-        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0
+        preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0,
+        comissao_pct: parseFloat(p.comissao_pct) || 0
       });
     }
     pedidoCatalog.sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
@@ -7971,6 +8070,7 @@ function showProdutoForm(id) {
       '<p style="font-size:11px;color:#64748b;margin:0;line-height:1.4">O campo «Preço» acima é o valor de <strong>1 copo</strong> (ex. 400 Kz). Se preencheres pacote (ex. 3 copos / 1000 Kz), o total usa pacotes completos + resto ao preço unitário.</p>' +
       '</div></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
+      '<div class="field"><label>Comissão por produto (%)</label><input id="p-comissao" type="number" min="0" max="100" step="0.1" value="0"/><div style="font-size:11px;color:#64748b;margin-top:4px">Usada quando o promotor tem modo «por produto». Default: 0%.</div></div>' +
       (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +
         '<button id="btn-modal-guardar" class="btn btn-success">Guardar</button>' +
@@ -7988,6 +8088,8 @@ function showProdutoForm(id) {
   if (pt) pt.value = p && p.peso_tara_kg != null ? String(parseFloat(p.peso_tara_kg) || 0) : '0';
   document.getElementById('p-cat').value = p ? (p.categoria || 'outro') : 'outro';
   document.getElementById('p-ordem').value = p ? (p.ordem || 0) : 0;
+  const pc = document.getElementById('p-comissao');
+  if (pc) pc.value = p && p.comissao_pct != null ? String(parseFloat(p.comissao_pct) || 0) : '0';
   if (isEdit) document.getElementById('p-ativo').value = p.ativo ? 'true' : 'false';
   if (p) document.getElementById('p-avulso').checked = !!p.venda_avulso;
   const pv = document.getElementById('p-vendavel');
@@ -8090,6 +8192,7 @@ async function createProduto() {
       venda_avulso:document.getElementById('p-avulso')?.checked||false,
       vendavel:!!document.getElementById('p-vendavel')?.checked,
       em_stock_turno:!!document.getElementById('p-stock-turno')?.checked,
+      comissao_pct: parseFloat(val('p-comissao')) || 0,
       ...payloadProdutoCopo()
     });
     closeProdutoModal();
@@ -8112,6 +8215,7 @@ async function saveProduto(id) {
       venda_avulso: document.getElementById('p-avulso')?.checked||false,
       vendavel: !!document.getElementById('p-vendavel')?.checked,
       em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
+      comissao_pct: parseFloat(val('p-comissao')) || 0,
       ...payloadProdutoCopo()
     });
     closeProdutoModal();
@@ -8209,8 +8313,8 @@ async function loadUtilizadores() {
         ${S.utilizadores.map(u => `
           <div class="produto-row">
             <div class="produto-info">
-              <div class="produto-nome">${u.nome}</div>
-              <div class="produto-meta">${u.username || '—'} · ${u.email} · ${u.role} ${!u.ativo?'· Inactivo':''}</div>
+              <div class="produto-nome">${u.nome}${u.promotor?' <span style="font-size:10px;background:#3f1d6a;color:#d8b4fe;padding:1px 5px;border-radius:4px">promotor</span>':''}</div>
+              <div class="produto-meta">${u.username || '—'} · ${u.email} · ${u.role} ${!u.ativo?'· Inactivo':''}${u.promotor?(' · '+(u.comissao_modo==='total'?(parseFloat(u.comissao_pct_total)||0).toFixed(1)+'% do total':'% por produto')):''}</div>
             </div>
             <div style="display:flex;gap:6px">
               <button class="btn btn-ghost btn-sm" onclick='verPerfil("${u.id}")'>Perfil</button>
@@ -8242,13 +8346,42 @@ function showUserForm(u) {
       <div class="field"><label>Activo</label>
         <select id="u-ativo"><option value="true" ${u?.ativo?'selected':''}>Sim</option><option value="false" ${!u?.ativo?'selected':''}>Não</option></select>
       </div>
-      <div class="field"><label>Nova Password (opcional)</label><input type="password" id="u-pass"/></div>`:''}
+      <div class="field"><label>Nova Password (opcional)</label><input type="password" id="u-pass"/></div>
+      <div class="field" style="border-top:1px solid #334155;padding-top:12px;margin-top:12px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="u-promotor" style="width:16px;height:16px" ${u?.promotor?'checked':''}/> Promotor (recebe comissão)
+        </label>
+        <div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Ao marcar como promotor, este utilizador fica disponível no dropdown do pedido balcão.</div>
+      </div>
+      <div class="field" id="u-comissao-fields" style="display:${u?.promotor?'block':'none'};margin-left:24px">
+        <label>Modo de cálculo</label>
+        <select id="u-comissao-modo">
+          <option value="produto" ${u?.comissao_modo==='produto'?'selected':''}>% por produto (soma das % de cada produto)</option>
+          <option value="total"   ${u?.comissao_modo==='total'?'selected':''}>% sobre o total do pedido</option>
+        </select>
+        <div class="field" id="u-pct-total-wrap" style="display:${u?.comissao_modo==='total'?'block':'none'};margin-top:8px">
+          <label>% sobre total</label>
+          <input id="u-pct-total" type="number" min="0" max="100" step="0.1" value="${u?.comissao_pct_total||0}"/>
+        </div>
+      </div>`:''}
       <div class="flex gap-8 mt-8">
         <button type="button" class="btn btn-success" onclick="runAction(event, ${isEdit?`() => saveUser('${u.id}')`:'createUser'})">Guardar</button>
         <button type="button" class="btn btn-ghost" onclick="show('admin-form','')">Cancelar</button>
       </div>
     </div>
   `);
+  if (isEdit) {
+    const promChk = document.getElementById('u-promotor');
+    const fields = document.getElementById('u-comissao-fields');
+    const modoSel = document.getElementById('u-comissao-modo');
+    const wrap = document.getElementById('u-pct-total-wrap');
+    if (promChk && fields) promChk.addEventListener('change', () => {
+      fields.style.display = promChk.checked ? 'block' : 'none';
+    });
+    if (modoSel && wrap) modoSel.addEventListener('change', () => {
+      wrap.style.display = modoSel.value === 'total' ? 'block' : 'none';
+    });
+  }
 }
 
 async function createUser() {
@@ -8265,6 +8398,12 @@ async function saveUser(id) {
     const body = {nome:val('u-nome'),username:val('u-username'),role:val('u-role'),ativo:val('u-ativo')==='true'};
     const p = val('u-pass');
     if (p) body.password = p;
+    const promChk = document.getElementById('u-promotor');
+    if (promChk) {
+      body.promotor = !!promChk.checked;
+      body.comissao_modo = val('u-comissao-modo') || 'produto';
+      body.comissao_pct_total = parseFloat(val('u-pct-total')) || 0;
+    }
     await api('PUT',`/utilizadores/${id}`,body);
     show('admin-form','');
     suc('admin-msg','Utilizador actualizado!');
@@ -8682,6 +8821,141 @@ async function loadPresencaDescriptors() {
 function verPerfil(uid) {
   S.perfilUid = uid;
   navigate('perfil');
+}
+
+// ── COMISSÕES ─────────────────────────────────────────────────
+function comissoesDefaultFiltros() {
+  const hoje = new Date();
+  const ate = hoje.toISOString().slice(0, 10);
+  const dde = new Date(hoje.getTime() - 29 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  return { data_de: dde, data_ate: ate, promotor_id: '' };
+}
+
+async function drawComissoes() {
+  if (!S.comissoesFiltros) S.comissoesFiltros = comissoesDefaultFiltros();
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Comissões</div>
+        <div class="header-sub">Promotores e comissões geradas pelos pedidos balcão</div>
+      </div>
+    </div>
+    <div id="content">
+      <div class="card">
+        <div class="card-title">Filtros</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:end">
+          <div class="field" style="margin:0;flex:1;min-width:140px">
+            <label>De</label>
+            <input type="date" id="com-de" value="${S.comissoesFiltros.data_de}"/>
+          </div>
+          <div class="field" style="margin:0;flex:1;min-width:140px">
+            <label>Até</label>
+            <input type="date" id="com-ate" value="${S.comissoesFiltros.data_ate}"/>
+          </div>
+          <div class="field" style="margin:0;flex:1;min-width:180px">
+            <label>Promotor</label>
+            <select id="com-prom"><option value="">— Todos —</option></select>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, comissoesAplicarFiltros)">Aplicar</button>
+        </div>
+      </div>
+      <div id="comissoes-msg"></div>
+      <div id="comissoes-mount"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  try {
+    const proms = await api('GET', '/promotores');
+    const sel = document.getElementById('com-prom');
+    if (sel) {
+      sel.innerHTML = '<option value="">— Todos —</option>' +
+        proms.map(p => `<option value="${escapeHtml(String(p.id))}" ${String(S.comissoesFiltros.promotor_id) === String(p.id) ? 'selected' : ''}>${escapeHtml(p.nome)}</option>`).join('');
+    }
+  } catch (_) {}
+  await comissoesCarregar();
+}
+
+async function comissoesAplicarFiltros() {
+  S.comissoesFiltros = {
+    data_de: val('com-de'),
+    data_ate: val('com-ate'),
+    promotor_id: val('com-prom')
+  };
+  await comissoesCarregar();
+}
+
+async function comissoesCarregar() {
+  const mount = document.getElementById('comissoes-mount');
+  if (!mount) return;
+  mount.innerHTML = '<div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div>';
+  const f = S.comissoesFiltros || comissoesDefaultFiltros();
+  const qs = new URLSearchParams();
+  if (f.data_de) qs.set('data_de', f.data_de);
+  if (f.data_ate) qs.set('data_ate', f.data_ate);
+  if (f.promotor_id) qs.set('promotor_id', f.promotor_id);
+  let data;
+  try {
+    data = await api('GET', '/comissoes?' + qs.toString());
+  } catch (e) {
+    mount.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const totais = data.totais || { comissao_externa: 0, comissao_operadores: 0, comissao_total: 0 };
+  const resumo = data.resumo_por_promotor || [];
+  const linhas = data.linhas || [];
+  const cards = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px">
+      <div class="card" style="margin:0"><div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em">Comissão total</div><div style="font-size:22px;font-weight:700;color:#fbbf24;margin-top:4px">${escapeHtml(fmt(totais.comissao_total))}</div></div>
+      <div class="card" style="margin:0"><div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em">A promotores externos</div><div style="font-size:22px;font-weight:700;color:#4ade80;margin-top:4px">${escapeHtml(fmt(totais.comissao_externa))}</div></div>
+      <div class="card" style="margin:0"><div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em">A operadores do turno</div><div style="font-size:22px;font-weight:700;color:#60a5fa;margin-top:4px">${escapeHtml(fmt(totais.comissao_operadores))}</div></div>
+      <div class="card" style="margin:0"><div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em">Pedidos com promotor</div><div style="font-size:22px;font-weight:700;color:#e2e8f0;margin-top:4px">${linhas.length}</div></div>
+    </div>`;
+  function tabelaResumo(items, titulo, vazio) {
+    if (!items.length) return `<div class="card"><div class="card-title">${titulo}</div><div style="color:#64748b;font-size:13px">${vazio}</div></div>`;
+    return `<div class="card"><div class="card-title">${titulo}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="text-align:left;color:#94a3b8;border-bottom:1px solid #334155">
+          <th style="padding:6px 4px">Promotor</th>
+          <th style="padding:6px 4px;text-align:right">Pedidos</th>
+          <th style="padding:6px 4px;text-align:right">Total vendido</th>
+          <th style="padding:6px 4px;text-align:right">Comissão</th>
+        </tr></thead>
+        <tbody>${items.map(r => `<tr style="border-bottom:1px solid #1e293b">
+          <td style="padding:6px 4px;color:#e2e8f0">${escapeHtml(r.promotor_nome || '—')}</td>
+          <td style="padding:6px 4px;text-align:right;color:#cbd5e1">${r.n_pedidos}</td>
+          <td style="padding:6px 4px;text-align:right;color:#94a3b8">${escapeHtml(fmt(r.total_vendido_kz))}</td>
+          <td style="padding:6px 4px;text-align:right;color:#fbbf24;font-weight:700">${escapeHtml(fmt(r.comissao_total_kz))}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+  const externos = resumo.filter(r => !r.auto_promocao);
+  const auto = resumo.filter(r => r.auto_promocao);
+  const detalheRows = linhas.length === 0
+    ? '<div style="color:#64748b;font-size:13px;padding:10px 4px">Sem pedidos com promotor no período seleccionado.</div>'
+    : `<table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="text-align:left;color:#94a3b8;border-bottom:1px solid #334155">
+          <th style="padding:6px 4px">Data</th>
+          <th style="padding:6px 4px">Turno</th>
+          <th style="padding:6px 4px">Pedido</th>
+          <th style="padding:6px 4px">Promotor</th>
+          <th style="padding:6px 4px;text-align:right">Total</th>
+          <th style="padding:6px 4px;text-align:right">Comissão</th>
+        </tr></thead>
+        <tbody>${linhas.map(l => `<tr style="border-bottom:1px solid #1e293b">
+          <td style="padding:6px 4px;color:#cbd5e1">${escapeHtml(String(l.turno_data || '').slice(0, 10))}</td>
+          <td style="padding:6px 4px;color:#94a3b8">${escapeHtml(l.turno_nome || '')}</td>
+          <td style="padding:6px 4px;color:#cbd5e1">#${l.pedido_id}${l.cliente_nome ? ` · ${escapeHtml(l.cliente_nome)}` : ''}</td>
+          <td style="padding:6px 4px;color:#e2e8f0">${escapeHtml(l.promotor_nome || '—')}${l.auto_promocao ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">operador</span>' : ''}</td>
+          <td style="padding:6px 4px;text-align:right;color:#94a3b8">${escapeHtml(fmt(l.total_pedido_kz))}</td>
+          <td style="padding:6px 4px;text-align:right;color:#fbbf24;font-weight:700">${escapeHtml(fmt(l.comissao_valor))}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  mount.innerHTML =
+    cards +
+    tabelaResumo(externos, 'Promotores externos', 'Sem promotores externos no período.') +
+    tabelaResumo(auto, 'Operadores do turno (auto-comissão)', 'Sem auto-comissão a operadores no período.') +
+    `<div class="card"><div class="card-title">Detalhe por pedido</div>${detalheRows}</div>`;
 }
 
 async function drawPerfil() {

@@ -8901,15 +8901,19 @@ async function comissoesCarregar() {
     mount.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
     return;
   }
-  const totais = data.totais || { comissao_externa: 0, comissao_operadores: 0, comissao_total: 0 };
+  const totais = data.totais || { comissao_externa: 0, comissao_operadores: 0, comissao_total: 0, comissao_a_revisar: 0, n_a_revisar: 0 };
   const resumo = data.resumo_por_promotor || [];
   const linhas = data.linhas || [];
+  const cardRevisar = totais.n_a_revisar > 0
+    ? `<div class="card" style="margin:0;border:1px solid #b45309;background:#1f1407"><div style="font-size:11px;color:#fbbf24;text-transform:uppercase;letter-spacing:.05em">⚠️ Comissão a revisar</div><div style="font-size:22px;font-weight:700;color:#fbbf24;margin-top:4px">${escapeHtml(fmt(totais.comissao_a_revisar))}</div><div style="font-size:11px;color:#fcd34d;margin-top:2px">${totais.n_a_revisar} pedido${totais.n_a_revisar === 1 ? '' : 's'} — promotor estava a trabalhar (escala + entrada). Avaliar.</div></div>`
+    : '';
   const cards = `
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px">
       <div class="card" style="margin:0"><div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em">Comissão total</div><div style="font-size:22px;font-weight:700;color:#fbbf24;margin-top:4px">${escapeHtml(fmt(totais.comissao_total))}</div></div>
       <div class="card" style="margin:0"><div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em">A promotores externos</div><div style="font-size:22px;font-weight:700;color:#4ade80;margin-top:4px">${escapeHtml(fmt(totais.comissao_externa))}</div></div>
       <div class="card" style="margin:0"><div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em">A operadores do turno</div><div style="font-size:22px;font-weight:700;color:#60a5fa;margin-top:4px">${escapeHtml(fmt(totais.comissao_operadores))}</div></div>
       <div class="card" style="margin:0"><div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em">Pedidos com promotor</div><div style="font-size:22px;font-weight:700;color:#e2e8f0;margin-top:4px">${linhas.length}</div></div>
+      ${cardRevisar}
     </div>`;
   function tabelaResumo(items, titulo, vazio) {
     if (!items.length) return `<div class="card"><div class="card-title">${titulo}</div><div style="color:#64748b;font-size:13px">${vazio}</div></div>`;
@@ -8920,17 +8924,28 @@ async function comissoesCarregar() {
           <th style="padding:6px 4px;text-align:right">Pedidos</th>
           <th style="padding:6px 4px;text-align:right">Total vendido</th>
           <th style="padding:6px 4px;text-align:right">Comissão</th>
+          <th style="padding:6px 4px;text-align:right" title="Comissão de pedidos em que o promotor estava simultaneamente com escala e presença activa.">A revisar</th>
         </tr></thead>
         <tbody>${items.map(r => `<tr style="border-bottom:1px solid #1e293b">
           <td style="padding:6px 4px;color:#e2e8f0">${escapeHtml(r.promotor_nome || '—')}</td>
           <td style="padding:6px 4px;text-align:right;color:#cbd5e1">${r.n_pedidos}</td>
           <td style="padding:6px 4px;text-align:right;color:#94a3b8">${escapeHtml(fmt(r.total_vendido_kz))}</td>
           <td style="padding:6px 4px;text-align:right;color:#fbbf24;font-weight:700">${escapeHtml(fmt(r.comissao_total_kz))}</td>
+          <td style="padding:6px 4px;text-align:right;color:${(r.comissao_a_revisar_kz || 0) > 0 ? '#fbbf24' : '#475569'}">${(r.n_a_trabalhar || 0) > 0 ? `${escapeHtml(fmt(r.comissao_a_revisar_kz || 0))} <span style="font-size:10px;color:#fcd34d">(${r.n_a_trabalhar})</span>` : '—'}</td>
         </tr>`).join('')}</tbody>
       </table></div>`;
   }
   const externos = resumo.filter(r => !r.auto_promocao);
   const auto = resumo.filter(r => r.auto_promocao);
+  function sinalEstado(l) {
+    if (l.promotor_a_trabalhar) {
+      return '<span title="Promotor tinha escala e presença de entrada no momento do pedido" style="font-size:10px;background:#422006;color:#fbbf24;padding:1px 5px;border-radius:4px;border:1px solid #b45309">⚠ a trabalhar</span>';
+    }
+    const parts = [];
+    if (l.promotor_tem_escala) parts.push('<span title="Tinha escala" style="font-size:10px;background:#1e293b;color:#94a3b8;padding:1px 5px;border-radius:4px">escala</span>');
+    if (l.promotor_clocked_in) parts.push('<span title="Tinha presença de entrada" style="font-size:10px;background:#1e293b;color:#94a3b8;padding:1px 5px;border-radius:4px">entrada</span>');
+    return parts.join(' ') || '<span style="color:#475569;font-size:10px">—</span>';
+  }
   const detalheRows = linhas.length === 0
     ? '<div style="color:#64748b;font-size:13px;padding:10px 4px">Sem pedidos com promotor no período seleccionado.</div>'
     : `<table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -8939,16 +8954,18 @@ async function comissoesCarregar() {
           <th style="padding:6px 4px">Turno</th>
           <th style="padding:6px 4px">Pedido</th>
           <th style="padding:6px 4px">Promotor</th>
+          <th style="padding:6px 4px">Estado no momento</th>
           <th style="padding:6px 4px;text-align:right">Total</th>
           <th style="padding:6px 4px;text-align:right">Comissão</th>
         </tr></thead>
-        <tbody>${linhas.map(l => `<tr style="border-bottom:1px solid #1e293b">
+        <tbody>${linhas.map(l => `<tr style="border-bottom:1px solid #1e293b;${l.promotor_a_trabalhar ? 'background:#1f1407' : ''}">
           <td style="padding:6px 4px;color:#cbd5e1">${escapeHtml(String(l.turno_data || '').slice(0, 10))}</td>
           <td style="padding:6px 4px;color:#94a3b8">${escapeHtml(l.turno_nome || '')}</td>
           <td style="padding:6px 4px;color:#cbd5e1">#${l.pedido_id}${l.cliente_nome ? ` · ${escapeHtml(l.cliente_nome)}` : ''}</td>
           <td style="padding:6px 4px;color:#e2e8f0">${escapeHtml(l.promotor_nome || '—')}${l.auto_promocao ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">operador</span>' : ''}</td>
+          <td style="padding:6px 4px">${sinalEstado(l)}</td>
           <td style="padding:6px 4px;text-align:right;color:#94a3b8">${escapeHtml(fmt(l.total_pedido_kz))}</td>
-          <td style="padding:6px 4px;text-align:right;color:#fbbf24;font-weight:700">${escapeHtml(fmt(l.comissao_valor))}</td>
+          <td style="padding:6px 4px;text-align:right;color:${l.promotor_a_trabalhar ? '#fbbf24' : '#fbbf24'};font-weight:700">${escapeHtml(fmt(l.comissao_valor))}</td>
         </tr>`).join('')}</tbody>
       </table>`;
   mount.innerHTML =

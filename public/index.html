@@ -3404,7 +3404,9 @@ function pedidoBalcaoBuildTalaoEscPos(pedido) {
       const pp = parseFloat(ln.preco_copos_pacote) || 0;
       sub = precoVendaCopos(copos, u, n, pp);
       qtyLabel = `${copos}x`;
-      nUnits = copos;
+      // Cada «unidade» de uma bebida com pacote = n copos por dentro,
+      // logo o nº de caixas a riscar é copos × n (caixa por copo entregue).
+      nUnits = n >= 2 ? copos * n : copos;
       unitLine =
         n >= 2 && pp > 0
           ? `  pac.${n}=${fmt(pp)} | un.${fmt(u)}`

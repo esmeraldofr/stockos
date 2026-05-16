@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-16-print-toast">
+<html lang="pt" data-stockos-ui="2026-05-16-print-auto">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3861,6 +3861,42 @@ async function registarPedidoBalcao(turnoId) {
   const idsAntes = new Set(
     (window.__stockosPedidosBalcao || []).map((p) => String(p.id))
   );
+
+  // ⚡ Imprimir ANTES do await para preservar o gesto do utilizador
+  // (a Web Share API exige user activation activa e perde-se após await).
+  if (pedidoBalcaoAutoPrintEnabled()) {
+    const catalog = window.__pedidoProdutosOpts || [];
+    const map = {};
+    catalog.forEach((o) => { map[String(o.id)] = o; });
+    const linhasTalao = linhas.map((ln) => {
+      const o = map[String(ln.produto_id)] || {};
+      return {
+        produto_nome: o.nome || 'Item',
+        quantidade: ln.quantidade,
+        preco: o.preco,
+        venda_por_copo: o.venda_por_copo,
+        kg_por_copo: o.kg_por_copo,
+        qtd_copos_pacote: o.qtd_copos_pacote,
+        preco_copos_pacote: o.preco_copos_pacote
+      };
+    });
+    const proximoId = (window.__stockosPedidosBalcao || [])
+      .reduce((m, p) => Math.max(m, Number(p.id) || 0), 0) + 1;
+    const pedidoPreview = {
+      id: proximoId,
+      cliente_nome: cliente,
+      tipo_pagamento: tipoPag,
+      com_entrega: comEntrega,
+      criado_em: new Date().toISOString(),
+      linhas: linhasTalao
+    };
+    try {
+      pedidoBalcaoImprimirTalao(pedidoPreview);
+    } catch (e) {
+      console.warn('Auto-print falhou:', e);
+    }
+  }
+
   await api('POST', `/turnos/${tid}/pedidos`, {
     cliente_nome: cliente,
     tipo_pagamento: tipoPag,
@@ -3870,22 +3906,6 @@ async function registarPedidoBalcao(turnoId) {
   window.__pedidoBalcaoDraft = {};
   window.__pedidoBalcaoDraftTurnoId = tid;
   await loadVendasMenu(tid, !!S.turnoCanEdit);
-  if (pedidoBalcaoAutoPrintEnabled()) {
-    const lista = window.__stockosPedidosBalcao || [];
-    const novo = lista
-      .filter((p) => !idsAntes.has(String(p.id)))
-      .sort(
-        (a, b) =>
-          (Number(b.id) || 0) - (Number(a.id) || 0)
-      )[0];
-    if (novo) {
-      try {
-        pedidoBalcaoImprimirTalao(novo);
-      } catch (e) {
-        console.warn('Auto-print falhou:', e);
-      }
-    }
-  }
 }
 
 async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {

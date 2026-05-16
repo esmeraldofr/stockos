@@ -5158,6 +5158,18 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
              u.nome AS promotor_nome,
              op.nome AS operador_nome,
              t.data AS turno_data, t.nome AS turno_nome,
+             EXISTS (
+               SELECT 1 FROM escala e
+               WHERE e.data = t.data AND e.turno = t.nome
+                 AND e.utilizador_id = tp.promotor_id::text
+             ) AS promotor_tem_escala,
+             (
+               SELECT pr.tipo FROM presencas pr
+               WHERE pr.utilizador_id = tp.promotor_id
+                 AND pr.criado_em <= tp.criado_em
+               ORDER BY pr.criado_em DESC
+               LIMIT 1
+             ) = 'entrada' AS promotor_clocked_in,
              (SELECT COALESCE(SUM(
                 CASE WHEN p.venda_por_copo = TRUE AND p.kg_por_copo > 0 THEN
                   CASE WHEN COALESCE(p.qtd_copos_pacote,0) >= 2 AND COALESCE(p.preco_copos_pacote,0) > 0
@@ -5179,6 +5191,9 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
     const r = await query(sql, params);
     const linhas = r.rows.map(row => {
       const auto = row.promotor_id && row.operador_id && row.promotor_id === row.operador_id;
+      const temEscala = row.promotor_tem_escala === true;
+      const clockedIn = row.promotor_clocked_in === true;
+      const aTrabalhar = temEscala && clockedIn;
       return {
         pedido_id: row.pedido_id,
         turno_id: row.turno_id,
@@ -5195,7 +5210,10 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
         total_pedido_kz: parseFloat(row.total_pedido_kz) || 0,
         comissao_valor: parseFloat(row.comissao_valor) || 0,
         comissao_valor_potencial: parseFloat(row.comissao_valor_potencial) || 0,
-        auto_promocao: !!auto
+        auto_promocao: !!auto,
+        promotor_tem_escala: temEscala,
+        promotor_clocked_in: clockedIn,
+        promotor_a_trabalhar: aTrabalhar
       };
     });
     const map = new Map();
@@ -5208,13 +5226,19 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
           auto_promocao: l.auto_promocao,
           n_pedidos: 0,
           total_vendido_kz: 0,
-          comissao_total_kz: 0
+          comissao_total_kz: 0,
+          comissao_a_revisar_kz: 0,
+          n_a_trabalhar: 0
         });
       }
       const a = map.get(key);
       a.n_pedidos += 1;
       a.total_vendido_kz += l.total_pedido_kz;
       a.comissao_total_kz += l.comissao_valor;
+      if (l.promotor_a_trabalhar) {
+        a.comissao_a_revisar_kz += l.comissao_valor;
+        a.n_a_trabalhar += 1;
+      }
     }
     const resumo = [...map.values()].sort((a, b) => b.comissao_total_kz - a.comissao_total_kz);
     res.json({
@@ -5223,7 +5247,9 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
       totais: {
         comissao_externa: resumo.filter(x => !x.auto_promocao).reduce((s, x) => s + x.comissao_total_kz, 0),
         comissao_operadores: resumo.filter(x => x.auto_promocao).reduce((s, x) => s + x.comissao_total_kz, 0),
-        comissao_total: resumo.reduce((s, x) => s + x.comissao_total_kz, 0)
+        comissao_total: resumo.reduce((s, x) => s + x.comissao_total_kz, 0),
+        comissao_a_revisar: linhas.filter(l => l.promotor_a_trabalhar).reduce((s, l) => s + l.comissao_valor, 0),
+        n_a_revisar: linhas.filter(l => l.promotor_a_trabalhar).length
       }
     });
   } catch (e) {

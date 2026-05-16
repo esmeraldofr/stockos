@@ -3383,7 +3383,13 @@ function pedidoBalcaoBuildTalaoEscPos(pedido) {
     }
     total += sub;
     body += wrapName(qtyLabel, nome);
-    body += padR(unitLine, fmt(sub)) + '\n';
+    const subFmt = fmt(sub);
+    if (fold(unitLine).length + 1 + fold(subFmt).length > W) {
+      body += fold(unitLine) + '\n';
+      body += padR('', subFmt) + '\n';
+    } else {
+      body += padR(unitLine, subFmt) + '\n';
+    }
   }
 
   const cliente = String(pedido.cliente_nome || '').trim();

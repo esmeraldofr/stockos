@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-15-print-help">
+<html lang="pt" data-stockos-ui="2026-05-16-print-share">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3311,6 +3311,23 @@ function pedidoBalcaoToggleAutoPrint(el) {
   pedidoBalcaoSetAutoPrint(!!el.checked);
 }
 
+/** Métodos de impressão suportados: 'rawbt' | 'share' | 'download'. */
+function pedidoBalcaoPrintMethod() {
+  try {
+    const v = localStorage.getItem('stockos.pedidoPrintMethod');
+    if (v === 'rawbt' || v === 'share' || v === 'download') return v;
+  } catch (_) {}
+  return 'share';
+}
+function pedidoBalcaoSetPrintMethod(m) {
+  if (m !== 'rawbt' && m !== 'share' && m !== 'download') return;
+  try { localStorage.setItem('stockos.pedidoPrintMethod', m); } catch (_) {}
+}
+function pedidoBalcaoOnChangePrintMethod(el) {
+  if (!el) return;
+  pedidoBalcaoSetPrintMethod(el.value);
+}
+
 function pedidoBalcaoAsciiFold(s) {
   return String(s == null ? '' : s)
     .normalize('NFD')
@@ -3439,12 +3456,26 @@ function pedidoBalcaoB64Latin1(s) {
   }
 }
 
+/** Converte string ESC/POS (com chars 0x00-0xFF) num Uint8Array de bytes. */
+function pedidoBalcaoEscPosBytes(s) {
+  const arr = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) arr[i] = s.charCodeAt(i) & 0xff;
+  return arr;
+}
+
 function pedidoBalcaoImprimirTalao(pedido) {
   if (!pedido) return false;
   if (!pedidoBalcaoIsAndroid()) {
-    pedidoBalcaoMostrarAjudaImpressao('Esta funcionalidade só está disponível no Android (com a app RawBT). No iPhone/iPad, usa o botão «Fatura» que abre a vista para imprimir.');
+    pedidoBalcaoMostrarAjudaImpressao('Esta funcionalidade só está disponível no Android. No iPhone/iPad, usa o botão «Fatura» que abre a vista para imprimir.');
     return false;
   }
+  const method = pedidoBalcaoPrintMethod();
+  if (method === 'rawbt') return pedidoBalcaoImprimirRawBT(pedido);
+  if (method === 'download') return pedidoBalcaoImprimirDownload(pedido);
+  return pedidoBalcaoImprimirShare(pedido);
+}
+
+function pedidoBalcaoImprimirRawBT(pedido) {
   const text = pedidoBalcaoBuildTalaoEscPos(pedido);
   const b64 = pedidoBalcaoB64Latin1(text);
   if (!b64) return false;
@@ -3463,13 +3494,46 @@ function pedidoBalcaoImprimirTalao(pedido) {
   } catch (_) {
     try { window.location.href = url; } catch (__) {}
   }
-  // Se ao fim de 1.5s a página continua visível, RawBT provavelmente não abriu.
   setTimeout(() => {
     document.removeEventListener('visibilitychange', onVis);
     if (!pageHidden && document.visibilityState === 'visible') {
       pedidoBalcaoMostrarAjudaImpressao();
     }
   }, 1500);
+  return true;
+}
+
+async function pedidoBalcaoImprimirShare(pedido) {
+  const text = pedidoBalcaoBuildTalaoEscPos(pedido);
+  const bytes = pedidoBalcaoEscPosBytes(text);
+  const filename = `talao-${pedido.id || 'novo'}.bin`;
+  try {
+    if (typeof File !== 'undefined' && navigator.canShare) {
+      const file = new File([bytes], filename, { type: 'application/octet-stream' });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Talão' });
+        return true;
+      }
+    }
+  } catch (e) {
+    // Utilizador cancelou ou erro — cai para download
+    if (e && e.name === 'AbortError') return true;
+  }
+  return pedidoBalcaoImprimirDownload(pedido);
+}
+
+function pedidoBalcaoImprimirDownload(pedido) {
+  const text = pedidoBalcaoBuildTalaoEscPos(pedido);
+  const bytes = pedidoBalcaoEscPosBytes(text);
+  const blob = new Blob([bytes], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `talao-${pedido.id || 'novo'}.bin`;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
   return true;
 }
 
@@ -3481,26 +3545,37 @@ function pedidoBalcaoMostrarAjudaImpressao(msgExtra) {
   div.className = 'modal-overlay';
   div.style.zIndex = '300';
   div.innerHTML = `
-    <div class="modal" style="max-width:min(480px,94vw)">
+    <div class="modal" style="max-width:min(520px,94vw)">
       <div class="modal-header">
         <div class="modal-title">🖨️ Configurar impressora térmica</div>
         <button type="button" class="modal-close" onclick="document.getElementById('pedido-print-help-modal').remove()" aria-label="Fechar">×</button>
       </div>
-      <div style="padding:0 4px;font-size:13px;color:#cbd5e1;line-height:1.5">
-        ${msgExtra ? `<div class="alert alert-error" style="margin-bottom:12px">${escapeHtml(msgExtra)}</div>` : `<div class="alert alert-error" style="margin-bottom:12px">O navegador não consegue falar directamente com a impressora Bluetooth. É preciso uma app intermediária — a RawBT (gratuita).</div>`}
-        <p style="margin:0 0 8px"><strong>Como configurar (uma vez):</strong></p>
-        <ol style="margin:0 0 12px;padding-left:20px;line-height:1.7">
-          <li>Liga a impressora e empareha-a no <strong>Bluetooth do Android</strong> (Definições → Bluetooth → emparelhar)</li>
-          <li>Instala a app <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:#60a5fa">RawBT (Play Store)</a></li>
-          <li>Abre a RawBT → <em>Settings → Connection method</em> → escolhe <strong>Bluetooth</strong> e selecciona a tua impressora</li>
-          <li>Volta ao StockOS e clica em «🖨️ Talão» novamente</li>
-        </ol>
-        <div style="font-size:11px;color:#94a3b8;padding:8px 10px;background:#0f172a;border-radius:6px;border:1px solid #1e293b">
-          Funciona com impressoras térmicas de 58 mm (e maiores). Se já tens RawBT instalada e mesmo assim não imprime, abre a RawBT manualmente e confirma que a impressora está conectada.
+      <div style="padding:0 4px;font-size:13px;color:#cbd5e1;line-height:1.5;max-height:70vh;overflow-y:auto">
+        ${msgExtra ? `<div class="alert alert-error" style="margin-bottom:12px">${escapeHtml(msgExtra)}</div>` : `<div class="alert" style="margin-bottom:12px;background:#1e293b;border:1px solid #334155;color:#cbd5e1">O navegador não fala directamente com a impressora Bluetooth. Escolhe um dos métodos abaixo conforme a app que tens instalada.</div>`}
+        <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px">
+          <div style="padding:10px 12px;background:#0f172a;border:1px solid #1e293b;border-radius:8px">
+            <div style="font-weight:600;color:#e2e8f0;margin-bottom:4px">📤 Partilhar (recomendado)</div>
+            <div style="font-size:12px;color:#94a3b8;line-height:1.5">Abre o menu de partilha do Android e escolhes a app de impressão (POS Printer, ESC POS Printer, etc.). Funciona com qualquer app que aceite ficheiros .bin de ESC/POS.</div>
+          </div>
+          <div style="padding:10px 12px;background:#0f172a;border:1px solid #1e293b;border-radius:8px">
+            <div style="font-weight:600;color:#e2e8f0;margin-bottom:4px">⚡ RawBT (link directo)</div>
+            <div style="font-size:12px;color:#94a3b8;line-height:1.5">Envia directamente para a app <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:#60a5fa">RawBT</a> (gratuita) sem passar pelo menu Partilhar. Mais rápido, mas só funciona com a RawBT.</div>
+          </div>
+          <div style="padding:10px 12px;background:#0f172a;border:1px solid #1e293b;border-radius:8px">
+            <div style="font-weight:600;color:#e2e8f0;margin-bottom:4px">💾 Transferir ficheiro .bin</div>
+            <div style="font-size:12px;color:#94a3b8;line-height:1.5">Descarrega o talão para o telemóvel. Depois abres com a app de impressão. Útil como último recurso.</div>
+          </div>
         </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
-          <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="text-decoration:none">Instalar RawBT</a>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('pedido-print-help-modal').remove()">Fechar</button>
+        <p style="margin:0 0 6px;color:#cbd5e1"><strong>Antes de imprimir (qualquer método):</strong></p>
+        <ol style="margin:0 0 12px;padding-left:20px;line-height:1.7;color:#cbd5e1">
+          <li>Liga a impressora e empareha-a no <strong>Bluetooth do Android</strong></li>
+          <li>Abre a app de impressão (RawBT / POS Printer / outra) e configura a tua impressora dentro dela</li>
+          <li>Selecciona o método correspondente no menu acima e clica em «🖨️ Talão»</li>
+        </ol>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">
+          <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none">RawBT</a>
+          <a href="https://play.google.com/store/search?q=pos%20printer%20escpos&c=apps" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none">Procurar POS Printer</a>
+          <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('pedido-print-help-modal').remove()">Fechar</button>
         </div>
       </div>
     </div>`;
@@ -3837,11 +3912,18 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <input type="checkbox" id="pedido-auto-print" ${
             pedidoBalcaoAutoPrintEnabled() ? 'checked' : ''
           } onchange="pedidoBalcaoToggleAutoPrint(this)" style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer"/>
-          <span>🖨️ Imprimir talão automaticamente (RawBT · Bluetooth)</span>
+          <span>🖨️ Imprimir talão automaticamente</span>
         </label>
-        <div style="margin:-4px 0 10px;font-size:11px;color:#94a3b8">
-          A impressão térmica precisa da app <strong>RawBT</strong> no Android com a impressora emparelhada.
-          <a href="#" onclick="event.preventDefault();pedidoBalcaoMostrarAjudaImpressao()" style="color:#60a5fa">ⓘ Como configurar</a>
+        <div style="margin:-4px 0 10px;display:flex;flex-direction:column;gap:4px">
+          <label style="font-size:11px;color:#94a3b8">Método de impressão</label>
+          <select onchange="pedidoBalcaoOnChangePrintMethod(this)" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:6px;padding:6px 8px;font-size:12px">
+            <option value="share" ${pedidoBalcaoPrintMethod() === 'share' ? 'selected' : ''}>Partilhar (POS Printer, ESC POS, etc.)</option>
+            <option value="rawbt" ${pedidoBalcaoPrintMethod() === 'rawbt' ? 'selected' : ''}>RawBT (link directo)</option>
+            <option value="download" ${pedidoBalcaoPrintMethod() === 'download' ? 'selected' : ''}>Transferir ficheiro .bin</option>
+          </select>
+          <span style="font-size:11px;color:#94a3b8">
+            <a href="#" onclick="event.preventDefault();pedidoBalcaoMostrarAjudaImpressao()" style="color:#60a5fa">ⓘ Como configurar</a>
+          </span>
         </div>
         <details style="margin-bottom:12px;font-size:12px;color:#cbd5e1" ${
           pedidoBalcaoLogoGetPreview() ? '' : ''
@@ -3899,7 +3981,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         <div style="font-size:13px;color:#94a3b8;margin-top:4px">Total <strong style="color:#4ade80">${tot}</strong></div>
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
-        <button type="button" class="btn btn-ghost btn-sm" onclick="pedidoBalcaoImprimirTalaoPorId(${p.id})" title="Imprimir talão na impressora térmica (RawBT)">🖨️ Talão</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="pedidoBalcaoImprimirTalaoPorId(${p.id})" title="Imprimir talão na impressora térmica (Bluetooth)">🖨️ Talão</button>
         <button type="button" class="btn btn-ghost btn-sm" onclick="imprimirFaturaPedidoPorId(${p.id})">Fatura</button>
       </div>
     </div>`;

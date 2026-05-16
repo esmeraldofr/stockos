@@ -3820,10 +3820,12 @@ async function pedidoBalcaoLoadPromotores() {
   const sel = document.getElementById('pedido-promotor');
   if (!sel) return;
   const current = sel.value;
-  const opts = ['<option value="">— Sem promotor —</option>']
+  const opts = ['<option value="__unset__" disabled hidden>— Escolher —</option>',
+                '<option value="">— Sem promotor —</option>']
     .concat((window.__promotoresList || []).map((p) => `<option value="${escapeHtml(String(p.id))}">${escapeHtml(p.nome)}${p.comissao_modo === 'total' ? ` · ${(parseFloat(p.comissao_pct_total) || 0).toFixed(1)}% total` : ' · % produto'}</option>`));
   sel.innerHTML = opts.join('');
   if (current) sel.value = current;
+  else sel.value = '__unset__';
   pedidoBalcaoRefreshComissao();
 }
 
@@ -3840,10 +3842,22 @@ async function registarPedidoBalcao(turnoId) {
     return;
   }
   const cliente = document.getElementById('pedido-cliente-nome')?.value || '';
-  const tipoPag =
-    document.getElementById('pedido-tipo-pagamento')?.value || 'dinheiro';
+  const tipoPagEl = document.getElementById('pedido-tipo-pagamento');
+  const tipoPag = tipoPagEl?.value || '';
+  if (!tipoPag) {
+    alert('Escolha o tipo de pagamento antes de registar o pedido.');
+    tipoPagEl?.focus();
+    return;
+  }
   const comEntrega = !!document.getElementById('pedido-com-entrega')?.checked;
-  const promotorId = document.getElementById('pedido-promotor')?.value || '';
+  const promotorSel = document.getElementById('pedido-promotor');
+  const promotorRaw = promotorSel?.value;
+  if (promotorRaw === '__unset__' || typeof promotorRaw === 'undefined') {
+    alert('Indique o promotor (ou seleccione «Sem promotor») antes de registar o pedido.');
+    promotorSel?.focus();
+    return;
+  }
+  const promotorId = promotorRaw || '';
   const tid = String(turnoId);
   const idsAntes = new Set(
     (window.__stockosPedidosBalcao || []).map((p) => String(p.id))
@@ -3962,9 +3976,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px"/>
         </div>
         <div class="field" style="margin-bottom:8px">
-          <label style="font-size:11px;color:#94a3b8">Tipo de pagamento</label>
-          <select id="pedido-tipo-pagamento"
+          <label style="font-size:11px;color:#94a3b8">Tipo de pagamento <span style="color:#ef4444">*</span></label>
+          <select id="pedido-tipo-pagamento" required
             style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px;cursor:pointer">
+            <option value="" disabled selected hidden>— Escolher —</option>
             <option value="dinheiro">Dinheiro</option>
             <option value="tpa">TPA / cartão</option>
             <option value="transferencia">Transferência</option>
@@ -3973,9 +3988,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           </select>
         </div>
         <div class="field" style="margin-bottom:8px">
-          <label style="font-size:11px;color:#94a3b8">Promotor (opcional)</label>
-          <select id="pedido-promotor" onchange="pedidoBalcaoRefreshComissao()"
+          <label style="font-size:11px;color:#94a3b8">Promotor <span style="color:#ef4444">*</span></label>
+          <select id="pedido-promotor" required onchange="pedidoBalcaoRefreshComissao()"
             style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px;cursor:pointer">
+            <option value="__unset__" disabled selected hidden>— Escolher —</option>
             <option value="">— Sem promotor —</option>
           </select>
           <div id="pedido-comissao-info" style="margin-top:6px;font-size:12px;color:#94a3b8;padding:6px 10px;border:1px dashed #334155;border-radius:8px;background:#0b1322">

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-16-print-rawbt-only">
+<html lang="pt" data-stockos-ui="2026-05-16-print-silent">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3460,9 +3460,6 @@ function pedidoBalcaoImprimirRawBT(pedido) {
   const b64 = pedidoBalcaoB64Latin1(text);
   if (!b64) return false;
   const url = `rawbt:base64,${b64}`;
-  let pageHidden = false;
-  const onVis = () => { if (document.visibilityState === 'hidden') pageHidden = true; };
-  document.addEventListener('visibilitychange', onVis);
   try {
     const a = document.createElement('a');
     a.href = url;
@@ -3474,12 +3471,6 @@ function pedidoBalcaoImprimirRawBT(pedido) {
   } catch (_) {
     try { window.location.href = url; } catch (__) {}
   }
-  setTimeout(() => {
-    document.removeEventListener('visibilitychange', onVis);
-    if (!pageHidden && document.visibilityState === 'visible') {
-      pedidoBalcaoMostrarAjudaImpressao();
-    }
-  }, 1500);
   return true;
 }
 

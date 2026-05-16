@@ -3322,24 +3322,36 @@ function pedidoBalcaoAsciiFold(s) {
     .replace(/[^\x20-\x7E\n]/g, '?');
 }
 
-/** Imprime N caixas \u00ab[ ]\u00bb para riscar \u00e0 medida que entrega cada unidade. */
+/**
+ * Imprime N caixas hollow (CP437 box-drawing) para riscar \u00e0 medida que entrega
+ * cada unidade. Cada caixa ocupa 3 chars \u00d7 3 linhas:
+ *   \u250c\u2500\u2510
+ *   \u2502 \u2502
+ *   \u2514\u2500\u2518
+ * Os bytes n\u00e3o passam pelo ASCII fold porque o output \u00e9 concatenado directamente
+ * ao body e enviado em Latin-1 \u2192 ESC/POS interpreta como CP437.
+ */
 function pedidoBalcaoCaixasEntrega(n, w) {
   const W = w || 32;
   const INDENT = '  ';
-  const BOX = '[ ]';
+  // CP437: 0xDA=\u250c 0xC4=\u2500 0xBF=\u2510 0xB3=\u2502 0xC0=\u2514 0xD9=\u2518
+  const TOP = '\xDA\xC4\xBF';
+  const MID = '\xB3 \xB3';
+  const BOT = '\xC0\xC4\xD9';
+  const BOX_W = 3;
   const SEP = ' ';
+  const available = W - INDENT.length;
+  const perRow = Math.max(1, Math.floor((available + SEP.length) / (BOX_W + SEP.length)));
   const lines = [];
-  let cur = INDENT + BOX;
-  for (let i = 1; i < n; i++) {
-    const nxt = cur + SEP + BOX;
-    if (nxt.length > W) {
-      lines.push(cur);
-      cur = INDENT + BOX;
-    } else {
-      cur = nxt;
-    }
+  for (let i = 0; i < n; i += perRow) {
+    const count = Math.min(perRow, n - i);
+    const tops = Array(count).fill(TOP).join(SEP);
+    const mids = Array(count).fill(MID).join(SEP);
+    const bots = Array(count).fill(BOT).join(SEP);
+    lines.push(INDENT + tops);
+    lines.push(INDENT + mids);
+    lines.push(INDENT + bots);
   }
-  lines.push(cur);
   return lines.join('\n');
 }
 
@@ -3434,6 +3446,7 @@ function pedidoBalcaoBuildTalaoEscPos(pedido) {
 
   let out = '';
   out += ESC + '@';
+  out += ESC + 't' + '\x00'; // codepage CP437 (para os chars de desenho ┌─┐│└─┘)
   out += ESC + 'a' + '\x01';
   const logoBin = pedidoBalcaoLogoGetEscPos();
   if (logoBin) {

@@ -2379,7 +2379,8 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
       venda_por_copo,
       kg_por_copo,
       preco_copos_pacote,
-      qtd_copos_pacote
+      qtd_copos_pacote,
+      comissao_pct
     } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
@@ -2392,9 +2393,10 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
     const kgc = parseFloat(kg_por_copo) || 0;
     const pcp = parseFloat(preco_copos_pacote) || 0;
     const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
+    const cpct = Math.max(0, Math.min(100, parseFloat(comissao_pct) || 0));
     const r = await query(
-      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel,comissao_pct)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [
         nome,
         preco || 0,
@@ -2407,7 +2409,8 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
         kgc,
         pcp,
         qcp,
-        vendavelFinal
+        vendavelFinal,
+        cpct
       ]
     );
     const row = r.rows[0];
@@ -2437,7 +2440,8 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
       venda_por_copo,
       kg_por_copo,
       preco_copos_pacote,
-      qtd_copos_pacote
+      qtd_copos_pacote,
+      comissao_pct
     } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const noTurno =
@@ -2450,11 +2454,15 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
     const kgc = parseFloat(kg_por_copo) || 0;
     const pcp = parseFloat(preco_copos_pacote) || 0;
     const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
+    const cpct = comissao_pct === undefined || comissao_pct === null
+      ? undefined
+      : Math.max(0, Math.min(100, parseFloat(comissao_pct) || 0));
     const r =
       noTurno === undefined
         ? await query(
             `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
-             venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11,vendavel=$12 WHERE id=$13 RETURNING *`,
+             venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11,vendavel=$12,
+             comissao_pct=COALESCE($13, comissao_pct) WHERE id=$14 RETURNING *`,
             [
               nome,
               preco,
@@ -2468,12 +2476,14 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               pcp,
               qcp,
               vendavelFinal,
+              cpct === undefined ? null : cpct,
               req.params.id
             ]
           )
         : await query(
             `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
-             venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12,vendavel=$13 WHERE id=$14 RETURNING *`,
+             venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12,vendavel=$13,
+             comissao_pct=COALESCE($14, comissao_pct) WHERE id=$15 RETURNING *`,
             [
               nome,
               preco,
@@ -2488,6 +2498,7 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               pcp,
               qcp,
               vendavelFinal,
+              cpct === undefined ? null : cpct,
               req.params.id
             ]
           );
@@ -4880,10 +4891,15 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
     const turnoId = req.params.id;
     const r = await query(
       `SELECT tp.id, tp.turno_id, tp.cliente_nome, tp.tipo_pagamento, tp.com_entrega, tp.criado_em,
+              tp.promotor_id, tp.promotor_modo, tp.promotor_pct_total, tp.operador_id,
+              COALESCE(tp.comissao_valor,0) AS comissao_valor,
+              COALESCE(tp.comissao_valor_potencial,0) AS comissao_valor_potencial,
+              u.nome AS promotor_nome,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
-              p.preco_copos_pacote, p.qtd_copos_pacote
+              p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct
        FROM turno_pedidos tp
+       LEFT JOIN utilizadores u ON u.id = tp.promotor_id
        LEFT JOIN turno_pedido_linhas tpl ON tpl.pedido_id = tp.id
        LEFT JOIN produtos p ON p.id = tpl.produto_id
        WHERE tp.turno_id = $1
@@ -4900,6 +4916,13 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
           tipo_pagamento: row.tipo_pagamento || 'dinheiro',
           com_entrega: row.com_entrega === true || row.com_entrega === 't',
           criado_em: row.criado_em,
+          promotor_id: row.promotor_id || null,
+          promotor_nome: row.promotor_nome || null,
+          promotor_modo: row.promotor_modo || null,
+          promotor_pct_total: row.promotor_pct_total == null ? null : parseFloat(row.promotor_pct_total),
+          operador_id: row.operador_id || null,
+          comissao_valor: parseFloat(row.comissao_valor) || 0,
+          comissao_valor_potencial: parseFloat(row.comissao_valor_potencial) || 0,
           linhas: []
         });
       }
@@ -4912,7 +4935,8 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
           venda_por_copo: row.venda_por_copo,
           kg_por_copo: parseFloat(row.kg_por_copo) || 0,
           preco_copos_pacote: parseFloat(row.preco_copos_pacote) || 0,
-          qtd_copos_pacote: parseInt(row.qtd_copos_pacote, 10) || 0
+          qtd_copos_pacote: parseInt(row.qtd_copos_pacote, 10) || 0,
+          comissao_pct: parseFloat(row.comissao_pct) || 0
         });
       }
     }
@@ -4939,13 +4963,25 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
   }
 });
 
+function calcLinhaSubtotal(preco, quantidade, vendaPorCopo, kgPorCopo, qtdCoposPacote, precoCoposPacote) {
+  const copo = vendaPorCopo === true && parseFloat(kgPorCopo) > 0;
+  if (copo) {
+    const c = Math.floor(parseFloat(quantidade) || 0);
+    const u = parseFloat(preco) || 0;
+    const n = parseInt(qtdCoposPacote, 10) || 0;
+    const p = parseFloat(precoCoposPacote) || 0;
+    return n >= 2 && p > 0 ? Math.floor(c / n) * p + (c % n) * u : c * u;
+  }
+  return (parseFloat(quantidade) || 0) * (parseFloat(preco) || 0);
+}
+
 app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
   const client = await pool.connect();
   try {
     await ensureTurnoPedidos();
     await client.query('BEGIN');
     const turnoId = parseInt(req.params.id, 10);
-    const { cliente_nome, linhas, tipo_pagamento, com_entrega } = req.body;
+    const { cliente_nome, linhas, tipo_pagamento, com_entrega, promotor_id } = req.body;
     const tCheck = await client.query(`SELECT id, estado FROM turnos WHERE id=$1`, [turnoId]);
     if (!tCheck.rows.length) {
       await client.query('ROLLBACK');
@@ -4992,9 +5028,65 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
       String(com_entrega || '').toLowerCase() === 'true' ||
       String(com_entrega || '').toLowerCase() === 'on' ||
       String(com_entrega || '').toLowerCase() === 'sim';
+
+    let promotor = null;
+    if (promotor_id) {
+      const pr = await client.query(
+        `SELECT id, nome, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total
+         FROM utilizadores WHERE id=$1 AND ativo=true AND promotor=true`,
+        [promotor_id]
+      );
+      if (!pr.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ erro: 'Promotor inválido ou inactivo.' });
+      }
+      promotor = pr.rows[0];
+    }
+
+    let totalPedido = 0;
+    let comissaoPotencial = 0;
+    for (const line of normalized) {
+      const pr = await client.query(
+        `SELECT preco, venda_por_copo, kg_por_copo, qtd_copos_pacote, preco_copos_pacote, COALESCE(comissao_pct,0) AS comissao_pct
+         FROM produtos WHERE id=$1`,
+        [line.produto_id]
+      );
+      const p = pr.rows[0];
+      const sub = calcLinhaSubtotal(p.preco, line.quantidade, p.venda_por_copo, p.kg_por_copo, p.qtd_copos_pacote, p.preco_copos_pacote);
+      totalPedido += sub;
+      comissaoPotencial += sub * (parseFloat(p.comissao_pct) || 0) / 100;
+      line._subtotal = sub;
+      line._comissao_pct = parseFloat(p.comissao_pct) || 0;
+    }
+
+    let comissaoValor = 0;
+    let promotorModo = null;
+    let promotorPct = null;
+    if (promotor) {
+      promotorModo = promotor.comissao_modo === 'total' ? 'total' : 'produto';
+      if (promotorModo === 'total') {
+        promotorPct = parseFloat(promotor.comissao_pct_total) || 0;
+        comissaoValor = totalPedido * promotorPct / 100;
+      } else {
+        comissaoValor = comissaoPotencial;
+      }
+    }
+
     const pedidoIns = await client.query(
-      `INSERT INTO turno_pedidos (turno_id, cliente_nome, tipo_pagamento, com_entrega) VALUES ($1, $2, $3, $4) RETURNING id, criado_em`,
-      [turnoId, String(cliente_nome || '').trim().slice(0, 200), tpag, comEntrega]
+      `INSERT INTO turno_pedidos (turno_id, cliente_nome, tipo_pagamento, com_entrega, promotor_id, promotor_modo, promotor_pct_total, comissao_valor, comissao_valor_potencial, operador_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, criado_em`,
+      [
+        turnoId,
+        String(cliente_nome || '').trim().slice(0, 200),
+        tpag,
+        comEntrega,
+        promotor ? promotor.id : null,
+        promotorModo,
+        promotorPct,
+        Math.round(comissaoValor * 100) / 100,
+        Math.round(comissaoPotencial * 100) / 100,
+        req.user && req.user.id ? req.user.id : null
+      ]
     );
     const pedidoId = pedidoIns.rows[0].id;
     for (const line of normalized) {
@@ -5010,12 +5102,132 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
       await applyTurnoVendaQuantity(client, turnoId, line.produto_id, oldQ + line.quantidade);
     }
     await client.query('COMMIT');
-    res.json({ id: pedidoId, sucesso: true });
+    res.json({
+      id: pedidoId,
+      sucesso: true,
+      total_kz: Math.round(totalPedido * 100) / 100,
+      comissao_valor: Math.round(comissaoValor * 100) / 100,
+      comissao_valor_potencial: Math.round(comissaoPotencial * 100) / 100
+    });
   } catch (e) {
     await client.query('ROLLBACK');
     res.status(500).json({ erro: e.message });
   } finally {
     client.release();
+  }
+});
+
+/**
+ * Relatório de comissões.
+ * Filtros (query):
+ *   - turno_id: limita a um turno específico
+ *   - data_de, data_ate: YYYY-MM-DD (intervalo inclusivo) — usa turnos.data
+ *   - promotor_id: limita a um promotor específico
+ * Retorna:
+ *   - linhas (1 por pedido com promotor),
+ *   - resumo_por_promotor (agregação),
+ *   - separação operador-vs-externo (auto-promoção do operador).
+ */
+app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) => {
+  try {
+    await ensureTurnoPedidos();
+    const params = [];
+    const where = ['tp.promotor_id IS NOT NULL'];
+    if (req.query.turno_id) {
+      params.push(parseInt(req.query.turno_id, 10));
+      where.push(`tp.turno_id = $${params.length}`);
+    }
+    if (req.query.data_de) {
+      params.push(req.query.data_de);
+      where.push(`t.data >= $${params.length}::date`);
+    }
+    if (req.query.data_ate) {
+      params.push(req.query.data_ate);
+      where.push(`t.data <= $${params.length}::date`);
+    }
+    if (req.query.promotor_id) {
+      params.push(req.query.promotor_id);
+      where.push(`tp.promotor_id = $${params.length}`);
+    }
+    const sql = `
+      SELECT tp.id AS pedido_id, tp.turno_id, tp.cliente_nome, tp.criado_em,
+             tp.promotor_id, tp.promotor_modo, tp.promotor_pct_total,
+             COALESCE(tp.comissao_valor,0) AS comissao_valor,
+             COALESCE(tp.comissao_valor_potencial,0) AS comissao_valor_potencial,
+             tp.operador_id,
+             u.nome AS promotor_nome,
+             op.nome AS operador_nome,
+             t.data AS turno_data, t.nome AS turno_nome,
+             (SELECT COALESCE(SUM(
+                CASE WHEN p.venda_por_copo = TRUE AND p.kg_por_copo > 0 THEN
+                  CASE WHEN COALESCE(p.qtd_copos_pacote,0) >= 2 AND COALESCE(p.preco_copos_pacote,0) > 0
+                    THEN FLOOR(FLOOR(tpl.quantidade) / p.qtd_copos_pacote) * p.preco_copos_pacote
+                         + (FLOOR(tpl.quantidade) - FLOOR(FLOOR(tpl.quantidade)/p.qtd_copos_pacote)*p.qtd_copos_pacote) * p.preco
+                    ELSE FLOOR(tpl.quantidade) * p.preco
+                  END
+                ELSE tpl.quantidade * p.preco END
+              ),0)
+              FROM turno_pedido_linhas tpl JOIN produtos p ON p.id=tpl.produto_id
+              WHERE tpl.pedido_id = tp.id) AS total_pedido_kz
+      FROM turno_pedidos tp
+      JOIN turnos t ON t.id = tp.turno_id
+      LEFT JOIN utilizadores u ON u.id = tp.promotor_id
+      LEFT JOIN utilizadores op ON op.id = tp.operador_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY tp.criado_em DESC
+    `;
+    const r = await query(sql, params);
+    const linhas = r.rows.map(row => {
+      const auto = row.promotor_id && row.operador_id && row.promotor_id === row.operador_id;
+      return {
+        pedido_id: row.pedido_id,
+        turno_id: row.turno_id,
+        turno_data: row.turno_data,
+        turno_nome: row.turno_nome,
+        cliente_nome: row.cliente_nome,
+        criado_em: row.criado_em,
+        promotor_id: row.promotor_id,
+        promotor_nome: row.promotor_nome,
+        promotor_modo: row.promotor_modo,
+        promotor_pct_total: row.promotor_pct_total == null ? null : parseFloat(row.promotor_pct_total),
+        operador_id: row.operador_id,
+        operador_nome: row.operador_nome,
+        total_pedido_kz: parseFloat(row.total_pedido_kz) || 0,
+        comissao_valor: parseFloat(row.comissao_valor) || 0,
+        comissao_valor_potencial: parseFloat(row.comissao_valor_potencial) || 0,
+        auto_promocao: !!auto
+      };
+    });
+    const map = new Map();
+    for (const l of linhas) {
+      const key = l.promotor_id + '|' + (l.auto_promocao ? '1' : '0');
+      if (!map.has(key)) {
+        map.set(key, {
+          promotor_id: l.promotor_id,
+          promotor_nome: l.promotor_nome,
+          auto_promocao: l.auto_promocao,
+          n_pedidos: 0,
+          total_vendido_kz: 0,
+          comissao_total_kz: 0
+        });
+      }
+      const a = map.get(key);
+      a.n_pedidos += 1;
+      a.total_vendido_kz += l.total_pedido_kz;
+      a.comissao_total_kz += l.comissao_valor;
+    }
+    const resumo = [...map.values()].sort((a, b) => b.comissao_total_kz - a.comissao_total_kz);
+    res.json({
+      linhas,
+      resumo_por_promotor: resumo,
+      totais: {
+        comissao_externa: resumo.filter(x => !x.auto_promocao).reduce((s, x) => s + x.comissao_total_kz, 0),
+        comissao_operadores: resumo.filter(x => x.auto_promocao).reduce((s, x) => s + x.comissao_total_kz, 0),
+        comissao_total: resumo.reduce((s, x) => s + x.comissao_total_kz, 0)
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
   }
 });
 
@@ -5105,7 +5317,7 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
 app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url FROM utilizadores ORDER BY nome");
+    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total FROM utilizadores ORDER BY nome");
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -5114,7 +5326,17 @@ app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
 app.get('/api/equipa', auth, requireRole('admin','gestor','operador','compras'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url FROM utilizadores ORDER BY nome");
+    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor FROM utilizadores ORDER BY nome");
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Promotores activos — usado no dropdown de pedido balcão. */
+app.get('/api/promotores', auth, async (req, res) => {
+  try {
+    const r = await query(
+      "SELECT id, nome, username, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total FROM utilizadores WHERE ativo=true AND promotor=true ORDER BY nome"
+    );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -5144,7 +5366,7 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
 app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const { nome, role, ativo, password, username } = req.body;
+    const { nome, role, ativo, password, username, promotor, comissao_modo, comissao_pct_total } = req.body;
     const un = normalizeUsername(username);
     if (un && !isValidUsername(un)) {
       return res.status(400).json({ erro: 'Nome de utilizador: 3 a 50 caracteres (letras minúsculas, números, . _ -)' });
@@ -5159,14 +5381,20 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
     if (password) {
       await query('UPDATE utilizadores SET senha_hash=$1 WHERE id=$2', [hashPassword(password), req.params.id]);
     }
+    const isPromotor = !!promotor;
+    let modo = null;
+    if (isPromotor) {
+      modo = comissao_modo === 'total' ? 'total' : (comissao_modo === 'produto' ? 'produto' : null);
+    }
+    const pctTotal = Math.max(0, Math.min(100, parseFloat(comissao_pct_total) || 0));
     const r = un
       ? await query(
-          'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,username=$4 WHERE id=$5 RETURNING id,email,nome,username,role,ativo',
-          [nome, role, ativo, un, req.params.id]
+          'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,username=$4,promotor=$5,comissao_modo=$6,comissao_pct_total=$7 WHERE id=$8 RETURNING id,email,nome,username,role,ativo,promotor,comissao_modo,comissao_pct_total',
+          [nome, role, ativo, un, isPromotor, modo, pctTotal, req.params.id]
         )
       : await query(
-          'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3 WHERE id=$4 RETURNING id,email,nome,username,role,ativo',
-          [nome, role, ativo, req.params.id]
+          'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,promotor=$4,comissao_modo=$5,comissao_pct_total=$6 WHERE id=$7 RETURNING id,email,nome,username,role,ativo,promotor,comissao_modo,comissao_pct_total',
+          [nome, role, ativo, isPromotor, modo, pctTotal, req.params.id]
         );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }

@@ -3455,10 +3455,9 @@ function pedidoBalcaoBuildTalaoEscPos(pedido) {
     out += logoBin;
     out += '\n';
   }
-  out += GS + '!' + '\x11';
-  out += 'Tanuma\n';
+  out += GS + '!' + '\x10';
+  out += 'Tanuma 935 049 404\n';
   out += GS + '!' + '\x00';
-  out += '935 049 404\n';
   if (turnoNome) out += fold(`Turno ${turnoNome}`) + '\n';
   out += '\n';
   out += ESC + 'a' + '\x00';

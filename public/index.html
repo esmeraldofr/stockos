@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-16-print-share">
+<html lang="pt" data-stockos-ui="2026-05-16-print-toast">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3470,9 +3470,47 @@ function pedidoBalcaoImprimirTalao(pedido) {
     return false;
   }
   const method = pedidoBalcaoPrintMethod();
+  // O Web Share API requer um gesto recente do utilizador. Se não houver,
+  // mostra um toast com botão para o utilizador disparar a partilha.
+  if (method === 'share' && !pedidoBalcaoHasUserGesture()) {
+    pedidoBalcaoMostrarToastImpressao(pedido);
+    return true;
+  }
   if (method === 'rawbt') return pedidoBalcaoImprimirRawBT(pedido);
   if (method === 'download') return pedidoBalcaoImprimirDownload(pedido);
   return pedidoBalcaoImprimirShare(pedido);
+}
+
+function pedidoBalcaoHasUserGesture() {
+  try {
+    if (navigator.userActivation && typeof navigator.userActivation.isActive === 'boolean') {
+      return navigator.userActivation.isActive;
+    }
+  } catch (_) {}
+  return true; // fallback optimista
+}
+
+function pedidoBalcaoMostrarToastImpressao(pedido) {
+  const id = 'pedido-print-toast';
+  const existing = document.getElementById(id);
+  if (existing) existing.remove();
+  const div = document.createElement('div');
+  div.id = id;
+  div.style.cssText = 'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#0f172a;border:1px solid #22c55e;border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);z-index:400;max-width:92vw;font-size:13px;color:#e2e8f0';
+  div.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:2px">
+      <div style="font-weight:600;color:#22c55e">Pedido #${pedido.id || '—'} guardado</div>
+      <div style="font-size:11px;color:#94a3b8">Toque para imprimir o talão</div>
+    </div>
+    <button type="button" class="btn btn-primary btn-sm" style="white-space:nowrap" data-action="print">🖨️ Imprimir</button>
+    <button type="button" class="btn btn-ghost btn-sm" aria-label="Fechar" data-action="close">×</button>`;
+  document.body.appendChild(div);
+  div.querySelector('[data-action="print"]').addEventListener('click', async () => {
+    div.remove();
+    await pedidoBalcaoImprimirShare(pedido);
+  });
+  div.querySelector('[data-action="close"]').addEventListener('click', () => div.remove());
+  setTimeout(() => { if (document.getElementById(id)) document.getElementById(id).remove(); }, 15000);
 }
 
 function pedidoBalcaoImprimirRawBT(pedido) {
@@ -3506,19 +3544,41 @@ function pedidoBalcaoImprimirRawBT(pedido) {
 async function pedidoBalcaoImprimirShare(pedido) {
   const text = pedidoBalcaoBuildTalaoEscPos(pedido);
   const bytes = pedidoBalcaoEscPosBytes(text);
-  const filename = `talao-${pedido.id || 'novo'}.bin`;
-  try {
-    if (typeof File !== 'undefined' && navigator.canShare) {
-      const file = new File([bytes], filename, { type: 'application/octet-stream' });
-      if (navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: 'Talão' });
+  const base = `talao-${pedido.id || 'novo'}`;
+  if (typeof File === 'undefined' || !navigator.canShare || !navigator.share) {
+    return pedidoBalcaoImprimirDownload(pedido);
+  }
+  // Chrome Android tem uma allowlist restrita de MIME types para Web Share.
+  // Tentamos várias combinações até uma passar em canShare().
+  const tentativas = [
+    { mime: 'application/octet-stream', name: `${base}.bin` },
+    { mime: 'text/plain', name: `${base}.bin` },
+    { mime: 'text/plain', name: `${base}.txt` },
+  ];
+  let lastErr = null;
+  for (const t of tentativas) {
+    let file;
+    try {
+      file = new File([bytes], t.name, { type: t.mime });
+    } catch (e) { lastErr = e; continue; }
+    try {
+      if (!navigator.canShare({ files: [file] })) continue;
+    } catch (e) { lastErr = e; continue; }
+    try {
+      await navigator.share({ files: [file], title: 'Talão' });
+      return true;
+    } catch (e) {
+      lastErr = e;
+      if (e && e.name === 'AbortError') return true;
+      // NotAllowedError = gesto perdido → mostra toast
+      if (e && e.name === 'NotAllowedError') {
+        pedidoBalcaoMostrarToastImpressao(pedido);
         return true;
       }
+      // Outros erros: tenta próximo MIME
     }
-  } catch (e) {
-    // Utilizador cancelou ou erro — cai para download
-    if (e && e.name === 'AbortError') return true;
   }
+  console.warn('Web Share indisponível, a fazer download:', lastErr);
   return pedidoBalcaoImprimirDownload(pedido);
 }
 

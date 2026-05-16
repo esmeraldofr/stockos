@@ -1,5 +1,7 @@
 # 🚀 StockOS — Guia de Deploy (Supabase + Vercel)
 
+<!-- last-deploy-trigger: 2026-05-16T08:02 -->
+
 ## Estrutura do Projecto
 ```
 stockos-deploy/

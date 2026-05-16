@@ -2274,15 +2274,15 @@ async function abrirTurno(nome) {
 async function drawTurno() {
   render(`
     <div id="header">
-      <div style="display:flex;flex-direction:column;gap:4px">
+      <div style="display:flex;flex-direction:column;gap:4px;min-width:0;flex:1">
         <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => navigate('dia'))" style="align-self:flex-start">‹ Voltar</button>
-        <div style="display:flex;align-items:center;gap:6px">
-          <button type="button" class="btn btn-ghost btn-sm" id="btn-prev-turno" onclick="runAction(event, () => navTurno(-1))" style="padding:2px 8px;font-size:18px;line-height:1">‹</button>
-          <div id="turno-title" style="font-size:15px;font-weight:700;color:#f1f5f9;white-space:nowrap">Turno</div>
-          <button type="button" class="btn btn-ghost btn-sm" id="btn-next-turno" onclick="runAction(event, () => navTurno(1))" style="padding:2px 8px;font-size:18px;line-height:1">›</button>
+        <div style="display:flex;align-items:center;gap:6px;min-width:0">
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-prev-turno" onclick="runAction(event, () => navTurno(-1))" style="padding:2px 8px;font-size:18px;line-height:1;flex-shrink:0">‹</button>
+          <div id="turno-title" style="font-size:15px;font-weight:700;color:#f1f5f9;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Turno</div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-next-turno" onclick="runAction(event, () => navTurno(1))" style="padding:2px 8px;font-size:18px;line-height:1;flex-shrink:0">›</button>
         </div>
       </div>
-      <div id="turno-header-actions"></div>
+      <div id="turno-header-actions" style="flex-shrink:0"></div>
     </div>
     <div id="content">
       <div id="turno-msg" class="turno-msg" aria-live="polite"><span class="turno-msg-spacer">&nbsp;</span></div>

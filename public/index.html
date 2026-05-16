@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-16-print-auto">
+<html lang="pt" data-stockos-ui="2026-05-16-print-bluetooth">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3311,21 +3311,25 @@ function pedidoBalcaoToggleAutoPrint(el) {
   pedidoBalcaoSetAutoPrint(!!el.checked);
 }
 
-/** Métodos de impressão suportados: 'rawbt' | 'share' | 'download'. */
+/** Métodos de impressão suportados: 'bluetooth' | 'rawbt' | 'share' | 'download'. */
 function pedidoBalcaoPrintMethod() {
   try {
     const v = localStorage.getItem('stockos.pedidoPrintMethod');
-    if (v === 'rawbt' || v === 'share' || v === 'download') return v;
+    if (v === 'bluetooth' || v === 'rawbt' || v === 'share' || v === 'download') return v;
   } catch (_) {}
   return 'share';
 }
 function pedidoBalcaoSetPrintMethod(m) {
-  if (m !== 'rawbt' && m !== 'share' && m !== 'download') return;
+  if (m !== 'bluetooth' && m !== 'rawbt' && m !== 'share' && m !== 'download') return;
   try { localStorage.setItem('stockos.pedidoPrintMethod', m); } catch (_) {}
 }
 function pedidoBalcaoOnChangePrintMethod(el) {
   if (!el) return;
   pedidoBalcaoSetPrintMethod(el.value);
+}
+function pedidoBalcaoRefreshBtBtn() {
+  const btn = document.getElementById('pedido-bt-pair');
+  if (btn) btn.style.display = pedidoBalcaoPrintMethod() === 'bluetooth' ? 'inline-block' : 'none';
 }
 
 function pedidoBalcaoAsciiFold(s) {
@@ -3476,9 +3480,115 @@ function pedidoBalcaoImprimirTalao(pedido) {
     pedidoBalcaoMostrarToastImpressao(pedido);
     return true;
   }
+  if (method === 'bluetooth') return pedidoBalcaoImprimirBluetooth(pedido);
   if (method === 'rawbt') return pedidoBalcaoImprimirRawBT(pedido);
   if (method === 'download') return pedidoBalcaoImprimirDownload(pedido);
   return pedidoBalcaoImprimirShare(pedido);
+}
+
+// ─── Bluetooth directo (Web Bluetooth) ──────────────────────────────────
+// Liga directamente à impressora BLE, sem app intermediária nem menu Partilhar.
+// Requer impressora compatível com Bluetooth Low Energy.
+
+const PED_BT_SERVICES = [
+  '000018f0-0000-1000-8000-00805f9b34fb', // Serial Port (impressoras térmicas BLE comuns)
+  '0000ff00-0000-1000-8000-00805f9b34fb', // Variante de algumas impressoras
+  '49535343-fe7d-4ae5-8fa9-9fafd205e455', // Microchip RN4870/71
+  'e7810a71-73ae-499d-8c15-faa9aef0c3f2'  // Bluefruit-like
+];
+const PED_BT_WRITE_CHARS = [
+  '00002af1-0000-1000-8000-00805f9b34fb',
+  '0000ff02-0000-1000-8000-00805f9b34fb',
+  '49535343-8841-43f4-a8d4-ecbe34729bb3',
+  'bef8d6c4-9fdc-4fa8-b6cd-37dbd1c8d9d3'
+];
+
+async function pedidoBalcaoBtConectar(forcePicker) {
+  if (!navigator.bluetooth) {
+    throw new Error('Este browser não suporta Web Bluetooth. Usa o Chrome em Android.');
+  }
+  let device = window.__pedidoBalcaoBtDevice;
+  if (!device || forcePicker) {
+    device = await navigator.bluetooth.requestDevice({
+      filters: PED_BT_SERVICES.map((s) => ({ services: [s] }))
+        .concat([{ namePrefix: 'Printer' }, { namePrefix: 'POS' }, { namePrefix: 'BT' }, { namePrefix: 'MTP' }, { namePrefix: 'MPT' }]),
+      optionalServices: PED_BT_SERVICES
+    });
+    window.__pedidoBalcaoBtDevice = device;
+  }
+  if (device.gatt.connected && window.__pedidoBalcaoBtChar) {
+    return window.__pedidoBalcaoBtChar;
+  }
+  const server = await device.gatt.connect();
+  let lastErr = null;
+  for (const svcUuid of PED_BT_SERVICES) {
+    try {
+      const svc = await server.getPrimaryService(svcUuid);
+      for (const chUuid of PED_BT_WRITE_CHARS) {
+        try {
+          const ch = await svc.getCharacteristic(chUuid);
+          if (ch.properties.write || ch.properties.writeWithoutResponse) {
+            window.__pedidoBalcaoBtChar = ch;
+            return ch;
+          }
+        } catch (e) { lastErr = e; }
+      }
+      // Se não há characteristic conhecida, procurar a primeira escrita
+      const chars = await svc.getCharacteristics();
+      for (const ch of chars) {
+        if (ch.properties.write || ch.properties.writeWithoutResponse) {
+          window.__pedidoBalcaoBtChar = ch;
+          return ch;
+        }
+      }
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('Não foi encontrada uma característica de escrita compatível.');
+}
+
+async function pedidoBalcaoBtEscrever(ch, bytes) {
+  const CHUNK = 180; // BLE MTU seguro
+  const useWWOR = ch.properties.writeWithoutResponse;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.slice(i, i + CHUNK);
+    if (useWWOR && ch.writeValueWithoutResponse) {
+      await ch.writeValueWithoutResponse(slice);
+    } else {
+      await ch.writeValue(slice);
+    }
+  }
+}
+
+async function pedidoBalcaoImprimirBluetooth(pedido) {
+  const text = pedidoBalcaoBuildTalaoEscPos(pedido);
+  const bytes = pedidoBalcaoEscPosBytes(text);
+  try {
+    const ch = await pedidoBalcaoBtConectar(false);
+    await pedidoBalcaoBtEscrever(ch, bytes);
+    return true;
+  } catch (e) {
+    console.warn('Impressão Bluetooth falhou:', e);
+    const msg = (e && e.message) || String(e);
+    pedidoBalcaoMostrarAjudaImpressao(
+      'Falha ao imprimir por Bluetooth: ' + msg +
+      '\n\nVerifica que a impressora está ligada e usa o botão «Emparelhar impressora» nas opções de impressão.'
+    );
+    return false;
+  }
+}
+
+async function pedidoBalcaoBtEmparelhar() {
+  try {
+    window.__pedidoBalcaoBtChar = null;
+    window.__pedidoBalcaoBtDevice = null;
+    await pedidoBalcaoBtConectar(true);
+    const nome = (window.__pedidoBalcaoBtDevice && window.__pedidoBalcaoBtDevice.name) || 'Impressora';
+    pedidoBalcaoMostrarAjudaImpressao(`Impressora «${nome}» emparelhada. As próximas impressões serão automáticas.`);
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    if (e && e.name === 'NotFoundError') return; // utilizador cancelou
+    pedidoBalcaoMostrarAjudaImpressao('Falha ao emparelhar: ' + msg);
+  }
 }
 
 function pedidoBalcaoHasUserGesture() {
@@ -3996,11 +4106,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         </label>
         <div style="margin:-4px 0 10px;display:flex;flex-direction:column;gap:4px">
           <label style="font-size:11px;color:#94a3b8">Método de impressão</label>
-          <select onchange="pedidoBalcaoOnChangePrintMethod(this)" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:6px;padding:6px 8px;font-size:12px">
+          <select onchange="pedidoBalcaoOnChangePrintMethod(this);pedidoBalcaoRefreshBtBtn()" id="pedido-print-method" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:6px;padding:6px 8px;font-size:12px">
+            <option value="bluetooth" ${pedidoBalcaoPrintMethod() === 'bluetooth' ? 'selected' : ''}>📡 Bluetooth directo (recomendado)</option>
             <option value="share" ${pedidoBalcaoPrintMethod() === 'share' ? 'selected' : ''}>Partilhar (POS Printer, ESC POS, etc.)</option>
             <option value="rawbt" ${pedidoBalcaoPrintMethod() === 'rawbt' ? 'selected' : ''}>RawBT (link directo)</option>
             <option value="download" ${pedidoBalcaoPrintMethod() === 'download' ? 'selected' : ''}>Transferir ficheiro .bin</option>
           </select>
+          <button type="button" id="pedido-bt-pair" onclick="pedidoBalcaoBtEmparelhar()" style="display:${pedidoBalcaoPrintMethod() === 'bluetooth' ? 'inline-block' : 'none'};margin-top:6px;background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer">
+            📡 Emparelhar impressora Bluetooth
+          </button>
           <span style="font-size:11px;color:#94a3b8">
             <a href="#" onclick="event.preventDefault();pedidoBalcaoMostrarAjudaImpressao()" style="color:#60a5fa">ⓘ Como configurar</a>
           </span>

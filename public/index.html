@@ -4679,6 +4679,51 @@ async function refreshIrregularidadesEquipaLine(show) {
 const KG_IRREG_COMPONENTE_EPS = 0.02;
 
 /**
+ * Expande recursivamente a receita de um produto: devolve `{ id_ingrediente_final: qtd_total }`.
+ * Acompanha a função `expandIngredientes` no backend (api/server.js).
+ */
+function expandReceitaRecursiveClient(prodId, fator, receitasByProduto, seen) {
+  const key = prodIdKey(prodId);
+  if (!key) return {};
+  if (seen && seen.has(key)) return {};
+  const rows = receitasByProduto[key] || [];
+  if (!rows.length) return { [key]: fator };
+  const nextSeen = new Set(seen || []);
+  nextSeen.add(key);
+  const out = {};
+  for (const r of rows) {
+    const sub = expandReceitaRecursiveClient(r.componente_id, fator * parseFloat(r.quantidade), receitasByProduto, nextSeen);
+    for (const [k, v] of Object.entries(sub)) {
+      out[k] = (out[k] || 0) + v;
+    }
+  }
+  return out;
+}
+
+/**
+ * Para todos os menus vendidos, calcula consumo esperado por ingrediente final (recursivo)
+ * com breakdown por menu. Devolve `{ ingId: { total, byMenu: [{menu_nome, qtd}] } }`.
+ */
+function computeIngredientesEsperadosPorMenu(vm, receitasByProduto, produtos) {
+  const out = {};
+  const menus = (produtos || []).filter((p) => p.categoria === 'menu');
+  for (const m of menus) {
+    const menuKey = prodIdKey(m.id);
+    if (!menuKey) continue;
+    const qtyMenu = parseFloat(vm[menuKey]) || 0;
+    if (qtyMenu <= 0) continue;
+    const exp = expandReceitaRecursiveClient(m.id, qtyMenu, receitasByProduto, new Set());
+    for (const [ingId, qtd] of Object.entries(exp)) {
+      if (ingId === menuKey) continue;
+      if (!out[ingId]) out[ingId] = { total: 0, byMenu: [] };
+      out[ingId].total += qtd;
+      out[ingId].byMenu.push({ menu_nome: m.nome, qtd });
+    }
+  }
+  return out;
+}
+
+/**
  * Quantidade (un. ou kg conforme receita) imputável a partir de vendas de **menu** com linha de receita
  * directa para o `componenteProdId` (sem venda avulsa nem expansão recursiva).
  */
@@ -4765,7 +4810,7 @@ function vmFromVendasBufIrreg(vb) {
  * @param {number} p.totalGeradoKz — TPA+transf+din (turno: inputs caixa; histórico: `turno.caixa`)
  * @param {Array} [p.produtos] — catálogo para resolver Fino 400/1000 (fallback: stock + `S.produtos`)
  * @param {object} [p.receitasIrreg] — mapa `produto_id` → [{ componente_id, quantidade }] (receitas); sem isto não há check stock vs menus
- * @returns {{ hasAny: boolean, caixaHtml: string, stockHtml: string, finoHtml: string, batataHtml: string, coxaHtml: string }}
+ * @returns {{ hasAny: boolean, caixaHtml: string, bancoHtml: string, stockHtml: string, finoHtml: string, ingredientesItems: Array<{produto_id:string,produto_nome:string,html:string}> }}
  */
 function buildIrregularidadesHtmlParts({
   turno,
@@ -4930,36 +4975,52 @@ function buildIrregularidadesHtmlParts({
     finoHtml = '';
   }
 
-  let batataHtml = '';
-  let coxaHtml = '';
+  const ingredientesItems = [];
   const temReceitas = receitasIrreg && Object.keys(receitasIrreg).length;
   if (temReceitas) {
-    const batataRow = stock.find((s) => isProdutoBatataIrreg(s.produto_nome));
-    if (batataRow) {
-      batataHtml = buildIrregStockVsMenusHtml({
-        stockRow: batataRow,
-        stockBuf,
-        vendasBuf,
-        receitasIrreg,
-        prodArr,
-        receitaLabel: 'Batata'
-      });
-    }
-    const coxaRow = stock.find((s) => isProdutoCoxaIrreg(s.produto_nome));
-    if (coxaRow) {
-      coxaHtml = buildIrregStockVsMenusHtml({
-        stockRow: coxaRow,
-        stockBuf,
-        vendasBuf,
-        receitasIrreg,
-        prodArr,
-        receitaLabel: 'Coxa'
-      });
+    const rbp = receitasByProdutoFromIrregBuf(receitasIrreg);
+    const vm = vmFromVendasBufIrreg(vendasBuf);
+    const esperado = computeIngredientesEsperadosPorMenu(vm, rbp, prodArr);
+    for (const s of stock) {
+      const sid = prodIdKey(s.produto_id);
+      if (!sid) continue;
+      const cat = String(s.categoria || s.produto_categoria || '').toLowerCase();
+      const exp = esperado[sid];
+      const expectedTotal = exp ? exp.total : 0;
+      if (cat !== 'ingredientes' && expectedTotal <= 0) continue;
+      const b = stockBuf[sid] || {};
+      const encRaw = (b.encontrado != null && b.encontrado !== '') ? b.encontrado : s.encontrado;
+      const encN = encRaw == null || encRaw === '' ? NaN : parseFloat(encRaw);
+      const entN = Number.isFinite(parseFloat(b.entrada)) ? parseFloat(b.entrada) : (parseFloat(s.entrada) || 0);
+      const deiRaw = (b.deixado != null && b.deixado !== '') ? b.deixado : s.deixado;
+      const deiN = deiRaw == null || deiRaw === '' ? NaN : parseFloat(deiRaw);
+      if (!Number.isFinite(encN) || !Number.isFinite(deiN)) continue;
+      const consumed = Math.max(0, encN + entN - deiN);
+      if (consumed < 1e-6 && expectedTotal < 1e-6) continue;
+      const diff = consumed - expectedTotal;
+      if (Math.abs(diff) < KG_IRREG_COMPONENTE_EPS) continue;
+      const um = medicaoSigla(s.tipo_medicao || 'unidade');
+      const byMenuLine = (exp && exp.byMenu.length)
+        ? exp.byMenu
+            .sort((a, b2) => b2.qtd - a.qtd)
+            .map((bm) => `${escapeHtml(bm.menu_nome)}: <strong>${fmtNum(bm.qtd)}</strong> ${um}`)
+            .join(' · ')
+        : '<span style="color:#94a3b8">nenhum menu vendido contém este ingrediente na receita</span>';
+      const sinal = diff > 0 ? 'falta justificar consumo' : 'consumo menor do que esperado';
+      const html = `
+        <div style="margin-top:8px;padding:8px 10px;border-radius:6px;border:1px solid rgba(251,146,60,0.45);background:rgba(251,146,60,0.1);font-size:12px;color:#cbd5e1;line-height:1.4">
+          <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">${escapeHtml(s.produto_nome)} (stock vs menus)</div>
+          <div>Consumo de stock <span style="color:#94a3b8">(enc.+entr.−deix.)</span> <strong>${fmtNum(consumed)}</strong> ${um}</div>
+          <div style="margin-top:4px">Esperado pelas vendas <span style="color:#64748b">(menus × receita, recursivo)</span> <strong>${fmtNum(expectedTotal)}</strong> ${um}</div>
+          <div style="margin-top:4px;font-size:11px;color:#cbd5e1">Por menu: ${byMenuLine}</div>
+          <div style="margin-top:4px"><span style="color:#94a3b8">Diferença</span> <strong style="color:#fb923c">${fmtNum(Math.abs(diff))}</strong> ${um} · <span style="color:#fbbf24">${sinal}</span></div>
+        </div>`;
+      ingredientesItems.push({ produto_id: sid, produto_nome: s.produto_nome, html });
     }
   }
 
-  const hasAny = !!(caixaHtml || bancoHtml || stockHtml || finoHtml || batataHtml || coxaHtml);
-  return { hasAny, caixaHtml, bancoHtml, stockHtml, finoHtml, batataHtml, coxaHtml };
+  const hasAny = !!(caixaHtml || bancoHtml || stockHtml || finoHtml || ingredientesItems.length);
+  return { hasAny, caixaHtml, bancoHtml, stockHtml, finoHtml, ingredientesItems };
 }
 
 /** Wrapa cada bloco do snap com footer de aceitar/rejeitar/pendente. decisoes = map categoria → row. */
@@ -4968,10 +5029,11 @@ function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat) {
     { key: 'caixa', html: snap.caixaHtml },
     { key: 'banco', html: snap.bancoHtml || '' },
     { key: 'stock', html: snap.stockHtml },
-    { key: 'fino', html: snap.finoHtml },
-    { key: 'batata', html: snap.batataHtml },
-    { key: 'coxa', html: snap.coxaHtml }
+    { key: 'fino', html: snap.finoHtml }
   ];
+  for (const it of (snap.ingredientesItems || [])) {
+    cats.push({ key: 'ing:' + it.produto_id, html: it.html });
+  }
   const podeDecidir = S.user?.role === 'admin';
   return cats.map(({ key, html }) => {
     if (!html) return '';
@@ -5026,7 +5088,7 @@ async function reabrirIrregularidade(turnoId, categoria) {
 /**
  * Mesma lógica que o cartão Irregularidades no turno (sem DOM): constrói buffers a partir de
  * `vendasRows` + catálogo e delega em `buildIrregularidadesHtmlParts`.
- * @returns {{ hasAny: boolean, caixaHtml: string, stockHtml: string, finoHtml: string, batataHtml: string, coxaHtml: string }}
+ * @returns {{ hasAny: boolean, caixaHtml: string, bancoHtml: string, stockHtml: string, finoHtml: string, ingredientesItems: Array<{produto_id:string,produto_nome:string,html:string}> }}
  */
 function computeIrregularidadesSnapshot(turno, vendasRows, produtos, receitas, depositosTurno) {
   const stock = turno.stock || [];
@@ -6457,7 +6519,7 @@ async function loadIrregularidadesLista() {
     if (!out.length) {
       show(
         'irreg-content',
-        '<div class="card"><p style="color:#94a3b8;margin:0">Nenhuma irregularidade neste período (caixa alinhado, banco/depósito alinhado, stock, Batata, Coxa e Fino dentro dos critérios).</p></div>'
+        '<div class="card"><p style="color:#94a3b8;margin:0">Nenhuma irregularidade neste período (caixa, banco, stock, Fino e ingredientes vs menus dentro dos critérios).</p></div>'
       );
       return;
     }

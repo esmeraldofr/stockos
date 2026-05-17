@@ -2675,6 +2675,7 @@ async function loadTurno() {
     S.turnoData = turno;
     S.turnoDeposito = undefined;
     S.turnoDecisoes = {};
+    S.turnoComentarios = {};
     if (turno.estado === 'fechado' && ['admin','gestor','compras'].includes(S.user?.role)) {
       try {
         const deps = await api('GET', `/depositos?data=${encodeURIComponent(myDate)}`);
@@ -2686,12 +2687,21 @@ async function loadTurno() {
       }
     }
     try {
-      const decs = await api('GET', `/irregularidades/decisoes?turno_id=${encodeURIComponent(myTurnoId)}`);
+      const [decs, coms] = await Promise.all([
+        api('GET', `/irregularidades/decisoes?turno_id=${encodeURIComponent(myTurnoId)}`),
+        api('GET', `/irregularidades/comentarios?turno_id=${encodeURIComponent(myTurnoId)}`).catch(() => [])
+      ]);
       if (mySeq !== loadTurnoSeq) return;
-      const map = {};
-      for (const d of (decs || [])) map[d.categoria] = d;
-      S.turnoDecisoes = map;
-    } catch (_) { S.turnoDecisoes = {}; }
+      const dMap = {};
+      for (const d of (decs || [])) dMap[d.categoria] = d;
+      S.turnoDecisoes = dMap;
+      const cMap = {};
+      for (const c of (coms || [])) {
+        if (!cMap[c.categoria]) cMap[c.categoria] = [];
+        cMap[c.categoria].push(c);
+      }
+      S.turnoComentarios = cMap;
+    } catch (_) { S.turnoDecisoes = {}; S.turnoComentarios = {}; }
     stockBuf = {};
     turno.stock.forEach((s) => {
       const sid = prodIdKey(s.produto_id);
@@ -5084,8 +5094,9 @@ function buildIrregularidadesHtmlParts({
   return { hasAny, numIrr, finoDiffCopos, caixaHtml, bancoHtml, stockHtml, finoHtml, ingredientesItems };
 }
 
-/** Wrapa cada bloco do snap com footer de aceitar/rejeitar/pendente. decisoes = map categoria → row. */
-function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat) {
+/** Wrapa cada bloco do snap com footer de aceitar/rejeitar/pendente + comentários.
+ *  decisoes = map categoria → row. comentariosByCat = map categoria → array de comentários. */
+function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat, comentariosByCat) {
   const cats = [
     { key: 'caixa', html: snap.caixaHtml },
     { key: 'banco', html: snap.bancoHtml || '' },
@@ -5122,8 +5133,64 @@ function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat) {
         <button type="button" class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="runAction(event, () => decidirIrregularidade(${turnoId}, '${key}', false))">✗</button>
       </div>`;
     }
+    const coms = (comentariosByCat && comentariosByCat[key]) || [];
+    footer += renderIrregularidadeComentariosBox(turnoId, key, coms);
     return html + footer;
   }).join('');
+}
+
+/** Caixa colapsável com lista de comentários + input para novo. */
+function renderIrregularidadeComentariosBox(turnoId, categoria, comentarios) {
+  const n = comentarios.length;
+  const myId = String(S.user?.id || '');
+  const ehAdmin = S.user?.role === 'admin';
+  const escKey = String(categoria).replace(/'/g, "\\'");
+  const lista = comentarios.map((c) => {
+    const podeApagar = ehAdmin || String(c.autor_id) === myId;
+    const data = c.criado_em ? new Date(c.criado_em).toLocaleString('pt-PT', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+    const autor = escapeHtml(c.autor_nome || 'utilizador');
+    const texto = escapeHtml(c.comentario || '').replace(/\n/g, '<br>');
+    const delBtn = podeApagar
+      ? `<button type="button" title="Apagar comentário" style="background:none;border:0;color:#fca5a5;cursor:pointer;font-size:12px;padding:0 4px" onclick="runAction(event, () => apagarComentarioIrregularidade(${c.id}, ${turnoId}))">✕</button>`
+      : '';
+    return `<div style="padding:6px 8px;background:rgba(148,163,184,0.06);border:1px solid rgba(148,163,184,0.18);border-radius:6px;margin-bottom:4px;font-size:11px;line-height:1.4">
+      <div style="display:flex;justify-content:space-between;gap:8px;color:#94a3b8">
+        <span><strong style="color:#e2e8f0">${autor}</strong> · ${data}</span>
+        ${delBtn}
+      </div>
+      <div style="color:#cbd5e1;margin-top:3px;white-space:pre-wrap;word-break:break-word">${texto}</div>
+    </div>`;
+  }).join('');
+  const inputId = `cmt-input-${turnoId}-${categoria.replace(/[^a-z0-9]/gi, '_')}`;
+  return `<div style="margin:4px 0 12px;padding:8px 10px;background:rgba(30,41,59,0.55);border:1px solid rgba(148,163,184,0.18);border-radius:8px">
+    <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">💬 Comentários${n ? ` (${n})` : ''}</div>
+    ${lista}
+    <div style="display:flex;gap:6px;margin-top:4px">
+      <input type="text" id="${inputId}" placeholder="Escrever comentário…" maxlength="2000" style="flex:1;font-size:12px;padding:5px 8px;background:rgba(15,23,42,0.6);border:1px solid rgba(148,163,184,0.25);border-radius:6px;color:#e2e8f0" onkeydown="if(event.key==='Enter'){event.preventDefault();runAction(event, () => adicionarComentarioIrregularidade(${turnoId}, '${escKey}', '${inputId}'))}">
+      <button type="button" class="btn btn-primary" style="padding:5px 12px;font-size:11px" onclick="runAction(event, () => adicionarComentarioIrregularidade(${turnoId}, '${escKey}', '${inputId}'))">Enviar</button>
+    </div>
+  </div>`;
+}
+
+async function adicionarComentarioIrregularidade(turnoId, categoria, inputId) {
+  const el = document.getElementById(inputId);
+  const texto = String(el?.value || '').trim();
+  if (!texto) return;
+  try {
+    await api('POST', '/irregularidades/comentario', { turno_id: turnoId, categoria, comentario: texto });
+    if (el) el.value = '';
+    if (S.page === 'irregularidades') await loadIrregularidadesLista();
+    else if (S.page === 'turno') await loadTurno();
+  } catch (e) { alert(e.message); }
+}
+
+async function apagarComentarioIrregularidade(comId, turnoId) {
+  if (!confirm('Apagar este comentário?')) return;
+  try {
+    await api('DELETE', `/irregularidades/comentario?id=${encodeURIComponent(comId)}`);
+    if (S.page === 'irregularidades') await loadIrregularidadesLista();
+    else if (S.page === 'turno') await loadTurno();
+  } catch (e) { alert(e.message); }
 }
 
 async function decidirIrregularidade(turnoId, categoria, aceite) {
@@ -5367,7 +5434,8 @@ function renderIrregularidadesTurno() {
   });
   const tid = S.turnoData?.id;
   const decisoesByCat = (S.turnoDecisoes && tid) ? S.turnoDecisoes : {};
-  mount.innerHTML = renderIrregularidadeBlocos(snap, tid, decisoesByCat).trim();
+  const comentariosByCat = (S.turnoComentarios && tid) ? S.turnoComentarios : {};
+  mount.innerHTML = renderIrregularidadeBlocos(snap, tid, decisoesByCat, comentariosByCat).trim();
   const showCard = snap.hasAny;
   setIrregCardVisible(showCard);
   void refreshIrregularidadesEquipaLine(showCard);
@@ -6592,13 +6660,22 @@ async function loadIrregularidadesLista() {
       );
       return;
     }
-    // Fetch decisões em bulk
+    // Fetch decisões + comentários em bulk
     const turnoIds = out.map(o => o.r.turno_id).join(',');
-    const decisoes = await api('GET', `/irregularidades/decisoes?turno_id=${encodeURIComponent(turnoIds)}`).catch(() => []);
+    const [decisoes, comentarios] = await Promise.all([
+      api('GET', `/irregularidades/decisoes?turno_id=${encodeURIComponent(turnoIds)}`).catch(() => []),
+      api('GET', `/irregularidades/comentarios?turno_id=${encodeURIComponent(turnoIds)}`).catch(() => [])
+    ]);
     const decisoesPorTurno = {};
     for (const d of (decisoes || [])) {
       if (!decisoesPorTurno[d.turno_id]) decisoesPorTurno[d.turno_id] = {};
       decisoesPorTurno[d.turno_id][d.categoria] = d;
+    }
+    const comentariosPorTurno = {};
+    for (const c of (comentarios || [])) {
+      if (!comentariosPorTurno[c.turno_id]) comentariosPorTurno[c.turno_id] = {};
+      if (!comentariosPorTurno[c.turno_id][c.categoria]) comentariosPorTurno[c.turno_id][c.categoria] = [];
+      comentariosPorTurno[c.turno_id][c.categoria].push(c);
     }
     const sortMode = val('ir-sort') || 'erros';
     if (sortMode === 'erros') {
@@ -6627,7 +6704,7 @@ async function loadIrregularidadesLista() {
         const equipaLine = nomesEquipa.length
           ? `Trabalharam: ${escapeHtml(nomesEquipa.join(', '))}`
           : 'Trabalharam: — (sem registo na aba Escala)';
-        const blocos = renderIrregularidadeBlocos(snap, r.turno_id, decisoesPorTurno[r.turno_id] || {});
+        const blocos = renderIrregularidadeBlocos(snap, r.turno_id, decisoesPorTurno[r.turno_id] || {}, comentariosPorTurno[r.turno_id] || {});
         const nIrr = snap.numIrr || 0;
         const badge = nIrr > 0
           ? `<span style="display:inline-block;padding:2px 8px;background:rgba(251,146,60,0.18);border:1px solid rgba(251,146,60,0.45);border-radius:999px;font-size:11px;font-weight:700;color:#fb923c;margin-left:6px">${nIrr} ${nIrr === 1 ? 'erro' : 'erros'}</span>`

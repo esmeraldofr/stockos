@@ -278,6 +278,8 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
   .pedidos-balcao-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 .pedido-prod-tile{
+  position:relative;
+  overflow:hidden;
   min-height:92px;
   border-radius:10px;
   border:1px solid rgba(255,255,255,.1);
@@ -293,6 +295,19 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
   user-select:none;
   -webkit-tap-highlight-color:transparent;
 }
+.pedido-prod-tile.pedido-tile--has-img{padding:0;aspect-ratio:1/1;min-height:0}
+.pedido-prod-tile.pedido-tile--has-img .pedido-prod-tile__nome,
+.pedido-prod-tile.pedido-tile--has-img .pedido-prod-tile__preco{position:relative;z-index:2}
+.pedido-prod-tile.pedido-tile--has-img::after{
+  content:'';
+  position:absolute;
+  inset:0;
+  z-index:1;
+  background:linear-gradient(to top,rgba(0,0,0,.78) 0%,rgba(0,0,0,.4) 40%,rgba(0,0,0,0) 70%);
+  pointer-events:none;
+}
+.pedido-prod-tile.pedido-tile--has-img .pedido-prod-tile__nome{padding:0 6px;text-shadow:0 1px 3px rgba(0,0,0,.8)}
+.pedido-prod-tile.pedido-tile--has-img .pedido-prod-tile__preco{color:#f1f5f9;padding:0 6px 6px;text-shadow:0 1px 3px rgba(0,0,0,.8);font-weight:600}
 .pedido-prod-tile:hover{
   transform:translateY(-1px);
   border-color:rgba(56,189,248,.65);
@@ -301,7 +316,7 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .pedido-prod-tile:active{transform:translateY(0)}
 .pedido-prod-tile.pedido-tile--hidden{display:none}
 .pedido-prod-tile__emoji{font-size:26px;line-height:1;margin-bottom:5px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))}
-.pedido-prod-tile__img{width:56px;height:56px;border-radius:8px;object-fit:cover;margin-bottom:5px;background:#0f172a;border:1px solid #334155}
+.pedido-prod-tile__img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;background:#0f172a;display:block}
 .pedido-prod-tile__nome{
   font-size:11px;
   font-weight:600;
@@ -3964,10 +3979,12 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const pid = String(o.id);
       const em = pedidoEmojiGrupo(o.grupo);
       const preco = parseFloat(o.preco) || 0;
-      const visual = o.imagem
-        ? `<img class="pedido-prod-tile__img" src="${escapeHtml(o.imagem)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'pedido-prod-tile__emoji',textContent:'${em}'}))"/>`
+      const hasImg = !!o.imagem;
+      const visual = hasImg
+        ? `<img class="pedido-prod-tile__img" src="${escapeHtml(o.imagem)}" alt="" loading="lazy" onerror="const b=this.closest('.pedido-prod-tile');if(b){b.classList.remove('pedido-tile--has-img');this.replaceWith(Object.assign(document.createElement('span'),{className:'pedido-prod-tile__emoji',textContent:'${em}'}));}"/>`
         : `<span class="pedido-prod-tile__emoji" aria-hidden="true">${em}</span>`;
-      return `<button type="button" class="pedido-prod-tile" data-grupo="${escapeHtml(o.grupo)}" data-pid="${escapeHtml(pid)}" onclick="pedidoBalcaoTileClick(this.getAttribute('data-pid'))">
+      const tileCls = hasImg ? 'pedido-prod-tile pedido-tile--has-img' : 'pedido-prod-tile';
+      return `<button type="button" class="${tileCls}" data-grupo="${escapeHtml(o.grupo)}" data-pid="${escapeHtml(pid)}" onclick="pedidoBalcaoTileClick(this.getAttribute('data-pid'))">
         ${visual}
         <span class="pedido-prod-tile__nome">${escapeHtml(o.nome)}</span>
         <span class="pedido-prod-tile__preco">${fmt(preco)}</span>

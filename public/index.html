@@ -5044,7 +5044,6 @@ function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat) {
   return cats.map(({ key, html }) => {
     if (!html) return '';
     const dec = decisoesByCat?.[key];
-    const isIng = key.startsWith('ing:');
     let footer = '';
     if (dec) {
       const quando = dec.decidido_em ? new Date(dec.decidido_em).toLocaleDateString('pt-PT', { day:'2-digit', month:'2-digit', year:'2-digit' }) : '';
@@ -5055,28 +5054,18 @@ function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat) {
       const bd = aceite ? 'rgba(34,197,94,0.32)' : 'rgba(248,113,113,0.32)';
       const cor = aceite ? '#86efac' : '#fca5a5';
       const label = aceite ? '✓ Aceite' : '✗ Rejeitada';
-      const padding = isIng ? '4px 8px' : '8px 10px';
-      const fontSize = isIng ? '11px' : '12px';
-      const margin = isIng ? '-2px 0 4px' : '-6px 0 10px';
-      footer = `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:${padding};background:${bg};border:1px solid ${bd};border-radius:6px;margin:${margin};font-size:${fontSize};color:${cor}">
+      footer = `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:4px 8px;background:${bg};border:1px solid ${bd};border-radius:6px;margin:-2px 0 4px;font-size:11px;color:${cor}">
         <div style="flex:1;min-width:0">
           <strong>${label}</strong> · ${nome}${quando ? ` · ${quando}` : ''}
           ${just}
         </div>
-        ${podeDecidir ? `<button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => reabrirIrregularidade(${turnoId}, '${key}'))">Reabrir</button>` : ''}
+        ${podeDecidir ? `<button type="button" class="btn btn-ghost" style="padding:3px 10px;font-size:11px" onclick="runAction(event, () => reabrirIrregularidade(${turnoId}, '${key}'))">Reabrir</button>` : ''}
       </div>`;
     } else if (podeDecidir) {
-      if (isIng) {
-        footer = `<div style="display:flex;justify-content:flex-end;gap:6px;margin:-2px 0 4px">
-          <button type="button" class="btn btn-success" style="padding:3px 10px;font-size:11px" onclick="runAction(event, () => decidirIrregularidade(${turnoId}, '${key}', true))">✓</button>
-          <button type="button" class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="runAction(event, () => decidirIrregularidade(${turnoId}, '${key}', false))">✗</button>
-        </div>`;
-      } else {
-        footer = `<div style="display:flex;justify-content:flex-end;gap:8px;margin:-6px 0 10px">
-          <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, () => decidirIrregularidade(${turnoId}, '${key}', true))">✓ Aceitar</button>
-          <button type="button" class="btn btn-danger btn-sm" onclick="runAction(event, () => decidirIrregularidade(${turnoId}, '${key}', false))">✗ Rejeitar</button>
-        </div>`;
-      }
+      footer = `<div style="display:flex;justify-content:flex-end;gap:6px;margin:-2px 0 4px">
+        <button type="button" class="btn btn-success" style="padding:3px 10px;font-size:11px" onclick="runAction(event, () => decidirIrregularidade(${turnoId}, '${key}', true))">✓</button>
+        <button type="button" class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="runAction(event, () => decidirIrregularidade(${turnoId}, '${key}', false))">✗</button>
+      </div>`;
     }
     return html + footer;
   }).join('');

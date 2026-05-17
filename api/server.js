@@ -212,7 +212,12 @@ async function ensurePgSingleton() {
     for (const url of getDbCandidates()) {
       let sqlConn = null;
       try {
-        sqlConn = postgres(url, _sqlOpts);
+        sqlConn = postgres(url, {
+          ..._sqlOpts,
+          /** Pooler do Supabase fecha sockets idle no lado deles; reciclar a singleton
+           *  para que o próximo pedido reabra em vez de tentar escrever num socket morto. */
+          onclose: () => { if (_pgSingleton === sqlConn) _pgSingleton = null; }
+        });
         // Timeout explícito: connect_timeout cobre o handshake TCP/SSL mas não a execução do SELECT.
         // Se o Supavisor aceitar TCP mas não responder à query, pendurava indefinidamente.
         // 4s é suficiente: SELECT 1 numa ligação sã demora < 1s; zombie falha em 4s vs 10s antes.
@@ -250,9 +255,10 @@ const query = async (text, params) => {
       const msg = String(e && e.message ? e.message : e);
       const transient =
         attempt < 2 &&
-        (/ECONNRESET|ECONNREFUSED|ENETUNREACH|Connection|terminated|closed|socket|timeout|53300|57P01|57P02|57P03|MaxClientsInSessionMode|pool_size|EMAXCONN|max client connections/i.test(msg) ||
+        (/ECONNRESET|ECONNREFUSED|ENETUNREACH|EPIPE|Connection|terminated|closed|destroyed|socket|timeout|53300|57P01|57P02|57P03|MaxClientsInSessionMode|pool_size|EMAXCONN|max client connections/i.test(msg) ||
           e.code === 'ECONNRESET' ||
-          e.code === 'ENETUNREACH');
+          e.code === 'ENETUNREACH' ||
+          e.code === 'EPIPE');
       if (transient) {
         await resetPgSingleton();
         // backoff curto para EMAXCONN (esperar conexões libertarem no pooler)
@@ -295,7 +301,7 @@ const pool = {
         const msg = String(e && e.message ? e.message : e);
         const transient =
           attempt < 2 &&
-          /EMAXCONN|max client connections|MaxClientsInSessionMode|pool_size|ECONNRESET|terminated|closed/i.test(msg);
+          /EMAXCONN|max client connections|MaxClientsInSessionMode|pool_size|ECONNRESET|EPIPE|Connection|terminated|closed|destroyed|socket/i.test(msg);
         if (transient) {
           await resetPgSingleton();
           await new Promise((r) => setTimeout(r, 300 + Math.floor(Math.random() * 400)));

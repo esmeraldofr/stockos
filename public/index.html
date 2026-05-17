@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-cal-pendentes">
+<html lang="pt" data-stockos-ui="2026-05-17-cal-click-turno">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2172,8 +2172,8 @@ async function loadCalendarioTurnos() {
         const badge = pend > 0
           ? `<span class="cal-pill-badge" title="${pend} irregularidade(s) por avaliar" style="display:inline-block;margin-left:3px;padding:0 4px;background:#fb923c;color:#0f172a;border-radius:6px;font-size:9px;font-weight:800;vertical-align:middle">${pend}</span>`
           : '';
-        const tt = `${turnoLabel(nome)}: ${st}${pend > 0 ? ` · ${pend} irreg. por avaliar` : ''}`;
-        return `<span class="cal-pill ${cls}" data-turno-id="${t.id}" title="${tt}">${L}${badge}</span>`;
+        const tt = `${turnoLabel(nome)}: ${st}${pend > 0 ? ` · ${pend} irreg. por avaliar — clica para abrir o turno` : ' — clica para abrir o turno'}`;
+        return `<span class="cal-pill ${cls}" data-turno-id="${t.id}" style="cursor:pointer" title="${tt}" onclick="event.stopPropagation(); runAction(event, () => openTurnoFromIrreg('${iso}', '${t.id}'))">${L}${badge}</span>`;
       }).join('');
 
       const diffPills = ['manha', 'tarde', 'noite'].map((nome) => {

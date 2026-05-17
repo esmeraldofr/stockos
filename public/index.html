@@ -5184,10 +5184,24 @@ async function adicionarComentarioIrregularidade(turnoId, categoria, inputId) {
   const texto = String(el?.value || '').trim();
   if (!texto) return;
   try {
-    await api('POST', '/irregularidades/comentario', { turno_id: turnoId, categoria, comentario: texto });
+    const row = await api('POST', '/irregularidades/comentario', { turno_id: turnoId, categoria, comentario: texto });
     if (el) el.value = '';
-    if (S.page === 'irregularidades') await loadIrregularidadesLista();
-    else if (S.page === 'turno') await loadTurno();
+    if (S.page === 'irregularidades') {
+      if (S.irregCache) {
+        const map = S.irregCache.comentariosPorTurno;
+        if (!map[turnoId]) map[turnoId] = {};
+        if (!map[turnoId][categoria]) map[turnoId][categoria] = [];
+        map[turnoId][categoria].push(row);
+        renderIrregularidadesListaFromCache();
+      } else {
+        await loadIrregularidadesLista();
+      }
+    } else if (S.page === 'turno') {
+      if (!S.turnoComentarios) S.turnoComentarios = {};
+      if (!S.turnoComentarios[categoria]) S.turnoComentarios[categoria] = [];
+      S.turnoComentarios[categoria].push(row);
+      renderIrregularidadesTurno();
+    }
   } catch (e) { alert(e.message); }
 }
 
@@ -5195,8 +5209,24 @@ async function apagarComentarioIrregularidade(comId, turnoId) {
   if (!confirm('Apagar este comentário?')) return;
   try {
     await api('DELETE', `/irregularidades/comentario?id=${encodeURIComponent(comId)}`);
-    if (S.page === 'irregularidades') await loadIrregularidadesLista();
-    else if (S.page === 'turno') await loadTurno();
+    const idNum = Number(comId);
+    const removerDe = (mapPorCat) => {
+      if (!mapPorCat) return;
+      for (const cat of Object.keys(mapPorCat)) {
+        mapPorCat[cat] = (mapPorCat[cat] || []).filter((c) => Number(c.id) !== idNum);
+      }
+    };
+    if (S.page === 'irregularidades') {
+      if (S.irregCache?.comentariosPorTurno) {
+        removerDe(S.irregCache.comentariosPorTurno[turnoId]);
+        renderIrregularidadesListaFromCache();
+      } else {
+        await loadIrregularidadesLista();
+      }
+    } else if (S.page === 'turno') {
+      removerDe(S.turnoComentarios);
+      renderIrregularidadesTurno();
+    }
   } catch (e) { alert(e.message); }
 }
 
@@ -5205,9 +5235,21 @@ async function decidirIrregularidade(turnoId, categoria, aceite) {
   const just = prompt(`${label} esta irregularidade. Justificação (opcional):`, '');
   if (just === null) return; // cancelado
   try {
-    await api('POST', '/irregularidades/decisao', { turno_id: turnoId, categoria, aceite, justificacao: just });
-    if (S.page === 'irregularidades') await loadIrregularidadesLista();
-    else if (S.page === 'turno') await loadTurno();
+    const row = await api('POST', '/irregularidades/decisao', { turno_id: turnoId, categoria, aceite, justificacao: just });
+    if (S.page === 'irregularidades') {
+      if (S.irregCache) {
+        const map = S.irregCache.decisoesPorTurno;
+        if (!map[turnoId]) map[turnoId] = {};
+        map[turnoId][categoria] = row;
+        renderIrregularidadesListaFromCache();
+      } else {
+        await loadIrregularidadesLista();
+      }
+    } else if (S.page === 'turno') {
+      if (!S.turnoDecisoes) S.turnoDecisoes = {};
+      S.turnoDecisoes[categoria] = row;
+      renderIrregularidadesTurno();
+    }
   } catch (e) { alert(e.message); }
 }
 
@@ -5215,8 +5257,17 @@ async function reabrirIrregularidade(turnoId, categoria) {
   if (!confirm('Reabrir esta irregularidade?')) return;
   try {
     await api('DELETE', `/irregularidades/decisao?turno_id=${turnoId}&categoria=${encodeURIComponent(categoria)}`);
-    if (S.page === 'irregularidades') await loadIrregularidadesLista();
-    else if (S.page === 'turno') await loadTurno();
+    if (S.page === 'irregularidades') {
+      if (S.irregCache?.decisoesPorTurno?.[turnoId]) {
+        delete S.irregCache.decisoesPorTurno[turnoId][categoria];
+        renderIrregularidadesListaFromCache();
+      } else {
+        await loadIrregularidadesLista();
+      }
+    } else if (S.page === 'turno') {
+      if (S.turnoDecisoes) delete S.turnoDecisoes[categoria];
+      renderIrregularidadesTurno();
+    }
   } catch (e) { alert(e.message); }
 }
 

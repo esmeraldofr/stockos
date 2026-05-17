@@ -1995,6 +1995,7 @@ async function drawCalendario() {
         <span id="cal-month-label" style="font-weight:600;color:#e2e8f0;min-width:180px;text-align:center"></span>
         <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => calShiftMonth(1))">Mês ›</button>
         <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => calGoToday())" style="margin-left:4px">Hoje</button>
+        <button type="button" id="cal-check-irreg-btn" class="btn btn-ghost btn-sm" onclick="runAction(event, calCheckIrregularidades)" style="margin-left:auto" title="Verificar quais turnos têm irregularidades por avaliar este mês">⚠ Ver pendentes</button>
       </div>
       <div id="cal-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
     </div>
@@ -2026,10 +2027,104 @@ async function goDiaFromCal(iso) {
   await navigate('dia');
 }
 
+/** Pesquisa quais turnos do mês visível têm irregularidades por avaliar (sem decisão registada).
+ *  Cacheia por YYYY-MM em S.calPendentesByYM e re-renderiza o calendário com os badges. */
+async function calCheckIrregularidades(force = false) {
+  const ym = S.calYM;
+  if (!ym) return;
+  if (!S.calPendentesByYM) S.calPendentesByYM = {};
+  const btn = document.getElementById('cal-check-irreg-btn');
+  if (S.calPendentesByYM[ym] && !force) {
+    delete S.calPendentesByYM[ym];
+    if (btn) btn.textContent = '⚠ Ver pendentes';
+    await loadCalendarioTurnos();
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '… a calcular'; }
+  try {
+    const [y, m] = ym.split('-').map((x) => parseInt(x, 10));
+    const pad = (n) => String(n).padStart(2, '0');
+    const lastDay = new Date(y, m, 0).getDate();
+    const ini = `${y}-${pad(m)}-01`;
+    const fim = `${y}-${pad(m)}-${pad(lastDay)}`;
+    const map = await computePendentesPorTurnoNoPeriodo(ini, fim);
+    const obj = {};
+    for (const [tid, n] of map.entries()) obj[String(tid)] = n;
+    S.calPendentesByYM[ym] = obj;
+  } catch (e) {
+    alert('Não foi possível verificar irregularidades: ' + (e && e.message ? e.message : e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⚠ Esconder pendentes'; }
+  }
+  await loadCalendarioTurnos();
+}
+
+/** Para um período, devolve Map<turno_id, número de irregularidades sem decisão registada>. */
+async function computePendentesPorTurnoNoPeriodo(ini, fim) {
+  const [produtos, receitas, histRows] = await Promise.all([
+    api('GET', '/produtos?todos=0'),
+    api('GET', '/receitas'),
+    api('GET', `/historico?inicio=${encodeURIComponent(ini)}&fim=${encodeURIComponent(fim)}`)
+  ]);
+  if (!Array.isArray(histRows) || !histRows.length) return new Map();
+  const podeVerDepositos = ['admin','gestor','compras'].includes(S.user?.role);
+  const depByDate = new Map();
+  async function getDeposito(dataStr, tid) {
+    if (!podeVerDepositos) return undefined;
+    if (!depByDate.has(dataStr)) depByDate.set(dataStr, api('GET', `/depositos?data=${encodeURIComponent(dataStr)}`).catch(() => []));
+    const list = await depByDate.get(dataStr);
+    return (Array.isArray(list) ? list : []).find((d) => String(d.turno_id) === String(tid)) || null;
+  }
+  const snapshots = new Map();
+  const CHUNK = 6;
+  for (let i = 0; i < histRows.length; i += CHUNK) {
+    const chunk = histRows.slice(i, i + CHUNK);
+    await Promise.all(chunk.map(async (r) => {
+      const dataStr = String(r.data).slice(0, 10);
+      try {
+        const [turnos, vendas, dep] = await Promise.all([
+          api('GET', `/dia?data=${encodeURIComponent(dataStr)}&turno_id=${encodeURIComponent(r.turno_id)}`),
+          api('GET', `/turnos/${r.turno_id}/vendas`),
+          getDeposito(dataStr, r.turno_id)
+        ]);
+        const turno = turnos[0];
+        if (!turno) return;
+        const snap = computeIrregularidadesSnapshot(turno, vendas, produtos, receitas, dep);
+        if (snap.hasAny) snapshots.set(r.turno_id, snap);
+      } catch (_) {}
+    }));
+  }
+  if (!snapshots.size) return new Map();
+  const ids = Array.from(snapshots.keys()).join(',');
+  const decs = await api('GET', `/irregularidades/decisoes?turno_id=${encodeURIComponent(ids)}`).catch(() => []);
+  const decided = {};
+  for (const d of (decs || [])) {
+    if (!decided[d.turno_id]) decided[d.turno_id] = new Set();
+    decided[d.turno_id].add(d.categoria);
+  }
+  const result = new Map();
+  for (const [tid, snap] of snapshots.entries()) {
+    const cats = ['caixa','banco','stock','fino', ...(snap.ingredientesItems || []).map((i) => 'ing:' + i.produto_id)]
+      .filter((k) =>
+        (k === 'caixa' && snap.caixaHtml) ||
+        (k === 'banco' && snap.bancoHtml) ||
+        (k === 'stock' && snap.stockHtml) ||
+        (k === 'fino' && snap.finoHtml) ||
+        (k.startsWith('ing:') && (snap.ingredientesItems || []).some((i) => 'ing:' + i.produto_id === k))
+      );
+    const dec = decided[tid] || new Set();
+    const pendentes = cats.filter((k) => !dec.has(k)).length;
+    if (pendentes > 0) result.set(tid, pendentes);
+  }
+  return result;
+}
+
 async function loadCalendarioTurnos() {
   const wrap = document.getElementById('cal-content');
   const lab = document.getElementById('cal-month-label');
   if (lab) lab.textContent = calMonthTitle(S.calYM);
+  const btn = document.getElementById('cal-check-irreg-btn');
+  if (btn) btn.textContent = (S.calPendentesByYM && S.calPendentesByYM[S.calYM]) ? '⚠ Esconder pendentes' : '⚠ Ver pendentes';
   if (!wrap) return;
   wrap.innerHTML = '<div class="text-center" style="padding:32px;color:#64748b"><div class="spinner"></div></div>';
   try {
@@ -2073,7 +2168,12 @@ async function loadCalendarioTurnos() {
         if (!t) return `<span class="cal-pill cal-pill--livre" title="${turnoLabel(nome)}: não iniciado">${L}</span>`;
         const cls = t.estado === 'aberto' ? 'cal-pill--aberto' : 'cal-pill--fechado';
         const st = t.estado === 'aberto' ? 'aberto' : 'fechado';
-        return `<span class="cal-pill ${cls}" title="${turnoLabel(nome)}: ${st}">${L}</span>`;
+        const pend = (S.calPendentesByYM && S.calPendentesByYM[S.calYM]) ? S.calPendentesByYM[S.calYM][String(t.id)] : 0;
+        const badge = pend > 0
+          ? `<span class="cal-pill-badge" title="${pend} irregularidade(s) por avaliar" style="display:inline-block;margin-left:3px;padding:0 4px;background:#fb923c;color:#0f172a;border-radius:6px;font-size:9px;font-weight:800;vertical-align:middle">${pend}</span>`
+          : '';
+        const tt = `${turnoLabel(nome)}: ${st}${pend > 0 ? ` · ${pend} irreg. por avaliar` : ''}`;
+        return `<span class="cal-pill ${cls}" data-turno-id="${t.id}" title="${tt}">${L}${badge}</span>`;
       }).join('');
 
       const diffPills = ['manha', 'tarde', 'noite'].map((nome) => {

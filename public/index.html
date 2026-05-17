@@ -6391,7 +6391,11 @@ async function drawHistorico() {
   const ontem = addDays(hoje, -1);
   document.getElementById('h-inicio').value = ontem;
   document.getElementById('h-fim').value = hoje;
-  await loadHistorico();
+  if (S.histLastHtml) {
+    show('hist-content', S.histLastHtml);
+  } else {
+    show('hist-content', '<div class="card"><p style="color:#94a3b8;margin:0">Escolhe um período e carrega para ver o histórico.</p></div>');
+  }
 }
 
 /** Categorias conhecidas para agrupar o card «Quantidade vendida por produto». */
@@ -6589,7 +6593,7 @@ async function loadHistorico() {
       })
       .join('');
 
-    show('hist-content', `
+    const histHtml = `
       <div class="card" style="margin-bottom:16px">
         <div class="card-title" style="margin-bottom:12px">Somatório do período (todos os turnos)</div>
         <div style="display:grid;grid-template-columns:1fr;gap:10px;font-size:15px">
@@ -6610,7 +6614,9 @@ async function loadHistorico() {
       </div>
       ${histVendasProdutosCardHtml(vendasProdutos)}
       ${rowsHtml}
-    `);
+    `;
+    S.histLastHtml = histHtml;
+    show('hist-content', histHtml);
   } catch(e) { show('hist-content',`<div class="alert alert-error">${e.message}</div>`); }
 }
 

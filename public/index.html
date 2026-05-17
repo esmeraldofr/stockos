@@ -5003,17 +5003,15 @@ function buildIrregularidadesHtmlParts({
       const byMenuLine = (exp && exp.byMenu.length)
         ? exp.byMenu
             .sort((a, b2) => b2.qtd - a.qtd)
-            .map((bm) => `${escapeHtml(bm.menu_nome)}: <strong>${fmtNum(bm.qtd)}</strong> ${um}`)
+            .map((bm) => `${escapeHtml(bm.menu_nome)} <strong>${fmtNum(bm.qtd)}</strong>`)
             .join(' · ')
-        : '<span style="color:#94a3b8">nenhum menu vendido contém este ingrediente na receita</span>';
-      const sinal = diff > 0 ? 'falta justificar consumo' : 'consumo menor do que esperado';
+        : '';
       const html = `
         <div style="margin-top:8px;padding:8px 10px;border-radius:6px;border:1px solid rgba(251,146,60,0.45);background:rgba(251,146,60,0.1);font-size:12px;color:#cbd5e1;line-height:1.4">
-          <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">${escapeHtml(s.produto_nome)} (stock vs menus)</div>
-          <div>Consumo de stock <span style="color:#94a3b8">(enc.+entr.−deix.)</span> <strong>${fmtNum(consumed)}</strong> ${um}</div>
-          <div style="margin-top:4px">Esperado pelas vendas <span style="color:#64748b">(menus × receita, recursivo)</span> <strong>${fmtNum(expectedTotal)}</strong> ${um}</div>
-          <div style="margin-top:4px;font-size:11px;color:#cbd5e1">Por menu: ${byMenuLine}</div>
-          <div style="margin-top:4px"><span style="color:#94a3b8">Diferença</span> <strong style="color:#fb923c">${fmtNum(Math.abs(diff))}</strong> ${um} · <span style="color:#fbbf24">${sinal}</span></div>
+          <div style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;color:#fb923c">${escapeHtml(s.produto_nome)}</div>
+          <div>Vendido no stock <strong>${fmtNum(consumed)}</strong> ${um}</div>
+          <div style="margin-top:4px">Vendido em vendas <strong>${fmtNum(expectedTotal)}</strong> ${um}${exp && exp.byMenu.length ? ` <span style="color:#94a3b8">(${byMenuLine})</span>` : ''}</div>
+          <div style="margin-top:4px"><span style="color:#94a3b8">Diferença</span> <strong style="color:#fb923c">${fmtNum(Math.abs(diff))}</strong> ${um}</div>
         </div>`;
       ingredientesItems.push({ produto_id: sid, produto_nome: s.produto_nome, html });
     }

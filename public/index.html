@@ -6671,7 +6671,11 @@ async function drawIrregularidades() {
   document.getElementById('ir-inicio').value = ontem;
   document.getElementById('ir-fim').value = hoje;
   renderIrregFiltros();
-  await loadIrregularidadesLista();
+  if (S.irregCache) {
+    renderIrregularidadesListaFromCache();
+  } else {
+    show('irreg-content', '<div class="card"><p style="color:#94a3b8;margin:0">Escolhe um período e carrega para ver as irregularidades.</p></div>');
+  }
 }
 
 function renderIrregFiltros() {

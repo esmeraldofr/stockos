@@ -5095,8 +5095,10 @@ function buildIrregularidadesHtmlParts({
 }
 
 /** Wrapa cada bloco do snap com footer de aceitar/rejeitar/pendente + comentários.
- *  decisoes = map categoria → row. comentariosByCat = map categoria → array de comentários. */
-function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat, comentariosByCat) {
+ *  decisoes = map categoria → row. comentariosByCat = map categoria → array de comentários.
+ *  opts.hideAceites = true esconde blocos cuja decisão é aceite. */
+function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat, comentariosByCat, opts) {
+  const hideAceites = !!(opts && opts.hideAceites);
   const cats = [
     { key: 'caixa', html: snap.caixaHtml },
     { key: 'banco', html: snap.bancoHtml || '' },
@@ -5110,6 +5112,7 @@ function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat, comentariosByC
   return cats.map(({ key, html }) => {
     if (!html) return '';
     const dec = decisoesByCat?.[key];
+    if (hideAceites && dec && dec.aceite) return '';
     let footer = '';
     if (dec) {
       const quando = dec.decidido_em ? new Date(dec.decidido_em).toLocaleDateString('pt-PT', { day:'2-digit', month:'2-digit', year:'2-digit' }) : '';
@@ -6696,6 +6699,9 @@ async function loadIrregularidadesLista() {
     }
     const html = out
       .map(({ r, dataStr, snap, equipaReal }) => {
+        const decsT = decisoesPorTurno[r.turno_id] || {};
+        const blocos = renderIrregularidadeBlocos(snap, r.turno_id, decsT, comentariosPorTurno[r.turno_id] || {}, { hideAceites: true });
+        if (!blocos.trim()) return '';
         const title = `${turnoLabel(r.nome)} — ${dateLabelWithWeekday(dataStr)}`;
         const tid = String(r.turno_id);
         const nomesEquipa = (equipaReal || [])
@@ -6704,10 +6710,22 @@ async function loadIrregularidadesLista() {
         const equipaLine = nomesEquipa.length
           ? `Trabalharam: ${escapeHtml(nomesEquipa.join(', '))}`
           : 'Trabalharam: — (sem registo na aba Escala)';
-        const blocos = renderIrregularidadeBlocos(snap, r.turno_id, decisoesPorTurno[r.turno_id] || {}, comentariosPorTurno[r.turno_id] || {});
-        const nIrr = snap.numIrr || 0;
-        const badge = nIrr > 0
-          ? `<span style="display:inline-block;padding:2px 8px;background:rgba(251,146,60,0.18);border:1px solid rgba(251,146,60,0.45);border-radius:999px;font-size:11px;font-weight:700;color:#fb923c;margin-left:6px">${nIrr} ${nIrr === 1 ? 'erro' : 'erros'}</span>`
+        const catsAll = ['caixa','banco','stock','fino', ...(snap.ingredientesItems || []).map(i => 'ing:' + i.produto_id)];
+        const nIrrVisiveis = catsAll.reduce((acc, k) => {
+          const hasBlock = (
+            (k === 'caixa' && snap.caixaHtml) ||
+            (k === 'banco' && snap.bancoHtml) ||
+            (k === 'stock' && snap.stockHtml) ||
+            (k === 'fino' && snap.finoHtml) ||
+            (k.startsWith('ing:') && (snap.ingredientesItems || []).some(i => 'ing:' + i.produto_id === k))
+          );
+          if (!hasBlock) return acc;
+          const dec = decsT[k];
+          if (dec && dec.aceite) return acc;
+          return acc + 1;
+        }, 0);
+        const badge = nIrrVisiveis > 0
+          ? `<span style="display:inline-block;padding:2px 8px;background:rgba(251,146,60,0.18);border:1px solid rgba(251,146,60,0.45);border-radius:999px;font-size:11px;font-weight:700;color:#fb923c;margin-left:6px">${nIrrVisiveis} ${nIrrVisiveis === 1 ? 'erro' : 'erros'}</span>`
           : '';
         const finoCopos = Number.isFinite(snap.finoDiffCopos) ? Math.round(snap.finoDiffCopos) : 0;
         const finoBadge = finoCopos > 0
@@ -6727,6 +6745,13 @@ async function loadIrregularidadesLista() {
       </div>`;
       })
       .join('');
+    if (!html.trim()) {
+      show(
+        'irreg-content',
+        '<div class="card"><p style="color:#94a3b8;margin:0">Sem irregularidades por resolver neste período (as aceites estão ocultas).</p></div>'
+      );
+      return;
+    }
     show('irreg-content', html);
   } catch (e) {
     show('irreg-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);

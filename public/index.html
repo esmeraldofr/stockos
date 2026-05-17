@@ -301,6 +301,7 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .pedido-prod-tile:active{transform:translateY(0)}
 .pedido-prod-tile.pedido-tile--hidden{display:none}
 .pedido-prod-tile__emoji{font-size:26px;line-height:1;margin-bottom:5px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))}
+.pedido-prod-tile__img{width:56px;height:56px;border-radius:8px;object-fit:cover;margin-bottom:5px;background:#0f172a;border:1px solid #334155}
 .pedido-prod-tile__nome{
   font-size:11px;
   font-weight:600;
@@ -1054,6 +1055,36 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+/** Redimensiona uma File de imagem para `maxSide` px e devolve data URL JPEG (qualidade 0.82). */
+async function fileToImagemDataUrl(file, maxSide = 256, quality = 0.82) {
+  if (!file || !file.type || !file.type.startsWith('image/')) {
+    throw new Error('Ficheiro não é uma imagem');
+  }
+  const blobUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('Não foi possível ler a imagem'));
+      i.src = blobUrl;
+    });
+    const w0 = img.naturalWidth || img.width;
+    const h0 = img.naturalHeight || img.height;
+    if (!w0 || !h0) throw new Error('Imagem inválida');
+    const scale = Math.min(1, maxSide / Math.max(w0, h0));
+    const w = Math.max(1, Math.round(w0 * scale));
+    const h = Math.max(1, Math.round(h0 * scale));
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, w, h);
+    return c.toDataURL('image/jpeg', quality);
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
 }
 function attrUrl(u) {
   return String(u ?? '')
@@ -3933,8 +3964,11 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const pid = String(o.id);
       const em = pedidoEmojiGrupo(o.grupo);
       const preco = parseFloat(o.preco) || 0;
+      const visual = o.imagem
+        ? `<img class="pedido-prod-tile__img" src="${escapeHtml(o.imagem)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'pedido-prod-tile__emoji',textContent:'${em}'}))"/>`
+        : `<span class="pedido-prod-tile__emoji" aria-hidden="true">${em}</span>`;
       return `<button type="button" class="pedido-prod-tile" data-grupo="${escapeHtml(o.grupo)}" data-pid="${escapeHtml(pid)}" onclick="pedidoBalcaoTileClick(this.getAttribute('data-pid'))">
-        <span class="pedido-prod-tile__emoji" aria-hidden="true">${em}</span>
+        ${visual}
         <span class="pedido-prod-tile__nome">${escapeHtml(o.nome)}</span>
         <span class="pedido-prod-tile__preco">${fmt(preco)}</span>
       </button>`;
@@ -4430,7 +4464,8 @@ async function loadVendasMenu(turnoId, canEdit) {
         nome: p.nome,
         grupo: 'Menu',
         preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0,
-        comissao_pct: parseFloat(p.comissao_pct) || 0
+        comissao_pct: parseFloat(p.comissao_pct) || 0,
+        imagem: p.imagem || null
       });
     }
     for (const p of avulsoProds) {
@@ -4439,7 +4474,8 @@ async function loadVendasMenu(turnoId, canEdit) {
         nome: p.nome,
         grupo: 'Avulso',
         preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0,
-        comissao_pct: parseFloat(p.comissao_pct) || 0
+        comissao_pct: parseFloat(p.comissao_pct) || 0,
+        imagem: p.imagem || null
       });
     }
     for (const p of bebidaCopoProds) {
@@ -4452,7 +4488,8 @@ async function loadVendasMenu(turnoId, canEdit) {
         preco_copos_pacote: parseFloat(p.preco_copos_pacote) || 0,
         venda_por_copo: true,
         kg_por_copo: parseFloat(p.kg_por_copo) || 0,
-        comissao_pct: parseFloat(p.comissao_pct) || 0
+        comissao_pct: parseFloat(p.comissao_pct) || 0,
+        imagem: p.imagem || null
       });
     }
     for (const p of bebidaOutras) {
@@ -4461,7 +4498,8 @@ async function loadVendasMenu(turnoId, canEdit) {
         nome: `${p.nome} (unidade)`,
         grupo: 'BebidaUnidade',
         preco: (vendasProdPrecos[p.id] ?? parseFloat(p.preco)) || 0,
-        comissao_pct: parseFloat(p.comissao_pct) || 0
+        comissao_pct: parseFloat(p.comissao_pct) || 0,
+        imagem: p.imagem || null
       });
     }
     pedidoCatalog.sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
@@ -8188,6 +8226,17 @@ function showProdutoForm(id) {
       '</div></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
       '<div class="field"><label>Comissão por produto (%)</label><input id="p-comissao" type="number" min="0" max="100" step="0.1" value="0"/><div style="font-size:11px;color:#64748b;margin-top:4px">Usada quando o promotor tem modo «por produto». Default: 0%.</div></div>' +
+      '<div class="field"><label>Imagem (mostrada nos pedidos ao balcão)</label>' +
+        '<div style="display:flex;gap:10px;align-items:flex-start">' +
+          '<img id="p-imagem-preview" alt="" style="display:none;width:64px;height:64px;border-radius:8px;object-fit:cover;background:#0f172a;border:1px solid #334155"/>' +
+          '<div style="flex:1;min-width:0">' +
+            '<input id="p-imagem-file" type="file" accept="image/*" style="font-size:12px"/>' +
+            '<input id="p-imagem" type="hidden" value=""/>' +
+            '<button type="button" id="btn-imagem-clear" class="btn btn-ghost btn-sm" style="margin-top:6px;display:none">Remover imagem</button>' +
+            '<div id="p-imagem-msg" style="font-size:11px;color:#64748b;margin-top:4px">Redimensionada automaticamente para 256 px.</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
       (isEdit ? '<div class="field"><label>Activo</label><select id="p-ativo"><option value="true">Sim</option><option value="false">Não</option></select></div>' : '') +
       '<div class="flex gap-8 mt-8">' +
         '<button id="btn-modal-guardar" class="btn btn-success">Guardar</button>' +
@@ -8277,6 +8326,52 @@ function showProdutoForm(id) {
   toggleCopoBebida();
   if (isEdit && canEditReceita) toggleReceita();
 
+  // Imagem do produto
+  const imgHidden = document.getElementById('p-imagem');
+  const imgPreview = document.getElementById('p-imagem-preview');
+  const imgFile = document.getElementById('p-imagem-file');
+  const imgClear = document.getElementById('btn-imagem-clear');
+  const imgMsg = document.getElementById('p-imagem-msg');
+  function refreshImagemPreview() {
+    const v = imgHidden.value;
+    if (v) {
+      imgPreview.src = v;
+      imgPreview.style.display = '';
+      imgClear.style.display = '';
+    } else {
+      imgPreview.removeAttribute('src');
+      imgPreview.style.display = 'none';
+      imgClear.style.display = 'none';
+    }
+  }
+  imgHidden.value = (p && p.imagem) ? p.imagem : '';
+  refreshImagemPreview();
+  imgFile.addEventListener('change', async () => {
+    const f = imgFile.files && imgFile.files[0];
+    if (!f) return;
+    imgMsg.textContent = 'A processar imagem…';
+    imgMsg.style.color = '#94a3b8';
+    try {
+      const dataUrl = await fileToImagemDataUrl(f, 256, 0.82);
+      imgHidden.value = dataUrl;
+      refreshImagemPreview();
+      const kb = Math.round((dataUrl.length * 3) / 4 / 1024);
+      imgMsg.textContent = `Pronto (~${kb} KB). Guarda o produto para aplicar.`;
+      imgMsg.style.color = '#64748b';
+    } catch (e) {
+      imgMsg.textContent = e.message || 'Erro a processar imagem';
+      imgMsg.style.color = '#f87171';
+    } finally {
+      imgFile.value = '';
+    }
+  });
+  imgClear.addEventListener('click', () => {
+    imgHidden.value = '';
+    refreshImagemPreview();
+    imgMsg.textContent = 'Imagem removida. Guarda o produto para aplicar.';
+    imgMsg.style.color = '#64748b';
+  });
+
   document.getElementById('btn-modal-close').addEventListener('click', closeProdutoModal);
   document.getElementById('btn-modal-cancelar').addEventListener('click', closeProdutoModal);
   document.getElementById('btn-modal-guardar').addEventListener('click', function(ev) {
@@ -8310,6 +8405,7 @@ async function createProduto() {
       vendavel:!!document.getElementById('p-vendavel')?.checked,
       em_stock_turno:!!document.getElementById('p-stock-turno')?.checked,
       comissao_pct: parseFloat(val('p-comissao')) || 0,
+      imagem: val('p-imagem') || null,
       ...payloadProdutoCopo()
     });
     closeProdutoModal();
@@ -8333,6 +8429,7 @@ async function saveProduto(id) {
       vendavel: !!document.getElementById('p-vendavel')?.checked,
       em_stock_turno: !!document.getElementById('p-stock-turno')?.checked,
       comissao_pct: parseFloat(val('p-comissao')) || 0,
+      imagem: val('p-imagem') || null,
       ...payloadProdutoCopo()
     });
     closeProdutoModal();

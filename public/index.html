@@ -5232,10 +5232,9 @@ async function apagarComentarioIrregularidade(comId, turnoId) {
 
 async function decidirIrregularidade(turnoId, categoria, aceite) {
   const label = aceite ? 'Aceitar' : 'Rejeitar';
-  const just = prompt(`${label} esta irregularidade. Justificação (opcional):`, '');
-  if (just === null) return; // cancelado
+  if (!confirm(`${label} esta irregularidade?`)) return;
   try {
-    const row = await api('POST', '/irregularidades/decisao', { turno_id: turnoId, categoria, aceite, justificacao: just });
+    const row = await api('POST', '/irregularidades/decisao', { turno_id: turnoId, categoria, aceite, justificacao: '' });
     if (S.page === 'irregularidades') {
       if (S.irregCache) {
         const map = S.irregCache.decisoesPorTurno;

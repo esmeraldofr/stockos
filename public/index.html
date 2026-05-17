@@ -4884,6 +4884,7 @@ function buildIrregularidadesHtmlParts({
   }
 
   let stockHtml = '';
+  let stockIrrCount = 0;
   if (stock.length) {
     const rowsL = [];
     let temPrev = false;
@@ -4912,6 +4913,7 @@ function buildIrregularidadesHtmlParts({
     }
     if (temPrev) {
       const irr = rowsL.filter((r) => r.alertEnc);
+      stockIrrCount = irr.length;
       if (irr.length > 0) {
         const bullets = irr
           .map((r) => {
@@ -5018,7 +5020,8 @@ function buildIrregularidadesHtmlParts({
   }
 
   const hasAny = !!(caixaHtml || bancoHtml || stockHtml || finoHtml || ingredientesItems.length);
-  return { hasAny, caixaHtml, bancoHtml, stockHtml, finoHtml, ingredientesItems };
+  const numIrr = (caixaHtml ? 1 : 0) + (bancoHtml ? 1 : 0) + stockIrrCount + (finoHtml ? 1 : 0) + ingredientesItems.length;
+  return { hasAny, numIrr, caixaHtml, bancoHtml, stockHtml, finoHtml, ingredientesItems };
 }
 
 /** Wrapa cada bloco do snap com footer de aceitar/rejeitar/pendente. decisoes = map categoria → row. */
@@ -6447,6 +6450,13 @@ async function drawIrregularidades() {
         <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
           <div class="field" style="flex:1;min-width:140px;margin:0"><label>De</label><input type="date" id="ir-inicio"/></div>
           <div class="field" style="flex:1;min-width:140px;margin:0"><label>Até</label><input type="date" id="ir-fim"/></div>
+          <div class="field" style="flex:1;min-width:160px;margin:0">
+            <label>Ordenar por</label>
+            <select id="ir-sort" onchange="runAction(event, loadIrregularidadesLista)">
+              <option value="erros">Mais erros</option>
+              <option value="data">Mais recente</option>
+            </select>
+          </div>
           <button type="button" class="btn btn-primary" onclick="runAction(event, loadIrregularidadesLista)">Carregar</button>
         </div>
       </div>
@@ -6529,6 +6539,16 @@ async function loadIrregularidadesLista() {
       if (!decisoesPorTurno[d.turno_id]) decisoesPorTurno[d.turno_id] = {};
       decisoesPorTurno[d.turno_id][d.categoria] = d;
     }
+    const sortMode = val('ir-sort') || 'erros';
+    if (sortMode === 'erros') {
+      out.sort((a, b) => {
+        const da = (b.snap.numIrr || 0) - (a.snap.numIrr || 0);
+        if (da !== 0) return da;
+        return String(b.dataStr).localeCompare(String(a.dataStr));
+      });
+    } else {
+      out.sort((a, b) => String(b.dataStr).localeCompare(String(a.dataStr)));
+    }
     const html = out
       .map(({ r, dataStr, snap, equipaReal }) => {
         const title = `${turnoLabel(r.nome)} — ${dateLabelWithWeekday(dataStr)}`;
@@ -6540,11 +6560,15 @@ async function loadIrregularidadesLista() {
           ? `Trabalharam: ${escapeHtml(nomesEquipa.join(', '))}`
           : 'Trabalharam: — (sem registo na aba Escala)';
         const blocos = renderIrregularidadeBlocos(snap, r.turno_id, decisoesPorTurno[r.turno_id] || {});
+        const nIrr = snap.numIrr || 0;
+        const badge = nIrr > 0
+          ? `<span style="display:inline-block;padding:2px 8px;background:rgba(251,146,60,0.18);border:1px solid rgba(251,146,60,0.45);border-radius:999px;font-size:11px;font-weight:700;color:#fb923c;margin-left:6px">${nIrr} ${nIrr === 1 ? 'erro' : 'erros'}</span>`
+          : '';
         return `
       <div class="card" style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px">
           <div>
-            <div style="font-weight:700;color:#f1f5f9;font-size:15px">⚠️ ${escapeHtml(title)}</div>
+            <div style="font-weight:700;color:#f1f5f9;font-size:15px">⚠️ ${escapeHtml(title)}${badge}</div>
             <div style="font-size:11px;color:#64748b;margin-top:2px">${escapeHtml(dataStr)} · ${r.estado === 'fechado' ? 'Fechado' : 'Aberto'}</div>
             <div style="font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.4">${equipaLine}</div>
           </div>

@@ -5096,9 +5096,12 @@ function buildIrregularidadesHtmlParts({
 
 /** Wrapa cada bloco do snap com footer de aceitar/rejeitar/pendente + comentários.
  *  decisoes = map categoria → row. comentariosByCat = map categoria → array de comentários.
- *  opts.hideAceites = true esconde blocos cuja decisão é aceite. */
+ *  opts.hideAceites = true esconde blocos cuja decisão é aceite.
+ *  opts.filtroTipos = objecto {caixa,banco,stock,fino,ing} com flags; falso oculta o tipo. */
 function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat, comentariosByCat, opts) {
   const hideAceites = !!(opts && opts.hideAceites);
+  const filtro = opts && opts.filtroTipos;
+  const tipoDe = (key) => key.startsWith('ing:') ? 'ing' : key;
   const cats = [
     { key: 'caixa', html: snap.caixaHtml },
     { key: 'banco', html: snap.bancoHtml || '' },
@@ -5111,6 +5114,7 @@ function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat, comentariosByC
   const podeDecidir = S.user?.role === 'admin';
   return cats.map(({ key, html }) => {
     if (!html) return '';
+    if (filtro && filtro[tipoDe(key)] === false) return '';
     const dec = decisoesByCat?.[key];
     if (hideAceites && dec && dec.aceite) return '';
     let footer = '';
@@ -6568,6 +6572,7 @@ async function openTurnoFromIrreg(dataStr, turnoId) {
 }
 
 async function drawIrregularidades() {
+  if (!S.irregFiltros) S.irregFiltros = { caixa: true, banco: true, stock: true, fino: true, ing: true };
   render(`
     <div id="header">
       <div>
@@ -6583,13 +6588,17 @@ async function drawIrregularidades() {
           <div class="field" style="flex:1;min-width:140px;margin:0"><label>Até</label><input type="date" id="ir-fim"/></div>
           <div class="field" style="flex:1;min-width:160px;margin:0">
             <label>Ordenar por</label>
-            <select id="ir-sort" onchange="runAction(event, loadIrregularidadesLista)">
+            <select id="ir-sort" onchange="runAction(event, () => S.irregCache ? renderIrregularidadesListaFromCache() : loadIrregularidadesLista())">
               <option value="erros">Mais erros</option>
               <option value="fino">Mais copos de Fino desperdiçados</option>
               <option value="data">Mais recente</option>
             </select>
           </div>
           <button type="button" class="btn btn-primary" onclick="runAction(event, loadIrregularidadesLista)">Carregar</button>
+        </div>
+        <div style="margin-top:10px">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Mostrar tipos:</div>
+          <div id="ir-filtros" style="display:flex;flex-wrap:wrap;gap:6px"></div>
         </div>
       </div>
       <div id="irreg-content"></div>
@@ -6600,7 +6609,34 @@ async function drawIrregularidades() {
   const ontem = addDays(hoje, -1);
   document.getElementById('ir-inicio').value = ontem;
   document.getElementById('ir-fim').value = hoje;
+  renderIrregFiltros();
   await loadIrregularidadesLista();
+}
+
+function renderIrregFiltros() {
+  const mount = document.getElementById('ir-filtros');
+  if (!mount) return;
+  const tipos = [
+    { k: 'caixa', label: 'Caixa' },
+    { k: 'banco', label: 'Banco' },
+    { k: 'stock', label: 'Stock' },
+    { k: 'fino', label: 'Fino' },
+    { k: 'ing', label: 'Ingredientes' }
+  ];
+  mount.innerHTML = tipos.map((t) => {
+    const on = !!(S.irregFiltros && S.irregFiltros[t.k]);
+    const bg = on ? 'rgba(96,165,250,0.18)' : 'rgba(51,65,85,0.55)';
+    const bd = on ? 'rgba(96,165,250,0.55)' : 'rgba(148,163,184,0.25)';
+    const cor = on ? '#93c5fd' : '#94a3b8';
+    return `<button type="button" data-filtro="${t.k}" style="padding:4px 10px;font-size:12px;font-weight:600;background:${bg};border:1px solid ${bd};border-radius:999px;color:${cor};cursor:pointer" onclick="toggleIrregFiltro('${t.k}')">${on ? '✓ ' : ''}${t.label}</button>`;
+  }).join('');
+}
+
+function toggleIrregFiltro(k) {
+  if (!S.irregFiltros) S.irregFiltros = { caixa: true, banco: true, stock: true, fino: true, ing: true };
+  S.irregFiltros[k] = !S.irregFiltros[k];
+  renderIrregFiltros();
+  renderIrregularidadesListaFromCache();
 }
 
 async function loadIrregularidadesLista() {
@@ -6680,82 +6716,95 @@ async function loadIrregularidadesLista() {
       if (!comentariosPorTurno[c.turno_id][c.categoria]) comentariosPorTurno[c.turno_id][c.categoria] = [];
       comentariosPorTurno[c.turno_id][c.categoria].push(c);
     }
-    const sortMode = val('ir-sort') || 'erros';
-    if (sortMode === 'erros') {
-      out.sort((a, b) => {
-        const da = (b.snap.numIrr || 0) - (a.snap.numIrr || 0);
-        if (da !== 0) return da;
-        return String(b.dataStr).localeCompare(String(a.dataStr));
-      });
-    } else if (sortMode === 'fino') {
-      const finoDiff = (s) => Number.isFinite(s?.finoDiffCopos) ? s.finoDiffCopos : -Infinity;
-      out.sort((a, b) => {
-        const da = finoDiff(b.snap) - finoDiff(a.snap);
-        if (da !== 0) return da;
-        return String(b.dataStr).localeCompare(String(a.dataStr));
-      });
-    } else {
-      out.sort((a, b) => String(b.dataStr).localeCompare(String(a.dataStr)));
-    }
-    const html = out
-      .map(({ r, dataStr, snap, equipaReal }) => {
-        const decsT = decisoesPorTurno[r.turno_id] || {};
-        const blocos = renderIrregularidadeBlocos(snap, r.turno_id, decsT, comentariosPorTurno[r.turno_id] || {}, { hideAceites: true });
-        if (!blocos.trim()) return '';
-        const title = `${turnoLabel(r.nome)} — ${dateLabelWithWeekday(dataStr)}`;
-        const tid = String(r.turno_id);
-        const nomesEquipa = (equipaReal || [])
-          .map((p) => String(p.utilizador_nome || '').trim())
-          .filter(Boolean);
-        const equipaLine = nomesEquipa.length
-          ? `Trabalharam: ${escapeHtml(nomesEquipa.join(', '))}`
-          : 'Trabalharam: — (sem registo na aba Escala)';
-        const catsAll = ['caixa','banco','stock','fino', ...(snap.ingredientesItems || []).map(i => 'ing:' + i.produto_id)];
-        const nIrrVisiveis = catsAll.reduce((acc, k) => {
-          const hasBlock = (
-            (k === 'caixa' && snap.caixaHtml) ||
-            (k === 'banco' && snap.bancoHtml) ||
-            (k === 'stock' && snap.stockHtml) ||
-            (k === 'fino' && snap.finoHtml) ||
-            (k.startsWith('ing:') && (snap.ingredientesItems || []).some(i => 'ing:' + i.produto_id === k))
-          );
-          if (!hasBlock) return acc;
-          const dec = decsT[k];
-          if (dec && dec.aceite) return acc;
-          return acc + 1;
-        }, 0);
-        const badge = nIrrVisiveis > 0
-          ? `<span style="display:inline-block;padding:2px 8px;background:rgba(251,146,60,0.18);border:1px solid rgba(251,146,60,0.45);border-radius:999px;font-size:11px;font-weight:700;color:#fb923c;margin-left:6px">${nIrrVisiveis} ${nIrrVisiveis === 1 ? 'erro' : 'erros'}</span>`
-          : '';
-        const finoCopos = Number.isFinite(snap.finoDiffCopos) ? Math.round(snap.finoDiffCopos) : 0;
-        const finoBadge = finoCopos > 0
-          ? `<span style="display:inline-block;padding:2px 8px;background:rgba(248,113,113,0.18);border:1px solid rgba(248,113,113,0.45);border-radius:999px;font-size:11px;font-weight:700;color:#fca5a5;margin-left:6px">🍺 −${finoCopos} ${finoCopos === 1 ? 'copo' : 'copos'} Fino</span>`
-          : '';
-        return `
-      <div class="card" style="margin-bottom:14px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-          <div>
-            <div style="font-weight:700;color:#f1f5f9;font-size:15px">⚠️ ${escapeHtml(title)}${badge}${finoBadge}</div>
-            <div style="font-size:11px;color:#64748b;margin-top:2px">${escapeHtml(dataStr)} · ${r.estado === 'fechado' ? 'Fechado' : 'Aberto'}</div>
-            <div style="font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.4">${equipaLine}</div>
-          </div>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, async () => { await openTurnoFromIrreg('${dataStr}', '${tid}'); })">Abrir turno</button>
-        </div>
-        <div>${blocos}</div>
-      </div>`;
-      })
-      .join('');
-    if (!html.trim()) {
-      show(
-        'irreg-content',
-        '<div class="card"><p style="color:#94a3b8;margin:0">Sem irregularidades por resolver neste período (as aceites estão ocultas).</p></div>'
-      );
-      return;
-    }
-    show('irreg-content', html);
+    S.irregCache = { out, decisoesPorTurno, comentariosPorTurno };
+    renderIrregularidadesListaFromCache();
   } catch (e) {
     show('irreg-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
   }
+}
+
+function renderIrregularidadesListaFromCache() {
+  const cache = S.irregCache;
+  if (!cache) return;
+  const { out, decisoesPorTurno, comentariosPorTurno } = cache;
+  const filtro = S.irregFiltros || { caixa: true, banco: true, stock: true, fino: true, ing: true };
+  const sortMode = val('ir-sort') || 'erros';
+  const ordered = out.slice();
+  if (sortMode === 'erros') {
+    ordered.sort((a, b) => {
+      const da = (b.snap.numIrr || 0) - (a.snap.numIrr || 0);
+      if (da !== 0) return da;
+      return String(b.dataStr).localeCompare(String(a.dataStr));
+    });
+  } else if (sortMode === 'fino') {
+    const finoDiff = (s) => Number.isFinite(s?.finoDiffCopos) ? s.finoDiffCopos : -Infinity;
+    ordered.sort((a, b) => {
+      const da = finoDiff(b.snap) - finoDiff(a.snap);
+      if (da !== 0) return da;
+      return String(b.dataStr).localeCompare(String(a.dataStr));
+    });
+  } else {
+    ordered.sort((a, b) => String(b.dataStr).localeCompare(String(a.dataStr)));
+  }
+  const html = ordered
+    .map(({ r, dataStr, snap, equipaReal }) => {
+      const decsT = decisoesPorTurno[r.turno_id] || {};
+      const blocos = renderIrregularidadeBlocos(snap, r.turno_id, decsT, comentariosPorTurno[r.turno_id] || {}, { hideAceites: true, filtroTipos: filtro });
+      if (!blocos.trim()) return '';
+      const title = `${turnoLabel(r.nome)} — ${dateLabelWithWeekday(dataStr)}`;
+      const tid = String(r.turno_id);
+      const nomesEquipa = (equipaReal || [])
+        .map((p) => String(p.utilizador_nome || '').trim())
+        .filter(Boolean);
+      const equipaLine = nomesEquipa.length
+        ? `Trabalharam: ${escapeHtml(nomesEquipa.join(', '))}`
+        : 'Trabalharam: — (sem registo na aba Escala)';
+      const tipoDe = (k) => k.startsWith('ing:') ? 'ing' : k;
+      const catsAll = ['caixa','banco','stock','fino', ...(snap.ingredientesItems || []).map(i => 'ing:' + i.produto_id)];
+      const nIrrVisiveis = catsAll.reduce((acc, k) => {
+        if (filtro[tipoDe(k)] === false) return acc;
+        const hasBlock = (
+          (k === 'caixa' && snap.caixaHtml) ||
+          (k === 'banco' && snap.bancoHtml) ||
+          (k === 'stock' && snap.stockHtml) ||
+          (k === 'fino' && snap.finoHtml) ||
+          (k.startsWith('ing:') && (snap.ingredientesItems || []).some(i => 'ing:' + i.produto_id === k))
+        );
+        if (!hasBlock) return acc;
+        const dec = decsT[k];
+        if (dec && dec.aceite) return acc;
+        return acc + 1;
+      }, 0);
+      const badge = nIrrVisiveis > 0
+        ? `<span style="display:inline-block;padding:2px 8px;background:rgba(251,146,60,0.18);border:1px solid rgba(251,146,60,0.45);border-radius:999px;font-size:11px;font-weight:700;color:#fb923c;margin-left:6px">${nIrrVisiveis} ${nIrrVisiveis === 1 ? 'erro' : 'erros'}</span>`
+        : '';
+      const finoCopos = Number.isFinite(snap.finoDiffCopos) ? Math.round(snap.finoDiffCopos) : 0;
+      const finoBadge = (filtro.fino !== false && finoCopos > 0)
+        ? `<span style="display:inline-block;padding:2px 8px;background:rgba(248,113,113,0.18);border:1px solid rgba(248,113,113,0.45);border-radius:999px;font-size:11px;font-weight:700;color:#fca5a5;margin-left:6px">🍺 −${finoCopos} ${finoCopos === 1 ? 'copo' : 'copos'} Fino</span>`
+        : '';
+      return `
+    <div class="card" style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <div>
+          <div style="font-weight:700;color:#f1f5f9;font-size:15px">⚠️ ${escapeHtml(title)}${badge}${finoBadge}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px">${escapeHtml(dataStr)} · ${r.estado === 'fechado' ? 'Fechado' : 'Aberto'}</div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.4">${equipaLine}</div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, async () => { await openTurnoFromIrreg('${dataStr}', '${tid}'); })">Abrir turno</button>
+      </div>
+      <div>${blocos}</div>
+    </div>`;
+    })
+    .join('');
+  if (!html.trim()) {
+    const totaisAtivos = Object.values(S.irregFiltros || {}).filter(Boolean).length;
+    const msg = totaisAtivos === 0
+      ? 'Selecciona pelo menos um tipo de irregularidade nos filtros acima.'
+      : 'Sem irregularidades para mostrar neste período com os filtros actuais.';
+    show('irreg-content', `<div class="card"><p style="color:#94a3b8;margin:0">${msg}</p></div>`);
+    return;
+  }
+  show('irreg-content', html);
 }
 
 // ── ASSIDUIDADE ───────────────────────────────────────────────

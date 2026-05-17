@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-cal-modal-irreg">
+<html lang="pt" data-stockos-ui="2026-05-17-he-opcional">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6556,7 +6556,6 @@ async function addTurnoPresenca(turnoId) {
   const naoEscalado = !escaladosIds.has(String(utilizador_id));
   if (naoEscalado && !cobrindo_utilizador_id) return err('turno-presenca-msg', 'Seleciona quem este funcionário está cobrindo');
   if (naoEscalado && !motivo_falta.trim()) return err('turno-presenca-msg', 'Regista o motivo da falta');
-  if (naoEscalado && !hora_extra) return err('turno-presenca-msg', 'Confirma se deve aplicar pagamento de hora extra');
   try {
     await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, cobrindo_utilizador_id: naoEscalado ? cobrindo_utilizador_id : null, hora_extra, motivo_falta: naoEscalado ? motivo_falta.trim() : '', notas });
     show('turno-presenca-msg', '');

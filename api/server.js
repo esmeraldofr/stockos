@@ -320,6 +320,7 @@ let turnoPedidosReady = false;
 let presencasReady = false;
 let precosVendasSnapshotsReady = false;
 let irregularidadeDecisoesReady = false;
+let irregularidadeComentariosReady = false;
 /** ALTER/enum de utilizadores só na primeira vez por processo. */
 let usernameColumnEnsured = false;
 
@@ -4722,6 +4723,97 @@ app.delete('/api/irregularidades/decisao', auth, requireRole('admin'), async (re
       return res.status(400).json({ erro: 'turno_id e categoria obrigatórios.' });
     }
     await query('DELETE FROM irregularidade_decisoes WHERE turno_id=$1 AND categoria=$2', [tid, cat]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── IRREGULARIDADES — COMENTÁRIOS (thread por turno+categoria) ──
+async function ensureIrregularidadeComentarios() {
+  if (irregularidadeComentariosReady) return;
+  let done = false;
+  try {
+    const r = await query(`SELECT k FROM stockos_meta WHERE k = 'irreg_comentarios_ddl_v1'`);
+    if (r.rows.length) done = true;
+  } catch (_) {}
+  try {
+    if (!done) {
+      await query(`CREATE TABLE IF NOT EXISTS irregularidade_comentarios (
+        id SERIAL PRIMARY KEY,
+        turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+        categoria VARCHAR(64) NOT NULL,
+        autor_id TEXT NOT NULL DEFAULT '',
+        autor_nome TEXT NOT NULL DEFAULT '',
+        comentario TEXT NOT NULL,
+        criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`);
+      await query(`CREATE INDEX IF NOT EXISTS irreg_comentarios_turno_cat_idx ON irregularidade_comentarios(turno_id, categoria)`).catch(() => {});
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('irreg_comentarios_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+    }
+    irregularidadeComentariosReady = true;
+  } catch (e) {
+    console.warn('[ensureIrregularidadeComentarios]', e && e.message);
+  }
+}
+
+/** GET comentários por turno(s). ?turno_id=1,2,3 — devolve todos ordenados por criado_em ASC. */
+app.get('/api/irregularidades/comentarios', auth, async (req, res) => {
+  try {
+    await ensureIrregularidadeComentarios();
+    const raw = String(req.query.turno_id || '').trim();
+    if (!raw) return res.json([]);
+    const ids = raw.split(',').map(x => parseInt(x, 10)).filter(Number.isFinite);
+    if (!ids.length) return res.json([]);
+    const r = await query(
+      `SELECT c.id, c.turno_id, c.categoria, c.autor_id, c.autor_nome, c.comentario, c.criado_em
+       FROM irregularidade_comentarios c
+       WHERE c.turno_id = ANY($1::int[])
+       ORDER BY c.criado_em ASC, c.id ASC`,
+      [ids]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** POST adicionar comentário. { turno_id, categoria, comentario } — qualquer utilizador autenticado. */
+app.post('/api/irregularidades/comentario', auth, async (req, res) => {
+  try {
+    await ensureIrregularidadeComentarios();
+    const tid = parseInt(req.body?.turno_id, 10);
+    const cat = String(req.body?.categoria || '').trim().toLowerCase();
+    const texto = String(req.body?.comentario || '').trim();
+    if (!tid || !isIrregCategoriaValida(cat)) {
+      return res.status(400).json({ erro: 'turno_id e categoria (caixa/banco/stock/fino ou ing:<produto_id>) obrigatórios.' });
+    }
+    if (!texto) return res.status(400).json({ erro: 'comentário vazio.' });
+    if (texto.length > 2000) return res.status(400).json({ erro: 'comentário demasiado longo (máx. 2000 caracteres).' });
+    const uNome = await query('SELECT nome FROM utilizadores WHERE id=$1', [req.user.id]).catch(() => ({ rows: [] }));
+    const r = await query(
+      `INSERT INTO irregularidade_comentarios (turno_id, categoria, autor_id, autor_nome, comentario)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [tid, cat, String(req.user.id || ''), uNome.rows[0]?.nome || '', texto]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** DELETE — só admin ou o próprio autor. */
+app.delete('/api/irregularidades/comentario', auth, async (req, res) => {
+  try {
+    await ensureIrregularidadeComentarios();
+    const id = parseInt(req.query.id, 10);
+    if (!id) return res.status(400).json({ erro: 'id obrigatório.' });
+    const r = await query('SELECT autor_id FROM irregularidade_comentarios WHERE id=$1', [id]);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Comentário não encontrado.' });
+    const ehAdmin = req.user.role === 'admin';
+    const ehAutor = String(r.rows[0].autor_id) === String(req.user.id);
+    if (!ehAdmin && !ehAutor) return res.status(403).json({ erro: 'Só o autor ou um admin pode apagar este comentário.' });
+    await query('DELETE FROM irregularidade_comentarios WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });

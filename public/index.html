@@ -4935,6 +4935,7 @@ function buildIrregularidadesHtmlParts({
   }
 
   let finoHtml = '';
+  let finoDiffCopos = NaN;
   const barrilRow = stock.find((s) => prodNomeNorm(s.produto_nome) === 'fino barril');
   if (barrilRow) {
     const pidB = prodIdKey(barrilRow.produto_id);
@@ -4949,6 +4950,7 @@ function buildIrregularidadesHtmlParts({
     if (id1000) v1000 = parseFloat(vendasBuf[prodIdKey(id1000)]) || 0;
     const coposVendas = v400 + v1000;
     const diff = Number.isFinite(coposStock) ? coposStock - coposVendas : NaN;
+    finoDiffCopos = diff;
     const ok = Number.isFinite(diff) && Math.abs(diff) < 0.06;
     const missing = !id400 || !id1000;
     if (!ok || missing) {
@@ -5024,7 +5026,7 @@ function buildIrregularidadesHtmlParts({
 
   const hasAny = !!(caixaHtml || bancoHtml || stockHtml || finoHtml || ingredientesItems.length);
   const numIrr = (caixaHtml ? 1 : 0) + (bancoHtml ? 1 : 0) + stockIrrCount + (finoHtml ? 1 : 0) + ingredientesItems.length;
-  return { hasAny, numIrr, caixaHtml, bancoHtml, stockHtml, finoHtml, ingredientesItems };
+  return { hasAny, numIrr, finoDiffCopos, caixaHtml, bancoHtml, stockHtml, finoHtml, ingredientesItems };
 }
 
 /** Wrapa cada bloco do snap com footer de aceitar/rejeitar/pendente. decisoes = map categoria → row. */
@@ -6468,6 +6470,7 @@ async function drawIrregularidades() {
             <label>Ordenar por</label>
             <select id="ir-sort" onchange="runAction(event, loadIrregularidadesLista)">
               <option value="erros">Mais erros</option>
+              <option value="fino">Mais copos de Fino desperdiçados</option>
               <option value="data">Mais recente</option>
             </select>
           </div>
@@ -6560,6 +6563,13 @@ async function loadIrregularidadesLista() {
         if (da !== 0) return da;
         return String(b.dataStr).localeCompare(String(a.dataStr));
       });
+    } else if (sortMode === 'fino') {
+      const finoDiff = (s) => Number.isFinite(s?.finoDiffCopos) ? s.finoDiffCopos : -Infinity;
+      out.sort((a, b) => {
+        const da = finoDiff(b.snap) - finoDiff(a.snap);
+        if (da !== 0) return da;
+        return String(b.dataStr).localeCompare(String(a.dataStr));
+      });
     } else {
       out.sort((a, b) => String(b.dataStr).localeCompare(String(a.dataStr)));
     }
@@ -6578,11 +6588,15 @@ async function loadIrregularidadesLista() {
         const badge = nIrr > 0
           ? `<span style="display:inline-block;padding:2px 8px;background:rgba(251,146,60,0.18);border:1px solid rgba(251,146,60,0.45);border-radius:999px;font-size:11px;font-weight:700;color:#fb923c;margin-left:6px">${nIrr} ${nIrr === 1 ? 'erro' : 'erros'}</span>`
           : '';
+        const finoCopos = Number.isFinite(snap.finoDiffCopos) ? Math.round(snap.finoDiffCopos) : 0;
+        const finoBadge = finoCopos > 0
+          ? `<span style="display:inline-block;padding:2px 8px;background:rgba(248,113,113,0.18);border:1px solid rgba(248,113,113,0.45);border-radius:999px;font-size:11px;font-weight:700;color:#fca5a5;margin-left:6px">🍺 −${finoCopos} ${finoCopos === 1 ? 'copo' : 'copos'} Fino</span>`
+          : '';
         return `
       <div class="card" style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px">
           <div>
-            <div style="font-weight:700;color:#f1f5f9;font-size:15px">⚠️ ${escapeHtml(title)}${badge}</div>
+            <div style="font-weight:700;color:#f1f5f9;font-size:15px">⚠️ ${escapeHtml(title)}${badge}${finoBadge}</div>
             <div style="font-size:11px;color:#64748b;margin-top:2px">${escapeHtml(dataStr)} · ${r.estado === 'fechado' ? 'Fechado' : 'Aberto'}</div>
             <div style="font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.4">${equipaLine}</div>
           </div>

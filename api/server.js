@@ -442,11 +442,6 @@ async function initDB() {
     senha_hash TEXT NOT NULL DEFAULT '', role VARCHAR(20) NOT NULL DEFAULT 'operador',
     ativo BOOLEAN NOT NULL DEFAULT TRUE, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, [], 'utilizadores');
-  await qry(
-    `INSERT INTO utilizadores (nome,email,senha_hash,role) VALUES ('Admin','admin@stockos.ao',$1,'admin') ON CONFLICT (email) DO UPDATE SET senha_hash=$1`,
-    [hashPassword('admin123')],
-    'admin-early'
-  );
   markLoginReady();
   await qry(`CREATE TABLE IF NOT EXISTS produtos (
     id SERIAL PRIMARY KEY, nome VARCHAR(200) NOT NULL, preco NUMERIC(15,2) NOT NULL DEFAULT 0,
@@ -809,7 +804,7 @@ app.post('/api/auth/login', async (req, res) => {
     console.error('[auth/login]', pgErrText(e));
     res.status(500).json({
       erro:
-        'Não foi possível autenticar. Usa o email completo (ex.: admin@stockos.ao). Se persistir, o user da DATABASE_URL precisa de GRANT SELECT (e UPDATE nas colunas usadas) em public.utilizadores.'
+        'Não foi possível autenticar. Verifica o email/username e a password. Se persistir, o user da DATABASE_URL precisa de GRANT SELECT (e UPDATE nas colunas usadas) em public.utilizadores.'
     });
   }
 });
@@ -1664,19 +1659,15 @@ function pgErrText(e) {
  */
 async function queryUtilizadorPorLogin(login) {
   const L = String(login || '').trim();
-  /** Alias hardcoded: permite entrar como `admin` mesmo quando o backfill de username ainda
-   *  não correu (ensureUsernameColumn só é chamado por /api/utilizadores). */
-  const emailAlias = L.toLowerCase() === 'admin' ? 'admin@stockos.ao' : null;
   try {
     const r = await query(
       `SELECT * FROM utilizadores WHERE ativo=true AND (
         LOWER(email) = LOWER($1)
-        OR ($2::text IS NOT NULL AND LOWER(email) = $2)
         OR (STRPOS($1, '@') = 0 AND LOWER(COALESCE(username, '')) = LOWER($1))
       )
       ORDER BY CASE WHEN LOWER(email) = LOWER($1) THEN 0 ELSE 1 END
       LIMIT 1`,
-      [L, emailAlias]
+      [L]
     );
     return r;
   } catch (e) {
@@ -1716,7 +1707,6 @@ async function ensureUsernameColumn() {
     for (const row of r.rows) {
       await query(`UPDATE utilizadores SET username=$1 WHERE id=$2`, [`u${row.id}`, row.id]).catch(() => {});
     }
-    await query(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`).catch(() => {});
   } else {
     console.warn('[ensureUsernameColumn] Coluna username ausente — aplica supabase/grant_stockos_app.sql e migrações como postgres, ou POST /api/migrate.');
   }
@@ -2135,7 +2125,6 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     `UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = ''`,
     'utilizadores-username-backfill'
   );
-  await run(`UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao'`, 'utilizadores-username-admin');
   await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username))`, 'utilizadores-username-idx');
   try {
     await ensureDepositosBanco();

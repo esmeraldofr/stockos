@@ -186,7 +186,6 @@ ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS senha_hash TEXT NOT NULL DEFAU
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50);
 ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_foto_url TEXT NOT NULL DEFAULT '';
 UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = '';
-UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_utilizadores_username_lower ON utilizadores (LOWER(username));
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0;
 DO $$ BEGIN
@@ -301,13 +300,9 @@ ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS area_trabalho SMALLINT;
 
 -- ============================================================
 --  DADOS INICIAIS — UTILIZADORES
---  Senhas: definidas pelo admin ou password inicial na criação do utilizador
+--  Os utilizadores são criados pelo admin via UI. Sem seed automático.
 -- ============================================================
-INSERT INTO utilizadores (nome, email, senha_hash, role, username) VALUES
-  ('Admin', 'admin@stockos.ao', '', 'admin', 'admin')
-  ON CONFLICT (email) DO NOTHING;
 UPDATE utilizadores SET username = 'u' || id::text WHERE username IS NULL OR TRIM(COALESCE(username,'')) = '';
-UPDATE utilizadores SET username = 'admin' WHERE email = 'admin@stockos.ao';
 
 -- ============================================================
 --  DADOS INICIAIS — PRODUTOS (INGREDIENTES)

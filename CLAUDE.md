@@ -24,13 +24,13 @@ Este ficheiro serve de referência para sessões futuras. Resume tudo o que foi 
 
 ---
 
-## Credenciais da Plataforma
+## Plataforma
 
 | Campo | Valor |
 |---|---|
 | URL | https://stockos-mu.vercel.app |
-| Email admin | `admin@stockos.ao` |
-| Password admin | `admin123` |
+
+**Contas:** sem seed automático no código. O administrador cria os utilizadores pela UI (Admin → Utilizadores). Se ficares sem nenhum admin activo, reactiva uma conta directamente na BD: `UPDATE utilizadores SET ativo=true WHERE email='…';`.
 
 ---
 
@@ -58,7 +58,7 @@ Dispara em push para `main`. Faz deploy automático para produção via `amondne
 
 ### 3. `setup-db.yml` — Inicialização da base de dados
 
-Dispara em push para `main` ou manualmente (`workflow_dispatch`). Corre o SQL em `supabase/stockos_database.sql` se a BD ainda não estiver inicializada. Define a password do admin no final.
+Dispara em push para `main` ou manualmente (`workflow_dispatch`). Corre o SQL em `supabase/stockos_database.sql` se a BD ainda não estiver inicializada. Garante a extensão `pgcrypto`. **Não cria utilizadores nem repõe passwords** — o admin gere isso via UI ou directamente no Postgres.
 
 ---
 

@@ -817,7 +817,7 @@ function sanitizeAuthLoginResponseErro(raw) {
     (m.includes('utilizadores') && (m.includes('owner') || m.includes('permission'))) ||
     m.includes('postgresql')
   ) {
-    return 'Não foi possível autenticar. Usa o email completo (ex.: admin@stockos.ao). Confirma o deploy na Vercel e GRANT em public.utilizadores para o user da DATABASE_URL.';
+    return 'Não foi possível autenticar. Verifica o email/username e a password. Se persistir, confirma o deploy na Vercel e GRANT em public.utilizadores para o user da DATABASE_URL.';
   }
   return raw;
 }

@@ -499,6 +499,11 @@ async function initDB() {
     'produtos-qtd-copos-pacote'
   );
   await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem TEXT`,
+    [],
+    'produtos-imagem'
+  );
+  await qry(
     `UPDATE produtos SET venda_por_copo = true, kg_por_copo = 0.27, preco = 400, preco_copos_pacote = 1000, qtd_copos_pacote = 3, tipo_medicao = 'peso'
      WHERE lower(trim(nome)) = 'fino' AND categoria = 'bebida' AND COALESCE(kg_por_copo, 0) = 0`,
     [],
@@ -2168,6 +2173,10 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS vendavel BOOLEAN NOT NULL DEFAULT FALSE`,
     'produtos-vendavel'
   );
+  await run(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem TEXT`,
+    'produtos-imagem'
+  );
   try {
     const r = await query(`SELECT v FROM stockos_meta WHERE k='produtos_vendavel_backfill_v1'`);
     if (!r.rows.length) {
@@ -2380,7 +2389,8 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
       kg_por_copo,
       preco_copos_pacote,
       qtd_copos_pacote,
-      comissao_pct
+      comissao_pct,
+      imagem
     } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const maxOrdem = await query('SELECT COALESCE(MAX(ordem),0)+1 as n FROM produtos');
@@ -2394,9 +2404,10 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
     const pcp = parseFloat(preco_copos_pacote) || 0;
     const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
     const cpct = Math.max(0, Math.min(100, parseFloat(comissao_pct) || 0));
+    const img = typeof imagem === 'string' && imagem.trim() ? imagem.trim() : null;
     const r = await query(
-      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel,comissao_pct)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel,comissao_pct,imagem)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
       [
         nome,
         preco || 0,
@@ -2410,7 +2421,8 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
         pcp,
         qcp,
         vendavelFinal,
-        cpct
+        cpct,
+        img
       ]
     );
     const row = r.rows[0];
@@ -2441,7 +2453,8 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
       kg_por_copo,
       preco_copos_pacote,
       qtd_copos_pacote,
-      comissao_pct
+      comissao_pct,
+      imagem
     } = req.body;
     const medicao = tipo_medicao === 'peso' ? 'peso' : 'unidade';
     const noTurno =
@@ -2457,12 +2470,19 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
     const cpct = comissao_pct === undefined || comissao_pct === null
       ? undefined
       : Math.max(0, Math.min(100, parseFloat(comissao_pct) || 0));
+    // imagem: undefined → não alterar; null/'' → limpar; string → guardar.
+    let imgArg;
+    if (imagem === undefined) imgArg = undefined;
+    else if (imagem === null || (typeof imagem === 'string' && imagem.trim() === '')) imgArg = null;
+    else imgArg = String(imagem).trim();
     const r =
       noTurno === undefined
         ? await query(
             `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
              venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11,vendavel=$12,
-             comissao_pct=COALESCE($13, comissao_pct) WHERE id=$14 RETURNING *`,
+             comissao_pct=COALESCE($13, comissao_pct),
+             imagem = CASE WHEN $14::boolean THEN $15::text ELSE imagem END
+             WHERE id=$16 RETURNING *`,
             [
               nome,
               preco,
@@ -2477,13 +2497,17 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               qcp,
               vendavelFinal,
               cpct === undefined ? null : cpct,
+              imgArg !== undefined,
+              imgArg === undefined ? null : imgArg,
               req.params.id
             ]
           )
         : await query(
             `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
              venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12,vendavel=$13,
-             comissao_pct=COALESCE($14, comissao_pct) WHERE id=$15 RETURNING *`,
+             comissao_pct=COALESCE($14, comissao_pct),
+             imagem = CASE WHEN $15::boolean THEN $16::text ELSE imagem END
+             WHERE id=$17 RETURNING *`,
             [
               nome,
               preco,
@@ -2499,6 +2523,8 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               qcp,
               vendavelFinal,
               cpct === undefined ? null : cpct,
+              imgArg !== undefined,
+              imgArg === undefined ? null : imgArg,
               req.params.id
             ]
           );

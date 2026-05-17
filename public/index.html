@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-cal-click-turno">
+<html lang="pt" data-stockos-ui="2026-05-17-cal-modal-irreg">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2027,6 +2027,125 @@ async function goDiaFromCal(iso) {
   await navigate('dia');
 }
 
+/** Modal sobreposto ao Calendário com as irregularidades de um turno —
+ *  permite aceitar/rejeitar/comentar sem sair da página. */
+async function openCalIrregModal(dataStr, turnoId) {
+  let modal = document.getElementById('cal-irreg-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'cal-irreg-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:9999;display:flex;align-items:stretch;justify-content:center';
+    modal.onclick = (e) => { if (e.target === modal) closeCalIrregModal(); };
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
+  modal.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;width:100%;max-width:760px;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:12px 14px;border-bottom:1px solid #334155;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-shrink:0">
+        <div id="cal-modal-title" style="font-weight:700;color:#e2e8f0;font-size:14px">A carregar…</div>
+        <div style="display:flex;gap:6px">
+          <button type="button" id="cal-modal-open-turno" class="btn btn-ghost btn-sm" style="display:none" onclick="runAction(event, calModalOpenTurno)">Abrir turno</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, closeCalIrregModal)">Fechar ✕</button>
+        </div>
+      </div>
+      <div id="cal-modal-body" style="padding:12px 14px;overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch">
+        <div class="text-center" style="padding:32px;color:#64748b"><div class="spinner"></div></div>
+      </div>
+    </div>`;
+  S.calModal = { dataStr: String(dataStr), turnoId: String(turnoId), loading: true };
+  try {
+    const podeVerDepositos = ['admin','gestor','compras'].includes(S.user?.role);
+    const [produtos, receitas, turnos, vendas, depList, decs, coms] = await Promise.all([
+      api('GET', '/produtos?todos=0'),
+      api('GET', '/receitas'),
+      api('GET', `/dia?data=${encodeURIComponent(dataStr)}&turno_id=${encodeURIComponent(turnoId)}`),
+      api('GET', `/turnos/${turnoId}/vendas`),
+      podeVerDepositos ? api('GET', `/depositos?data=${encodeURIComponent(dataStr)}`).catch(() => []) : Promise.resolve([]),
+      api('GET', `/irregularidades/decisoes?turno_id=${encodeURIComponent(turnoId)}`).catch(() => []),
+      api('GET', `/irregularidades/comentarios?turno_id=${encodeURIComponent(turnoId)}`).catch(() => [])
+    ]);
+    if (!S.calModal || S.calModal.turnoId !== String(turnoId)) return;
+    const turno = (turnos || [])[0];
+    if (!turno) {
+      const body = document.getElementById('cal-modal-body');
+      if (body) body.innerHTML = '<div class="alert alert-error">Turno não encontrado.</div>';
+      return;
+    }
+    const depTurno = (Array.isArray(depList) ? depList : []).find((d) => String(d.turno_id) === String(turnoId)) || null;
+    const snap = computeIrregularidadesSnapshot(turno, vendas, produtos, receitas, depTurno);
+    const decisoes = {};
+    for (const d of (decs || [])) decisoes[d.categoria] = d;
+    const comentarios = {};
+    for (const c of (coms || [])) {
+      if (!comentarios[c.categoria]) comentarios[c.categoria] = [];
+      comentarios[c.categoria].push(c);
+    }
+    S.calModal = { dataStr: String(dataStr), turnoId: String(turnoId), turno, snap, decisoes, comentarios, loading: false };
+    renderCalModalBody();
+    const openBtn = document.getElementById('cal-modal-open-turno');
+    if (openBtn) openBtn.style.display = '';
+  } catch (e) {
+    const body = document.getElementById('cal-modal-body');
+    if (body) body.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message || String(e))}</div>`;
+  }
+}
+
+function closeCalIrregModal() {
+  const m = document.getElementById('cal-irreg-modal');
+  if (m) m.style.display = 'none';
+  S.calModal = null;
+}
+
+async function calModalOpenTurno() {
+  if (!S.calModal) return;
+  const { dataStr, turnoId } = S.calModal;
+  closeCalIrregModal();
+  await openTurnoFromIrreg(dataStr, turnoId);
+}
+
+function renderCalModalBody() {
+  if (!S.calModal || S.calModal.loading) return;
+  const { dataStr, turnoId, turno, snap, decisoes, comentarios } = S.calModal;
+  const titleEl = document.getElementById('cal-modal-title');
+  if (titleEl) titleEl.textContent = `${turnoLabel(turno.nome)} — ${dateLabelWithWeekday(dataStr)}`;
+  const body = document.getElementById('cal-modal-body');
+  if (!body) return;
+  if (!snap.hasAny) {
+    body.innerHTML = '<div class="card"><p style="color:#94a3b8;margin:0">Sem irregularidades neste turno.</p></div>';
+    return;
+  }
+  const blocos = renderIrregularidadeBlocos(snap, turnoId, decisoes, comentarios);
+  body.innerHTML = blocos.trim() || '<div class="card"><p style="color:#94a3b8;margin:0">Sem irregularidades visíveis.</p></div>';
+}
+
+/** Recalcula pendentes do turno aberto no modal e actualiza o badge da pílula sem refetch. */
+function refreshCalPillBadgeFromModal() {
+  if (!S.calModal || !S.calModal.snap) return;
+  const tid = String(S.calModal.turnoId);
+  const { snap, decisoes } = S.calModal;
+  const cats = ['caixa','banco','stock','fino', ...(snap.ingredientesItems || []).map((i) => 'ing:' + i.produto_id)]
+    .filter((k) =>
+      (k === 'caixa' && snap.caixaHtml) ||
+      (k === 'banco' && snap.bancoHtml) ||
+      (k === 'stock' && snap.stockHtml) ||
+      (k === 'fino' && snap.finoHtml) ||
+      (k.startsWith('ing:') && (snap.ingredientesItems || []).some((i) => 'ing:' + i.produto_id === k))
+    );
+  const pendentes = cats.filter((k) => !decisoes[k]).length;
+  if (!S.calPendentesByYM) S.calPendentesByYM = {};
+  if (!S.calPendentesByYM[S.calYM]) S.calPendentesByYM[S.calYM] = {};
+  if (pendentes > 0) S.calPendentesByYM[S.calYM][tid] = pendentes;
+  else delete S.calPendentesByYM[S.calYM][tid];
+  const pill = document.querySelector(`.cal-pill[data-turno-id="${tid}"]`);
+  if (pill) {
+    const oldBadge = pill.querySelector('.cal-pill-badge');
+    if (oldBadge) oldBadge.remove();
+    if (pendentes > 0) {
+      pill.insertAdjacentHTML('beforeend', `<span class="cal-pill-badge" title="${pendentes} irregularidade(s) por avaliar" style="display:inline-block;margin-left:3px;padding:0 4px;background:#fb923c;color:#0f172a;border-radius:6px;font-size:9px;font-weight:800;vertical-align:middle">${pendentes}</span>`);
+    }
+  }
+}
+
 /** Pesquisa quais turnos do mês visível têm irregularidades por avaliar (sem decisão registada).
  *  Cacheia por YYYY-MM em S.calPendentesByYM e re-renderiza o calendário com os badges. */
 async function calCheckIrregularidades(force = false) {
@@ -2172,8 +2291,8 @@ async function loadCalendarioTurnos() {
         const badge = pend > 0
           ? `<span class="cal-pill-badge" title="${pend} irregularidade(s) por avaliar" style="display:inline-block;margin-left:3px;padding:0 4px;background:#fb923c;color:#0f172a;border-radius:6px;font-size:9px;font-weight:800;vertical-align:middle">${pend}</span>`
           : '';
-        const tt = `${turnoLabel(nome)}: ${st}${pend > 0 ? ` · ${pend} irreg. por avaliar — clica para abrir o turno` : ' — clica para abrir o turno'}`;
-        return `<span class="cal-pill ${cls}" data-turno-id="${t.id}" style="cursor:pointer" title="${tt}" onclick="event.stopPropagation(); runAction(event, () => openTurnoFromIrreg('${iso}', '${t.id}'))">${L}${badge}</span>`;
+        const tt = `${turnoLabel(nome)}: ${st}${pend > 0 ? ` · ${pend} irreg. por avaliar` : ''} — clica para ver irregularidades`;
+        return `<span class="cal-pill ${cls}" data-turno-id="${t.id}" style="cursor:pointer" title="${tt}" onclick="event.stopPropagation(); runAction(event, () => openCalIrregModal('${iso}', '${t.id}'))">${L}${badge}</span>`;
       }).join('');
 
       const diffPills = ['manha', 'tarde', 'noite'].map((nome) => {
@@ -5302,6 +5421,11 @@ async function adicionarComentarioIrregularidade(turnoId, categoria, inputId) {
       S.turnoComentarios[categoria].push(row);
       renderIrregularidadesTurno();
     }
+    if (S.calModal && String(S.calModal.turnoId) === String(turnoId)) {
+      if (!S.calModal.comentarios[categoria]) S.calModal.comentarios[categoria] = [];
+      S.calModal.comentarios[categoria].push(row);
+      renderCalModalBody();
+    }
   } catch (e) { alert(e.message); }
 }
 
@@ -5327,6 +5451,10 @@ async function apagarComentarioIrregularidade(comId, turnoId) {
       removerDe(S.turnoComentarios);
       renderIrregularidadesTurno();
     }
+    if (S.calModal && String(S.calModal.turnoId) === String(turnoId)) {
+      removerDe(S.calModal.comentarios);
+      renderCalModalBody();
+    }
   } catch (e) { alert(e.message); }
 }
 
@@ -5349,6 +5477,11 @@ async function decidirIrregularidade(turnoId, categoria, aceite) {
       S.turnoDecisoes[categoria] = row;
       renderIrregularidadesTurno();
     }
+    if (S.calModal && String(S.calModal.turnoId) === String(turnoId)) {
+      S.calModal.decisoes[categoria] = row;
+      renderCalModalBody();
+      refreshCalPillBadgeFromModal();
+    }
   } catch (e) { alert(e.message); }
 }
 
@@ -5366,6 +5499,11 @@ async function reabrirIrregularidade(turnoId, categoria) {
     } else if (S.page === 'turno') {
       if (S.turnoDecisoes) delete S.turnoDecisoes[categoria];
       renderIrregularidadesTurno();
+    }
+    if (S.calModal && String(S.calModal.turnoId) === String(turnoId)) {
+      delete S.calModal.decisoes[categoria];
+      renderCalModalBody();
+      refreshCalPillBadgeFromModal();
     }
   } catch (e) { alert(e.message); }
 }

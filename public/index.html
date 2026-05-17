@@ -6572,7 +6572,13 @@ async function openTurnoFromIrreg(dataStr, turnoId) {
 }
 
 async function drawIrregularidades() {
-  if (!S.irregFiltros) S.irregFiltros = { caixa: true, banco: true, stock: true, fino: true, ing: true };
+  if (!S.irregFiltros) S.irregFiltros = { caixa: true, banco: true, stock: true, fino: true, ing: true, manha: true, tarde: true, noite: true };
+  else {
+    // Compatibilidade com sessões antigas sem filtros de turno.
+    if (S.irregFiltros.manha === undefined) S.irregFiltros.manha = true;
+    if (S.irregFiltros.tarde === undefined) S.irregFiltros.tarde = true;
+    if (S.irregFiltros.noite === undefined) S.irregFiltros.noite = true;
+  }
   render(`
     <div id="header">
       <div>
@@ -6600,6 +6606,10 @@ async function drawIrregularidades() {
           <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Mostrar tipos:</div>
           <div id="ir-filtros" style="display:flex;flex-wrap:wrap;gap:6px"></div>
         </div>
+        <div style="margin-top:10px">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Mostrar turnos:</div>
+          <div id="ir-filtros-turnos" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
       </div>
       <div id="irreg-content"></div>
     </div>
@@ -6614,8 +6624,13 @@ async function drawIrregularidades() {
 }
 
 function renderIrregFiltros() {
-  const mount = document.getElementById('ir-filtros');
-  if (!mount) return;
+  const chipsHtml = (lista) => lista.map((t) => {
+    const on = !!(S.irregFiltros && S.irregFiltros[t.k]);
+    const bg = on ? 'rgba(96,165,250,0.18)' : 'rgba(51,65,85,0.55)';
+    const bd = on ? 'rgba(96,165,250,0.55)' : 'rgba(148,163,184,0.25)';
+    const cor = on ? '#93c5fd' : '#94a3b8';
+    return `<button type="button" data-filtro="${t.k}" style="padding:4px 10px;font-size:12px;font-weight:600;background:${bg};border:1px solid ${bd};border-radius:999px;color:${cor};cursor:pointer" onclick="toggleIrregFiltro('${t.k}')">${on ? '✓ ' : ''}${t.label}</button>`;
+  }).join('');
   const tipos = [
     { k: 'caixa', label: 'Caixa' },
     { k: 'banco', label: 'Banco' },
@@ -6623,17 +6638,19 @@ function renderIrregFiltros() {
     { k: 'fino', label: 'Fino' },
     { k: 'ing', label: 'Ingredientes' }
   ];
-  mount.innerHTML = tipos.map((t) => {
-    const on = !!(S.irregFiltros && S.irregFiltros[t.k]);
-    const bg = on ? 'rgba(96,165,250,0.18)' : 'rgba(51,65,85,0.55)';
-    const bd = on ? 'rgba(96,165,250,0.55)' : 'rgba(148,163,184,0.25)';
-    const cor = on ? '#93c5fd' : '#94a3b8';
-    return `<button type="button" data-filtro="${t.k}" style="padding:4px 10px;font-size:12px;font-weight:600;background:${bg};border:1px solid ${bd};border-radius:999px;color:${cor};cursor:pointer" onclick="toggleIrregFiltro('${t.k}')">${on ? '✓ ' : ''}${t.label}</button>`;
-  }).join('');
+  const turnos = [
+    { k: 'manha', label: '🌅 Manhã' },
+    { k: 'tarde', label: '🌤 Tarde' },
+    { k: 'noite', label: '🌙 Noite' }
+  ];
+  const mTipos = document.getElementById('ir-filtros');
+  if (mTipos) mTipos.innerHTML = chipsHtml(tipos);
+  const mTurnos = document.getElementById('ir-filtros-turnos');
+  if (mTurnos) mTurnos.innerHTML = chipsHtml(turnos);
 }
 
 function toggleIrregFiltro(k) {
-  if (!S.irregFiltros) S.irregFiltros = { caixa: true, banco: true, stock: true, fino: true, ing: true };
+  if (!S.irregFiltros) S.irregFiltros = { caixa: true, banco: true, stock: true, fino: true, ing: true, manha: true, tarde: true, noite: true };
   S.irregFiltros[k] = !S.irregFiltros[k];
   renderIrregFiltros();
   renderIrregularidadesListaFromCache();
@@ -6748,6 +6765,7 @@ function renderIrregularidadesListaFromCache() {
   }
   const html = ordered
     .map(({ r, dataStr, snap, equipaReal }) => {
+      if (filtro[r.nome] === false) return '';
       const decsT = decisoesPorTurno[r.turno_id] || {};
       const blocos = renderIrregularidadeBlocos(snap, r.turno_id, decsT, comentariosPorTurno[r.turno_id] || {}, { hideAceites: true, filtroTipos: filtro });
       if (!blocos.trim()) return '';

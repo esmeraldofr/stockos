@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-equipa-kiosk-warn">
+<html lang="pt" data-stockos-ui="2026-05-17-assid-nomenclatura">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7259,10 +7259,6 @@ async function loadAssiduidade() {
       show('assiduidade-content', '<div class="card"><p style="color:#94a3b8;margin:0">Sem dados de utilizadores activos no período.</p></div>');
       return;
     }
-    const sumEsp = rows.reduce((s, r) => s + (Number(r.turnos_esperados ?? r.dias_esperados) || 0), 0);
-    const sumTrab = rows.reduce((s, r) => s + (Number(r.turnos_trabalhados ?? r.dias_trabalhados) || 0), 0);
-    const sumFalt = rows.reduce((s, r) => s + (Number(r.faltas) || 0), 0);
-    const sumHE = rows.reduce((s, r) => s + (Number(r.horas_extra) || 0), 0);
     function turnoAbbr(nome) {
       return { manha: 'M', tarde: 'T', noite: 'N' }[nome] || String(nome || '').slice(0, 1).toUpperCase();
     }
@@ -7323,28 +7319,12 @@ async function loadAssiduidade() {
         </tr>`;
     }).join('');
     show('assiduidade-content', `
-      <div class="card" style="margin-bottom:16px">
-        <div class="card-title" style="margin-bottom:10px">Totais do período</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
-          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;text-align:center">
-            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Turnos esperados</div>
-            <div style="font-size:22px;font-weight:700;color:#cbd5e1;margin-top:4px">${sumEsp}</div>
-          </div>
-          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;text-align:center">
-            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Trabalhados</div>
-            <div style="font-size:22px;font-weight:700;color:#a5b4fc;margin-top:4px">${sumTrab}</div>
-          </div>
-          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;text-align:center">
-            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Faltas</div>
-            <div style="font-size:22px;font-weight:700;color:#f87171;margin-top:4px">${sumFalt}</div>
-          </div>
-          <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px;text-align:center">
-            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Horas extra</div>
-            <div style="font-size:22px;font-weight:700;color:#a78bfa;margin-top:4px">${sumHE}</div>
-          </div>
-        </div>
-        <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">
-          <strong style="color:#94a3b8">Esperados</strong>: turnos em que o funcionário estava na escala (do dia ou, na ausência, template). A regra "1 folga por semana" está implícita na escala. <strong style="color:#94a3b8">Trabalhados</strong>: turnos com presença registada. <strong style="color:#94a3b8">Faltas</strong>: turnos passados em que estava escalado e não foi registada presença — <em>turnos de hoje e futuros não são contados</em>. <strong style="color:#94a3b8">Horas extra</strong>: turnos em que trabalhou sem estar escalado, com hora extra aplicada. <strong style="color:#94a3b8">Assiduidade %</strong>: presenças sobre esperados <em>já passados</em>.
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-title" style="margin-bottom:6px">Nomenclatura das faltas e horas extra</div>
+        <p style="margin:0;font-size:12px;color:#94a3b8;line-height:1.55">
+          Formato de cada etiqueta: <strong style="color:#e2e8f0">&lt;dia do mês&gt;&lt;turno&gt;&lt;dia da semana&gt;</strong>. Exemplo: <code style="background:#1e293b;padding:1px 6px;border-radius:4px;color:#fca5a5">14Nqu</code> = dia 14, turno da <strong style="color:#cbd5e1">Noite</strong>, <strong style="color:#cbd5e1">Quinta</strong>-feira.
+          <br><strong style="color:#94a3b8">Turno:</strong> <code style="color:#cbd5e1">M</code> Manhã · <code style="color:#cbd5e1">T</code> Tarde · <code style="color:#cbd5e1">N</code> Noite.
+          <br><strong style="color:#94a3b8">Dia da semana:</strong> <code style="color:#cbd5e1">se</code> Seg/Sex · <code style="color:#cbd5e1">te</code> Ter · <code style="color:#cbd5e1">qa</code> Qua · <code style="color:#cbd5e1">qu</code> Qui · <code style="color:#cbd5e1">sa</code> Sáb · <code style="color:#cbd5e1">do</code> Dom.
         </p>
       </div>
       <div class="card" style="padding:0;overflow:hidden">

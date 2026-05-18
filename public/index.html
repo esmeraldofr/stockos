@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-assid-nomenclatura">
+<html lang="pt" data-stockos-ui="2026-05-17-justif-falta-he">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6406,12 +6406,19 @@ async function loadEscalaTurno() {
       el.innerHTML = '<span style="color:#64748b">Turno não selecionado.</span>';
       return;
     }
-    const [escalaPack, equipaReal, pessoas, faltasReg] = await Promise.all([
+    const [escalaPack, equipaReal, pessoas, faltasReg, justifs] = await Promise.all([
       api('GET', `/escala/semana?data_inicio=${encodeURIComponent(S.date)}&data_fim=${encodeURIComponent(S.date)}`).catch(() => ({ semana: [], template: [] })),
       api('GET', `/turnos/${S.turnoData.id}/equipa-real`),
       api('GET', '/equipa/pessoas'),
-      api('GET', `/turnos/${S.turnoData.id}/faltas`)
+      api('GET', `/turnos/${S.turnoData.id}/faltas`),
+      api('GET', `/presencas/justificacoes?turno_id=${encodeURIComponent(S.turnoData.id)}`).catch(() => [])
     ]);
+    /** Justificações por (utilizador_id, tipo): falta / hora_extra. */
+    const justifByKey = {};
+    for (const j of (justifs || [])) {
+      justifByKey[`${j.utilizador_id}|${j.tipo}`] = j;
+    }
+    window._stockosJustifByKey = justifByKey; // usado pelos handlers inline
     const canEdit = !!S.turnoCanEdit;
     /** Presenças biométricas (kiosk) — só admin/gestor têm acesso ao endpoint. */
     const podeVerPresencas = ['admin','gestor'].includes(S.user?.role);
@@ -6506,16 +6513,42 @@ async function loadEscalaTurno() {
     const semRegistoLine = semRegisto.length
       ? `<div style="color:#fbbf24;margin-top:6px;line-height:1.5">⚠ Sem registo no kiosk: ${semRegisto.map(s => `${escapeHtml(s.nome)} (sem ${s.missing.join(' e sem ')})`).join(', ')}</div>`
       : '';
+    const coberturasHE = equipaReal.filter(r => r.hora_extra && r.utilizador_id);
+    const ehAdmin = S.user?.role === 'admin';
+    const tid = S.turnoData.id;
+    function justifInline(uid, tipo, nome) {
+      const j = justifByKey[`${uid}|${tipo}`];
+      const safeName = String(nome || 'Sem nome').replace(/'/g, "\\'");
+      const safeUid = encodeURIComponent(uid);
+      if (!j) {
+        return `${escapeHtml(nome)} <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;margin-left:4px" onclick="runAction(event, () => justificarPresenca('${tid}','${safeUid}','${tipo}','${safeName}'))">Justificar</button>`;
+      }
+      const corEstado = j.estado === 'aceite' ? '#86efac' : (j.estado === 'rejeitada' ? '#fca5a5' : '#fbbf24');
+      const labelEstado = j.estado === 'aceite' ? '✓ Aceite' : (j.estado === 'rejeitada' ? '✗ Rejeitada' : '⏳ Pendente');
+      const decAuthor = j.decidido_por_nome ? ` por ${escapeHtml(j.decidido_por_nome)}` : '';
+      const obs = j.observacao_admin ? ` — ${escapeHtml(j.observacao_admin)}` : '';
+      const adminBtns = (ehAdmin && j.estado === 'pendente')
+        ? ` <button type="button" class="btn btn-success btn-sm" style="padding:2px 8px;font-size:11px" onclick="runAction(event, () => decidirJustifPresenca(${j.id}, true))">✓</button> <button type="button" class="btn btn-danger btn-sm" style="padding:2px 8px;font-size:11px" onclick="runAction(event, () => decidirJustifPresenca(${j.id}, false))">✗</button>`
+        : '';
+      const reJustifBtn = (j.estado !== 'aceite')
+        ? ` <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:10px" title="Reescrever (volta a pendente)" onclick="runAction(event, () => justificarPresenca('${tid}','${safeUid}','${tipo}','${safeName}'))">↻</button>`
+        : '';
+      return `${escapeHtml(nome)} — “${escapeHtml(j.justificacao)}” · <span style="color:${corEstado};font-weight:600">${labelEstado}${decAuthor}</span>${obs}${adminBtns}${reJustifBtn}`;
+    }
+    const faltasLine = faltas.length
+      ? `<div style="color:#fbbf24;line-height:1.55">⚠ Faltas (${faltas.length}):${faltas.map(f => `<div style="margin-left:14px">• ${justifInline(String(f.utilizador_id), 'falta', f.utilizador_nome)}${motivoPorFalta[String(f.utilizador_id)] && !justifByKey[`${f.utilizador_id}|falta`] ? ` <span style="color:#94a3b8">(motivo antigo: ${escapeHtml(motivoPorFalta[String(f.utilizador_id)])})</span>` : ''}</div>`).join('')}</div>`
+      : '<div style="color:#4ade80">✓ Sem faltas nos escalados</div>';
+    const heLine = coberturasHE.length
+      ? `<div style="color:#a78bfa;margin-top:6px;line-height:1.55">⏱ Horas extra (${coberturasHE.length}):${coberturasHE.map(c => `<div style="margin-left:14px">• ${justifInline(String(c.utilizador_id), 'hora_extra', c.utilizador_nome)}</div>`).join('')}</div>`
+      : '';
+    const coberturasLine = coberturas.length
+      ? `<div style="color:#60a5fa;margin-top:6px">↺ Coberturas: ${coberturas.map(c => c.utilizador_nome || 'Sem nome').join(', ')}</div>`
+      : '<div style="color:#64748b;margin-top:6px">Sem coberturas registadas</div>';
     const alertaHtml = `
       <div style="margin-top:10px;font-size:12px">
-        <div style="color:${faltas.length ? '#fbbf24' : '#4ade80'}">${faltas.length ? `⚠ Faltas: ${faltas.map(f => {
-          const motivo = motivoPorFalta[String(f.utilizador_id)];
-          const nome = f.utilizador_nome || 'Sem nome';
-          return motivo
-            ? `${nome} (${motivo})`
-            : `${nome}${canEdit ? ` <button type="button" class="btn btn-danger btn-sm" style="margin-left:6px" onclick="registarMotivoFalta(event, '${S.turnoData.id}','${encodeURIComponent(f.utilizador_id)}','${(nome||'').replace(/'/g, "\\'")}')">Registar motivo</button>` : ''}`;
-        }).join(', ')}` : '✓ Sem faltas nos escalados'}</div>
-        <div style="color:${coberturas.length ? '#60a5fa' : '#64748b'};margin-top:4px">${coberturas.length ? `↺ Coberturas: ${coberturas.map(c => c.utilizador_nome || 'Sem nome').join(', ')}` : 'Sem coberturas registadas'}</div>
+        ${faltasLine}
+        ${heLine}
+        ${coberturasLine}
         ${semRegistoLine}
       </div>`;
 
@@ -6619,6 +6652,41 @@ async function registarMotivoFalta(ev, turnoId, utilizadorIdEncoded, nome) {
       await loadEscalaTurno();
     } catch (e) { alert(e.message); }
   });
+}
+
+/** Justificar uma falta ou hora extra de um funcionário (qualquer utilizador autenticado). */
+async function justificarPresenca(turnoId, utilizadorIdEncoded, tipo, nome) {
+  const label = tipo === 'falta' ? 'falta' : 'hora extra';
+  const justAnt = (window._stockosJustifByKey || {})[`${decodeURIComponent(utilizadorIdEncoded)}|${tipo}`];
+  const texto = prompt(`Justificação da ${label} de ${nome}:`, justAnt?.justificacao || '');
+  if (texto === null) return;
+  const t = String(texto || '').trim();
+  if (!t) return;
+  try {
+    await api('POST', '/presencas/justificacao', {
+      turno_id: turnoId,
+      utilizador_id: decodeURIComponent(utilizadorIdEncoded),
+      tipo,
+      justificacao: t
+    });
+    await loadEscalaTurno();
+  } catch (e) { alert(e.message); }
+}
+
+/** Admin aceita ou rejeita uma justificação. */
+async function decidirJustifPresenca(id, aceite) {
+  const label = aceite ? 'Aceitar' : 'Rejeitar';
+  if (!confirm(`${label} esta justificação?`)) return;
+  let observacao = '';
+  if (!aceite) {
+    const obs = prompt('Observação (opcional):', '');
+    if (obs === null) return;
+    observacao = String(obs || '').trim();
+  }
+  try {
+    await api('POST', '/presencas/justificacao/decisao', { id, aceite, observacao });
+    await loadEscalaTurno();
+  } catch (e) { alert(e.message); }
 }
 
 async function submitSaida(turnoId) {

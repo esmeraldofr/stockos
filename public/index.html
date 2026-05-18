@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-hist-grafico-suave">
+<html lang="pt" data-stockos-ui="2026-05-17-produtos-avatar">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -8896,8 +8896,13 @@ function renderProdutos() {
     return `
       <div class="card">
         <div class="card-title">${label}</div>
-        ${items.map(p => `
+        ${items.map(p => {
+          const av = p.imagem
+            ? `<img src="${p.imagem}" alt="" style="width:40px;height:40px;border-radius:50%;object-fit:cover;background:#0f172a;border:1px solid #334155;flex-shrink:0"/>`
+            : `<div style="width:40px;height:40px;border-radius:50%;background:#1e293b;color:#64748b;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;border:1px solid #334155">${escapeHtml(String(p.nome || '?').slice(0, 1).toUpperCase())}</div>`;
+          return `
           <div class="produto-row">
+            ${av}
             <div class="produto-info">
               <div class="produto-nome" style="${!p.ativo?'color:#64748b;text-decoration:line-through':''}">${p.nome} ${badgesAll(p)}${p.venda_avulso ? ' <span style="font-size:10px;background:#1e3a5f;color:#60a5fa;padding:1px 5px;border-radius:4px">avulso</span>' : ''}${p.venda_por_copo && parseFloat(p.kg_por_copo) > 0 ? ' <span style="font-size:10px;background:#14532d;color:#86efac;padding:1px 5px;border-radius:4px">por copo</span>' : ''}${p.em_stock_turno === false ? ' <span style="font-size:10px;background:#422006;color:#fdba74;padding:1px 5px;border-radius:4px">sem stock</span>' : ''}</div>
               <div class="produto-meta">${p.preco > 0 ? fmt(p.preco) : 'Sem preço'} · ${p.tipo_medicao === 'peso' ? 'Peso' : 'Unidade'} · #${p.ordem}</div>
@@ -8906,7 +8911,8 @@ function renderProdutos() {
             <div class="produto-actions">
               <button class="btn btn-ghost btn-sm" data-edit-id="${p.id}">Editar</button>
             </div>` : ''}
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>`;
   }
 

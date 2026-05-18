@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-hist-gerado-detalhe">
+<html lang="pt" data-stockos-ui="2026-05-17-hist-grafico-vendido">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6807,6 +6807,84 @@ const HIST_CAT_LABEL = {
   outro: 'Outros'
 };
 
+/** Gráfico de linhas (Dinheiro/Transf./TPA/Total) por dia para o período do Histórico. */
+function histVendasChartCardHtml(days) {
+  if (!days || !days.length) return '';
+  const items = days.map((day) => {
+    let din = 0, trf = 0, tpa = 0, vendido = 0;
+    for (const t of (day.turnos || [])) {
+      din += parseFloat(t.caixa_dinheiro) || 0;
+      trf += parseFloat(t.caixa_transferencia) || 0;
+      tpa += parseFloat(t.caixa_tpa) || 0;
+      vendido += parseFloat(t.total_vendas) || 0;
+    }
+    return { data: String(day.data).slice(0, 10), din, trf, tpa, vendido, total: din + trf + tpa };
+  }).sort((a, b) => a.data.localeCompare(b.data));
+  const n = items.length;
+  const maxVal = items.reduce((m, it) => Math.max(m, it.din, it.trf, it.tpa, it.total, it.vendido), 0) || 1;
+  const W = 820, H = 240, padT = 18, padB = 32, padL = 36, padR = 10;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const xAt = (i) => n <= 1 ? padL + chartW / 2 : padL + (i / (n - 1)) * chartW;
+  const yAt = (v) => padT + chartH - (v / maxVal) * chartH;
+  let svg = '';
+  // Linhas-guia horizontais + escala Y
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (chartH * i) / 4;
+    const v = Math.round((maxVal * (4 - i)) / 4);
+    svg += `<line x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}" stroke="#1e293b" stroke-width="1"/>`;
+    svg += `<text x="${padL - 4}" y="${y + 3}" fill="#475569" font-size="9" text-anchor="end">${fmtCompact(v)}</text>`;
+  }
+  const labelDe = { total: 'Total gerado', vendido: 'Total vendido', din: 'Dinheiro', trf: 'Transf.', tpa: 'TPA' };
+  function poly(key, cor, dashed) {
+    const pts = items.map((it, i) => `${xAt(i).toFixed(1)},${yAt(it[key]).toFixed(1)}`).join(' ');
+    let dots = '';
+    items.forEach((it, i) => {
+      const cx = xAt(i), cy = yAt(it[key]);
+      const tt = `${it.data} · ${labelDe[key] || key} ${fmt(it[key])}`;
+      dots += `<g><title>${escapeHtml(tt)}</title><circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="${cor}"/></g>`;
+    });
+    const dashAttr = dashed ? ' stroke-dasharray="4,3"' : '';
+    return `<polyline points="${pts}" fill="none" stroke="${cor}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"${dashAttr}/>${dots}`;
+  }
+  svg += poly('vendido', '#a5b4fc');
+  svg += poly('total', '#fbbf24', true);
+  svg += poly('din', '#22c55e');
+  svg += poly('trf', '#60a5fa');
+  svg += poly('tpa', '#a78bfa');
+  // Eixo X
+  items.forEach((it, idx) => {
+    const showLabel = n <= 16 || idx % Math.ceil(n / 16) === 0;
+    if (showLabel) {
+      const label = it.data.slice(8, 10) + '/' + it.data.slice(5, 7);
+      svg += `<text x="${xAt(idx).toFixed(1)}" y="${H - 10}" fill="#64748b" font-size="10" text-anchor="middle">${label}</text>`;
+    }
+  });
+  // Click numa zona vertical (faixa por dia) → abre Dia
+  items.forEach((it, idx) => {
+    const xCenter = xAt(idx);
+    const half = n <= 1 ? chartW / 2 : (chartW / (n - 1)) / 2;
+    const x0 = Math.max(padL, xCenter - half);
+    const x1 = Math.min(W - padR, xCenter + half);
+    svg += `<rect x="${x0.toFixed(1)}" y="${padT}" width="${(x1 - x0).toFixed(1)}" height="${chartH}" fill="transparent" style="cursor:pointer" onclick="runAction(event, async () => { S.date='${it.data}'; await navigate('dia'); })"><title>${escapeHtml(it.data + ' — Total ' + fmt(it.total))}</title></rect>`;
+  });
+  return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title" style="margin-bottom:8px">Vendas por dia</div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:#94a3b8;margin-bottom:6px">
+        <span><span style="display:inline-block;width:14px;height:2px;background:#a5b4fc;vertical-align:middle;margin-right:4px"></span>Total vendido</span>
+        <span><span style="display:inline-block;width:14px;height:0;border-top:2px dashed #fbbf24;vertical-align:middle;margin-right:4px"></span>Total gerado</span>
+        <span><span style="display:inline-block;width:14px;height:2px;background:#22c55e;vertical-align:middle;margin-right:4px"></span>Dinheiro</span>
+        <span><span style="display:inline-block;width:14px;height:2px;background:#60a5fa;vertical-align:middle;margin-right:4px"></span>Transferência</span>
+        <span><span style="display:inline-block;width:14px;height:2px;background:#a78bfa;vertical-align:middle;margin-right:4px"></span>TPA</span>
+      </div>
+      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;width:100%;min-width:${Math.max(320, n * 28)}px;height:${H}px">${svg}</svg>
+      </div>
+      <div style="font-size:11px;color:#64748b;margin-top:6px">Toca/click sobre um dia para abrir a vista do Dia.</div>
+    </div>`;
+}
+
 function histVendasProdutosCardHtml(rows) {
   const list = Array.isArray(rows) ? rows.filter((r) => {
     const q = parseFloat(r.qtd_vendida) || 0;
@@ -6998,6 +7076,7 @@ async function loadHistorico() {
       .join('');
 
     const histHtml = `
+      ${histVendasChartCardHtml(days)}
       <div class="card" style="margin-bottom:16px">
         <div class="card-title" style="margin-bottom:12px">Somatório do período (todos os turnos)</div>
         <div style="display:grid;grid-template-columns:1fr;gap:10px;font-size:15px">

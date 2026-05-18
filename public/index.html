@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-justif-falta-he">
+<html lang="pt" data-stockos-ui="2026-05-17-equipa-horario">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6434,9 +6434,20 @@ async function loadEscalaTurno() {
         for (const p of [...(pres1 || []), ...(pres2 || [])]) {
           const k = String(p.utilizador_id || '');
           if (!k) continue;
-          if (!presencasByUser[k]) presencasByUser[k] = { entrada: false, saida: false };
-          if (p.tipo === 'entrada') presencasByUser[k].entrada = true;
-          else if (p.tipo === 'saida') presencasByUser[k].saida = true;
+          if (!presencasByUser[k]) presencasByUser[k] = { entrada: false, saida: false, entradaEm: null, saidaEm: null };
+          if (p.tipo === 'entrada') {
+            // Primeira entrada do dia/turno (criado_em é DESC por defeito → guarda a mais antiga).
+            presencasByUser[k].entrada = true;
+            if (!presencasByUser[k].entradaEm || new Date(p.criado_em) < new Date(presencasByUser[k].entradaEm)) {
+              presencasByUser[k].entradaEm = p.criado_em;
+            }
+          } else if (p.tipo === 'saida') {
+            // Última saída.
+            presencasByUser[k].saida = true;
+            if (!presencasByUser[k].saidaEm || new Date(p.criado_em) > new Date(presencasByUser[k].saidaEm)) {
+              presencasByUser[k].saidaEm = p.criado_em;
+            }
+          }
         }
       } catch (_) {}
     }
@@ -6481,12 +6492,26 @@ async function loadEscalaTurno() {
       }).join('')
       : '<span style="color:#64748b">Sem funcionários escalados para este turno.</span>';
 
+    const fmtHora = (iso) => {
+      if (!iso) return '—';
+      try {
+        return new Date(iso).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Luanda' });
+      } catch (_) { return '—'; }
+    };
     const reaisHtml = equipaReal.length
-      ? equipaReal.map((r, i) => `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;${i < equipaReal.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
+      ? equipaReal.map((r, i) => {
+        const k = String(r.utilizador_id || '');
+        const p = (podeVerPresencas && presencasByUser[k]) ? presencasByUser[k] : null;
+        const horaCor = (h) => h ? '#cbd5e1' : '#f87171';
+        const horarioLine = podeVerPresencas
+          ? `<div style="font-size:12px;color:#94a3b8;margin-top:3px;font-variant-numeric:tabular-nums">⏱ Entrada <strong style="color:${horaCor(p?.entradaEm)}">${fmtHora(p?.entradaEm)}</strong> · Saída <strong style="color:${horaCor(p?.saidaEm)}">${fmtHora(p?.saidaEm)}</strong></div>`
+          : '';
+        return `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;${i < equipaReal.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
         <div>
           <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>
           <div style="font-size:12px;color:#64748b">${(r.utilizador_role || 'operador').toUpperCase()}</div>
+          ${horarioLine}
           ${r.cobrindo_utilizador_nome ? `<div style="font-size:12px;color:#60a5fa;margin-top:2px">Cobrindo: ${r.cobrindo_utilizador_nome}</div>` : ''}
           ${r.motivo_falta ? `<div style="font-size:12px;color:#fbbf24;margin-top:2px">Motivo da falta: ${r.motivo_falta}</div>` : ''}
           ${r.hora_extra ? `<div style="font-size:12px;color:#fbbf24;margin-top:2px">Hora extra aplicada</div>` : ''}
@@ -6496,7 +6521,7 @@ async function loadEscalaTurno() {
           ${canEdit ? `<button type="button" class="btn btn-danger btn-sm" onclick="runAction(event, () => removeTurnoPresenca('${S.turnoData.id}','${encodeURIComponent(r.utilizador_id)}'))">Remover</button>` : ''}
         </div>
       </div>
-    `).join('')
+    `;}).join('')
       : '<span style="color:#64748b">Nenhum funcionário registado como presente.</span>';
 
     const semRegisto = podeVerPresencas

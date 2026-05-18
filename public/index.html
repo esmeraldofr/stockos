@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-equipa-horario">
+<html lang="pt" data-stockos-ui="2026-05-17-falta-foto-resolvido">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1815,9 +1815,40 @@ function htmlPendentesDia(lista) {
     </div>`;
 }
 
+/** Abre a câmara do telemóvel (ou file picker) e devolve dataURL ou null se cancelado. */
+function capturarFotoResolvido() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.setAttribute('capture', 'environment');
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; try { input.remove(); } catch (_) {} resolve(v); } };
+    input.onchange = async () => {
+      const f = input.files && input.files[0];
+      if (!f) return finish(null);
+      try { finish(await fileToDataUrl(f)); }
+      catch (e) { alert('Não foi possível ler a foto: ' + e.message); finish(null); }
+    };
+    input.oncancel = () => finish(null);
+    input.click();
+    // Se o utilizador fechar o picker sem disparar onchange (Android), há fallback ao perder foco.
+    setTimeout(() => {
+      window.addEventListener('focus', function once() {
+        window.removeEventListener('focus', once);
+        setTimeout(() => { if (!done && (!input.files || !input.files.length)) finish(null); }, 400);
+      }, { once: true });
+    }, 0);
+  });
+}
+
 async function resolverFaltaDia(id) {
+  const foto = await capturarFotoResolvido();
+  if (!foto) return;
   try {
-    await api('PATCH', '/faltas/' + id);
+    await api('PATCH', '/faltas/' + id, { foto_base64: foto });
     await loadDia();
     await refreshFaltasBadge();
   } catch (e) { alert(e.message); }
@@ -9352,7 +9383,7 @@ function faltaRowHtml(f) {
   const quando = new Date(f.reportado_em);
   const dataStr = quando.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' }) + ' ' + quando.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
   const resolvidoStr = !pendente
-    ? `<div style="font-size:11px;color:#4ade80;margin-top:2px">✓ Resolvido ${new Date(f.resolvido_em).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })} por ${escapeHtml(f.resolvido_por_nome || '—')}</div>`
+    ? `<div style="font-size:11px;color:#4ade80;margin-top:2px">✓ Resolvido ${new Date(f.resolvido_em).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })} por ${escapeHtml(f.resolvido_por_nome || '—')}${f.tem_foto ? ` · <a href="javascript:void(0)" onclick="runAction(event, () => verFotoFaltaResolvida(${f.id}))" style="color:#60a5fa">ver foto</a>` : ''}</div>`
     : '';
   const notasStr = f.notas ? `<div style="font-size:12px;color:#94a3b8;margin-top:4px">${escapeHtml(f.notas)}</div>` : '';
   const livreBadge = f.produto_livre ? ' <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:#451a03;color:#fb923c;vertical-align:middle">não listado</span>' : '';
@@ -9364,7 +9395,7 @@ function faltaRowHtml(f) {
         ${notasStr}
         ${resolvidoStr}
       </div>
-      ${pendente ? `<button class="btn btn-success btn-sm" onclick="runAction(event, () => resolverFalta(${f.id}))">✓ Resolvido</button>` : ''}
+      ${pendente ? `<button class="btn btn-success btn-sm" title="Tira foto e marca como resolvido" onclick="runAction(event, () => resolverFalta(${f.id}))">✓ Resolvido</button>` : ''}
     </div>`;
 }
 
@@ -9389,11 +9420,25 @@ async function submitFalta() {
 }
 
 async function resolverFalta(id) {
+  const foto = await capturarFotoResolvido();
+  if (!foto) return;
   try {
-    await api('PATCH', '/faltas/' + id);
+    await api('PATCH', '/faltas/' + id, { foto_base64: foto });
     await loadFaltas();
     await refreshFaltasBadge();
   } catch (e) { err('faltas-msg', e.message); }
+}
+
+async function verFotoFaltaResolvida(id) {
+  try {
+    const r = await api('GET', '/faltas/' + id + '/foto');
+    if (!r.foto_base64) { alert('Sem foto.'); return; }
+    const w = window.open('', '_blank');
+    if (w) {
+      w.document.write(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Foto da resolução</title><body style="margin:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="${r.foto_base64}" style="max-width:100%;max-height:100vh;object-fit:contain"/></body>`);
+      w.document.close();
+    }
+  } catch (e) { alert(e.message); }
 }
 
 async function refreshFaltasBadge() {

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-falta-atribuir-fix">
+<html lang="pt" data-stockos-ui="2026-05-17-hist-gerado-detalhe">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6912,10 +6912,14 @@ async function loadHistorico() {
     if (!rows.length) { show('hist-content','<div class="alert alert-error">Sem dados neste período</div>'); return; }
 
     let sumVendas = 0, sumGerado = 0, sumFinal = 0;
+    let sumDinheiro = 0, sumTransf = 0, sumTpa = 0;
     for (const r of rows) {
       sumVendas += parseFloat(r.total_vendas) || 0;
       sumGerado += parseFloat(r.total_gerado) || 0;
       sumFinal += parseFloat(r.total_final) || 0;
+      sumDinheiro += parseFloat(r.caixa_dinheiro) || 0;
+      sumTransf += parseFloat(r.caixa_transferencia) || 0;
+      sumTpa += parseFloat(r.caixa_tpa) || 0;
     }
 
     const days = [];
@@ -7001,9 +7005,25 @@ async function loadHistorico() {
             <span style="color:#94a3b8">Total vendas</span>
             <span style="font-weight:700;color:#a5b4fc;font-size:1.1rem">${fmt(sumVendas)}</span>
           </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#1e293b;border-radius:8px">
-            <span style="color:#94a3b8">Total gerado</span>
-            <span style="font-weight:700;color:#fbbf24;font-size:1.1rem">${fmt(sumGerado)}</span>
+          <div style="padding:10px 12px;background:#1e293b;border-radius:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:#94a3b8">Total gerado</span>
+              <span style="font-weight:700;color:#fbbf24;font-size:1.1rem">${fmt(sumGerado)}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px;font-size:11px">
+              <div style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 8px;text-align:center">
+                <div style="color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">Dinheiro</div>
+                <div style="color:#86efac;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px">${fmt(sumDinheiro)}</div>
+              </div>
+              <div style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 8px;text-align:center">
+                <div style="color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">Transf.</div>
+                <div style="color:#60a5fa;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px">${fmt(sumTransf)}</div>
+              </div>
+              <div style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 8px;text-align:center">
+                <div style="color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">TPA</div>
+                <div style="color:#c4b5fd;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px">${fmt(sumTpa)}</div>
+              </div>
+            </div>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#1e293b;border-radius:8px">
             <span style="color:#94a3b8">Total final</span>

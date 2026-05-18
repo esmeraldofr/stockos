@@ -5044,6 +5044,10 @@ app.get('/api/historico', auth, async (req, res) => {
          t.nome,
          t.estado,
          COALESCE(v.total_vendas, 0)::numeric AS total_vendas,
+         COALESCE(tc.dinheiro,0)::numeric AS caixa_dinheiro,
+         COALESCE(tc.transferencia,0)::numeric AS caixa_transferencia,
+         COALESCE(tc.tpa,0)::numeric AS caixa_tpa,
+         COALESCE(tc.saida,0)::numeric AS caixa_saida,
          (COALESCE(tc.tpa,0)+COALESCE(tc.transferencia,0)+COALESCE(tc.dinheiro,0))::numeric AS total_gerado,
          (COALESCE(tc.tpa,0)+COALESCE(tc.transferencia,0)+COALESCE(tc.dinheiro,0)-COALESCE(tc.saida,0))::numeric AS total_final
        FROM turnos t

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-hist-grafico-vendido">
+<html lang="pt" data-stockos-ui="2026-05-17-hist-grafico-turnos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6812,16 +6812,21 @@ function histVendasChartCardHtml(days) {
   if (!days || !days.length) return '';
   const items = days.map((day) => {
     let din = 0, trf = 0, tpa = 0, vendido = 0;
+    let geradoM = 0, geradoT = 0, geradoN = 0;
     for (const t of (day.turnos || [])) {
       din += parseFloat(t.caixa_dinheiro) || 0;
       trf += parseFloat(t.caixa_transferencia) || 0;
       tpa += parseFloat(t.caixa_tpa) || 0;
       vendido += parseFloat(t.total_vendas) || 0;
+      const tg = parseFloat(t.total_gerado) || 0;
+      if (t.nome === 'manha') geradoM += tg;
+      else if (t.nome === 'tarde') geradoT += tg;
+      else if (t.nome === 'noite') geradoN += tg;
     }
-    return { data: String(day.data).slice(0, 10), din, trf, tpa, vendido, total: din + trf + tpa };
+    return { data: String(day.data).slice(0, 10), din, trf, tpa, vendido, geradoM, geradoT, geradoN, total: din + trf + tpa };
   }).sort((a, b) => a.data.localeCompare(b.data));
   const n = items.length;
-  const maxVal = items.reduce((m, it) => Math.max(m, it.din, it.trf, it.tpa, it.total, it.vendido), 0) || 1;
+  const maxVal = items.reduce((m, it) => Math.max(m, it.total, it.vendido, it.geradoM, it.geradoT, it.geradoN), 0) || 1;
   const W = 820, H = 240, padT = 18, padB = 32, padL = 36, padR = 10;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
@@ -6835,7 +6840,7 @@ function histVendasChartCardHtml(days) {
     svg += `<line x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}" stroke="#1e293b" stroke-width="1"/>`;
     svg += `<text x="${padL - 4}" y="${y + 3}" fill="#475569" font-size="9" text-anchor="end">${fmtCompact(v)}</text>`;
   }
-  const labelDe = { total: 'Total gerado', vendido: 'Total vendido', din: 'Dinheiro', trf: 'Transf.', tpa: 'TPA' };
+  const labelDe = { total: 'Total gerado', vendido: 'Total vendido', geradoM: '🌅 Manhã', geradoT: '🌤 Tarde', geradoN: '🌙 Noite' };
   function poly(key, cor, dashed) {
     const pts = items.map((it, i) => `${xAt(i).toFixed(1)},${yAt(it[key]).toFixed(1)}`).join(' ');
     let dots = '';
@@ -6849,9 +6854,9 @@ function histVendasChartCardHtml(days) {
   }
   svg += poly('vendido', '#a5b4fc');
   svg += poly('total', '#fbbf24', true);
-  svg += poly('din', '#22c55e');
-  svg += poly('trf', '#60a5fa');
-  svg += poly('tpa', '#a78bfa');
+  svg += poly('geradoM', '#f59e0b');
+  svg += poly('geradoT', '#60a5fa');
+  svg += poly('geradoN', '#a78bfa');
   // Eixo X
   items.forEach((it, idx) => {
     const showLabel = n <= 16 || idx % Math.ceil(n / 16) === 0;
@@ -6873,10 +6878,10 @@ function histVendasChartCardHtml(days) {
       <div class="card-title" style="margin-bottom:8px">Vendas por dia</div>
       <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:#94a3b8;margin-bottom:6px">
         <span><span style="display:inline-block;width:14px;height:2px;background:#a5b4fc;vertical-align:middle;margin-right:4px"></span>Total vendido</span>
-        <span><span style="display:inline-block;width:14px;height:0;border-top:2px dashed #fbbf24;vertical-align:middle;margin-right:4px"></span>Total gerado</span>
-        <span><span style="display:inline-block;width:14px;height:2px;background:#22c55e;vertical-align:middle;margin-right:4px"></span>Dinheiro</span>
-        <span><span style="display:inline-block;width:14px;height:2px;background:#60a5fa;vertical-align:middle;margin-right:4px"></span>Transferência</span>
-        <span><span style="display:inline-block;width:14px;height:2px;background:#a78bfa;vertical-align:middle;margin-right:4px"></span>TPA</span>
+        <span><span style="display:inline-block;width:14px;height:0;border-top:2px dashed #fbbf24;vertical-align:middle;margin-right:4px"></span>Total gerado (dia)</span>
+        <span><span style="display:inline-block;width:14px;height:2px;background:#f59e0b;vertical-align:middle;margin-right:4px"></span>🌅 Manhã</span>
+        <span><span style="display:inline-block;width:14px;height:2px;background:#60a5fa;vertical-align:middle;margin-right:4px"></span>🌤 Tarde</span>
+        <span><span style="display:inline-block;width:14px;height:2px;background:#a78bfa;vertical-align:middle;margin-right:4px"></span>🌙 Noite</span>
       </div>
       <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;width:100%;min-width:${Math.max(320, n * 28)}px;height:${H}px">${svg}</svg>
@@ -6990,14 +6995,10 @@ async function loadHistorico() {
     if (!rows.length) { show('hist-content','<div class="alert alert-error">Sem dados neste período</div>'); return; }
 
     let sumVendas = 0, sumGerado = 0, sumFinal = 0;
-    let sumDinheiro = 0, sumTransf = 0, sumTpa = 0;
     for (const r of rows) {
       sumVendas += parseFloat(r.total_vendas) || 0;
       sumGerado += parseFloat(r.total_gerado) || 0;
       sumFinal += parseFloat(r.total_final) || 0;
-      sumDinheiro += parseFloat(r.caixa_dinheiro) || 0;
-      sumTransf += parseFloat(r.caixa_transferencia) || 0;
-      sumTpa += parseFloat(r.caixa_tpa) || 0;
     }
 
     const days = [];
@@ -7084,25 +7085,9 @@ async function loadHistorico() {
             <span style="color:#94a3b8">Total vendas</span>
             <span style="font-weight:700;color:#a5b4fc;font-size:1.1rem">${fmt(sumVendas)}</span>
           </div>
-          <div style="padding:10px 12px;background:#1e293b;border-radius:8px">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span style="color:#94a3b8">Total gerado</span>
-              <span style="font-weight:700;color:#fbbf24;font-size:1.1rem">${fmt(sumGerado)}</span>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px;font-size:11px">
-              <div style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 8px;text-align:center">
-                <div style="color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">Dinheiro</div>
-                <div style="color:#86efac;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px">${fmt(sumDinheiro)}</div>
-              </div>
-              <div style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 8px;text-align:center">
-                <div style="color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">Transf.</div>
-                <div style="color:#60a5fa;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px">${fmt(sumTransf)}</div>
-              </div>
-              <div style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 8px;text-align:center">
-                <div style="color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">TPA</div>
-                <div style="color:#c4b5fd;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px">${fmt(sumTpa)}</div>
-              </div>
-            </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#1e293b;border-radius:8px">
+            <span style="color:#94a3b8">Total gerado</span>
+            <span style="font-weight:700;color:#fbbf24;font-size:1.1rem">${fmt(sumGerado)}</span>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#1e293b;border-radius:8px">
             <span style="color:#94a3b8">Total final</span>

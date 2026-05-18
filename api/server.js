@@ -327,6 +327,7 @@ let presencasReady = false;
 let precosVendasSnapshotsReady = false;
 let irregularidadeDecisoesReady = false;
 let irregularidadeComentariosReady = false;
+let presencaJustificacoesReady = false;
 /** ALTER/enum de utilizadores só na primeira vez por processo. */
 let usernameColumnEnsured = false;
 
@@ -4820,6 +4821,149 @@ app.delete('/api/irregularidades/comentario', auth, async (req, res) => {
     const ehAutor = String(r.rows[0].autor_id) === String(req.user.id);
     if (!ehAdmin && !ehAutor) return res.status(403).json({ erro: 'Só o autor ou um admin pode apagar este comentário.' });
     await query('DELETE FROM irregularidade_comentarios WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── JUSTIFICAÇÕES DE FALTA / HORA EXTRA ──
+async function ensurePresencaJustificacoes() {
+  if (presencaJustificacoesReady) return;
+  let done = false;
+  try {
+    const r = await query(`SELECT k FROM stockos_meta WHERE k = 'presenca_just_ddl_v1'`);
+    if (r.rows.length) done = true;
+  } catch (_) {}
+  try {
+    if (!done) {
+      await query(`CREATE TABLE IF NOT EXISTS presenca_justificacoes (
+        id SERIAL PRIMARY KEY,
+        turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+        utilizador_id TEXT NOT NULL,
+        tipo VARCHAR(16) NOT NULL CHECK (tipo IN ('falta', 'hora_extra')),
+        justificacao TEXT NOT NULL,
+        criado_por TEXT NOT NULL DEFAULT '',
+        criado_por_nome TEXT NOT NULL DEFAULT '',
+        criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        estado VARCHAR(16) NOT NULL DEFAULT 'pendente',
+        decidido_por TEXT,
+        decidido_por_nome TEXT,
+        decidido_em TIMESTAMPTZ,
+        observacao_admin TEXT,
+        UNIQUE (turno_id, utilizador_id, tipo)
+      )`);
+      await query(`CREATE INDEX IF NOT EXISTS presenca_just_turno_idx ON presenca_justificacoes(turno_id)`).catch(() => {});
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('presenca_just_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+    }
+    presencaJustificacoesReady = true;
+  } catch (e) {
+    console.warn('[ensurePresencaJustificacoes]', e && e.message);
+  }
+}
+
+function isPresencaTipoValido(t) {
+  return t === 'falta' || t === 'hora_extra';
+}
+
+/** GET justificações por turno(s). ?turno_id=1,2,3. */
+app.get('/api/presencas/justificacoes', auth, async (req, res) => {
+  try {
+    await ensurePresencaJustificacoes();
+    const raw = String(req.query.turno_id || '').trim();
+    if (!raw) return res.json([]);
+    const ids = raw.split(',').map(x => parseInt(x, 10)).filter(Number.isFinite);
+    if (!ids.length) return res.json([]);
+    const r = await query(
+      `SELECT id, turno_id, utilizador_id, tipo, justificacao,
+              criado_por, criado_por_nome, criado_em,
+              estado, decidido_por, decidido_por_nome, decidido_em, observacao_admin
+       FROM presenca_justificacoes
+       WHERE turno_id = ANY($1::int[])
+       ORDER BY criado_em ASC, id ASC`,
+      [ids]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** POST nova/atualizada justificação. Reset estado=pendente. Qualquer autenticado. */
+app.post('/api/presencas/justificacao', auth, async (req, res) => {
+  try {
+    await ensurePresencaJustificacoes();
+    const tid = parseInt(req.body?.turno_id, 10);
+    const uid = String(req.body?.utilizador_id || '').trim();
+    const tipo = String(req.body?.tipo || '').trim();
+    const texto = String(req.body?.justificacao || '').trim();
+    if (!tid || !uid || !isPresencaTipoValido(tipo)) {
+      return res.status(400).json({ erro: 'turno_id, utilizador_id e tipo (falta|hora_extra) obrigatórios.' });
+    }
+    if (!texto) return res.status(400).json({ erro: 'justificação vazia.' });
+    if (texto.length > 2000) return res.status(400).json({ erro: 'justificação demasiado longa (máx. 2000 caracteres).' });
+    const uNome = await query('SELECT nome FROM utilizadores WHERE id=$1', [req.user.id]).catch(() => ({ rows: [] }));
+    const r = await query(
+      `INSERT INTO presenca_justificacoes (turno_id, utilizador_id, tipo, justificacao, criado_por, criado_por_nome)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (turno_id, utilizador_id, tipo) DO UPDATE SET
+         justificacao = EXCLUDED.justificacao,
+         criado_por = EXCLUDED.criado_por,
+         criado_por_nome = EXCLUDED.criado_por_nome,
+         criado_em = NOW(),
+         estado = 'pendente',
+         decidido_por = NULL,
+         decidido_por_nome = NULL,
+         decidido_em = NULL,
+         observacao_admin = NULL
+       RETURNING *`,
+      [tid, uid, tipo, texto, String(req.user.id || ''), uNome.rows[0]?.nome || '']
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** POST decisão (admin). { id, aceite, observacao? }. */
+app.post('/api/presencas/justificacao/decisao', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensurePresencaJustificacoes();
+    const id = parseInt(req.body?.id, 10);
+    if (!id) return res.status(400).json({ erro: 'id obrigatório.' });
+    const aceite = req.body?.aceite !== false;
+    const obs = String(req.body?.observacao || '').trim();
+    const uNome = await query('SELECT nome FROM utilizadores WHERE id=$1', [req.user.id]).catch(() => ({ rows: [] }));
+    const r = await query(
+      `UPDATE presenca_justificacoes SET
+         estado = $1,
+         decidido_por = $2,
+         decidido_por_nome = $3,
+         decidido_em = NOW(),
+         observacao_admin = $4
+       WHERE id = $5
+       RETURNING *`,
+      [aceite ? 'aceite' : 'rejeitada', String(req.user.id || ''), uNome.rows[0]?.nome || '', obs, id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Justificação não encontrada.' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** DELETE — só admin ou autor. */
+app.delete('/api/presencas/justificacao', auth, async (req, res) => {
+  try {
+    await ensurePresencaJustificacoes();
+    const id = parseInt(req.query.id, 10);
+    if (!id) return res.status(400).json({ erro: 'id obrigatório.' });
+    const r = await query('SELECT criado_por FROM presenca_justificacoes WHERE id=$1', [id]);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Justificação não encontrada.' });
+    const ehAdmin = req.user.role === 'admin';
+    const ehAutor = String(r.rows[0].criado_por) === String(req.user.id);
+    if (!ehAdmin && !ehAutor) return res.status(403).json({ erro: 'Só o autor ou um admin pode apagar.' });
+    await query('DELETE FROM presenca_justificacoes WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });

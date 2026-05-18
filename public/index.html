@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-falta-foto-resolvido">
+<html lang="pt" data-stockos-ui="2026-05-17-falta-atribuir">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1792,11 +1792,15 @@ function htmlPendentesDia(lista) {
         const notas = f.notas ? `<div style="font-size:12px;color:#94a3b8;margin-top:2px">${escapeHtml(f.notas)}</div>` : '';
         const quando = new Date(f.reportado_em);
         const dataStr = quando.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' }) + ' ' + quando.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+        const atribDia = f.atribuido_a_nome
+          ? `<div style="font-size:11px;color:#60a5fa;margin-top:2px">👤 Atribuído a ${escapeHtml(f.atribuido_a_nome)}</div>`
+          : '';
         return `
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #1e293b">
           <div style="flex:1;min-width:0">
             <div style="font-weight:600;color:#fbbf24">🚨 ${escapeHtml(f.produto_nome || '—')}${livreBadge}</div>
             <div style="font-size:11px;color:#64748b;margin-top:2px">Reportado por ${escapeHtml(f.reportado_por_nome || '—')} · ${dataStr}</div>
+            ${atribDia}
             ${notas}
           </div>
           <button class="btn btn-success btn-sm" onclick="runAction(event, () => resolverFaltaDia(${f.id}))">✓ Resolvido</button>
@@ -9362,10 +9366,12 @@ async function loadFaltasProdutosSelect() {
 
 async function loadFaltas() {
   try {
-    const [pend, hist] = await Promise.all([
+    const [pend, hist, pessoas] = await Promise.all([
       api('GET', '/faltas?status=pendentes'),
-      api('GET', '/faltas?status=resolvidas')
+      api('GET', '/faltas?status=resolvidas'),
+      api('GET', '/equipa/pessoas').catch(() => [])
     ]);
+    S.faltasPessoas = Array.isArray(pessoas) ? pessoas : [];
     S.faltasPendentes = pend.length;
     const titulo = document.getElementById('faltas-pendentes-title');
     if (titulo) titulo.textContent = `Pendentes (${pend.length})`;
@@ -9387,16 +9393,35 @@ function faltaRowHtml(f) {
     : '';
   const notasStr = f.notas ? `<div style="font-size:12px;color:#94a3b8;margin-top:4px">${escapeHtml(f.notas)}</div>` : '';
   const livreBadge = f.produto_livre ? ' <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:#451a03;color:#fb923c;vertical-align:middle">não listado</span>' : '';
+  let atribLine = '';
+  if (pendente) {
+    const pessoas = S.faltasPessoas || [];
+    const opts = ['<option value="">— sem atribuição —</option>']
+      .concat(pessoas.map((p) => `<option value="${escapeAttr(String(p.id))}"${String(p.id) === String(f.atribuido_a || '') ? ' selected' : ''}>${escapeHtml(p.nome)}</option>`))
+      .join('');
+    atribLine = `<div style="font-size:11px;color:#94a3b8;margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span>Atribuído a:</span><select onchange="runAction(event, () => atribuirFalta(${f.id}, this.value))" style="font-size:11px;padding:3px 6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:6px;max-width:200px">${opts}</select></div>`;
+  } else if (f.atribuido_a_nome) {
+    atribLine = `<div style="font-size:11px;color:#64748b;margin-top:2px">Era atribuído a ${escapeHtml(f.atribuido_a_nome)}</div>`;
+  }
   return `
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #1e293b">
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;color:${pendente ? '#fbbf24' : '#94a3b8'}">${pendente ? '🚨 ' : '✓ '}${escapeHtml(f.produto_nome || '—')}${livreBadge}</div>
         <div style="font-size:11px;color:#64748b;margin-top:2px">Reportado por ${escapeHtml(f.reportado_por_nome || '—')} · ${dataStr}</div>
         ${notasStr}
+        ${atribLine}
         ${resolvidoStr}
       </div>
       ${pendente ? `<button class="btn btn-success btn-sm" title="Tira foto e marca como resolvido" onclick="runAction(event, () => resolverFalta(${f.id}))">✓ Resolvido</button>` : ''}
     </div>`;
+}
+
+async function atribuirFalta(id, utilizadorId) {
+  try {
+    const body = utilizadorId ? { utilizador_id: utilizadorId } : { utilizador_id: null };
+    await api('PATCH', `/faltas/${id}/atribuir`, body);
+  } catch (e) { alert(e.message); }
+  await loadFaltas();
 }
 
 async function submitFalta() {

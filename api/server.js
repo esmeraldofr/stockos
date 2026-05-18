@@ -2540,7 +2540,7 @@ app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => 
 async function ensureProdutoFaltas() {
   if (produtoFaltasReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='produto_faltas_ddl_v2'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='produto_faltas_ddl_v3'`);
     if (r.rows.length) { produtoFaltasReady = true; return; }
   } catch (_) {}
   const pidCheck = await query(
@@ -2559,13 +2559,15 @@ async function ensureProdutoFaltas() {
     reportado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     resolvido_em TIMESTAMPTZ,
     resolvido_por TEXT NOT NULL DEFAULT '',
-    resolvido_por_nome TEXT NOT NULL DEFAULT ''
+    resolvido_por_nome TEXT NOT NULL DEFAULT '',
+    resolvido_foto_base64 TEXT
   )`).catch(() => {});
   await query(`ALTER TABLE produto_faltas ALTER COLUMN produto_id DROP NOT NULL`).catch(() => {});
   await query(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS produto_nome_livre TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await query(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS resolvido_foto_base64 TEXT`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS produto_faltas_pendentes_idx ON produto_faltas (resolvido_em) WHERE resolvido_em IS NULL`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS produto_faltas_reportado_idx ON produto_faltas (reportado_em DESC)`).catch(() => {});
-  await query(`INSERT INTO stockos_meta (k,v) VALUES ('produto_faltas_ddl_v2','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+  await query(`INSERT INTO stockos_meta (k,v) VALUES ('produto_faltas_ddl_v3','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
   produtoFaltasReady = true;
 }
 
@@ -2578,7 +2580,11 @@ app.get('/api/faltas', auth, async (req, res) => {
     if (status === 'pendentes') where = 'WHERE f.resolvido_em IS NULL';
     else if (status === 'resolvidas') where = "WHERE f.resolvido_em IS NOT NULL AND f.resolvido_em > NOW() - INTERVAL '30 days'";
     const r = await query(
-      `SELECT f.*, COALESCE(p.nome, f.produto_nome_livre) AS produto_nome,
+      `SELECT f.id, f.produto_id, f.produto_nome_livre, f.notas,
+              f.reportado_por, f.reportado_por_nome, f.reportado_em,
+              f.resolvido_em, f.resolvido_por, f.resolvido_por_nome,
+              (f.resolvido_foto_base64 IS NOT NULL) AS tem_foto,
+              COALESCE(p.nome, f.produto_nome_livre) AS produto_nome,
               p.categoria AS produto_categoria, p.tipo_medicao AS produto_tipo_medicao,
               (f.produto_id IS NULL) AS produto_livre
        FROM produto_faltas f
@@ -2632,18 +2638,36 @@ app.post('/api/faltas', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-/** Marcar como resolvido — qualquer utilizador autenticado. */
+/** Marcar como resolvido — exige foto (prova). Qualquer utilizador autenticado. */
 app.patch('/api/faltas/:id', auth, async (req, res) => {
   try {
     await ensureProdutoFaltas();
+    const foto = String(req.body?.foto_base64 || '').trim();
+    if (!foto || !foto.startsWith('data:image/')) {
+      return res.status(400).json({ erro: 'É obrigatório anexar uma foto da resolução.' });
+    }
+    if (foto.length > 8 * 1024 * 1024) {
+      return res.status(400).json({ erro: 'Foto demasiado grande (máx. ~6 MB).' });
+    }
     const r = await query(
       `UPDATE produto_faltas
-       SET resolvido_em = NOW(), resolvido_por = $1, resolvido_por_nome = $2
-       WHERE id = $3 AND resolvido_em IS NULL RETURNING *`,
-      [String(req.user.id || ''), String(req.user.nome || ''), req.params.id]
+       SET resolvido_em = NOW(), resolvido_por = $1, resolvido_por_nome = $2, resolvido_foto_base64 = $3
+       WHERE id = $4 AND resolvido_em IS NULL RETURNING id, produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome, reportado_em, resolvido_em, resolvido_por, resolvido_por_nome,
+         (resolvido_foto_base64 IS NOT NULL) AS tem_foto`,
+      [String(req.user.id || ''), String(req.user.nome || ''), foto, req.params.id]
     );
     if (!r.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado ou já resolvido' });
     res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Devolve a foto base64 de um aviso resolvido (lazy — não inclui na lista). */
+app.get('/api/faltas/:id/foto', auth, async (req, res) => {
+  try {
+    await ensureProdutoFaltas();
+    const r = await query(`SELECT resolvido_foto_base64 FROM produto_faltas WHERE id=$1`, [req.params.id]);
+    if (!r.rows.length || !r.rows[0].resolvido_foto_base64) return res.status(404).json({ erro: 'Sem foto.' });
+    res.json({ foto_base64: r.rows[0].resolvido_foto_base64 });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

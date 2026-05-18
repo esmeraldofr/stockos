@@ -2540,7 +2540,7 @@ app.delete('/api/produtos/:id', auth, requireRole('admin'), async (req, res) => 
 async function ensureProdutoFaltas() {
   if (produtoFaltasReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='produto_faltas_ddl_v3'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='produto_faltas_ddl_v4'`);
     if (r.rows.length) { produtoFaltasReady = true; return; }
   } catch (_) {}
   const pidCheck = await query(
@@ -2560,14 +2560,20 @@ async function ensureProdutoFaltas() {
     resolvido_em TIMESTAMPTZ,
     resolvido_por TEXT NOT NULL DEFAULT '',
     resolvido_por_nome TEXT NOT NULL DEFAULT '',
-    resolvido_foto_base64 TEXT
+    resolvido_foto_base64 TEXT,
+    atribuido_a TEXT,
+    atribuido_a_nome TEXT,
+    atribuido_em TIMESTAMPTZ
   )`).catch(() => {});
   await query(`ALTER TABLE produto_faltas ALTER COLUMN produto_id DROP NOT NULL`).catch(() => {});
   await query(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS produto_nome_livre TEXT NOT NULL DEFAULT ''`).catch(() => {});
   await query(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS resolvido_foto_base64 TEXT`).catch(() => {});
+  await query(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS atribuido_a TEXT`).catch(() => {});
+  await query(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS atribuido_a_nome TEXT`).catch(() => {});
+  await query(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS atribuido_em TIMESTAMPTZ`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS produto_faltas_pendentes_idx ON produto_faltas (resolvido_em) WHERE resolvido_em IS NULL`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS produto_faltas_reportado_idx ON produto_faltas (reportado_em DESC)`).catch(() => {});
-  await query(`INSERT INTO stockos_meta (k,v) VALUES ('produto_faltas_ddl_v3','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+  await query(`INSERT INTO stockos_meta (k,v) VALUES ('produto_faltas_ddl_v4','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
   produtoFaltasReady = true;
 }
 
@@ -2584,6 +2590,7 @@ app.get('/api/faltas', auth, async (req, res) => {
               f.reportado_por, f.reportado_por_nome, f.reportado_em,
               f.resolvido_em, f.resolvido_por, f.resolvido_por_nome,
               (f.resolvido_foto_base64 IS NOT NULL) AS tem_foto,
+              f.atribuido_a, f.atribuido_a_nome, f.atribuido_em,
               COALESCE(p.nome, f.produto_nome_livre) AS produto_nome,
               p.categoria AS produto_categoria, p.tipo_medicao AS produto_tipo_medicao,
               (f.produto_id IS NULL) AS produto_livre
@@ -2658,6 +2665,35 @@ app.patch('/api/faltas/:id', auth, async (req, res) => {
     );
     if (!r.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado ou já resolvido' });
     res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Atribuir o aviso pendente a um utilizador (responsável por resolver). Qualquer auth. */
+app.patch('/api/faltas/:id/atribuir', auth, async (req, res) => {
+  try {
+    await ensureProdutoFaltas();
+    const uid = req.body?.utilizador_id ? String(req.body.utilizador_id).trim() : null;
+    if (uid) {
+      const u = await query('SELECT id, nome FROM utilizadores WHERE id=$1', [uid]);
+      if (!u.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado.' });
+      const r = await query(
+        `UPDATE produto_faltas SET atribuido_a=$1, atribuido_a_nome=$2, atribuido_em=NOW()
+         WHERE id=$3 AND resolvido_em IS NULL
+         RETURNING id, atribuido_a, atribuido_a_nome, atribuido_em`,
+        [uid, u.rows[0].nome || '', req.params.id]
+      );
+      if (!r.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado ou já resolvido.' });
+      return res.json(r.rows[0]);
+    }
+    // Sem utilizador → remove atribuição.
+    const r2 = await query(
+      `UPDATE produto_faltas SET atribuido_a=NULL, atribuido_a_nome=NULL, atribuido_em=NULL
+       WHERE id=$1 AND resolvido_em IS NULL
+       RETURNING id, atribuido_a, atribuido_a_nome, atribuido_em`,
+      [req.params.id]
+    );
+    if (!r2.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado ou já resolvido.' });
+    res.json(r2.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

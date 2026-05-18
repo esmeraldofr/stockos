@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-hist-grafico-turnos">
+<html lang="pt" data-stockos-ui="2026-05-17-hist-grafico-suave">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6840,17 +6840,28 @@ function histVendasChartCardHtml(days) {
     svg += `<line x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}" stroke="#1e293b" stroke-width="1"/>`;
     svg += `<text x="${padL - 4}" y="${y + 3}" fill="#475569" font-size="9" text-anchor="end">${fmtCompact(v)}</text>`;
   }
-  const labelDe = { total: 'Total gerado', vendido: 'Total vendido', geradoM: '🌅 Manhã', geradoT: '🌤 Tarde', geradoN: '🌙 Noite' };
+  /** Catmull-Rom → cubic Bezier para curvas suaves entre pontos. */
+  function smoothPath(pts) {
+    if (!pts.length) return '';
+    if (pts.length === 1) return `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+    let d = `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] || pts[i + 1];
+      const c1x = p1.x + (p2.x - p0.x) / 6;
+      const c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6;
+      const c2y = p2.y - (p3.y - p1.y) / 6;
+      d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+    }
+    return d;
+  }
   function poly(key, cor, dashed) {
-    const pts = items.map((it, i) => `${xAt(i).toFixed(1)},${yAt(it[key]).toFixed(1)}`).join(' ');
-    let dots = '';
-    items.forEach((it, i) => {
-      const cx = xAt(i), cy = yAt(it[key]);
-      const tt = `${it.data} · ${labelDe[key] || key} ${fmt(it[key])}`;
-      dots += `<g><title>${escapeHtml(tt)}</title><circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="${cor}"/></g>`;
-    });
+    const pts = items.map((it, i) => ({ x: xAt(i), y: yAt(it[key]) }));
     const dashAttr = dashed ? ' stroke-dasharray="4,3"' : '';
-    return `<polyline points="${pts}" fill="none" stroke="${cor}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"${dashAttr}/>${dots}`;
+    return `<path d="${smoothPath(pts)}" fill="none" stroke="${cor}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"${dashAttr}/>`;
   }
   svg += poly('vendido', '#a5b4fc');
   svg += poly('total', '#fbbf24', true);
@@ -6865,13 +6876,21 @@ function histVendasChartCardHtml(days) {
       svg += `<text x="${xAt(idx).toFixed(1)}" y="${H - 10}" fill="#64748b" font-size="10" text-anchor="middle">${label}</text>`;
     }
   });
-  // Click numa zona vertical (faixa por dia) → abre Dia
+  // Hot-zone vertical por dia: tooltip multi-linha + click abre Dia.
   items.forEach((it, idx) => {
     const xCenter = xAt(idx);
     const half = n <= 1 ? chartW / 2 : (chartW / (n - 1)) / 2;
     const x0 = Math.max(padL, xCenter - half);
     const x1 = Math.min(W - padR, xCenter + half);
-    svg += `<rect x="${x0.toFixed(1)}" y="${padT}" width="${(x1 - x0).toFixed(1)}" height="${chartH}" fill="transparent" style="cursor:pointer" onclick="runAction(event, async () => { S.date='${it.data}'; await navigate('dia'); })"><title>${escapeHtml(it.data + ' — Total ' + fmt(it.total))}</title></rect>`;
+    const tt = [
+      it.data,
+      `Total vendido ${fmt(it.vendido)}`,
+      `Total gerado ${fmt(it.total)}`,
+      `Manhã ${fmt(it.geradoM)}`,
+      `Tarde ${fmt(it.geradoT)}`,
+      `Noite ${fmt(it.geradoN)}`
+    ].join('\n');
+    svg += `<rect x="${x0.toFixed(1)}" y="${padT}" width="${(x1 - x0).toFixed(1)}" height="${chartH}" fill="transparent" style="cursor:pointer" onclick="runAction(event, async () => { S.date='${it.data}'; await navigate('dia'); })"><title>${escapeHtml(tt)}</title></rect>`;
   });
   return `
     <div class="card" style="margin-bottom:16px">

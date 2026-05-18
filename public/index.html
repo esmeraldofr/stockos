@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-irreg-filtro-estado">
+<html lang="pt" data-stockos-ui="2026-05-17-equipa-kiosk-warn">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6412,6 +6412,27 @@ async function loadEscalaTurno() {
       api('GET', '/equipa/pessoas'),
       api('GET', `/turnos/${S.turnoData.id}/faltas`)
     ]);
+    const canEdit = !!S.turnoCanEdit;
+    /** Presenças biométricas (kiosk) — só admin/gestor têm acesso ao endpoint. */
+    const podeVerPresencas = ['admin','gestor'].includes(S.user?.role);
+    const presencasByUser = {};
+    if (podeVerPresencas && equipaReal.length) {
+      try {
+        const dProx = addDays(S.date, 1);
+        const [pres1, pres2] = await Promise.all([
+          api('GET', `/presencas?data=${encodeURIComponent(S.date)}`).catch(() => []),
+          // Para turno da noite (23–08) precisamos da madrugada do dia seguinte.
+          turnoNome === 'noite' ? api('GET', `/presencas?data=${encodeURIComponent(dProx)}`).catch(() => []) : Promise.resolve([])
+        ]);
+        for (const p of [...(pres1 || []), ...(pres2 || [])]) {
+          const k = String(p.utilizador_id || '');
+          if (!k) continue;
+          if (!presencasByUser[k]) presencasByUser[k] = { entrada: false, saida: false };
+          if (p.tipo === 'entrada') presencasByUser[k].entrada = true;
+          else if (p.tipo === 'saida') presencasByUser[k].saida = true;
+        }
+      } catch (_) {}
+    }
     const rowsDia = escalaPack.semana || [];
     const rowsTemplate = escalaPack.template || [];
     const listaDia = rowsDia.filter(r => r.turno === turnoNome);
@@ -6421,7 +6442,6 @@ async function loadEscalaTurno() {
     const listaTpl = rowsTemplate.filter(r => Number(r.dia_semana) === diaSemana && r.turno === turnoNome);
     const lista = listaDia.length ? listaDia : listaTpl;
     const origem = listaDia.length ? 'escala do dia' : 'escala template';
-    const canEdit = !!S.turnoCanEdit;
     const escaladosIds = new Set(lista.map(r => String(r.utilizador_id || '')).filter(Boolean));
     const reaisIds = new Set(equipaReal.map(r => String(r.utilizador_id || '')).filter(Boolean));
     const faltas = lista.filter(r => r.utilizador_id && !reaisIds.has(String(r.utilizador_id)));
@@ -6472,6 +6492,20 @@ async function loadEscalaTurno() {
     `).join('')
       : '<span style="color:#64748b">Nenhum funcionário registado como presente.</span>';
 
+    const semRegisto = podeVerPresencas
+      ? equipaReal.map(r => {
+          const k = String(r.utilizador_id || '');
+          const p = presencasByUser[k] || { entrada: false, saida: false };
+          if (p.entrada && p.saida) return null;
+          const missing = [];
+          if (!p.entrada) missing.push('entrada');
+          if (!p.saida) missing.push('saída');
+          return { nome: r.utilizador_nome || 'Sem nome', missing };
+        }).filter(Boolean)
+      : [];
+    const semRegistoLine = semRegisto.length
+      ? `<div style="color:#fbbf24;margin-top:6px;line-height:1.5">⚠ Sem registo no kiosk: ${semRegisto.map(s => `${escapeHtml(s.nome)} (sem ${s.missing.join(' e sem ')})`).join(', ')}</div>`
+      : '';
     const alertaHtml = `
       <div style="margin-top:10px;font-size:12px">
         <div style="color:${faltas.length ? '#fbbf24' : '#4ade80'}">${faltas.length ? `⚠ Faltas: ${faltas.map(f => {
@@ -6482,6 +6516,7 @@ async function loadEscalaTurno() {
             : `${nome}${canEdit ? ` <button type="button" class="btn btn-danger btn-sm" style="margin-left:6px" onclick="registarMotivoFalta(event, '${S.turnoData.id}','${encodeURIComponent(f.utilizador_id)}','${(nome||'').replace(/'/g, "\\'")}')">Registar motivo</button>` : ''}`;
         }).join(', ')}` : '✓ Sem faltas nos escalados'}</div>
         <div style="color:${coberturas.length ? '#60a5fa' : '#64748b'};margin-top:4px">${coberturas.length ? `↺ Coberturas: ${coberturas.map(c => c.utilizador_nome || 'Sem nome').join(', ')}` : 'Sem coberturas registadas'}</div>
+        ${semRegistoLine}
       </div>`;
 
     const addForm = canEdit ? `

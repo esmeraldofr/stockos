@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-he-opcional">
+<html lang="pt" data-stockos-ui="2026-05-17-irreg-filtro-estado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5315,12 +5315,13 @@ function buildIrregularidadesHtmlParts({
 
 /** Wrapa cada bloco do snap com footer de aceitar/rejeitar/pendente + comentários.
  *  decisoes = map categoria → row. comentariosByCat = map categoria → array de comentários.
- *  opts.hideAceites = true esconde blocos cuja decisão é aceite.
- *  opts.filtroTipos = objecto {caixa,banco,stock,fino,ing} com flags; falso oculta o tipo. */
+ *  opts.filtroTipos = objecto {caixa,banco,stock,fino,ing} com flags; falso oculta o tipo.
+ *  opts.filtroEstado = objecto {aceite,rejeitado,pendente}; falso oculta o estado. */
 function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat, comentariosByCat, opts) {
-  const hideAceites = !!(opts && opts.hideAceites);
   const filtro = opts && opts.filtroTipos;
+  const filtroEstado = opts && opts.filtroEstado;
   const tipoDe = (key) => key.startsWith('ing:') ? 'ing' : key;
+  const estadoDe = (dec) => !dec ? 'pendente' : (dec.aceite ? 'aceite' : 'rejeitado');
   const cats = [
     { key: 'caixa', html: snap.caixaHtml },
     { key: 'banco', html: snap.bancoHtml || '' },
@@ -5335,7 +5336,7 @@ function renderIrregularidadeBlocos(snap, turnoId, decisoesByCat, comentariosByC
     if (!html) return '';
     if (filtro && filtro[tipoDe(key)] === false) return '';
     const dec = decisoesByCat?.[key];
-    if (hideAceites && dec && dec.aceite) return '';
+    if (filtroEstado && filtroEstado[estadoDe(dec)] === false) return '';
     let footer = '';
     if (dec) {
       const quando = dec.decidido_em ? new Date(dec.decidido_em).toLocaleDateString('pt-PT', { day:'2-digit', month:'2-digit', year:'2-digit' }) : '';
@@ -6865,12 +6866,15 @@ async function openTurnoFromIrreg(dataStr, turnoId) {
 }
 
 async function drawIrregularidades() {
-  if (!S.irregFiltros) S.irregFiltros = { caixa: true, banco: true, stock: true, fino: true, ing: true, manha: true, tarde: true, noite: true };
+  if (!S.irregFiltros) S.irregFiltros = { caixa: true, banco: true, stock: true, fino: true, ing: true, manha: true, tarde: true, noite: true, st_aceite: false, st_rejeitado: true, st_pendente: true };
   else {
-    // Compatibilidade com sessões antigas sem filtros de turno.
+    // Compatibilidade com sessões antigas: chaves novas inicializadas.
     if (S.irregFiltros.manha === undefined) S.irregFiltros.manha = true;
     if (S.irregFiltros.tarde === undefined) S.irregFiltros.tarde = true;
     if (S.irregFiltros.noite === undefined) S.irregFiltros.noite = true;
+    if (S.irregFiltros.st_aceite === undefined) S.irregFiltros.st_aceite = false;
+    if (S.irregFiltros.st_rejeitado === undefined) S.irregFiltros.st_rejeitado = true;
+    if (S.irregFiltros.st_pendente === undefined) S.irregFiltros.st_pendente = true;
   }
   render(`
     <div id="header">
@@ -6902,6 +6906,10 @@ async function drawIrregularidades() {
         <div style="margin-top:10px">
           <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Mostrar turnos:</div>
           <div id="ir-filtros-turnos" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
+        <div style="margin-top:10px">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Mostrar estado:</div>
+          <div id="ir-filtros-estado" style="display:flex;flex-wrap:wrap;gap:6px"></div>
         </div>
       </div>
       <div id="irreg-content"></div>
@@ -6940,14 +6948,21 @@ function renderIrregFiltros() {
     { k: 'tarde', label: '🌤 Tarde' },
     { k: 'noite', label: '🌙 Noite' }
   ];
+  const estados = [
+    { k: 'st_pendente', label: 'Não avaliado' },
+    { k: 'st_aceite', label: '✓ Aceite' },
+    { k: 'st_rejeitado', label: '✗ Rejeitado' }
+  ];
   const mTipos = document.getElementById('ir-filtros');
   if (mTipos) mTipos.innerHTML = chipsHtml(tipos);
   const mTurnos = document.getElementById('ir-filtros-turnos');
   if (mTurnos) mTurnos.innerHTML = chipsHtml(turnos);
+  const mEstados = document.getElementById('ir-filtros-estado');
+  if (mEstados) mEstados.innerHTML = chipsHtml(estados);
 }
 
 function toggleIrregFiltro(k) {
-  if (!S.irregFiltros) S.irregFiltros = { caixa: true, banco: true, stock: true, fino: true, ing: true, manha: true, tarde: true, noite: true };
+  if (!S.irregFiltros) S.irregFiltros = { caixa: true, banco: true, stock: true, fino: true, ing: true, manha: true, tarde: true, noite: true, st_aceite: false, st_rejeitado: true, st_pendente: true };
   S.irregFiltros[k] = !S.irregFiltros[k];
   renderIrregFiltros();
   renderIrregularidadesListaFromCache();
@@ -7064,7 +7079,8 @@ function renderIrregularidadesListaFromCache() {
     .map(({ r, dataStr, snap, equipaReal }) => {
       if (filtro[r.nome] === false) return '';
       const decsT = decisoesPorTurno[r.turno_id] || {};
-      const blocos = renderIrregularidadeBlocos(snap, r.turno_id, decsT, comentariosPorTurno[r.turno_id] || {}, { hideAceites: true, filtroTipos: filtro });
+      const filtroEstado = { aceite: filtro.st_aceite !== false, rejeitado: filtro.st_rejeitado !== false, pendente: filtro.st_pendente !== false };
+      const blocos = renderIrregularidadeBlocos(snap, r.turno_id, decsT, comentariosPorTurno[r.turno_id] || {}, { filtroTipos: filtro, filtroEstado });
       if (!blocos.trim()) return '';
       const title = `${turnoLabel(r.nome)} — ${dateLabelWithWeekday(dataStr)}`;
       const tid = String(r.turno_id);
@@ -7075,6 +7091,7 @@ function renderIrregularidadesListaFromCache() {
         ? `Trabalharam: ${escapeHtml(nomesEquipa.join(', '))}`
         : 'Trabalharam: — (sem registo na aba Escala)';
       const tipoDe = (k) => k.startsWith('ing:') ? 'ing' : k;
+      const estadoDe = (dec) => !dec ? 'pendente' : (dec.aceite ? 'aceite' : 'rejeitado');
       const catsAll = ['caixa','banco','stock','fino', ...(snap.ingredientesItems || []).map(i => 'ing:' + i.produto_id)];
       const nIrrVisiveis = catsAll.reduce((acc, k) => {
         if (filtro[tipoDe(k)] === false) return acc;
@@ -7086,8 +7103,7 @@ function renderIrregularidadesListaFromCache() {
           (k.startsWith('ing:') && (snap.ingredientesItems || []).some(i => 'ing:' + i.produto_id === k))
         );
         if (!hasBlock) return acc;
-        const dec = decsT[k];
-        if (dec && dec.aceite) return acc;
+        if (filtroEstado[estadoDe(decsT[k])] === false) return acc;
         return acc + 1;
       }, 0);
       const badge = nIrrVisiveis > 0

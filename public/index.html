@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-17-produtos-avatar-r2">
+<html lang="pt" data-stockos-ui="2026-05-17-depositos-lock">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1550,6 +1550,15 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
   (depositos || []).forEach(d => {
     if (d.turno_id != null) depositosByTurno[String(d.turno_id)] = d;
   });
+  const bloqueado = (depositos || []).some((d) => d && d.fechado === true);
+  const ehAdmin = S.user?.role === 'admin';
+  const depFech = (depositos || []).find((d) => d && d.fechado === true);
+  const lockBanner = bloqueado
+    ? `<div style="margin-bottom:10px;padding:10px 12px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.32);border-radius:8px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px">
+        <div style="color:#bfdbfe;font-size:13px;line-height:1.4">🔒 <strong>Depósito fechado</strong>${depFech?.criado_por_nome ? ` — registado por ${escapeHtml(depFech.criado_por_nome)}` : ''}${depFech?.criado_em ? ` em ${new Date(depFech.criado_em).toLocaleDateString('pt-PT', { day:'2-digit', month:'2-digit', year:'2-digit' })}` : ''}. ${ehAdmin ? 'Podes reabrir para corrigir.' : 'Pede a um admin para reabrir antes de alterar.'}</div>
+        ${ehAdmin ? `<button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, reabrirDepositosDia)">🔓 Reabrir</button>` : ''}
+      </div>`
+    : '';
   const sumDinheiro = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor) || 0), 0);
   const totalSaidasNoDeposito = (depositos || []).reduce((s, d) => s + (parseFloat(d.valor_saidas) || 0), 0);
   const totalDepositos = Math.max(0, sumDinheiro - totalSaidasNoDeposito);
@@ -1579,6 +1588,7 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
         <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Por turno: <strong>Dinheiro</strong>, <strong>Transferência</strong> e <strong>TPA</strong> (cada um deve bater com o caixa do turno). As <strong>saídas no depósito</strong> são valores retirados do dinheiro depositado para <strong>compras de stock / armazém</strong> (não são outras despesas genéricas). Esse montante e a <strong>foto do borderô</strong> são <strong>únicos</strong> para todo o registo do dia. <strong>Referência</strong>, <strong>notas</strong> e <strong>data</strong> são comuns.</p>
         ${depositosErro ? `<div class="alert alert-error" style="margin-bottom:10px">Não foi possível carregar os depósitos: ${depositosErro}</div>` : ''}
         ${!turnos.length ? `<div class="alert alert-error" style="margin-bottom:10px">Não há turnos neste dia — abre turnos antes de registar depósitos.</div>` : ''}
+        ${lockBanner}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
           <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:center">
             <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Líquido em dinheiro</div>
@@ -1656,17 +1666,17 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
               <div class="field">
                 <label>Dinheiro (Kz) <span style="font-size:10px;color:#64748b;font-weight:400">(esperado: ${fmt(caixaDin)})</span></label>
-                <input id="${dinId}" type="number" min="0" step="any" placeholder="0" value="${dinVal.replace(/"/g, '&quot;')}" data-caixa-din="${caixaDin}" oninput="validateDepCaixa(${t.id});updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/>
+                <input id="${dinId}" type="number" min="0" step="any" placeholder="0" value="${dinVal.replace(/"/g, '&quot;')}" data-caixa-din="${caixaDin}" oninput="validateDepCaixa(${t.id});updateDepPreviewTotal()" ${(!pode || bloqueado) ? 'disabled' : ''}/>
                 <div id="${dinId}-diff" style="font-size:11px;margin-top:4px;min-height:14px"></div>
               </div>
               <div class="field">
                 <label>Transferência (Kz) <span style="font-size:10px;color:#64748b;font-weight:400">(esperado: ${fmt(caixaTransf)})</span></label>
-                <input id="${trfId}" type="number" min="0" step="any" placeholder="0" value="${trfVal.replace(/"/g, '&quot;')}" data-caixa-transf="${caixaTransf}" oninput="validateDepCaixa(${t.id});updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/>
+                <input id="${trfId}" type="number" min="0" step="any" placeholder="0" value="${trfVal.replace(/"/g, '&quot;')}" data-caixa-transf="${caixaTransf}" oninput="validateDepCaixa(${t.id});updateDepPreviewTotal()" ${(!pode || bloqueado) ? 'disabled' : ''}/>
                 <div id="${trfId}-diff" style="font-size:11px;margin-top:4px;min-height:14px"></div>
               </div>
               <div class="field">
                 <label>TPA (Kz) <span style="font-size:10px;color:#64748b;font-weight:400">(esperado: ${fmt(caixaTpa)})</span></label>
-                <input id="${tpaId}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" data-caixa-tpa="${caixaTpa}" oninput="validateDepCaixa(${t.id});updateDepPreviewTotal()" ${!pode ? 'disabled' : ''}/>
+                <input id="${tpaId}" type="number" min="0" step="any" placeholder="0" value="${tpaVal.replace(/"/g, '&quot;')}" data-caixa-tpa="${caixaTpa}" oninput="validateDepCaixa(${t.id});updateDepPreviewTotal()" ${(!pode || bloqueado) ? 'disabled' : ''}/>
                 <div id="${tpaId}-diff" style="font-size:11px;margin-top:4px;min-height:14px"></div>
               </div>
             </div>
@@ -1674,24 +1684,24 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
         }).join('')}
         <div class="field" style="margin-top:8px">
           <label>Saída em dinheiro para armazém / stock (Kz) — única para o dia</label>
-          <input id="dep-saidas-dia" type="number" min="0" step="any" placeholder="0" value="${saidasUnicaVal.replace(/"/g, '&quot;')}" oninput="updateDepSaidasDestinoRequired();updateDepPreviewTotal()" ${!temTurnoFechado ? 'disabled' : ''}/>
+          <input id="dep-saidas-dia" type="number" min="0" step="any" placeholder="0" value="${saidasUnicaVal.replace(/"/g, '&quot;')}" oninput="updateDepSaidasDestinoRequired();updateDepPreviewTotal()" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''}/>
           <div style="font-size:11px;color:#64748b;margin-top:4px">Dinheiro retirado antes do depósito para compras de stock (armazém). Desconta no líquido em dinheiro, não por turno.</div>
         </div>
         <div class="field">
           <label id="dep-saidas-destino-label">O que se comprou para o armazém <span id="dep-saidas-destino-hint" style="font-weight:400;color:#64748b">(obrigatório se houver valor acima)</span></label>
-          <textarea id="dep-saidas-destino-dia" rows="2" placeholder="Ex.: compra de ingredientes X; fatura fornecedor Y; enchidos e bebidas para stock…" ${!temTurnoFechado ? 'disabled' : ''}>${escapeHtml(destinoSaidasComum)}</textarea>
+          <textarea id="dep-saidas-destino-dia" rows="2" placeholder="Ex.: compra de ingredientes X; fatura fornecedor Y; enchidos e bebidas para stock…" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''}>${escapeHtml(destinoSaidasComum)}</textarea>
         </div>
         <div class="field" style="margin-top:4px">
           <label>Referência (opcional)</label>
-          <input id="dep-ref-dia" type="text" placeholder="Nº operação / guia" value="${String(refComum).replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
+          <input id="dep-ref-dia" type="text" placeholder="Nº operação / guia" value="${String(refComum).replace(/"/g, '&quot;')}" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''}/>
         </div>
         <div class="field">
           <label>Notas (opcional)</label>
-          <input id="dep-notas-dia" type="text" placeholder="Opcional" value="${String(notasComum).replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
+          <input id="dep-notas-dia" type="text" placeholder="Opcional" value="${String(notasComum).replace(/"/g, '&quot;')}" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''}/>
         </div>
         <div class="field">
           <label>Data do depósito (aplica a todos os turnos com valor)</label>
-          <input id="dep-data-dia" type="date" value="${dataDepComum.replace(/"/g, '&quot;')}" ${!temTurnoFechado ? 'disabled' : ''}/>
+          <input id="dep-data-dia" type="date" value="${dataDepComum.replace(/"/g, '&quot;')}" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''}/>
         </div>
         <div class="field">
           <label>Foto do borderô (opcional) — uma para todo o registo</label>
@@ -1701,14 +1711,14 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
                 <img src="${attrUrl(borderoDiaUrl)}" alt="Borderô" style="max-height:160px;max-width:100%;border-radius:8px;border:1px solid #334155;vertical-align:top"/>
               </a>
               <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-                <button type="button" class="btn btn-ghost btn-sm" onclick="removeBorderoDia(event)">Remover foto</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="removeBorderoDia(event)" ${bloqueado ? 'disabled' : ''}>Remover foto</button>
               </div>
             </div>
           ` : ''}
-          <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" id="dep-bordero-dia" ${!temTurnoFechado ? 'disabled' : ''} ${(depositos || []).length > 0 ? 'onchange="uploadBorderoDia(this)"' : ''}/>
+          <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" id="dep-bordero-dia" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''} ${(depositos || []).length > 0 ? 'onchange="uploadBorderoDia(this)"' : ''}/>
           <div style="font-size:11px;color:#64748b;margin-top:4px">Uma imagem por operação; substitui a anterior ao escolher outro ficheiro (ou ao registar de novo com nova foto). JPEG, PNG ou WebP.</div>
         </div>
-        <button type="button" class="btn btn-success" onclick="runAction(event, submitDepositosDia)" ${!temTurnoFechado ? 'disabled' : ''}>Registar depósito</button>
+        <button type="button" class="btn btn-success" onclick="runAction(event, submitDepositosDia)" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''}>${bloqueado ? '🔒 Fechado' : 'Registar depósito'}</button>
           `;
         })()}
       </div>`;
@@ -2440,6 +2450,14 @@ function updateDepPreviewTotal() {
   const liq = Math.max(0, sumDin - saidasU);
   el.textContent = fmt(liq);
   updateDepSaidasDestinoRequired();
+}
+
+async function reabrirDepositosDia() {
+  if (!confirm('Reabrir os depósitos deste dia para alteração?\nDepois de gravado de novo, voltam a ficar fechados.')) return;
+  try {
+    await api('PATCH', `/depositos/abrir?data=${encodeURIComponent(S.date)}`);
+    await loadDepositos();
+  } catch (e) { alert(e.message); }
 }
 
 async function submitDepositosDia() {

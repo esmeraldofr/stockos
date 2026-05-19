@@ -1731,7 +1731,7 @@ function loginFromBody(req) {
 async function ensureDepositosBanco() {
   if (depositosBancoReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='depositos_banco_ddl_v2'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='depositos_banco_ddl_v3'`);
     if (r.rows.length) { depositosBancoReady = true; depositosSaidasMigrationDone = true; return; }
   } catch (_) {}
   try {
@@ -1755,6 +1755,7 @@ async function ensureDepositosBanco() {
     await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS valor_saidas NUMERIC(15,2) NOT NULL DEFAULT 0`).catch(() => {});
     await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS saidas_destino TEXT NOT NULL DEFAULT ''`).catch(() => {});
     await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS bordero_foto_url TEXT NOT NULL DEFAULT ''`).catch(() => {});
+    await query(`ALTER TABLE depositos_banco ADD COLUMN IF NOT EXISTS fechado BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
     if (!depositosSaidasMigrationDone) {
       try {
         await migrateDepositosSaidasAntigasAgrupadas();
@@ -1763,7 +1764,7 @@ async function ensureDepositosBanco() {
         console.error('migrateDepositosSaidasAntigasAgrupadas', e);
       }
     }
-    await query(`INSERT INTO stockos_meta (k,v) VALUES ('depositos_banco_ddl_v2','done') ON CONFLICT (k) DO NOTHING`);
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('depositos_banco_ddl_v3','done') ON CONFLICT (k) DO NOTHING`);
     depositosBancoReady = true;
   } catch (e) {
     console.warn('[ensureDepositosBanco]', e && e.message);
@@ -4488,10 +4489,15 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), asyn
     const vtransfRaw = parseFloat(req.body?.valor_transferencia);
     const vtransf = Number.isNaN(vtransfRaw) ? 0 : Math.max(0, vtransfRaw);
     await assertTurnoFechado(turno_id);
+    // Bloqueia alterações se já registado e fechado — só admin reabre.
+    const ex = await query(`SELECT fechado FROM depositos_banco WHERE turno_id=$1`, [parseInt(turno_id, 10)]);
+    if (ex.rows.length && ex.rows[0].fechado === true && req.user.role !== 'admin') {
+      return res.status(403).json({ erro: 'Depósito já registado e fechado — pede a um admin para reabrir antes de alterar.' });
+    }
     const ddep = (data_deposito || new Date().toISOString().split('T')[0]).trim();
     const r = await query(
-      `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_transferencia, valor_saidas, saidas_destino, referencia, notas, criado_por)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_transferencia, valor_saidas, saidas_destino, referencia, notas, criado_por, fechado)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE)
        ON CONFLICT (turno_id) DO UPDATE SET
          data_deposito = EXCLUDED.data_deposito,
          valor = EXCLUDED.valor,
@@ -4501,7 +4507,8 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), asyn
          saidas_destino = EXCLUDED.saidas_destino,
          referencia = EXCLUDED.referencia,
          notas = EXCLUDED.notas,
-         criado_em = NOW()
+         criado_em = NOW(),
+         fechado = TRUE
        RETURNING *`,
       [
         parseInt(turno_id, 10),
@@ -4597,14 +4604,22 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
     }
     dedup[0].valor_saidas = saidasTotal;
     dedup[0].saidas_destino = saidasTotal > 0 ? saidasDestino : '';
+    // Verifica se algum dos turnos visados está fechado e o utilizador não é admin.
+    const exFech = await query(
+      `SELECT turno_id FROM depositos_banco WHERE turno_id = ANY($1::int[]) AND fechado = TRUE`,
+      [dedup.map((r) => r.turno_id)]
+    );
+    if (exFech.rows.length && req.user.role !== 'admin') {
+      return res.status(403).json({ erro: 'Existem depósitos já fechados para este dia — pede a um admin para reabrir antes de alterar.' });
+    }
     let out = [];
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       for (const row of dedup) {
         const r = await client.query(
-          `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_transferencia, valor_saidas, saidas_destino, referencia, notas, criado_por)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          `INSERT INTO depositos_banco (turno_id, data_deposito, valor, valor_tpa, valor_transferencia, valor_saidas, saidas_destino, referencia, notas, criado_por, fechado)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE)
            ON CONFLICT (turno_id) DO UPDATE SET
              data_deposito = EXCLUDED.data_deposito,
              valor = EXCLUDED.valor,
@@ -4614,7 +4629,8 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
              saidas_destino = EXCLUDED.saidas_destino,
              referencia = EXCLUDED.referencia,
              notas = EXCLUDED.notas,
-             criado_em = NOW()
+             criado_em = NOW(),
+             fechado = TRUE
            RETURNING *`,
           [
             row.turno_id,
@@ -4646,6 +4662,23 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
     res.json({ ok: true, registos: out.length, rows: out });
   } catch (e) {
     res.status(400).json({ erro: e.message });
+  }
+});
+
+/** Reabrir depósitos de um dia (todos os turnos) para alteração — só admin. */
+app.patch('/api/depositos/abrir', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureDepositosBanco();
+    const data = String(req.query.data || req.body?.data || '').trim();
+    if (!data) return res.status(400).json({ erro: 'Indica a data (?data=YYYY-MM-DD).' });
+    const r = await query(
+      `UPDATE depositos_banco d SET fechado = FALSE
+       FROM turnos t WHERE t.id = d.turno_id AND t.data = $1::date AND d.fechado = TRUE`,
+      [data]
+    );
+    res.json({ ok: true, reabertos: r.rowCount || 0 });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
   }
 });
 

@@ -5130,13 +5130,21 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
           tv.quantidade * (${precoUnitDirecto})
       END`;
     const r = await query(
-      `WITH stock_sales AS (
+      `WITH preco_compra_atual AS (
+         SELECT DISTINCT ON (produto_id) produto_id, preco_unitario::numeric AS preco_unitario
+         FROM armazem_compras
+         WHERE preco_unitario > 0
+         ORDER BY produto_id, criado_em DESC
+       ),
+       stock_sales AS (
          SELECT
            p.id AS produto_id,
            p.nome AS produto_nome,
            p.categoria,
            p.tipo_medicao,
            p.venda_por_copo,
+           p.preco::numeric AS preco_venda,
+           COALESCE(pc.preco_unitario, 0)::numeric AS preco_compra_ultimo,
            p.ordem,
            COALESCE(SUM(${sqlGteStockVendido()}), 0)::numeric AS qtd_vendida,
            COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS valor_vendas,
@@ -5144,8 +5152,9 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
          FROM turno_stock ts
          INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
          INNER JOIN turnos t ON t.id = ts.turno_id
+         LEFT JOIN preco_compra_atual pc ON pc.produto_id = p.id
          WHERE t.data BETWEEN $1::date AND $2::date
-         GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.ordem
+         GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.preco, pc.preco_unitario, p.ordem
        ),
        direct_sales AS (
          SELECT
@@ -5154,6 +5163,8 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
            p.categoria,
            p.tipo_medicao,
            p.venda_por_copo,
+           p.preco::numeric AS preco_venda,
+           COALESCE(pc.preco_unitario, 0)::numeric AS preco_compra_ultimo,
            p.ordem,
            COALESCE(SUM(tv.quantidade), 0)::numeric AS qtd_vendida,
            COALESCE(SUM(${valorLinhaDirecto}), 0)::numeric AS valor_vendas,
@@ -5161,8 +5172,9 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
          FROM turno_vendas tv
          INNER JOIN produtos p ON p.id = tv.produto_id AND p.em_stock_turno IS FALSE AND ${"p.categoria IN ('menu','ingredientes','bebida')"}
          INNER JOIN turnos t ON t.id = tv.turno_id
+         LEFT JOIN preco_compra_atual pc ON pc.produto_id = p.id
          WHERE t.data BETWEEN $1::date AND $2::date
-         GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.ordem
+         GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.preco, pc.preco_unitario, p.ordem
        )
        SELECT * FROM stock_sales WHERE qtd_vendida > 0 OR valor_vendas > 0
        UNION ALL

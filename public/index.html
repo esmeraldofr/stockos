@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-margem-custo-unit">
+<html lang="pt" data-stockos-ui="2026-05-19-margem-alinha-decimais">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6928,6 +6928,9 @@ function histVendasChartCardHtml(days) {
 }
 
 function histVendasProdutosCardHtml(rows) {
+  /** Formato fixo a 2 decimais para alinhamento vertical na tabela. */
+  const kz2 = (v) => ((parseFloat(v) || 0).toLocaleString('pt-AO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' Kz');
+  const num2 = (v) => (parseFloat(v) || 0).toLocaleString('pt-AO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const list = Array.isArray(rows) ? rows.filter((r) => {
     const q = parseFloat(r.qtd_vendida) || 0;
     const v = parseFloat(r.valor_vendas) || 0;
@@ -6989,20 +6992,20 @@ function histVendasProdutosCardHtml(rows) {
       if (margem != null) mCat += margem;
       const sigla = r.venda_por_copo === true ? 'copos' : medicaoSigla(r.tipo_medicao || 'unidade');
       const pcCell = pc > 0
-        ? `<td style="padding:6px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(pc)}</td>`
+        ? `<td style="padding:6px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${kz2(pc)}</td>`
         : `<td style="padding:6px 8px;text-align:right;color:#475569;font-size:11px">—</td>`;
       const mgCell = margem != null
         ? (() => {
             const pct = v > 0 ? Math.round((margem / v) * 100) : 0;
             const cor = margem >= 0 ? '#4ade80' : '#f87171';
-            return `<td style="padding:6px 8px;text-align:right;color:${cor};font-variant-numeric:tabular-nums">${fmt(margem)} <span style="color:#64748b;font-size:11px">${pct}%</span></td>`;
+            return `<td style="padding:6px 8px;text-align:right;color:${cor};font-variant-numeric:tabular-nums">${kz2(margem)} <span style="color:#64748b;font-size:11px">${pct}%</span></td>`;
           })()
         : `<td style="padding:6px 8px;text-align:right;color:#475569;font-size:11px">—</td>`;
       return `
       <tr>
         <td style="padding:6px 8px;color:#e2e8f0">${escapeHtml(r.produto_nome || 'Sem nome')}</td>
-        <td style="padding:6px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums">${fmtNum(q)} <span style="color:#64748b;font-size:11px">${escapeHtml(sigla)}</span></td>
-        <td style="padding:6px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(v)}</td>
+        <td style="padding:6px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums">${num2(q)} <span style="color:#64748b;font-size:11px">${escapeHtml(sigla)}</span></td>
+        <td style="padding:6px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${kz2(v)}</td>
         ${pcCell}
         ${mgCell}
         <td style="padding:6px 8px;text-align:right;color:#64748b;font-size:11px">${r.turnos || 0}</td>
@@ -7019,10 +7022,10 @@ function histVendasProdutosCardHtml(rows) {
       ${trsRender}
       <tr>
         <td style="padding:6px 8px;color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Subtotal ${escapeHtml(label.toLowerCase())}</td>
-        <td style="padding:6px 8px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;font-weight:600">${fmtNum(qCat)}</td>
-        <td style="padding:6px 8px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;font-weight:600">${fmt(vCat)}</td>
-        <td style="padding:6px 8px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;font-weight:600">${cCat > 0 ? fmt(cCat) : '—'}</td>
-        <td style="padding:6px 8px;text-align:right;color:${mCat >= 0 ? '#86efac' : '#fca5a5'};font-variant-numeric:tabular-nums;font-weight:700">${cCat > 0 ? `${fmt(mCat)} <span style="color:#64748b;font-size:11px">${pctCat}%</span>` : '—'}</td>
+        <td style="padding:6px 8px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;font-weight:600">${num2(qCat)}</td>
+        <td style="padding:6px 8px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;font-weight:600">${kz2(vCat)}</td>
+        <td style="padding:6px 8px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;font-weight:600">${cCat > 0 ? kz2(cCat) : '—'}</td>
+        <td style="padding:6px 8px;text-align:right;color:${mCat >= 0 ? '#86efac' : '#fca5a5'};font-variant-numeric:tabular-nums;font-weight:700">${cCat > 0 ? `${kz2(mCat)} <span style="color:#64748b;font-size:11px">${pctCat}%</span>` : '—'}</td>
         <td></td>
       </tr>`;
   }).join('');
@@ -7048,10 +7051,10 @@ function histVendasProdutosCardHtml(rows) {
           <tfoot>
             <tr style="border-top:2px solid #334155">
               <td style="padding:10px 8px;color:#f1f5f9;font-weight:700">Total do período</td>
-              <td style="padding:10px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700">${fmtNum(totalQtd)}</td>
-              <td style="padding:10px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalValor)}</td>
-              <td style="padding:10px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${totalCusto > 0 ? fmt(totalCusto) : '—'}</td>
-              <td style="padding:10px 8px;text-align:right;color:${totalMargem >= 0 ? '#86efac' : '#fca5a5'};font-variant-numeric:tabular-nums;font-weight:700">${totalCusto > 0 ? `${fmt(totalMargem)} <span style="color:#64748b;font-size:11px">${totalValor > 0 ? Math.round((totalMargem/totalValor)*100) : 0}%</span>` : '—'}</td>
+              <td style="padding:10px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700">${num2(totalQtd)}</td>
+              <td style="padding:10px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${kz2(totalValor)}</td>
+              <td style="padding:10px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${totalCusto > 0 ? kz2(totalCusto) : '—'}</td>
+              <td style="padding:10px 8px;text-align:right;color:${totalMargem >= 0 ? '#86efac' : '#fca5a5'};font-variant-numeric:tabular-nums;font-weight:700">${totalCusto > 0 ? `${kz2(totalMargem)} <span style="color:#64748b;font-size:11px">${totalValor > 0 ? Math.round((totalMargem/totalValor)*100) : 0}%</span>` : '—'}</td>
               <td></td>
             </tr>
           </tfoot>

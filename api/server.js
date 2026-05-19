@@ -5131,9 +5131,13 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
       END`;
     const r = await query(
       `WITH preco_compra_atual AS (
-         SELECT DISTINCT ON (produto_id) produto_id, preco_unitario::numeric AS preco_unitario
+         SELECT DISTINCT ON (produto_id) produto_id,
+           CASE WHEN quantidade > 0 AND valor_total > 0
+                THEN (valor_total / quantidade)
+                ELSE preco_unitario
+           END::numeric AS preco_unitario
          FROM armazem_compras
-         WHERE preco_unitario > 0
+         WHERE quantidade > 0
          ORDER BY produto_id, criado_em DESC
        ),
        stock_sales AS (

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pedidos-todos-dia">
+<html lang="pt" data-stockos-ui="2026-05-19-pedidos-lista-oculta">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3646,6 +3646,15 @@ function pedidoBalcaoToggleAutoPrint(el) {
   pedidoBalcaoSetAutoPrint(!!el.checked);
 }
 
+function togglePedidosTurnoLista() {
+  const el = document.getElementById('pedidos-turno-lista');
+  const btn = document.getElementById('ver-pedidos-turno-btn');
+  if (!el) return;
+  const show = el.style.display === 'none' || el.style.display === '';
+  el.style.display = show ? '' : 'none';
+  if (btn) btn.textContent = show ? 'Esconder pedidos do turno' : 'Mostrar pedidos do turno';
+}
+
 async function abrirTodosPedidosDia() {
   let modal = document.getElementById('todos-pedidos-modal');
   if (!modal) {
@@ -4696,7 +4705,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     formHtml +
     resumoHtml +
     resumoProdutosHtml +
-    `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno</div><button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, abrirTodosPedidosDia)" title="Ver todos os pedidos do dia (manhã + tarde + noite)">📋 Ver todos do dia</button></div>${listHtml}</div>`;
+    `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button><button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, abrirTodosPedidosDia)" title="Ver todos os pedidos do dia (manhã + tarde + noite)">📋 Ver todos do dia</button></div></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
   pedidoBalcaoSyncDraftUI();
   pedidoBalcaoLogoRefreshUI();
   if (canEdit) { pedidoBalcaoLoadPromotores().catch(() => {}); }

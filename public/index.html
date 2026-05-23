@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pedidos-resumo-produtos">
+<html lang="pt" data-stockos-ui="2026-05-19-pedidos-resumo-pacotes">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4498,7 +4498,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           subtotal = qtd * u;
         }
         if (!byProd.has(key)) {
-          byProd.set(key, { nome: ln.produto_nome || 'Sem nome', qtd: 0, valor: 0, unidade: isCopo ? 'copos' : 'un.', isCopo });
+          byProd.set(key, {
+            nome: ln.produto_nome || 'Sem nome',
+            qtd: 0,
+            valor: 0,
+            unidade: isCopo ? 'copos' : 'un.',
+            isCopo,
+            pacoteN: n,
+            pacotePreco: pp
+          });
         }
         const e = byProd.get(key);
         e.qtd += qtd;
@@ -4510,12 +4518,25 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     const totalQtd = arr.reduce((s, r) => s + r.qtd, 0);
     const totalKz = arr.reduce((s, r) => s + r.valor, 0);
     const num2 = (v) => (parseFloat(v) || 0).toLocaleString('pt-AO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const trs = arr.map((r) => `
+    const trs = arr.map((r) => {
+      let unidadeStr = r.unidade;
+      if (r.isCopo && r.pacoteN >= 2 && r.pacotePreco > 0) {
+        const c = Math.floor(r.qtd);
+        const pacotes = Math.floor(c / r.pacoteN);
+        const avulsos = c % r.pacoteN;
+        if (pacotes > 0) {
+          const pT = `${pacotes} pacote${pacotes !== 1 ? 's' : ''}`;
+          const aT = avulsos > 0 ? ` + ${avulsos} copo${avulsos !== 1 ? 's' : ''}` : '';
+          unidadeStr = `copos (${pT}${aT})`;
+        }
+      }
+      return `
       <tr>
         <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)}</td>
-        <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums">${num2(r.qtd)} <span style="color:#64748b;font-size:11px">${escapeHtml(r.unidade)}</span></td>
+        <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums">${num2(r.qtd)} <span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span></td>
         <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.valor)}</td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
     return `
       <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
         <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">Produtos vendidos</div>

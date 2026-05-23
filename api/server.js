@@ -323,6 +323,7 @@ let produtoFaltasReady = false;
 let turnoEntradasReady = false;
 let turnoSaidasReady = false;
 let turnoPedidosReady = false;
+let turnoPedidosEntregaReady = false;
 let presencasReady = false;
 let precosVendasSnapshotsReady = false;
 let irregularidadeDecisoesReady = false;
@@ -1531,6 +1532,7 @@ async function ensureTurnoPedidos() {
       )`);
       await query(`ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro'`, []);
       await query(`ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS com_entrega BOOLEAN NOT NULL DEFAULT FALSE`, []);
+      await query(`ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS valor_entrega NUMERIC(15,2) NOT NULL DEFAULT 0`, []);
       await query(`CREATE TABLE IF NOT EXISTS turno_pedido_linhas (
         id SERIAL PRIMARY KEY,
         pedido_id INTEGER NOT NULL REFERENCES turno_pedidos(id) ON DELETE CASCADE,
@@ -1545,6 +1547,22 @@ async function ensureTurnoPedidos() {
     turnoPedidosReady = true; // if lock not acquired, another instance is running DDL — treat as ready
   } catch (e) {
     console.error('[ensureTurnoPedidos]', e && e.message, e && e.stack);
+  }
+}
+
+/** Garante a coluna valor_entrega em turno_pedidos mesmo se a v1 já está marcada. */
+async function ensureTurnoPedidosEntrega() {
+  if (turnoPedidosEntregaReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_pedidos_entrega_v1'`);
+    if (r.rows.length) { turnoPedidosEntregaReady = true; return; }
+  } catch (_) {}
+  try {
+    await query(`ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS valor_entrega NUMERIC(15,2) NOT NULL DEFAULT 0`);
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('turno_pedidos_entrega_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+    turnoPedidosEntregaReady = true;
+  } catch (e) {
+    console.warn('[ensureTurnoPedidosEntrega]', e && e.message);
   }
 }
 
@@ -5278,10 +5296,12 @@ const TIPOS_PAGAMENTO_PEDIDO = ['dinheiro', 'tpa', 'transferencia', 'mbway', 'ou
 app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
   try {
     await ensureTurnoPedidos();
+    await ensureTurnoPedidosEntrega();
     const turnoId = req.params.id;
     const r = await query(
       `SELECT tp.id, tp.turno_id, tp.cliente_nome, tp.tipo_pagamento, tp.com_entrega, tp.criado_em,
               tp.promotor_id, tp.promotor_modo, tp.promotor_pct_total, tp.operador_id,
+              COALESCE(tp.valor_entrega,0) AS valor_entrega,
               COALESCE(tp.comissao_valor,0) AS comissao_valor,
               COALESCE(tp.comissao_valor_potencial,0) AS comissao_valor_potencial,
               u.nome AS promotor_nome,
@@ -5305,6 +5325,7 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
           cliente_nome: row.cliente_nome,
           tipo_pagamento: row.tipo_pagamento || 'dinheiro',
           com_entrega: row.com_entrega === true || row.com_entrega === 't',
+          valor_entrega: parseFloat(row.valor_entrega) || 0,
           criado_em: row.criado_em,
           promotor_id: row.promotor_id || null,
           promotor_nome: row.promotor_nome || null,
@@ -5345,7 +5366,8 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
           total += parseFloat(ln.quantidade) * ln.preco;
         }
       }
-      ped.total_kz = total;
+      ped.total_artigos_kz = total;
+      ped.total_kz = total + (parseFloat(ped.valor_entrega) || 0);
     }
     res.json(list);
   } catch (e) {
@@ -5369,9 +5391,10 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
   const client = await pool.connect();
   try {
     await ensureTurnoPedidos();
+    await ensureTurnoPedidosEntrega();
     await client.query('BEGIN');
     const turnoId = parseInt(req.params.id, 10);
-    const { cliente_nome, linhas, tipo_pagamento, com_entrega, promotor_id } = req.body;
+    const { cliente_nome, linhas, tipo_pagamento, com_entrega, promotor_id, valor_entrega } = req.body;
     const tCheck = await client.query(`SELECT id, estado FROM turnos WHERE id=$1`, [turnoId]);
     if (!tCheck.rows.length) {
       await client.query('ROLLBACK');
@@ -5418,6 +5441,7 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
       String(com_entrega || '').toLowerCase() === 'true' ||
       String(com_entrega || '').toLowerCase() === 'on' ||
       String(com_entrega || '').toLowerCase() === 'sim';
+    const vEntrega = comEntrega ? Math.max(0, parseFloat(valor_entrega) || 0) : 0;
 
     let promotor = null;
     if (promotor_id) {
@@ -5463,13 +5487,14 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
     }
 
     const pedidoIns = await client.query(
-      `INSERT INTO turno_pedidos (turno_id, cliente_nome, tipo_pagamento, com_entrega, promotor_id, promotor_modo, promotor_pct_total, comissao_valor, comissao_valor_potencial, operador_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, criado_em`,
+      `INSERT INTO turno_pedidos (turno_id, cliente_nome, tipo_pagamento, com_entrega, valor_entrega, promotor_id, promotor_modo, promotor_pct_total, comissao_valor, comissao_valor_potencial, operador_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id, criado_em`,
       [
         turnoId,
         String(cliente_nome || '').trim().slice(0, 200),
         tpag,
         comEntrega,
+        Math.round(vEntrega * 100) / 100,
         promotor ? promotor.id : null,
         promotorModo,
         promotorPct,
@@ -5495,7 +5520,9 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
     res.json({
       id: pedidoId,
       sucesso: true,
-      total_kz: Math.round(totalPedido * 100) / 100,
+      total_kz: Math.round((totalPedido + vEntrega) * 100) / 100,
+      total_artigos_kz: Math.round(totalPedido * 100) / 100,
+      valor_entrega: Math.round(vEntrega * 100) / 100,
       comissao_valor: Math.round(comissaoValor * 100) / 100,
       comissao_valor_potencial: Math.round(comissaoPotencial * 100) / 100
     });

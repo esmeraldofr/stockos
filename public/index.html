@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pagamentos-3">
+<html lang="pt" data-stockos-ui="2026-05-19-entrega-fee">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3646,6 +3646,16 @@ function pedidoBalcaoToggleAutoPrint(el) {
   pedidoBalcaoSetAutoPrint(!!el.checked);
 }
 
+function pedidoBalcaoToggleEntregaCampo(el) {
+  const wrap = document.getElementById('pedido-entrega-valor-wrap');
+  const val = document.getElementById('pedido-entrega-valor');
+  if (!wrap) return;
+  const on = !!(el && el.checked);
+  wrap.style.display = on ? '' : 'none';
+  if (!on && val) val.value = '';
+  if (typeof pedidoBalcaoSyncDraftUI === 'function') pedidoBalcaoSyncDraftUI();
+}
+
 function pedidoBalcaoAsciiFold(s) {
   return String(s == null ? '' : s)
     .normalize('NFD')
@@ -4052,7 +4062,15 @@ function pedidoBalcaoSyncDraftUI() {
       '<tr><td colspan="5" style="color:#64748b;font-size:13px;padding:10px 8px">Toque num artigo na grelha para adicionar.</td></tr>';
   }
   tbody.innerHTML = rows;
-  if (totalEl) totalEl.textContent = fmt(sum);
+  const comEntrega = !!document.getElementById('pedido-com-entrega')?.checked;
+  const valEntregaRaw = parseFloat(document.getElementById('pedido-entrega-valor')?.value);
+  const valEntrega = comEntrega && Number.isFinite(valEntregaRaw) && valEntregaRaw > 0 ? valEntregaRaw : 0;
+  const totalFinal = sum + valEntrega;
+  if (totalEl) {
+    totalEl.textContent = valEntrega > 0
+      ? `${fmt(totalFinal)} (artigos ${fmt(sum)} + entrega ${fmt(valEntrega)})`
+      : fmt(totalFinal);
+  }
   pedidoBalcaoRefreshComissao();
 }
 
@@ -4176,6 +4194,8 @@ async function registarPedidoBalcao(turnoId) {
     return;
   }
   const comEntrega = !!document.getElementById('pedido-com-entrega')?.checked;
+  const valorEntregaRaw = parseFloat(document.getElementById('pedido-entrega-valor')?.value);
+  const valorEntrega = comEntrega && Number.isFinite(valorEntregaRaw) && valorEntregaRaw > 0 ? valorEntregaRaw : 0;
   const promotorSel = document.getElementById('pedido-promotor');
   const promotorRaw = promotorSel?.value;
   if (promotorRaw === '__unset__' || typeof promotorRaw === 'undefined') {
@@ -4228,6 +4248,7 @@ async function registarPedidoBalcao(turnoId) {
     cliente_nome: cliente,
     tipo_pagamento: tipoPag,
     com_entrega: comEntrega,
+    valor_entrega: valorEntrega,
     promotor_id: promotorId || null,
     linhas
   });
@@ -4328,10 +4349,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             <span id="pedido-comissao-nota" style="display:block;font-size:11px;color:#64748b;margin-top:2px">Sem promotor — valor não atribuído.</span>
           </div>
         </div>
-        <label style="display:flex;align-items:center;gap:10px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#e2e8f0;user-select:none">
-          <input type="checkbox" id="pedido-com-entrega" style="width:18px;height:18px;accent-color:#0ea5e9;cursor:pointer"/>
+        <label style="display:flex;align-items:center;gap:10px;margin-bottom:6px;cursor:pointer;font-size:13px;color:#e2e8f0;user-select:none">
+          <input type="checkbox" id="pedido-com-entrega" onchange="pedidoBalcaoToggleEntregaCampo(this)" style="width:18px;height:18px;accent-color:#0ea5e9;cursor:pointer"/>
           <span>Entrega ao domicílio / fora do balcão</span>
         </label>
+        <div id="pedido-entrega-valor-wrap" class="field" style="display:none;margin-bottom:10px">
+          <label style="font-size:11px;color:#94a3b8">Valor da entrega (Kz)</label>
+          <input type="number" id="pedido-entrega-valor" min="0" step="any" placeholder="Ex.: 500" oninput="pedidoBalcaoSyncDraftUI && pedidoBalcaoSyncDraftUI()"
+            style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px"/>
+        </div>
         <label style="display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:8px 10px;border-radius:8px;background:#0f172a;border:1px dashed #334155;cursor:pointer;font-size:12px;color:#cbd5e1;user-select:none">
           <input type="checkbox" id="pedido-auto-print" ${
             pedidoBalcaoAutoPrintEnabled() ? 'checked' : ''
@@ -4396,12 +4422,16 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
               : (comissaoPot > 0
                   ? `<div style="font-size:12px;color:#64748b;margin-top:2px">Comissão potencial: <strong style="color:#a16207">${escapeHtml(fmt(comissaoPot))}</strong> (sem promotor)</div>`
                   : '');
+            const valEnt = parseFloat(p.valor_entrega) || 0;
+            const entregaTxt = p.com_entrega && valEnt > 0
+              ? `<strong style="color:#cbd5e1">${ent}</strong> · <strong style="color:#60a5fa">${escapeHtml(fmt(valEnt))}</strong>`
+              : `<strong style="color:#cbd5e1">${ent}</strong>`;
             return `<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #334155">
       <div>
         <div style="font-weight:600;color:#e2e8f0">Pedido #${p.id}</div>
         <div style="font-size:12px;color:#64748b">${escapeHtml(when)} · ${cli}</div>
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">Pagamento: <strong style="color:#cbd5e1">${tp}</strong></div>
-        <div style="font-size:12px;color:#94a3b8;margin-top:2px">Entrega: <strong style="color:#cbd5e1">${ent}</strong></div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:2px">Entrega: ${entregaTxt}</div>
         <div style="font-size:13px;color:#94a3b8;margin-top:4px">Total <strong style="color:#4ade80">${tot}</strong></div>
         ${comissaoLinha}
       </div>
@@ -4424,6 +4454,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     };
     let entregaN = 0;
     let entregaKz = 0;
+    let entregaFees = 0;
     let comissaoAtrib = 0;
     let comissaoPot = 0;
     for (const p of pedidos) {
@@ -4431,7 +4462,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const slot = porPg[tp] || porPg.dinheiro;
       slot.n += 1;
       slot.kz += parseFloat(p.total_kz) || 0;
-      if (p.com_entrega) { entregaN += 1; entregaKz += parseFloat(p.total_kz) || 0; }
+      if (p.com_entrega) { entregaN += 1; entregaKz += parseFloat(p.total_kz) || 0; entregaFees += parseFloat(p.valor_entrega) || 0; }
       const cV = parseFloat(p.comissao_valor) || 0;
       const cP = parseFloat(p.comissao_valor_potencial) || 0;
       if (p.promotor_id) comissaoAtrib += cV;
@@ -4456,7 +4487,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       ? `<div style="margin-top:8px;font-size:12px;color:#94a3b8">Comissão: <strong style="color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(comissaoAtrib)}</strong> atribuída${comissaoPot > 0 ? ` · <span style="color:#a16207">${fmt(comissaoPot)} potencial</span>` : ''}</div>`
       : '';
     const entregaLine = entregaN > 0
-      ? `<div style="margin-top:4px;font-size:12px;color:#94a3b8">🛵 Entrega: <strong style="color:#cbd5e1">${entregaN}</strong> de ${pedidos.length} pedido(s) — <strong style="color:#60a5fa;font-variant-numeric:tabular-nums">${fmt(entregaKz)}</strong></div>`
+      ? `<div style="margin-top:4px;font-size:12px;color:#94a3b8">🛵 Entrega: <strong style="color:#cbd5e1">${entregaN}</strong> de ${pedidos.length} pedido(s) — <strong style="color:#60a5fa;font-variant-numeric:tabular-nums">${fmt(entregaKz)}</strong>${entregaFees > 0 ? ` · taxas de entrega <strong style="color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(entregaFees)}</strong>` : ''}</div>`
       : '';
     return `
       <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:8px">

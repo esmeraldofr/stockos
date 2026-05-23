@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pedidos-resumo-pagamento-revert">
+<html lang="pt" data-stockos-ui="2026-05-19-resumo-pg-todos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4449,12 +4449,17 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       { k: 'transferencia', label: 'Transf.', cor: '#60a5fa' },
       { k: 'mbway', label: 'MB WAY', cor: '#f472b6' },
       { k: 'outro', label: 'Outro', cor: '#94a3b8' }
-    ].filter((b) => porPg[b.k].n > 0).map((b) => `
-      <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;text-align:center">
+    ].map((b) => {
+      const n = porPg[b.k].n;
+      const kz = porPg[b.k].kz;
+      const dim = n === 0;
+      return `
+      <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;text-align:center;${dim ? 'opacity:0.55' : ''}">
         <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">${b.label}</div>
-        <div style="font-weight:700;color:${b.cor};font-variant-numeric:tabular-nums;font-size:14px;margin-top:2px">${fmt(porPg[b.k].kz)}</div>
-        <div style="font-size:11px;color:#64748b;margin-top:2px">${porPg[b.k].n} ${porPg[b.k].n === 1 ? 'pedido' : 'pedidos'}</div>
-      </div>`).join('');
+        <div style="font-weight:700;color:${dim ? '#475569' : b.cor};font-variant-numeric:tabular-nums;font-size:14px;margin-top:2px">${fmt(kz)}</div>
+        <div style="font-size:11px;color:#64748b;margin-top:2px">${n} ${n === 1 ? 'pedido' : 'pedidos'}</div>
+      </div>`;
+    }).join('');
     const comLine = (comissaoAtrib > 0 || comissaoPot > 0)
       ? `<div style="margin-top:8px;font-size:12px;color:#94a3b8">Comissão: <strong style="color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(comissaoAtrib)}</strong> atribuída${comissaoPot > 0 ? ` · <span style="color:#a16207">${fmt(comissaoPot)} potencial</span>` : ''}</div>`
       : '';

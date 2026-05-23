@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pedido-save-first">
+<html lang="pt" data-stockos-ui="2026-05-19-talao-quadrados-fix">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3906,9 +3906,9 @@ function pedidoBalcaoBuildTalaoEscPos(pedido) {
       const pp = parseFloat(ln.preco_copos_pacote) || 0;
       sub = precoVendaCopos(copos, u, n, pp);
       qtyLabel = `${copos}x`;
-      // Cada «unidade» de uma bebida com pacote = n copos por dentro,
-      // logo o nº de caixas a riscar é copos × n (caixa por copo entregue).
-      nUnits = n >= 2 ? copos * n : copos;
+      // O nº de caixas a riscar é o nº de copos a entregar (uma por copo),
+      // não copos × n_por_pacote — `copos` já é o total de copos.
+      nUnits = copos;
       unitLine =
         n >= 2 && pp > 0
           ? `  pac.${n}=${fmt(pp)} | un.${fmt(u)}`

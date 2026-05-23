@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pedidos-lista-oculta-2">
+<html lang="pt" data-stockos-ui="2026-05-19-pedidos-toggle-fix">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3650,9 +3650,9 @@ function togglePedidosTurnoLista() {
   const el = document.getElementById('pedidos-turno-lista');
   const btn = document.getElementById('ver-pedidos-turno-btn');
   if (!el) return;
-  const show = el.style.display === 'none' || el.style.display === '';
-  el.style.display = show ? '' : 'none';
-  if (btn) btn.textContent = show ? 'Esconder pedidos do turno' : 'Mostrar pedidos do turno';
+  const escondido = el.style.display === 'none';
+  el.style.display = escondido ? 'block' : 'none';
+  if (btn) btn.textContent = escondido ? 'Esconder pedidos do turno' : 'Mostrar pedidos do turno';
 }
 
 async function abrirTodosPedidosDia() {

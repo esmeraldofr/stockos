@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-resumo-pg-todos">
+<html lang="pt" data-stockos-ui="2026-05-19-pagamentos-3">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3470,9 +3470,7 @@ function pedidoTipoPagamentoLabel(cod) {
   const m = {
     dinheiro: 'Dinheiro',
     tpa: 'TPA / cartão',
-    transferencia: 'Transferência',
-    mbway: 'MB WAY',
-    outro: 'Outro'
+    transferencia: 'Transferência'
   };
   return m[cod] || m.dinheiro;
 }
@@ -4316,8 +4314,6 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             <option value="dinheiro">Dinheiro</option>
             <option value="tpa">TPA / cartão</option>
             <option value="transferencia">Transferência</option>
-            <option value="mbway">MB WAY</option>
-            <option value="outro">Outro</option>
           </select>
         </div>
         <div class="field" style="margin-bottom:8px">
@@ -4424,17 +4420,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     const porPg = {
       dinheiro: { n: 0, kz: 0 },
       tpa: { n: 0, kz: 0 },
-      transferencia: { n: 0, kz: 0 },
-      mbway: { n: 0, kz: 0 },
-      outro: { n: 0, kz: 0 }
+      transferencia: { n: 0, kz: 0 }
     };
     let entregaN = 0;
     let entregaKz = 0;
     let comissaoAtrib = 0;
     let comissaoPot = 0;
     for (const p of pedidos) {
-      const tp = String(p.tipo_pagamento || 'outro').toLowerCase();
-      const slot = porPg[tp] || porPg.outro;
+      const tp = String(p.tipo_pagamento || 'dinheiro').toLowerCase();
+      const slot = porPg[tp] || porPg.dinheiro;
       slot.n += 1;
       slot.kz += parseFloat(p.total_kz) || 0;
       if (p.com_entrega) { entregaN += 1; entregaKz += parseFloat(p.total_kz) || 0; }
@@ -4446,9 +4440,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     const pgBlocks = [
       { k: 'dinheiro', label: 'Dinheiro', cor: '#86efac' },
       { k: 'tpa', label: 'TPA', cor: '#c4b5fd' },
-      { k: 'transferencia', label: 'Transf.', cor: '#60a5fa' },
-      { k: 'mbway', label: 'MB WAY', cor: '#f472b6' },
-      { k: 'outro', label: 'Outro', cor: '#94a3b8' }
+      { k: 'transferencia', label: 'Transf.', cor: '#60a5fa' }
     ].map((b) => {
       const n = porPg[b.k].n;
       const kz = porPg[b.k].kz;

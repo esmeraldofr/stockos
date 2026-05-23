@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pedidos-lista-oculta">
+<html lang="pt" data-stockos-ui="2026-05-19-pedidos-lista-oculta-2">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4705,7 +4705,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     formHtml +
     resumoHtml +
     resumoProdutosHtml +
-    `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button><button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, abrirTodosPedidosDia)" title="Ver todos os pedidos do dia (manhã + tarde + noite)">📋 Ver todos do dia</button></div></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
+    `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
   pedidoBalcaoSyncDraftUI();
   pedidoBalcaoLogoRefreshUI();
   if (canEdit) { pedidoBalcaoLoadPromotores().catch(() => {}); }

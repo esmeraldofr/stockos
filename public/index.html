@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-entrega-dropdown">
+<html lang="pt" data-stockos-ui="2026-05-19-pedidos-todos-dia">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3646,6 +3646,105 @@ function pedidoBalcaoToggleAutoPrint(el) {
   pedidoBalcaoSetAutoPrint(!!el.checked);
 }
 
+async function abrirTodosPedidosDia() {
+  let modal = document.getElementById('todos-pedidos-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'todos-pedidos-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:9999;display:flex;align-items:stretch;justify-content:center';
+    modal.onclick = (e) => { if (e.target === modal) fecharTodosPedidosDia(); };
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
+  const data = S.date || new Date().toISOString().slice(0, 10);
+  modal.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;width:100%;max-width:760px;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:12px 14px;border-bottom:1px solid #334155;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap">
+        <div style="font-weight:700;color:#e2e8f0;font-size:14px">📋 Todos os pedidos do dia</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <input type="date" id="todos-pedidos-data" value="${data}" onchange="runAction(event, () => recarregarTodosPedidosDia(this.value))" style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:6px 10px;color:#f1f5f9;font-size:13px"/>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, fecharTodosPedidosDia)">Fechar ✕</button>
+        </div>
+      </div>
+      <div id="todos-pedidos-body" style="padding:12px 14px;overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch">
+        <div class="text-center" style="padding:32px;color:#64748b"><div class="spinner"></div></div>
+      </div>
+    </div>`;
+  await recarregarTodosPedidosDia(data);
+}
+
+function fecharTodosPedidosDia() {
+  const m = document.getElementById('todos-pedidos-modal');
+  if (m) m.style.display = 'none';
+}
+
+async function recarregarTodosPedidosDia(data) {
+  const body = document.getElementById('todos-pedidos-body');
+  if (!body) return;
+  body.innerHTML = '<div class="text-center" style="padding:32px;color:#64748b"><div class="spinner"></div></div>';
+  try {
+    const pedidos = await api('GET', `/pedidos?data=${encodeURIComponent(data)}`);
+    if (!pedidos.length) {
+      body.innerHTML = '<div class="card"><p style="color:#94a3b8;margin:0">Sem pedidos neste dia.</p></div>';
+      return;
+    }
+    const porTurno = { manha: [], tarde: [], noite: [] };
+    for (const p of pedidos) {
+      const k = (porTurno[p.turno_nome] ? p.turno_nome : 'manha');
+      porTurno[k].push(p);
+    }
+    const totDia = pedidos.reduce((s, p) => s + (parseFloat(p.total_kz) || 0), 0);
+    const totEntregaFees = pedidos.reduce((s, p) => s + (p.com_entrega ? (parseFloat(p.valor_entrega) || 0) : 0), 0);
+    const headerLine = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px">
+        <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">Pedidos do dia</div>
+          <div style="font-weight:700;color:#e2e8f0;font-variant-numeric:tabular-nums;font-size:20px;margin-top:2px">${pedidos.length}</div>
+        </div>
+        <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">Total</div>
+          <div style="font-weight:700;color:#4ade80;font-variant-numeric:tabular-nums;font-size:18px;margin-top:2px">${fmt(totDia)}</div>
+        </div>
+        ${totEntregaFees > 0 ? `<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">Taxas entrega</div>
+          <div style="font-weight:700;color:#fbbf24;font-variant-numeric:tabular-nums;font-size:16px;margin-top:2px">${fmt(totEntregaFees)}</div>
+        </div>` : ''}
+      </div>`;
+    const seccoes = ['manha', 'tarde', 'noite'].map((tn) => {
+      const list = porTurno[tn] || [];
+      if (!list.length) return '';
+      const subtotal = list.reduce((s, p) => s + (parseFloat(p.total_kz) || 0), 0);
+      const rowsHtml = list.map((p) => {
+        const when = p.criado_em ? dateTimeLabel(p.criado_em) : '';
+        const cli = p.cliente_nome ? escapeHtml(p.cliente_nome) : '—';
+        const tp = escapeHtml(pedidoTipoPagamentoLabel(p.tipo_pagamento));
+        const valEnt = parseFloat(p.valor_entrega) || 0;
+        const entTxt = p.com_entrega
+          ? (valEnt > 0 ? `🛵 ${fmt(valEnt)}` : '🛵 grátis')
+          : '🏪 balcão';
+        return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #1e293b">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;color:#e2e8f0">#${p.id} · ${cli}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px">${escapeHtml(when)} · ${tp} · ${entTxt}</div>
+          </div>
+          <div style="color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap">${fmt(parseFloat(p.total_kz) || 0)}</div>
+        </div>`;
+      }).join('');
+      return `
+        <div style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <div style="font-size:12px;font-weight:600;color:#cbd5e1">${escapeHtml(turnoLabel(tn))} <span style="color:#64748b;font-weight:400">(${list.length})</span></div>
+            <div style="color:#cbd5e1;font-variant-numeric:tabular-nums;font-weight:600;font-size:13px">${fmt(subtotal)}</div>
+          </div>
+          ${rowsHtml}
+        </div>`;
+    }).join('');
+    body.innerHTML = headerLine + seccoes;
+  } catch (e) {
+    body.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
 function pedidoBalcaoToggleEntregaCampo(el) {
   const wrap = document.getElementById('pedido-entrega-valor-wrap');
   const val = document.getElementById('pedido-entrega-valor');
@@ -4597,7 +4696,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     formHtml +
     resumoHtml +
     resumoProdutosHtml +
-    `<div class="pedidos-balcao-lista-turno"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px">Pedidos do turno</div>${listHtml}</div>`;
+    `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno</div><button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, abrirTodosPedidosDia)" title="Ver todos os pedidos do dia (manhã + tarde + noite)">📋 Ver todos do dia</button></div>${listHtml}</div>`;
   pedidoBalcaoSyncDraftUI();
   pedidoBalcaoLogoRefreshUI();
   if (canEdit) { pedidoBalcaoLoadPromotores().catch(() => {}); }

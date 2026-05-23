@@ -5375,6 +5375,94 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
   }
 });
 
+/** Lista todos os pedidos de uma data (em todos os turnos). */
+app.get('/api/pedidos', auth, async (req, res) => {
+  try {
+    await ensureTurnoPedidos();
+    await ensureTurnoPedidosEntrega();
+    const data = String(req.query.data || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) {
+      return res.status(400).json({ erro: 'Indica ?data=YYYY-MM-DD' });
+    }
+    const r = await query(
+      `SELECT tp.id, tp.turno_id, t.nome AS turno_nome, t.data::text AS turno_data,
+              tp.cliente_nome, tp.tipo_pagamento, tp.com_entrega, tp.criado_em,
+              tp.promotor_id, tp.promotor_modo, tp.promotor_pct_total, tp.operador_id,
+              COALESCE(tp.valor_entrega,0) AS valor_entrega,
+              COALESCE(tp.comissao_valor,0) AS comissao_valor,
+              COALESCE(tp.comissao_valor_potencial,0) AS comissao_valor_potencial,
+              u.nome AS promotor_nome,
+              tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
+              p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
+              p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct
+       FROM turno_pedidos tp
+       JOIN turnos t ON t.id = tp.turno_id
+       LEFT JOIN utilizadores u ON u.id = tp.promotor_id
+       LEFT JOIN turno_pedido_linhas tpl ON tpl.pedido_id = tp.id
+       LEFT JOIN produtos p ON p.id = tpl.produto_id
+       WHERE t.data = $1::date
+       ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END,
+                tp.criado_em DESC, tpl.id ASC`,
+      [data]
+    );
+    const map = new Map();
+    for (const row of r.rows) {
+      if (!map.has(row.id)) {
+        map.set(row.id, {
+          id: row.id,
+          turno_id: row.turno_id,
+          turno_nome: row.turno_nome,
+          turno_data: row.turno_data,
+          cliente_nome: row.cliente_nome,
+          tipo_pagamento: row.tipo_pagamento || 'dinheiro',
+          com_entrega: row.com_entrega === true || row.com_entrega === 't',
+          valor_entrega: parseFloat(row.valor_entrega) || 0,
+          criado_em: row.criado_em,
+          promotor_id: row.promotor_id || null,
+          promotor_nome: row.promotor_nome || null,
+          comissao_valor: parseFloat(row.comissao_valor) || 0,
+          comissao_valor_potencial: parseFloat(row.comissao_valor_potencial) || 0,
+          linhas: []
+        });
+      }
+      if (row.linha_id != null && row.produto_id != null) {
+        map.get(row.id).linhas.push({
+          produto_id: row.produto_id,
+          quantidade: parseFloat(row.quantidade),
+          produto_nome: row.produto_nome,
+          preco: parseFloat(row.preco) || 0,
+          venda_por_copo: row.venda_por_copo,
+          kg_por_copo: parseFloat(row.kg_por_copo) || 0,
+          preco_copos_pacote: parseFloat(row.preco_copos_pacote) || 0,
+          qtd_copos_pacote: parseInt(row.qtd_copos_pacote, 10) || 0,
+          comissao_pct: parseFloat(row.comissao_pct) || 0
+        });
+      }
+    }
+    const list = [...map.values()];
+    for (const ped of list) {
+      let total = 0;
+      for (const ln of ped.linhas) {
+        const copo = ln.venda_por_copo === true && ln.kg_por_copo > 0;
+        if (copo) {
+          const c = Math.floor(parseFloat(ln.quantidade));
+          const u = ln.preco;
+          const n = ln.qtd_copos_pacote;
+          const p = ln.preco_copos_pacote;
+          total += n >= 2 && p > 0 ? Math.floor(c / n) * p + (c % n) * u : c * u;
+        } else {
+          total += parseFloat(ln.quantidade) * ln.preco;
+        }
+      }
+      ped.total_artigos_kz = total;
+      ped.total_kz = total + (parseFloat(ped.valor_entrega) || 0);
+    }
+    res.json(list);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 function calcLinhaSubtotal(preco, quantidade, vendaPorCopo, kgPorCopo, qtdCoposPacote, precoCoposPacote) {
   const copo = vendaPorCopo === true && parseFloat(kgPorCopo) > 0;
   if (copo) {

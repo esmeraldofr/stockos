@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-talao-quadrados-fix">
+<html lang="pt" data-stockos-ui="2026-05-19-caixa-em-pedidos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3213,12 +3213,7 @@ async function loadTurno() {
           <p style="font-size:12px;color:#64748b;margin:-4px 0 10px;line-height:1.45">Um pedido por cliente ou mesa. Cada pedido tem a sua fatura; as quantidades somam nas vendas do turno.</p>
           <div id="pedidos-balcao-mount"><span style="color:#64748b">A carregar…</span></div>
         </div>
-      </div>
-
-      <div id="tab-registos" class="${panelCls('registos')}">
-        <div id="turno-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
-        ${turnoAreasTrabalhoHtml()}
-        <div class="card mt-16">
+        <div class="card">
           <div class="card-title">💰 Caixa</div>
           <div id="caixa-esperado-pedidos" style="margin-bottom:10px"></div>
           <div class="caixa-grid">
@@ -3247,13 +3242,18 @@ async function loadTurno() {
             <span class="caixa-total-label">Total Final</span>
             <span class="caixa-total-value" id="c-total-final">${fmtKzOrEmpty(tf)}</span>
           </div>
-          <div style="margin-top:14px">
-            <div class="card-title" style="margin-bottom:6px">📝 Observações</div>
-            <textarea id="turno-notas" rows="3" placeholder="Escreve aqui as observações do turno..."
-              style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
-              ${canEdit ? '' : 'disabled'}
-              onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
-          </div>
+        </div>
+      </div>
+
+      <div id="tab-registos" class="${panelCls('registos')}">
+        <div id="turno-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
+        ${turnoAreasTrabalhoHtml()}
+        <div class="card mt-16">
+          <div class="card-title">📝 Observações</div>
+          <textarea id="turno-notas" rows="3" placeholder="Escreve aqui as observações do turno..."
+            style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
+            ${canEdit ? '' : 'disabled'}
+            onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
         </div>
       </div>
 

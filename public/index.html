@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pedidos-toggle-fix">
+<html lang="pt" data-stockos-ui="2026-05-19-caixa-vs-pedidos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2872,6 +2872,57 @@ function getTotalVendasTurnoKz() {
   return total;
 }
 
+/** Breakdown do total dos pedidos do balcão por tipo de pagamento + entrega. */
+function getPedidosBalcaoBreakdown() {
+  const out = { dinheiro: 0, tpa: 0, transferencia: 0, entregaFees: 0, total: 0, n: 0 };
+  const pedidos = window.__stockosPedidosBalcao || [];
+  for (const p of pedidos) {
+    const tp = String(p.tipo_pagamento || 'dinheiro').toLowerCase();
+    const total = parseFloat(p.total_kz) || 0;
+    if (out[tp] !== undefined) out[tp] += total;
+    else out.dinheiro += total;
+    out.entregaFees += p.com_entrega ? (parseFloat(p.valor_entrega) || 0) : 0;
+    out.total += total;
+    out.n += 1;
+  }
+  return out;
+}
+
+function getTotalPedidosBalcaoKz() {
+  return getPedidosBalcaoBreakdown().total;
+}
+
+function renderCaixaEsperadoPedidos() {
+  const mount = document.getElementById('caixa-esperado-pedidos');
+  if (!mount) return;
+  const br = getPedidosBalcaoBreakdown();
+  const tpa = parseFloat(document.getElementById('c-tpa')?.value) || 0;
+  const trf = parseFloat(document.getElementById('c-transf')?.value) || 0;
+  const din = parseFloat(document.getElementById('c-din')?.value) || 0;
+  const cell = (label, esperado, atual, cor) => {
+    const diff = atual - esperado;
+    const bate = Math.round(Math.abs(diff) * 100) < 1;
+    const hint = esperado === 0 && atual === 0
+      ? `<span style="color:#475569">—</span>`
+      : bate
+        ? `<span style="color:#86efac">✓ bate</span>`
+        : `<span style="color:#fb923c">${diff > 0 ? '+' : '−'}${fmt(Math.abs(diff))}</span>`;
+    return `<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;text-align:center">
+      <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">${label}</div>
+      <div style="font-weight:700;color:${cor};font-variant-numeric:tabular-nums;font-size:14px;margin-top:2px">${fmt(esperado)}</div>
+      <div style="font-size:11px;margin-top:3px">${hint}</div>
+    </div>`;
+  };
+  mount.innerHTML = `
+    <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Esperado dos pedidos ao balcão (${br.n} pedido${br.n === 1 ? '' : 's'})</div>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+      ${cell('Dinheiro', br.dinheiro, din, '#86efac')}
+      ${cell('TPA', br.tpa, tpa, '#c4b5fd')}
+      ${cell('Transf.', br.transferencia, trf, '#60a5fa')}
+    </div>
+    ${br.entregaFees > 0 ? `<div style="font-size:11px;color:#94a3b8;margin-top:6px">🛵 Inclui ${fmt(br.entregaFees)} em taxas de entrega.</div>` : ''}`;
+}
+
 function getTotalGeradoCaixaKz() {
   return parseCaixaTriploFromInputs();
 }
@@ -3169,6 +3220,7 @@ async function loadTurno() {
         ${turnoAreasTrabalhoHtml()}
         <div class="card mt-16">
           <div class="card-title">💰 Caixa</div>
+          <div id="caixa-esperado-pedidos" style="margin-bottom:10px"></div>
           <div class="caixa-grid">
             <div class="caixa-item">
               <label>TPA / Máquina <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
@@ -4383,6 +4435,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     return;
   }
   window.__stockosPedidosBalcao = pedidos;
+  // Pedidos mudaram → recalcular o painel "Esperado" na aba Caixa.
+  setTimeout(() => { try { renderCaixaEsperadoPedidos(); renderIrregularidadesTurno(); } catch (_) {} }, 0);
   const tilesHtml = produtosParaPedido
     .map((o) => {
       const pid = String(o.id);
@@ -5441,6 +5495,7 @@ function buildIrregularidadesHtmlParts({
   vendasBuf,
   totalVendasKz,
   totalGeradoKz,
+  totalPedidosKz,
   produtos,
   receitasIrreg,
   depositosTurno
@@ -5448,7 +5503,11 @@ function buildIrregularidadesHtmlParts({
   const stock = turno?.stock || [];
   const prodArr = produtos && produtos.length ? produtos : (S.produtos || []);
 
-  const tv = totalVendasKz;
+  // Caixa: referência são os pedidos ao balcão (quando existem).
+  // Fallback para totalVendasKz (legacy) se totalPedidosKz não vier definido.
+  const usaPedidos = Number.isFinite(totalPedidosKz);
+  const tv = usaPedidos ? totalPedidosKz : totalVendasKz;
+  const refLabel = usaPedidos ? 'pedidos' : 'vendas';
   const tg = totalGeradoKz;
   const diffCaixa = Number.isFinite(tv) && Number.isFinite(tg) ? tv - tg : NaN;
   const caixaIrreg =
@@ -5458,7 +5517,7 @@ function buildIrregularidadesHtmlParts({
   let caixaHtml = '';
   if (caixaIrreg) {
     caixaHtml = `<div style="padding:8px 10px;background:rgba(251,146,60,0.1);border-radius:6px;margin-bottom:10px;border:1px solid rgba(251,146,60,0.45);font-size:12px;color:#cbd5e1;line-height:1.4">
-      <span style="color:#fb923c;font-weight:700">Caixa:</span> vendas <strong>${fmt(tv)}</strong> diferente de gerado <strong>${fmt(tg)}</strong>
+      <span style="color:#fb923c;font-weight:700">Caixa:</span> ${refLabel} <strong>${fmt(tv)}</strong> diferente de gerado <strong>${fmt(tg)}</strong>
       <span style="color:#94a3b8"> · diferença </span><strong style="color:#fb923c">${Number.isFinite(diffCaixa) ? fmt(Math.abs(diffCaixa)) : '—'}</strong>
     </div>`;
   }
@@ -6063,6 +6122,7 @@ function renderIrregularidadesTurno() {
     vendasBuf,
     totalVendasKz: getTotalVendasTurnoKz(),
     totalGeradoKz: getTotalGeradoCaixaKz(),
+    totalPedidosKz: getTotalPedidosBalcaoKz(),
     produtos: S.produtos || [],
     receitasIrreg: receitasBuf,
     depositosTurno: S.turnoDeposito
@@ -6110,6 +6170,7 @@ function calcCaixa() {
   const elTF = document.getElementById('c-total-final');
   if (elTG) elTG.textContent = Number.isFinite(tg) ? fmtKzOrEmpty(tg) : '—';
   if (elTF) elTF.textContent = Number.isFinite(tf) ? fmtKzOrEmpty(tf) : '—';
+  renderCaixaEsperadoPedidos();
   renderIrregularidadesTurno();
   maybeClearTurnoStickyAfterStockCaixaOk();
   // Auto-save

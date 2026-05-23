@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-caixa-vs-pedidos">
+<html lang="pt" data-stockos-ui="2026-05-19-pedido-save-first">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4369,49 +4369,58 @@ async function registarPedidoBalcao(turnoId) {
     (window.__stockosPedidosBalcao || []).map((p) => String(p.id))
   );
 
-  // ⚡ Imprimir ANTES do await para preservar o gesto do utilizador
-  // (a Web Share API exige user activation activa e perde-se após await).
-  if (pedidoBalcaoAutoPrintEnabled()) {
-    const catalog = window.__pedidoProdutosOpts || [];
-    const map = {};
-    catalog.forEach((o) => { map[String(o.id)] = o; });
-    const linhasTalao = linhas.map((ln) => {
-      const o = map[String(ln.produto_id)] || {};
-      return {
-        produto_nome: o.nome || 'Item',
-        quantidade: ln.quantidade,
-        preco: o.preco,
-        venda_por_copo: o.venda_por_copo,
-        kg_por_copo: o.kg_por_copo,
-        qtd_copos_pacote: o.qtd_copos_pacote,
-        preco_copos_pacote: o.preco_copos_pacote
-      };
-    });
-    const proximoId = (window.__stockosPedidosBalcao || [])
-      .reduce((m, p) => Math.max(m, Number(p.id) || 0), 0) + 1;
-    const pedidoPreview = {
-      id: proximoId,
+  // CRÍTICO: gravar PRIMEIRO. Antes imprimíamos antes do save para preservar o
+  // gesto do utilizador (Web Share API), mas isso fazia talões "fantasma" se o
+  // POST falhasse (gap no SERIAL → talão impresso sem pedido na BD).
+  // Agora: 1) save → 2) print só após sucesso, com o ID real do servidor.
+  let pedidoSalvo;
+  try {
+    pedidoSalvo = await api('POST', `/turnos/${tid}/pedidos`, {
       cliente_nome: cliente,
       tipo_pagamento: tipoPag,
       com_entrega: comEntrega,
-      criado_em: new Date().toISOString(),
-      linhas: linhasTalao
-    };
-    try {
-      pedidoBalcaoImprimirTalao(pedidoPreview);
-    } catch (e) {
-      console.warn('Auto-print falhou:', e);
-    }
+      valor_entrega: valorEntrega,
+      promotor_id: promotorId || null,
+      linhas
+    });
+  } catch (e) {
+    alert('Falha ao registar o pedido: ' + (e?.message || e) + '\n\nNão foi impresso talão. O rascunho ficou guardado — tenta de novo.');
+    return;
   }
 
-  await api('POST', `/turnos/${tid}/pedidos`, {
-    cliente_nome: cliente,
-    tipo_pagamento: tipoPag,
-    com_entrega: comEntrega,
-    valor_entrega: valorEntrega,
-    promotor_id: promotorId || null,
-    linhas
-  });
+  // Print só depois do save bem sucedido, usando o ID devolvido pelo servidor.
+  if (pedidoBalcaoAutoPrintEnabled() && pedidoSalvo && pedidoSalvo.id) {
+    try {
+      const catalog = window.__pedidoProdutosOpts || [];
+      const map = {};
+      catalog.forEach((o) => { map[String(o.id)] = o; });
+      const linhasTalao = linhas.map((ln) => {
+        const o = map[String(ln.produto_id)] || {};
+        return {
+          produto_nome: o.nome || 'Item',
+          quantidade: ln.quantidade,
+          preco: o.preco,
+          venda_por_copo: o.venda_por_copo,
+          kg_por_copo: o.kg_por_copo,
+          qtd_copos_pacote: o.qtd_copos_pacote,
+          preco_copos_pacote: o.preco_copos_pacote
+        };
+      });
+      const pedidoParaTalao = {
+        id: pedidoSalvo.id,
+        cliente_nome: cliente,
+        tipo_pagamento: tipoPag,
+        com_entrega: comEntrega,
+        criado_em: new Date().toISOString(),
+        linhas: linhasTalao
+      };
+      pedidoBalcaoImprimirTalao(pedidoParaTalao);
+    } catch (e) {
+      console.warn('Auto-print falhou:', e);
+      // O pedido está guardado, só a impressão falhou — o utilizador pode
+      // imprimir manualmente no botão "🖨️ Talão" do pedido na lista.
+    }
+  }
   window.__pedidoBalcaoDraft = {};
   window.__pedidoBalcaoDraftTurnoId = tid;
   await loadVendasMenu(tid, !!S.turnoCanEdit);

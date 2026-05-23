@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pedidos-resumo">
+<html lang="pt" data-stockos-ui="2026-05-19-pedidos-resumo-produtos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4479,9 +4479,71 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         ${comLine}
       </div>`;
   })();
+  const resumoProdutosHtml = (() => {
+    if (!pedidos.length) return '';
+    const byProd = new Map();
+    for (const p of pedidos) {
+      for (const ln of (p.linhas || [])) {
+        const key = String(ln.produto_id);
+        const isCopo = ln.venda_por_copo === true && (parseFloat(ln.kg_por_copo) || 0) > 0;
+        const qtd = parseFloat(ln.quantidade) || 0;
+        const u = parseFloat(ln.preco) || 0;
+        const n = parseInt(ln.qtd_copos_pacote, 10) || 0;
+        const pp = parseFloat(ln.preco_copos_pacote) || 0;
+        let subtotal;
+        if (isCopo) {
+          const c = Math.floor(qtd);
+          subtotal = (n >= 2 && pp > 0) ? Math.floor(c / n) * pp + (c % n) * u : c * u;
+        } else {
+          subtotal = qtd * u;
+        }
+        if (!byProd.has(key)) {
+          byProd.set(key, { nome: ln.produto_nome || 'Sem nome', qtd: 0, valor: 0, unidade: isCopo ? 'copos' : 'un.', isCopo });
+        }
+        const e = byProd.get(key);
+        e.qtd += qtd;
+        e.valor += subtotal;
+      }
+    }
+    if (!byProd.size) return '';
+    const arr = [...byProd.values()].sort((a, b) => b.valor - a.valor);
+    const totalQtd = arr.reduce((s, r) => s + r.qtd, 0);
+    const totalKz = arr.reduce((s, r) => s + r.valor, 0);
+    const num2 = (v) => (parseFloat(v) || 0).toLocaleString('pt-AO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const trs = arr.map((r) => `
+      <tr>
+        <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)}</td>
+        <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums">${num2(r.qtd)} <span style="color:#64748b;font-size:11px">${escapeHtml(r.unidade)}</span></td>
+        <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.valor)}</td>
+      </tr>`).join('');
+    return `
+      <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
+        <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">Produtos vendidos</div>
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Produto</th>
+                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Quantidade</th>
+                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Valor</th>
+              </tr>
+            </thead>
+            <tbody>${trs}</tbody>
+            <tfoot>
+              <tr style="border-top:1px solid #334155">
+                <td style="padding:6px 8px;color:#cbd5e1;font-weight:700">Total</td>
+                <td style="padding:6px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700">${num2(totalQtd)}</td>
+                <td style="padding:6px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalKz)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>`;
+  })();
   mount.innerHTML =
     formHtml +
     resumoHtml +
+    resumoProdutosHtml +
     `<div class="pedidos-balcao-lista-turno"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px">Pedidos do turno</div>${listHtml}</div>`;
   pedidoBalcaoSyncDraftUI();
   pedidoBalcaoLogoRefreshUI();

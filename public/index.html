@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-tabs-simplificadas">
+<html lang="pt" data-stockos-ui="2026-05-19-tabs-fiscalizar">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -686,7 +686,7 @@ const S = {
 
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
-const ALLOWED_TURNO_TABS = ['stock', 'pedidos', 'escala'];
+const ALLOWED_TURNO_TABS = ['stock', 'vendas', 'pedidos', 'registos', 'escala'];
 const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria'];
 
 function _storageGet(key) {
@@ -3146,13 +3146,21 @@ async function loadTurno() {
       cx1 === null || cx2 === null || cx3 === null ? NaN : cx1 + cx2 + cx3;
     const tf = Number.isFinite(tg) ? tg - parseFloat(caixa.saida || 0) : NaN;
 
-    const activeTab = ['stock','pedidos','escala'].includes(S.turnoTab) ? S.turnoTab : 'stock';
+    // Em turnos abertos (operação) mostramos só Stock/Pedidos/Escala.
+    // Em turnos fechados (fiscalização) acrescentamos Vendas e Registos.
+    const turnoFechado = turno.estado === 'fechado';
+    const allowedTabs = turnoFechado
+      ? ['stock','vendas','pedidos','registos','escala']
+      : ['stock','pedidos','escala'];
+    const activeTab = allowedTabs.includes(S.turnoTab) ? S.turnoTab : 'stock';
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
     show('turno-content', `
       <div class="turno-tabs">
           <button type="button" class="${tabCls('stock')}" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
+          ${turnoFechado ? `<button type="button" class="${tabCls('vendas')}" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>` : ''}
           <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
+          ${turnoFechado ? `<button type="button" class="${tabCls('registos')}" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>` : ''}
           <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
       </div>
       <div class="card mt-12" id="turno-irregularidades-card" style="display:none">
@@ -3198,7 +3206,7 @@ async function loadTurno() {
         </div>
       </div>
 
-      <div id="tab-vendas" class="${panelCls('vendas')}" style="display:none">
+      <div id="tab-vendas" class="${panelCls('vendas')}"${turnoFechado ? '' : ' style="display:none"'}>
         <div class="card" id="vendas-menu-card">
           <div class="card-title">🍽️ Vendas de Menu</div>
           <div id="vendas-menu-list"><span style="color:#64748b">A carregar...</span></div>
@@ -3250,7 +3258,7 @@ async function loadTurno() {
         </div>
       </div>
 
-      <div id="tab-registos" class="${panelCls('registos')}" style="display:none">
+      <div id="tab-registos" class="${panelCls('registos')}"${turnoFechado ? '' : ' style="display:none"'}>
         <div id="turno-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
         ${turnoAreasTrabalhoHtml()}
       </div>

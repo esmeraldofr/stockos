@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pedidos-resumo-pacotes">
+<html lang="pt" data-stockos-ui="2026-05-19-pedidos-resumo-pagamento">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4482,7 +4482,9 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   const resumoProdutosHtml = (() => {
     if (!pedidos.length) return '';
     const byProd = new Map();
+    const PG_LABEL = { dinheiro: 'Dinheiro', tpa: 'TPA', transferencia: 'Transf.', mbway: 'MB WAY', outro: 'Outro' };
     for (const p of pedidos) {
+      const tp = (PG_LABEL[String(p.tipo_pagamento || 'outro').toLowerCase()] ? String(p.tipo_pagamento || 'outro').toLowerCase() : 'outro');
       for (const ln of (p.linhas || [])) {
         const key = String(ln.produto_id);
         const isCopo = ln.venda_por_copo === true && (parseFloat(ln.kg_por_copo) || 0) > 0;
@@ -4505,12 +4507,14 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             unidade: isCopo ? 'copos' : 'un.',
             isCopo,
             pacoteN: n,
-            pacotePreco: pp
+            pacotePreco: pp,
+            pgs: { dinheiro: 0, tpa: 0, transferencia: 0, mbway: 0, outro: 0 }
           });
         }
         const e = byProd.get(key);
         e.qtd += qtd;
         e.valor += subtotal;
+        e.pgs[tp] = (e.pgs[tp] || 0) + subtotal;
       }
     }
     if (!byProd.size) return '';
@@ -4518,6 +4522,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     const totalQtd = arr.reduce((s, r) => s + r.qtd, 0);
     const totalKz = arr.reduce((s, r) => s + r.valor, 0);
     const num2 = (v) => (parseFloat(v) || 0).toLocaleString('pt-AO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const PG_COR = { dinheiro: '#86efac', tpa: '#c4b5fd', transferencia: '#60a5fa', mbway: '#f472b6', outro: '#94a3b8' };
     const trs = arr.map((r) => {
       let unidadeStr = r.unidade;
       if (r.isCopo && r.pacoteN >= 2 && r.pacotePreco > 0) {
@@ -4530,11 +4535,16 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           unidadeStr = `copos (${pT}${aT})`;
         }
       }
+      const pgChips = Object.keys(PG_LABEL)
+        .filter((k) => (r.pgs[k] || 0) > 0)
+        .map((k) => `<span style="display:inline-block;padding:1px 6px;background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.2);border-radius:6px;font-size:10px;color:${PG_COR[k]};margin-right:4px;margin-top:3px;font-variant-numeric:tabular-nums">${escapeHtml(PG_LABEL[k])} ${fmt(r.pgs[k])}</span>`)
+        .join('');
+      const pgLine = pgChips ? `<div style="margin-top:3px">${pgChips}</div>` : '';
       return `
       <tr>
-        <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)}</td>
-        <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums">${num2(r.qtd)} <span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span></td>
-        <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.valor)}</td>
+        <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)}${pgLine}</td>
+        <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;vertical-align:top">${num2(r.qtd)} <span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span></td>
+        <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;vertical-align:top">${fmt(r.valor)}</td>
       </tr>`;
     }).join('');
     return `

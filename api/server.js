@@ -426,10 +426,15 @@ function markDbReady() {
  */
 const STOCKOS_BOOTSTRAP_VERSION = '2026-05-12-perf-fix';
 
+/** Versão das migrações realmente aplicada na BD (lida de stockos_meta.bootstrap).
+ *  Cacheada para que /api/health não bata na BD a cada pedido. */
+let STOCKOS_DB_APPLIED = null;
+
 async function initDB() {
   await qry(`CREATE TABLE IF NOT EXISTS stockos_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`, [], 'stockos_meta');
   try {
     const chk = await query(`SELECT v FROM stockos_meta WHERE k = $1`, ['bootstrap']);
+    if (chk.rows.length) STOCKOS_DB_APPLIED = chk.rows[0].v;
     if (chk.rows.length && chk.rows[0].v === STOCKOS_BOOTSTRAP_VERSION) {
       /** Fast-path bootstrap-skip: o esquema já está aplicado. Marca login E db como prontos
        *  IMEDIATAMENTE e move TODAS as verificações idempotentes para background.
@@ -680,6 +685,7 @@ async function initDB() {
     [STOCKOS_BOOTSTRAP_VERSION],
     'meta-bootstrap'
   );
+  STOCKOS_DB_APPLIED = STOCKOS_BOOTSTRAP_VERSION;
   console.log('DB ready');
 }
 /** Pré-aquecer o singleton postgres no top-level. Evita que o primeiro pedido após
@@ -803,7 +809,9 @@ app.get('/api/health', (req, res) =>
     git_sha: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.sha) || (process.env.VERCEL_GIT_COMMIT_SHA ? String(process.env.VERCEL_GIT_COMMIT_SHA).slice(0, 7) : null),
     commit_at: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.commitAt) || null,
     built_at: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.builtAt) || null,
-    commit_msg: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.msg) || null
+    commit_msg: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.msg) || null,
+    db_target: STOCKOS_BOOTSTRAP_VERSION,
+    db_applied: STOCKOS_DB_APPLIED || null
   })
 );
 /** Antes de await dbReady: só espera dbLoginReady (utilizadores + admin ou bootstrap). */

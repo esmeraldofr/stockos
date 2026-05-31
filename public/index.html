@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-build-id">
+<html lang="pt" data-stockos-ui="2026-05-19-db-version">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -645,6 +645,14 @@ input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-
     var tsShort = ts ? fmtShortDate(ts) : '';
     if (tsShort) parts.push('🕒 ' + tsShort);
     if (ts) titleParts.push('Commit: ' + ts);
+    // Versão da BD (target = código; applied = lido de stockos_meta.bootstrap).
+    if (info && info.db_target) {
+      var dbTag = info.db_target;
+      var mismatch = info.db_applied && info.db_applied !== info.db_target;
+      parts.push('🗄 ' + dbTag + (mismatch ? ' ⚠' : ''));
+      titleParts.push('DB target: ' + info.db_target);
+      if (info.db_applied) titleParts.push('DB applied: ' + info.db_applied + (mismatch ? ' (DIFERENTE!)' : ''));
+    }
     if (info && info.commit_msg) titleParts.push('"' + info.commit_msg + '"');
     banner.textContent = parts.join(' · ');
     banner.setAttribute('title', titleParts.join('\n'));

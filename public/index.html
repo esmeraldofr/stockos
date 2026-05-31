@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-env-banner-visivel">
+<html lang="pt" data-stockos-ui="2026-05-19-build-id">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -617,21 +617,37 @@ input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-
     preview:  '🟡 Preview',
     local:    '⚙ Local'
   };
+  function fmtShortDate(iso) {
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
+      return pad(d.getDate()) + '/' + pad(d.getMonth()+1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    } catch (_) { return ''; }
+  }
   function setEnvBanner(env, info) {
     document.body.classList.remove('env-develop','env-qualidade','env-producao');
     if (!env) { banner.textContent = ''; banner.removeAttribute('title'); return; }
     document.body.classList.add('env-' + env);
     var label = ENV_LABELS[env] || env;
     var parts = [label];
-    if (uiTag) parts.push('UI ' + uiTag);
-    if (info && info.build) parts.push('API ' + info.build);
+    var titleParts = [label];
+    if (uiTag) { parts.push('UI ' + uiTag); titleParts.push('UI ' + uiTag); }
+    if (info && info.build) titleParts.push('API ' + info.build);
     if (info && info.git_ref) {
       var ref = info.git_ref.replace(/^refs\/heads\//,'');
       if (info.git_sha) ref += '@' + info.git_sha;
       parts.push(ref);
+      titleParts.push(ref);
     }
+    // Identificador comparável entre ambientes: timestamp do commit deployado.
+    var ts = info && (info.commit_at || info.built_at);
+    var tsShort = ts ? fmtShortDate(ts) : '';
+    if (tsShort) parts.push('🕒 ' + tsShort);
+    if (ts) titleParts.push('Commit: ' + ts);
+    if (info && info.commit_msg) titleParts.push('"' + info.commit_msg + '"');
     banner.textContent = parts.join(' · ');
-    banner.setAttribute('title', parts.join('\n'));
+    banner.setAttribute('title', titleParts.join('\n'));
   }
   // Pré-render por hostname (antes do health responder), depois corrige com /api/health.
   if (h.includes('localhost')) setEnvBanner('local');

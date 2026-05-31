@@ -783,7 +783,11 @@ app.get('/api/health', (req, res) =>
     build: STOCKOS_API_BUILD,
     tier: stockosDeploymentTier(),
     develop_only: isStockosDevelopOnly(),
-    read_only: isStockosApiReadOnly()
+    read_only: isStockosApiReadOnly(),
+    git_ref: process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || null,
+    git_sha: process.env.VERCEL_GIT_COMMIT_SHA
+      ? String(process.env.VERCEL_GIT_COMMIT_SHA).slice(0, 7)
+      : null
   })
 );
 /** Antes de await dbReady: só espera dbLoginReady (utilizadores + admin ou bootstrap). */

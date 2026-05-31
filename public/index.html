@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-tabs-fiscalizar">
+<html lang="pt" data-stockos-ui="2026-05-19-env-banner-visivel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10,10 +10,11 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html{overflow-x:hidden;width:100%}
 body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;overflow-x:hidden;width:100%;position:relative}
-#env-banner{position:fixed;top:0;left:0;right:0;z-index:9999;text-align:center;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:3px 0;display:none}
+#env-banner{position:fixed;top:0;left:0;right:0;z-index:9999;text-align:center;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:3px 8px;display:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 body.env-develop #env-banner{display:block;background:#d97706;color:#fff}
 body.env-qualidade #env-banner{display:block;background:#7c3aed;color:#fff}
-body.env-develop #app,body.env-qualidade #app{padding-top:22px}
+body.env-producao #env-banner{display:block;background:#0f172a;color:#94a3b8;border-bottom:1px solid #1e293b;font-weight:500;text-transform:none;letter-spacing:0.3px}
+body.env-develop #app,body.env-qualidade #app,body.env-producao #app{padding-top:22px}
 input,select,button,textarea{font-family:inherit}
 
 /* Layout */
@@ -34,7 +35,7 @@ body:not(.has-auth) #menu-toggle,body:not(.has-auth) #menu-drawer,body:not(.has-
 #menu-toggle{position:fixed;top:10px;left:10px;z-index:60;width:40px;height:40px;border-radius:10px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:.15s;box-shadow:0 2px 6px rgba(0,0,0,0.3)}
 #menu-toggle:hover{background:#1e293b;border-color:#475569}
 #menu-toggle svg{width:20px;height:20px}
-body.env-develop #menu-toggle,body.env-qualidade #menu-toggle{top:32px}
+body.env-develop #menu-toggle,body.env-qualidade #menu-toggle,body.env-producao #menu-toggle{top:32px}
 #menu-overlay{position:fixed;inset:0;background:rgba(2,6,23,0.55);z-index:190;opacity:0;pointer-events:none;transition:opacity .18s}
 #menu-drawer{position:fixed;top:0;left:0;bottom:0;width:280px;max-width:85vw;background:#0f172a;border-right:1px solid #334155;z-index:200;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform .2s ease;box-shadow:6px 0 18px rgba(0,0,0,0.35)}
 body.menu-open #menu-overlay{opacity:1;pointer-events:auto}
@@ -608,40 +609,47 @@ input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-
 (function(){
   var h = location.hostname;
   var banner = document.getElementById('env-banner');
-  function setEnvBanner(env, detail) {
-    document.body.classList.remove('env-develop','env-qualidade');
-    if (!env) {
-      banner.textContent = '';
-      banner.removeAttribute('title');
-      return;
-    }
+  var uiTag = document.documentElement.getAttribute('data-stockos-ui') || '';
+  var ENV_LABELS = {
+    producao: '🟢 Produção',
+    qualidade: '🔵 Qualidade',
+    develop:  '⚠ Desenvolvimento',
+    preview:  '🟡 Preview',
+    local:    '⚙ Local'
+  };
+  function setEnvBanner(env, info) {
+    document.body.classList.remove('env-develop','env-qualidade','env-producao');
+    if (!env) { banner.textContent = ''; banner.removeAttribute('title'); return; }
     document.body.classList.add('env-' + env);
-    if (env === 'develop') {
-      banner.textContent = '⚠ Ambiente de Desenvolvimento' + (detail ? ' · ' + detail : '');
-    } else {
-      banner.textContent = '🔵 Ambiente de Qualidade' + (detail ? ' · ' + detail : '');
+    var label = ENV_LABELS[env] || env;
+    var parts = [label];
+    if (uiTag) parts.push('UI ' + uiTag);
+    if (info && info.build) parts.push('API ' + info.build);
+    if (info && info.git_ref) {
+      var ref = info.git_ref.replace(/^refs\/heads\//,'');
+      if (info.git_sha) ref += '@' + info.git_sha;
+      parts.push(ref);
     }
+    banner.textContent = parts.join(' · ');
+    banner.setAttribute('title', parts.join('\n'));
   }
-  if (h.includes('localhost')) setEnvBanner('develop', 'local');
+  // Pré-render por hostname (antes do health responder), depois corrige com /api/health.
+  if (h.includes('localhost')) setEnvBanner('local');
   else if (h.includes('develop')) setEnvBanner('develop');
   else if (h.includes('qualidade')) setEnvBanner('qualidade');
+  else setEnvBanner('producao');
 
   fetch('/api/health', { cache: 'no-store' })
     .then(function (r) { return r.json().catch(function () { return {}; }); })
     .then(function (d) {
       if (!d || typeof d !== 'object') return;
-      if (d.develop_only) {
-        setEnvBanner('develop', d.build || '');
-        if (d.build) banner.setAttribute('title', 'Build API: ' + d.build + ' · /api/dev/info');
-        return;
-      }
-      if (d.tier === 'qualidade' || (d.read_only && d.tier !== 'production')) {
-        setEnvBanner('qualidade');
-        return;
-      }
-      if (!h.includes('localhost') && !h.includes('develop') && !h.includes('qualidade')) {
-        setEnvBanner(null);
-      }
+      var env;
+      if (d.tier === 'production') env = 'producao';
+      else if (d.tier === 'qualidade' || (d.read_only && d.tier !== 'production')) env = 'qualidade';
+      else if (d.tier === 'develop' || d.develop_only) env = 'develop';
+      else if (d.tier === 'preview') env = 'preview';
+      else env = 'local';
+      setEnvBanner(env, d);
     })
     .catch(function () {});
 })();

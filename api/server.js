@@ -721,6 +721,21 @@ initDB()
 /** Confirma no separador Rede (DevTools) que o preview não está a servir uma função antiga. */
 const STOCKOS_API_BUILD = '2026-03-31-venda-copo-fino';
 
+/** Build-info gerado em postinstall (scripts/write-build-info.js). Identifica
+ *  univocamente cada deploy (sha + commit time + build time). Permite verificar
+ *  visualmente qual ambiente está mais actualizado. */
+let STOCKOS_BUILD_INFO = null;
+try {
+  const path = require('path');
+  const fs = require('fs');
+  const p = path.join(__dirname, '..', 'build-info.json');
+  if (fs.existsSync(p)) {
+    STOCKOS_BUILD_INFO = JSON.parse(fs.readFileSync(p, 'utf8'));
+  }
+} catch (e) {
+  console.warn('[build-info] não encontrado ou inválido:', (e && e.message) || e);
+}
+
 /**
  * Onde corre a API — para activar melhorias só em develop sem afectar produção/qualidade.
  * Opcional: STOCKOS_DEPLOY_TIER=develop|qualidade|production|preview|local (sobrepõe a detecção Vercel).
@@ -784,10 +799,11 @@ app.get('/api/health', (req, res) =>
     tier: stockosDeploymentTier(),
     develop_only: isStockosDevelopOnly(),
     read_only: isStockosApiReadOnly(),
-    git_ref: process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || null,
-    git_sha: process.env.VERCEL_GIT_COMMIT_SHA
-      ? String(process.env.VERCEL_GIT_COMMIT_SHA).slice(0, 7)
-      : null
+    git_ref: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.ref) || process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || null,
+    git_sha: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.sha) || (process.env.VERCEL_GIT_COMMIT_SHA ? String(process.env.VERCEL_GIT_COMMIT_SHA).slice(0, 7) : null),
+    commit_at: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.commitAt) || null,
+    built_at: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.builtAt) || null,
+    commit_msg: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.msg) || null
   })
 );
 /** Antes de await dbReady: só espera dbLoginReady (utilizadores + admin ou bootstrap). */

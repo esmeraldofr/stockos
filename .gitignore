@@ -10,6 +10,9 @@ node_modules/
 # Vercel
 .vercel/
 
+# Build info (gerado por scripts/write-build-info.js no postinstall)
+build-info.json
+
 # Logs
 logs/
 *.log

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node api/server.js",
     "dev": "nodemon api/server.js",
-    "build": "echo 'Build OK'"
+    "build": "node scripts/write-build-info.js",
+    "postinstall": "node scripts/write-build-info.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

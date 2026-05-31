@@ -2,9 +2,6 @@ name: Promover develop → qualidade
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - develop
 
 jobs:
   promote:

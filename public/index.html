@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-irregularidades-aba-caixa">
+<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-sem-scroll-x">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -346,19 +346,23 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .pedidos-balcao-side .pedido-side-title{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
 .pedido-draft-table-wrap{
   max-height:min(42vh,320px);
-  overflow:auto;
+  overflow-y:auto;
+  overflow-x:hidden;
   border:1px solid #334155;
   border-radius:8px;
   margin-bottom:10px;
 }
-.pedido-draft-table-wrap table{width:100%;border-collapse:collapse;font-size:12px}
-.pedido-draft-table-wrap th,.pedido-draft-table-wrap td{padding:6px 8px;border-bottom:1px solid #1e293b;text-align:left}
+.pedido-draft-table-wrap table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+.pedido-draft-table-wrap th,.pedido-draft-table-wrap td{padding:6px 6px;border-bottom:1px solid #1e293b;text-align:left}
 .pedido-draft-table-wrap th{background:#1e293b;color:#94a3b8;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.04em}
-.pedido-draft-table-wrap td:last-child,.pedido-draft-table-wrap th:last-child{text-align:center;width:36px}
+.pedido-draft-table-wrap td:last-child,.pedido-draft-table-wrap th:last-child{text-align:center;width:30px;padding-left:0;padding-right:2px}
+/* Nome do artigo quebra linha em vez de forçar scroll horizontal */
+.pedido-draft-table-wrap td:nth-child(2){white-space:normal;word-break:break-word;line-height:1.25}
 .pedido-draft-qty{
-  width:52px;
+  width:100%;
+  box-sizing:border-box;
   text-align:right;
-  padding:4px 6px;
+  padding:4px 4px;
   border-radius:6px;
   border:1px solid #334155;
   background:#0f172a;
@@ -4360,8 +4364,8 @@ function pedidoBalcaoSyncDraftUI() {
           oninput="pedidoBalcaoDraftQtyInput(this)" onchange="pedidoBalcaoDraftQtyFromInput(this)"/>
       </td>
       <td style="vertical-align:middle;color:#e2e8f0">${escapeHtml(o.nome)}</td>
-      <td class="pedido-line-unit" style="text-align:right;vertical-align:middle;max-width:140px">${unitHtml}</td>
-      <td class="pedido-line-total" data-pid="${pidAttr}" style="text-align:right;vertical-align:middle;color:#4ade80;white-space:nowrap;font-weight:700">${escapeHtml(
+      <td class="pedido-line-unit" style="text-align:right;vertical-align:middle;word-break:break-word">${unitHtml}</td>
+      <td class="pedido-line-total" data-pid="${pidAttr}" style="text-align:right;vertical-align:middle;color:#4ade80;word-break:break-word;font-weight:700">${escapeHtml(
         fmt(line)
       )}</td>
       <td style="vertical-align:middle">
@@ -4644,10 +4648,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <table>
             <thead>
               <tr>
-                <th style="width:56px">Qtd</th>
+                <th style="width:50px">Qtd</th>
                 <th>Artigos</th>
-                <th style="text-align:right;max-width:140px" title="Preço por unidade (copo ou unidade)">Preço unit.</th>
-                <th style="text-align:right;white-space:nowrap" title="Total desta linha (qtd × preço)">Total linha</th>
+                <th style="width:62px;text-align:right" title="Preço por unidade (copo ou unidade)">Preço</th>
+                <th style="width:66px;text-align:right" title="Total desta linha (qtd × preço)">Total</th>
                 <th></th>
               </tr>
             </thead>

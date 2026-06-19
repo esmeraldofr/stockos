@@ -1102,16 +1102,6 @@ function requireRole(...roles) {
     next();
   };
 }
-function prevTurno(nome, data) {
-  if (nome === 'manha') {
-    const d = new Date(data + 'T12:00:00Z');
-    d.setDate(d.getDate() - 1);
-    return { nome: 'noite', data: d.toISOString().split('T')[0] };
-  }
-  if (nome === 'tarde') return { nome: 'manha', data };
-  return { nome: 'tarde', data };
-}
-
 /** Início oficial do turno (minutos desde meia-noite), fuso Africa/Luanda. */
 const TURNO_INICIO_MINUTES = { manha: 7 * 60, tarde: 15 * 60, noite: 23 * 60 };
 const TZ_STOCKOS = 'Africa/Luanda';
@@ -3988,41 +3978,41 @@ app.get('/api/dia', auth, async (req, res) => {
       caixaByTurno[row.turno_id] = row;
     }
 
-    const prevKeys = new Set();
-    const prevPairs = [];
-    for (const turno of turnos.rows) {
-      const p = prevTurno(turno.nome, data);
-      const k = `${p.data}\t${p.nome}`;
-      if (!prevKeys.has(k)) {
-        prevKeys.add(k);
-        prevPairs.push([p.data, p.nome]);
-      }
-    }
-
-    const prevMapByDN = {};
-    if (prevPairs.length) {
-      const conds = prevPairs.map((_, i) => `(t.data = $${i * 2 + 1} AND t.nome = $${i * 2 + 2})`).join(' OR ');
-      const params = prevPairs.flat();
+    const prevMapByTurnoId = {};
+    if (ids.length) {
+      // Para cada turno actual, encontra o último `deixado` de cada produto em
+      // qualquer turno anterior (não só o imediato): se o turno anterior não
+      // foi aberto ou não registou o produto, recua até encontrar.
+      const slotCase = `CASE nome WHEN 'manha' THEN 0 WHEN 'tarde' THEN 1 WHEN 'noite' THEN 2 END`;
+      const slotCaseT = `CASE t.nome WHEN 'manha' THEN 0 WHEN 'tarde' THEN 1 WHEN 'noite' THEN 2 END`;
       const prevStock = await query(
-        `SELECT ts.produto_id, ts.deixado, t.data, t.nome
-         FROM turno_stock ts
-         JOIN turnos t ON ts.turno_id=t.id
-         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
-         WHERE ${conds}`,
-        params
+        `WITH cur AS (
+           SELECT id AS turno_id, data, ${slotCase} AS slot
+           FROM turnos WHERE id = ANY($1::int[])
+         )
+         SELECT c.turno_id, x.produto_id, x.deixado
+         FROM cur c,
+         LATERAL (
+           SELECT DISTINCT ON (ts.produto_id) ts.produto_id, ts.deixado
+           FROM turno_stock ts
+           JOIN turnos t ON ts.turno_id = t.id
+           JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+           WHERE (t.data < c.data OR (t.data = c.data AND ${slotCaseT} < c.slot))
+             AND ts.deixado IS NOT NULL
+           ORDER BY ts.produto_id, t.data DESC, ${slotCaseT} DESC
+         ) x ON TRUE`,
+        [ids]
       );
       for (const r of prevStock.rows) {
-        const dk = `${normDataPostgres(r.data)}|${r.nome}`;
-        if (!prevMapByDN[dk]) prevMapByDN[dk] = {};
-        prevMapByDN[dk][r.produto_id] = parseFloat(r.deixado);
+        if (!prevMapByTurnoId[r.turno_id]) prevMapByTurnoId[r.turno_id] = {};
+        prevMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.deixado);
       }
     }
 
     const result = [];
     for (const turno of turnos.rows) {
       const stock = stockByTurno[turno.id] || [];
-      const prev = prevTurno(turno.nome, data);
-      const prevMap = prevMapByDN[`${normDataPostgres(prev.data)}|${prev.nome}`] || {};
+      const prevMap = prevMapByTurnoId[turno.id] || {};
 
       const stockFinal = stock.map((s) => {
         const enc =

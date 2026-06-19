@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-compacta">
+<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-5col">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -361,6 +361,7 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .pedido-draft-table-wrap td:last-child,.pedido-draft-table-wrap th:last-child{text-align:center;width:30px;padding-left:0;padding-right:2px}
 /* Nome do artigo quebra linha em vez de forçar scroll horizontal */
 .pedido-draft-table-wrap td:nth-child(2){white-space:normal;word-break:break-word;line-height:1.25}
+.pedido-draft-table-wrap .pedido-line-unit{font-size:10px;color:#94a3b8;line-height:1.2}
 .pedido-draft-qty{
   width:100%;
   box-sizing:border-box;
@@ -4366,10 +4367,8 @@ function pedidoBalcaoSyncDraftUI() {
         <input type="number" min="0.001" step="any" class="pedido-draft-qty" data-pid="${pidAttr}" value="${escapeHtml(String(q))}"
           oninput="pedidoBalcaoDraftQtyInput(this)" onchange="pedidoBalcaoDraftQtyFromInput(this)"/>
       </td>
-      <td style="vertical-align:top;color:#e2e8f0">
-        <div class="pedido-line-nome">${escapeHtml(o.nome)}</div>
-        <div class="pedido-line-unit" style="font-size:10px;color:#94a3b8;margin-top:2px">${unitHtml}</div>
-      </td>
+      <td style="vertical-align:top;color:#e2e8f0">${escapeHtml(o.nome)}</td>
+      <td class="pedido-line-unit" style="text-align:right;vertical-align:top;word-break:break-word">${unitHtml}</td>
       <td class="pedido-line-total" data-pid="${pidAttr}" style="text-align:right;vertical-align:top;color:#4ade80;word-break:break-word;font-weight:700">${escapeHtml(
         fmt(line)
       )}</td>
@@ -4380,7 +4379,7 @@ function pedidoBalcaoSyncDraftUI() {
   }
   if (!rows) {
     rows =
-      '<tr><td colspan="4" style="color:#64748b;font-size:13px;padding:10px 8px">Toque num artigo na grelha para adicionar.</td></tr>';
+      '<tr><td colspan="5" style="color:#64748b;font-size:13px;padding:10px 8px">Toque num artigo na grelha para adicionar.</td></tr>';
   }
   tbody.innerHTML = rows;
   const comEntrega = String(document.getElementById('pedido-com-entrega')?.value || '0') === '1';
@@ -4653,9 +4652,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <table>
             <thead>
               <tr>
-                <th style="width:46px">Qtd</th>
+                <th style="width:44px">Qtd</th>
                 <th>Artigos</th>
-                <th style="width:72px;text-align:right" title="Total desta linha (qtd × preço)">Total</th>
+                <th style="width:62px;text-align:right" title="Preço por unidade (copo ou unidade)">Preço unit.</th>
+                <th style="width:66px;text-align:right" title="Total desta linha (qtd × preço)">Total linha</th>
                 <th></th>
               </tr>
             </thead>

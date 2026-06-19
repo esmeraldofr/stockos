@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-stock-caixa">
+<html lang="pt" data-stockos-ui="2026-05-19-caixa-comparacao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -160,6 +160,8 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .comp-falta{color:#f87171;font-size:12px}
 .comp-sobra{color:#fb923c;font-size:12px}
 .comp-null{color:#334155;font-size:12px}
+.stock-comp-caixa{margin-top:3px;font-size:10px;line-height:1.2;white-space:nowrap}
+.stock-comp-caixa.comp-null{color:#64748b}
 .section-header{background:#0f172a;color:#3b82f6;font-size:11px;font-weight:700;text-transform:uppercase;padding:6px 10px;letter-spacing:.5px}
 
 /* Caixa grid */
@@ -3136,6 +3138,14 @@ async function loadTurno() {
         if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
         else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
 
+        /* Mesma lógica para Enc. caixa vs Deix. caixa do turno anterior (mostrado por baixo do input). */
+        const prevCx = s.prev_deixado_caixa;
+        const prevCxTxt = prevCx !== null && prevCx !== undefined ? `T. ant.: ${fmtNum(prevCx)}` : '';
+        let compCaixaHtml = '';
+        if (s.comparacao_caixa && s.comparacao_caixa.startsWith('falta')) compCaixaHtml = `<div class="stock-comp-caixa comp-falta" id="comp-caixa-${pid}">⚠ ${s.comparacao_caixa}</div>`;
+        else if (s.comparacao_caixa && s.comparacao_caixa.startsWith('sobra')) compCaixaHtml = `<div class="stock-comp-caixa comp-sobra" id="comp-caixa-${pid}">↑ ${s.comparacao_caixa}</div>`;
+        else compCaixaHtml = `<div class="stock-comp-caixa comp-null" id="comp-caixa-${pid}">${prevCxTxt}</div>`;
+
         const inputAttr = canEdit ? '' : 'disabled';
         const taraKg = parseFloat(s.peso_tara_kg) || 0;
         let metaLinha = medicaoSigla(s.tipo_medicao);
@@ -3154,7 +3164,7 @@ async function loadTurno() {
             <td id="comp-${pid}">${compHtml}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado_caixa)}"
               onblur="stockNumberInputBlur(this)"
-              oninput="updateStock('${pid}','encontrado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="encontrado_caixa" title="Nº de caixas/fardos/grades inteiras encontradas" ${inputAttr}/></td>
+              oninput="updateStock('${pid}','encontrado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="encontrado_caixa" data-prev-caixa="${prevCx !== null && prevCx !== undefined ? prevCx : ''}" title="Nº de caixas/fardos/grades inteiras encontradas — comparado com a Deix. caixa do turno anterior" ${inputAttr}/>${compCaixaHtml}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="encontrado" title="Obrigatório" ${inputAttr}/></td>
@@ -5282,11 +5292,41 @@ function updateStock(pid, field, value) {
   const ve = document.getElementById(`vend-${k}`);
   const tipoM = prod?.tipo_medicao || 'unidade';
   if (ve) ve.textContent = Number.isFinite(vend) && vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(tipoM)}` : '';
+  if (field === 'encontrado_caixa') refreshCompCaixa(k);
   refreshMenuQtys();
   renderIrregularidadesTurno();
   maybeClearTurnoStickyAfterStockCaixaOk();
   // Auto-save
   autoSaveSchedule();
+}
+
+/** Recalcula em tempo real a comparação da Enc. caixa vs Deix. caixa do turno anterior. */
+function refreshCompCaixa(k) {
+  const el = document.getElementById(`comp-caixa-${k}`);
+  if (!el) return;
+  const inp = document.querySelector(`input[data-stock-pid="${k}"][data-stock-field="encontrado_caixa"]`);
+  const prevRaw = inp ? inp.getAttribute('data-prev-caixa') : '';
+  const prev = prevRaw === '' || prevRaw === null ? NaN : parseFloat(prevRaw);
+  const encC = stockBuf[k]?.encontrado_caixa;
+  el.className = 'stock-comp-caixa comp-null';
+  if (!Number.isFinite(prev)) {
+    el.textContent = '';
+    return;
+  }
+  if (!Number.isFinite(encC)) {
+    el.textContent = `T. ant.: ${fmtNum(prev)}`;
+    return;
+  }
+  const diff = encC - prev;
+  if (Math.abs(diff) < 0.001) {
+    el.textContent = `T. ant.: ${fmtNum(prev)}`;
+  } else if (diff < 0) {
+    el.className = 'stock-comp-caixa comp-falta';
+    el.textContent = `⚠ falta ${fmtNum(Math.abs(diff))}`;
+  } else {
+    el.className = 'stock-comp-caixa comp-sobra';
+    el.textContent = `↑ sobra ${fmtNum(diff)}`;
+  }
 }
 
 /**

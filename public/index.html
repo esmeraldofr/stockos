@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-resumo-na-aba-caixa">
+<html lang="pt" data-stockos-ui="2026-05-19-balcao-pesquisa">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -272,6 +272,8 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
   border-color:#38bdf8;
   color:#0f172a;
 }
+.pedidos-balcao-search{margin-bottom:8px}
+.pedidos-balcao-search input::-webkit-search-cancel-button{cursor:pointer}
 .pedidos-balcao-tiles{
   display:grid;
   grid-template-columns:repeat(5,minmax(0,1fr));
@@ -4251,14 +4253,28 @@ function pedidoBalcaoValorLinha(o, q) {
 
 function pedidoBalcaoSetFilter(btn) {
   if (!btn || !btn.getAttribute) return;
-  const grupo = btn.getAttribute('data-grupo');
   const wrap = btn.closest('.pedidos-balcao-filters');
   if (wrap) wrap.querySelectorAll('button').forEach((b) => b.classList.toggle('pedido-filter--on', b === btn));
+  pedidoBalcaoApplyTileFilter();
+}
+
+/** Aplica o filtro de grupo (botões) + a pesquisa por nome em simultâneo. */
+function pedidoBalcaoApplyTileFilter() {
+  const activeBtn = document.querySelector('#pedidos-balcao-mount .pedidos-balcao-filters button.pedido-filter--on');
+  const grupo = activeBtn ? activeBtn.getAttribute('data-grupo') : 'all';
+  const termo = (document.getElementById('pedido-balcao-search')?.value || '').trim().toLowerCase();
+  let visiveis = 0;
   document.querySelectorAll('#pedidos-balcao-mount .pedido-prod-tile').forEach((t) => {
     const g = t.getAttribute('data-grupo');
-    const show = grupo === 'all' || g === grupo;
+    const nome = t.getAttribute('data-nome') || '';
+    const matchGrupo = grupo === 'all' || g === grupo;
+    const matchTermo = !termo || nome.includes(termo);
+    const show = matchGrupo && matchTermo;
     t.classList.toggle('pedido-tile--hidden', !show);
+    if (show) visiveis++;
   });
+  const vazio = document.getElementById('pedido-balcao-sem-resultados');
+  if (vazio) vazio.style.display = visiveis === 0 ? 'block' : 'none';
 }
 
 function pedidoBalcaoRefreshDraftLineTotals() {
@@ -4599,7 +4615,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         ? `<img class="pedido-prod-tile__img" src="${escapeHtml(o.imagem)}" alt="" loading="lazy" onerror="const b=this.closest('.pedido-prod-tile');if(b){b.classList.remove('pedido-tile--has-img');this.replaceWith(Object.assign(document.createElement('span'),{className:'pedido-prod-tile__emoji',textContent:'${em}'}));}"/>`
         : `<span class="pedido-prod-tile__emoji" aria-hidden="true">${em}</span>`;
       const tileCls = hasImg ? 'pedido-prod-tile pedido-tile--has-img' : 'pedido-prod-tile';
-      return `<button type="button" class="${tileCls}" data-grupo="${escapeHtml(o.grupo)}" data-pid="${escapeHtml(pid)}" onclick="pedidoBalcaoTileClick(this.getAttribute('data-pid'))">
+      return `<button type="button" class="${tileCls}" data-grupo="${escapeHtml(o.grupo)}" data-pid="${escapeHtml(pid)}" data-nome="${escapeHtml(String(o.nome || '').toLowerCase())}" onclick="pedidoBalcaoTileClick(this.getAttribute('data-pid'))">
         ${visual}
         <span class="pedido-prod-tile__nome">${escapeHtml(o.nome)}</span>
         <span class="pedido-prod-tile__preco">${fmt(preco)}</span>
@@ -4610,6 +4626,11 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   const formHtml = canEdit
     ? `<div class="pedidos-balcao-pos" style="margin-bottom:14px">
       <div class="pedidos-balcao-tiles-wrap">
+        <div class="pedidos-balcao-search">
+          <input type="search" id="pedido-balcao-search" placeholder="🔍 Procurar produto…" autocomplete="off"
+            oninput="pedidoBalcaoApplyTileFilter()"
+            style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box"/>
+        </div>
         <div class="pedidos-balcao-filters">
           <button type="button" class="pedido-filter--on" data-grupo="all" onclick="pedidoBalcaoSetFilter(this)">Todos</button>
           <button type="button" data-grupo="Menu" onclick="pedidoBalcaoSetFilter(this)">Menu</button>
@@ -4618,6 +4639,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <button type="button" data-grupo="BebidaUnidade" onclick="pedidoBalcaoSetFilter(this)">Bebida (unidade)</button>
         </div>
         <div class="pedidos-balcao-tiles">${tilesHtml}</div>
+        <div id="pedido-balcao-sem-resultados" style="display:none;color:#64748b;font-size:13px;padding:10px 2px">Nenhum produto corresponde à pesquisa.</div>
       </div>
       <div class="pedidos-balcao-side">
         <div class="pedido-side-title">Conta corrente</div>

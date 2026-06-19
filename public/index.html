@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-balcao-sem-impressao">
+<html lang="pt" data-stockos-ui="2026-05-19-config-teclado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3813,6 +3813,22 @@ function pedidoBalcaoSetAutoPrint(on) {
   } catch (_) {}
 }
 
+/** Mostrar o teclado numérico no painel de Pedidos ao balcão. Por defeito sim. */
+function pedidoBalcaoKeypadEnabled() {
+  try {
+    const v = localStorage.getItem('stockos.pedidoKeypad');
+    return v === null ? true : v === '1';
+  } catch (_) {
+    return true;
+  }
+}
+
+function pedidoBalcaoSetKeypad(on) {
+  try {
+    localStorage.setItem('stockos.pedidoKeypad', on ? '1' : '0');
+  } catch (_) {}
+}
+
 function togglePedidosTurnoLista() {
   const el = document.getElementById('pedidos-turno-lista');
   const btn = document.getElementById('ver-pedidos-turno-btn');
@@ -4648,6 +4664,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <input type="number" id="pedido-entrega-valor" min="0" step="any" value="0" oninput="pedidoBalcaoSyncDraftUI && pedidoBalcaoSyncDraftUI()"
             style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px"/>
         </div>
+        ${pedidoBalcaoKeypadEnabled() ? `
         <div class="pedido-side-title" style="margin-top:4px">Teclado</div>
         <div class="pedido-keypad">
           <button type="button" class="pedido-kp-act" onclick="pedidoBalcaoKeypad('bs')">← Apagar</button>
@@ -4663,7 +4680,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <button type="button" onclick="pedidoBalcaoKeypad('3')">3</button>
           <button type="button" class="pedido-kp-wide" onclick="pedidoBalcaoKeypad('0')">0</button>
           <button type="button" onclick="pedidoBalcaoKeypad('.')">.</button>
-        </div>
+        </div>` : ''}
         <button type="button" class="btn btn-success" style="width:100%;margin-top:12px;padding:12px;font-weight:700"
           onclick='runAction(event, async () => { await registarPedidoBalcao(${tidJs}); })'>Registar pedido</button>
       </div>
@@ -9862,6 +9879,7 @@ async function deleteReceita(receitaId, produtoId) {
  * dispositivo. ----------------------------------------------------- */
 async function drawConfiguracoes() {
   const autoOn = pedidoBalcaoAutoPrintEnabled();
+  const keypadOn = pedidoBalcaoKeypadEnabled();
   const logoPreview = pedidoBalcaoLogoGetPreview();
   render(`
     <div id="header">
@@ -9884,6 +9902,22 @@ async function drawConfiguracoes() {
           <span>Imprimir talão automaticamente após registar pedido</span>
         </label>
         <div id="cfg-pedido-auto-print-msg" style="margin-top:6px;font-size:11px;color:#64748b">${autoOn ? 'Activo neste dispositivo.' : 'Desactivado neste dispositivo.'}</div>
+      </div>
+
+      <div class="card mb-12">
+        <div class="card-title">⌨️ Teclado numérico no balcão</div>
+        <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
+          Mostra um teclado numérico no painel de Pedidos ao balcão para introduzir
+          quantidades/preços com o dedo. Em dispositivos com teclado físico podes
+          desligá-lo para libertar espaço no ecrã.
+        </p>
+        <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#0f172a;border:1px dashed #334155;cursor:pointer;font-size:13px;color:#cbd5e1;user-select:none">
+          <input type="checkbox" id="cfg-pedido-keypad" ${keypadOn ? 'checked' : ''}
+            onchange="configPedidoKeypadChange(this)"
+            style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer"/>
+          <span>Mostrar teclado numérico no painel de balcão</span>
+        </label>
+        <div id="cfg-pedido-keypad-msg" style="margin-top:6px;font-size:11px;color:#64748b">${keypadOn ? 'Visível neste dispositivo.' : 'Escondido neste dispositivo.'}</div>
       </div>
 
       <div class="card mb-12">
@@ -9916,6 +9950,13 @@ function configPedidoAutoPrintChange(el) {
   pedidoBalcaoSetAutoPrint(!!el.checked);
   const msg = document.getElementById('cfg-pedido-auto-print-msg');
   if (msg) msg.textContent = el.checked ? 'Activo neste dispositivo.' : 'Desactivado neste dispositivo.';
+}
+
+function configPedidoKeypadChange(el) {
+  if (!el) return;
+  pedidoBalcaoSetKeypad(!!el.checked);
+  const msg = document.getElementById('cfg-pedido-keypad-msg');
+  if (msg) msg.textContent = el.checked ? 'Visível neste dispositivo.' : 'Escondido neste dispositivo.';
 }
 
 async function drawAdmin() {

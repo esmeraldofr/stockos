@@ -3980,27 +3980,38 @@ app.get('/api/dia', auth, async (req, res) => {
 
     const prevMapByTurnoId = {};
     if (ids.length) {
-      // Para cada turno actual, encontra o último `deixado` de cada produto em
-      // qualquer turno anterior (não só o imediato): se o turno anterior não
-      // foi aberto ou não registou o produto, recua até encontrar.
+      // Para cada turno actual, encontra o ÚLTIMO turno anterior que foi
+      // registado (tem stock com deixado) e usa o `deixado` desse turno para
+      // TODOS os produtos. O T. Anterior pertence sempre ao mesmo turno — se o
+      // turno imediato não foi aberto, recua até ao último turno com registos.
       const slotCase = `CASE nome WHEN 'manha' THEN 0 WHEN 'tarde' THEN 1 WHEN 'noite' THEN 2 END`;
       const slotCaseT = `CASE t.nome WHEN 'manha' THEN 0 WHEN 'tarde' THEN 1 WHEN 'noite' THEN 2 END`;
       const prevStock = await query(
         `WITH cur AS (
            SELECT id AS turno_id, data, ${slotCase} AS slot
            FROM turnos WHERE id = ANY($1::int[])
+         ),
+         prev AS (
+           SELECT c.turno_id, p.prev_turno_id
+           FROM cur c
+           LEFT JOIN LATERAL (
+             SELECT t.id AS prev_turno_id
+             FROM turnos t
+             WHERE (t.data < c.data OR (t.data = c.data AND ${slotCaseT} < c.slot))
+               AND EXISTS (
+                 SELECT 1 FROM turno_stock ts
+                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+                 WHERE ts.turno_id = t.id AND ts.deixado IS NOT NULL
+               )
+             ORDER BY t.data DESC, ${slotCaseT} DESC
+             LIMIT 1
+           ) p ON TRUE
          )
-         SELECT c.turno_id, x.produto_id, x.deixado
-         FROM cur c,
-         LATERAL (
-           SELECT DISTINCT ON (ts.produto_id) ts.produto_id, ts.deixado
-           FROM turno_stock ts
-           JOIN turnos t ON ts.turno_id = t.id
-           JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
-           WHERE (t.data < c.data OR (t.data = c.data AND ${slotCaseT} < c.slot))
-             AND ts.deixado IS NOT NULL
-           ORDER BY ts.produto_id, t.data DESC, ${slotCaseT} DESC
-         ) x ON TRUE`,
+         SELECT pr.turno_id, ts.produto_id, ts.deixado
+         FROM prev pr
+         JOIN turno_stock ts ON ts.turno_id = pr.prev_turno_id
+         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+         WHERE ts.deixado IS NOT NULL`,
         [ids]
       );
       for (const r of prevStock.rows) {

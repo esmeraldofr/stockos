@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-aba-caixas">
+<html lang="pt" data-stockos-ui="2026-05-19-encontrados-fechar">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -162,6 +162,9 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .comp-null{color:#334155;font-size:12px}
 .stock-comp-caixa{margin-top:3px;font-size:10px;line-height:1.2;white-space:nowrap}
 .stock-comp-caixa.comp-null{color:#64748b}
+.encontrados-banner{padding:12px 14px;border-radius:10px}
+.encontrados-banner-pend{background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.35)}
+.encontrados-banner-ok{background:rgba(34,197,94,0.10);border:1px solid rgba(34,197,94,0.30)}
 .section-header{background:#0f172a;color:#3b82f6;font-size:11px;font-weight:700;text-transform:uppercase;padding:6px 10px;letter-spacing:.5px}
 
 /* Caixa grid */
@@ -1255,6 +1258,11 @@ document.addEventListener('click', (ev) => {
 
 // ── ROUTER ────────────────────────────────────────────────────
 async function navigate(page, params) {
+  // Aviso se o utilizador sai do turno e o registo inicial de encontrados
+  // ainda não foi fechado (chamada antes de mudar S.page).
+  if (page !== 'turno' && S.page === 'turno') {
+    if (typeof notifyEncontradosPendente === 'function') notifyEncontradosPendente();
+  }
   S.page = page;
   if (params) Object.assign(S, params);
   if (page !== 'turno') S.turnoId = null;
@@ -3139,6 +3147,7 @@ async function loadTurno() {
         else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
 
         const inputAttr = canEdit ? '' : 'disabled';
+        const encInputAttr = canEdit && !encontradosFechados ? '' : 'disabled';
         const taraKg = parseFloat(s.peso_tara_kg) || 0;
         let metaLinha = medicaoSigla(s.tipo_medicao);
         if (taraKg > 0) metaLinha += ` · recipiente ${fmtNum(taraKg)} kg`;
@@ -3156,7 +3165,7 @@ async function loadTurno() {
             <td id="comp-${pid}">${compHtml}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado)}"
               onblur="stockNumberInputBlur(this)"
-              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="encontrado" title="Obrigatório" ${inputAttr}/></td>
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="encontrado" title="Obrigatório" ${encInputAttr}/></td>
             <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado)}"
               onblur="stockNumberInputBlur(this)"
@@ -3172,6 +3181,7 @@ async function loadTurno() {
         const pid = prodIdKey(s.produto_id);
         if (!pid) return '';
         const inputAttr = canEdit ? '' : 'disabled';
+        const encInputAttr = canEdit && !encontradosFechados ? '' : 'disabled';
         const prevCx = s.prev_deixado_caixa;
         const prevCxTxt = prevCx !== null && prevCx !== undefined ? `T. ant.: ${fmtNum(prevCx)}` : '';
         let compCaixaHtml = `<div class="stock-comp-caixa comp-null" id="comp-caixa-${pid}">${prevCxTxt}</div>`;
@@ -3183,7 +3193,7 @@ async function loadTurno() {
             <td class="td-calc" style="color:#94a3b8">${prevCx !== null && prevCx !== undefined ? fmtNum(prevCx) : '—'}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado_caixa)}"
               onblur="stockNumberInputBlur(this)"
-              oninput="updateStock('${pid}','encontrado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="encontrado_caixa" data-prev-caixa="${prevCx !== null && prevCx !== undefined ? prevCx : ''}" title="Nº de caixas/fardos/grades inteiras encontradas" ${inputAttr}/>${compCaixaHtml}</td>
+              oninput="updateStock('${pid}','encontrado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="encontrado_caixa" data-prev-caixa="${prevCx !== null && prevCx !== undefined ? prevCx : ''}" title="Nº de caixas/fardos/grades inteiras encontradas" ${encInputAttr}/>${compCaixaHtml}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado_caixa)}"
               onblur="stockNumberInputBlur(this)"
               oninput="updateStock('${pid}','deixado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="deixado_caixa" title="Nº de caixas/fardos/grades inteiras deixadas" ${inputAttr}/></td>
@@ -3216,6 +3226,8 @@ async function loadTurno() {
     // Em turnos abertos (operação) mostramos só Stock/Pedidos/Escala.
     // Em turnos fechados (fiscalização) acrescentamos Vendas e Registos.
     const turnoFechado = turno.estado === 'fechado';
+    const encontradosFechados = !!turno.encontrados_fechados_em;
+    const isAdminUserScope = S.user && (S.user.role === 'admin' || S.user.role === 'gestor');
     const allowedTabs = turnoFechado
       ? ['stock','caixas','vendas','pedidos','registos','escala']
       : ['stock','caixas','pedidos','escala'];
@@ -3239,6 +3251,7 @@ async function loadTurno() {
       </div>
 
       <div id="tab-stock" class="${panelCls('stock')}">
+        ${encontradosBannerHtml(turno, encontradosFechados, canEdit, isAdminUserScope)}
         <div class="card" style="padding:0;overflow:hidden">
           <div class="table-wrap">
             <table>
@@ -3275,6 +3288,7 @@ async function loadTurno() {
       </div>
 
       <div id="tab-caixas" class="${panelCls('caixas')}">
+        ${encontradosBannerHtml(turno, encontradosFechados, canEdit, isAdminUserScope)}
         <div class="card" style="padding:0;overflow:hidden">
           <div style="padding:14px 16px 0">
             <div class="card-title">📦 Controlo de caixas</div>
@@ -6283,6 +6297,83 @@ function autoSaveSchedule() {
   autoSaveTimer = setTimeout(() => guardarStock(turnoId), 2000);
 }
 
+/** Banner no topo das abas Stock e Caixas com o estado do registo inicial
+ *  de encontrados + CTA para fechar (ou reabrir, se admin/gestor). */
+function encontradosBannerHtml(turno, fechado, canEdit, isAdmin) {
+  if (!turno) return '';
+  if (fechado) {
+    const ts = turno.encontrados_fechados_em
+      ? new Date(turno.encontrados_fechados_em).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' })
+      : '';
+    const reabrir = isAdmin
+      ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="runAction(event, () => reabrirEncontrados('${turno.id}'))">🔓 Reabrir</button>`
+      : '';
+    return `
+      <div class="card encontrados-banner encontrados-banner-ok mb-12" style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:18px">✓</span>
+        <div style="flex:1">
+          <div style="font-weight:600;color:#86efac">Registo inicial fechado</div>
+          <div style="font-size:11px;color:#94a3b8">${ts}${ts ? ' · ' : ''}Encontrado e Enc. caixa estão bloqueados.</div>
+        </div>
+        ${reabrir}
+      </div>`;
+  }
+  const btn = canEdit
+    ? `<button type="button" class="btn btn-primary btn-sm" style="margin-left:auto" onclick="runAction(event, () => fecharEncontrados('${turno.id}'))">🔒 Fechar registo inicial</button>`
+    : '';
+  return `
+    <div class="card encontrados-banner encontrados-banner-pend mb-12" style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:18px">⚠</span>
+      <div style="flex:1">
+        <div style="font-weight:600;color:#fbbf24">Regista os encontrados iniciais</div>
+        <div style="font-size:11px;color:#cbd5e1">Preenche o Encontrado (Stock) e o Enc. caixa (Caixas) e depois fecha o registo. Enquanto não fechares, vais ser avisado a cada navegação.</div>
+      </div>
+      ${btn}
+    </div>`;
+}
+
+async function fecharEncontrados(turnoId) {
+  if (!confirm('Fechar o registo inicial de encontrados? Os campos Encontrado e Enc. caixa ficam bloqueados a partir daqui.')) return;
+  try {
+    turnoMsgPending('A fechar registo…');
+    await api('POST', `/turnos/${turnoId}/encontrados/fechar`, {});
+    turnoMsgOk('Registo fechado');
+    if (typeof loadTurnoPage === 'function') await loadTurnoPage();
+    else if (typeof drawTurno === 'function') await drawTurno();
+    setTimeout(() => turnoMsgIdle(), 1500);
+  } catch (e) { turnoMsgErr(e.message); }
+}
+
+async function reabrirEncontrados(turnoId) {
+  if (!confirm('Reabrir o registo de encontrados? Os campos voltam a ficar editáveis.')) return;
+  try {
+    turnoMsgPending('A reabrir registo…');
+    await api('POST', `/turnos/${turnoId}/encontrados/reabrir`, {});
+    turnoMsgOk('Registo reaberto');
+    if (typeof loadTurnoPage === 'function') await loadTurnoPage();
+    else if (typeof drawTurno === 'function') await drawTurno();
+    setTimeout(() => turnoMsgIdle(), 1500);
+  } catch (e) { turnoMsgErr(e.message); }
+}
+
+/** Aviso transitório quando o utilizador navega com encontrados ainda por fechar. */
+let _encontradosNotifyT = null;
+function notifyEncontradosPendente() {
+  const t = S.turnoData;
+  if (!t || t.estado !== 'aberto' || t.encontrados_fechados_em) return;
+  let el = document.getElementById('encontrados-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'encontrados-toast';
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:24px;background:#7c2d12;color:#fed7aa;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600;z-index:10000;box-shadow:0 4px 16px rgba(0,0,0,0.4);max-width:90%;text-align:center';
+    document.body.appendChild(el);
+  }
+  el.textContent = '⚠ Tens encontrados por registar — volta ao turno e fecha o registo inicial';
+  el.style.display = 'block';
+  clearTimeout(_encontradosNotifyT);
+  _encontradosNotifyT = setTimeout(() => { if (el) el.style.display = 'none'; }, 3500);
+}
+
 async function guardarStock(turnoId) {
   try {
     if (String(turnoId) !== String(S.turnoData?.id)) return;
@@ -6323,6 +6414,9 @@ function calcCaixa() {
 }
 
 async function switchTurnoTab(name, btn) {
+  // Aviso se o registo inicial de encontrados ainda está por fechar e o
+  // utilizador vai para uma aba que não é Stock nem Caixas.
+  if (name !== 'stock' && name !== 'caixas') notifyEncontradosPendente();
   S.turnoTab = name;
   try { persistUiState(); } catch (_) {}
   document.querySelectorAll('.turno-tab-panel').forEach(p => p.classList.remove('active'));

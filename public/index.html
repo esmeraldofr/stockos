@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-compact-side">
+<html lang="pt" data-stockos-ui="2026-05-19-form-grid-3col">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -347,9 +347,11 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
   min-width:0;
 }
 .pedidos-balcao-side .pedido-side-title{font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
-/* Form compacto dentro do painel POS */
-.pedidos-balcao-side .field{margin-bottom:6px}
-.pedidos-balcao-side .field label{font-size:10px;color:#94a3b8;line-height:1.2}
+/* Form compacto dentro do painel POS — campos em grelha de 3 colunas */
+.pedido-form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px 8px;margin-bottom:2px}
+@media(max-width:400px){.pedido-form-grid{grid-template-columns:repeat(2,1fr)}}
+.pedidos-balcao-side .field{margin-bottom:0;min-width:0}
+.pedidos-balcao-side .field label{font-size:10px;color:#94a3b8;line-height:1.2;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pedidos-balcao-side .field input,
 .pedidos-balcao-side .field select{
   width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;
@@ -4675,45 +4677,42 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           </table>
         </div>
         <div class="pedido-total-bar"><span>Total</span><span id="pedido-draft-total">0 Kz</span></div>
-        <div class="field" style="margin-bottom:8px">
-          <label style="font-size:11px;color:#94a3b8">Mesa / cliente (opcional)</label>
-          <input type="text" id="pedido-cliente-nome" maxlength="200" placeholder="Ex.: Mesa 2"
-            style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px"/>
-        </div>
-        <div class="field" style="margin-bottom:8px">
-          <label style="font-size:11px;color:#94a3b8">Tipo de pagamento <span style="color:#ef4444">*</span></label>
-          <select id="pedido-tipo-pagamento" required
-            style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px;cursor:pointer">
-            <option value="" disabled selected hidden>— Escolher —</option>
-            <option value="dinheiro">Dinheiro</option>
-            <option value="tpa">TPA / cartão</option>
-            <option value="transferencia">Transferência</option>
-          </select>
-        </div>
-        <div class="field" style="margin-bottom:8px">
-          <label style="font-size:11px;color:#94a3b8">Promotor <span style="color:#ef4444">*</span></label>
-          <select id="pedido-promotor" required onchange="pedidoBalcaoRefreshComissao()"
-            style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px;cursor:pointer">
-            <option value="__unset__" disabled selected hidden>— Escolher —</option>
-            <option value="">— Sem promotor —</option>
-          </select>
-          <div id="pedido-comissao-info" style="margin-top:6px;font-size:12px;color:#94a3b8;padding:6px 10px;border:1px dashed #334155;border-radius:8px;background:#0b1322">
-            <span>Comissão calculada: </span><strong id="pedido-comissao-valor" style="color:#fbbf24">0 Kz</strong>
-            <span id="pedido-comissao-nota" style="display:block;font-size:11px;color:#64748b;margin-top:2px">Sem promotor — valor não atribuído.</span>
+        <div class="pedido-form-grid">
+          <div class="field">
+            <label>Mesa / cliente <span style="color:#64748b">(opc.)</span></label>
+            <input type="text" id="pedido-cliente-nome" maxlength="200" placeholder="Ex.: Mesa 2"/>
+          </div>
+          <div class="field">
+            <label>Pagamento <span style="color:#ef4444">*</span></label>
+            <select id="pedido-tipo-pagamento" required>
+              <option value="" disabled selected hidden>— Escolher —</option>
+              <option value="dinheiro">Dinheiro</option>
+              <option value="tpa">TPA / cartão</option>
+              <option value="transferencia">Transferência</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Promotor <span style="color:#ef4444">*</span></label>
+            <select id="pedido-promotor" required onchange="pedidoBalcaoRefreshComissao()">
+              <option value="__unset__" disabled selected hidden>— Escolher —</option>
+              <option value="">— Sem promotor —</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Entrega</label>
+            <select id="pedido-com-entrega" onchange="pedidoBalcaoToggleEntregaCampo(this)">
+              <option value="0">Sem entrega (no balcão)</option>
+              <option value="1">Com entrega</option>
+            </select>
+          </div>
+          <div id="pedido-entrega-valor-wrap" class="field" style="display:none">
+            <label>Valor entrega (Kz)</label>
+            <input type="number" id="pedido-entrega-valor" min="0" step="any" value="0" oninput="pedidoBalcaoSyncDraftUI && pedidoBalcaoSyncDraftUI()"/>
           </div>
         </div>
-        <div class="field" style="margin-bottom:8px">
-          <label style="font-size:11px;color:#94a3b8">Entrega</label>
-          <select id="pedido-com-entrega" onchange="pedidoBalcaoToggleEntregaCampo(this)"
-            style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px;cursor:pointer">
-            <option value="0">Sem entrega (no balcão)</option>
-            <option value="1">Com entrega</option>
-          </select>
-        </div>
-        <div id="pedido-entrega-valor-wrap" class="field" style="display:none;margin-bottom:10px">
-          <label style="font-size:11px;color:#94a3b8">Valor da entrega (Kz) — pode ser 0</label>
-          <input type="number" id="pedido-entrega-valor" min="0" step="any" value="0" oninput="pedidoBalcaoSyncDraftUI && pedidoBalcaoSyncDraftUI()"
-            style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px"/>
+        <div id="pedido-comissao-info" style="margin-top:6px;font-size:12px;color:#94a3b8;padding:6px 10px;border:1px dashed #334155;border-radius:8px;background:#0b1322">
+          <span>Comissão calculada: </span><strong id="pedido-comissao-valor" style="color:#fbbf24">0 Kz</strong>
+          <span id="pedido-comissao-nota" style="display:block;font-size:11px;color:#64748b;margin-top:2px">Sem promotor — valor não atribuído.</span>
         </div>
         ${pedidoBalcaoKeypadEnabled() ? `
         <div class="pedido-side-title" style="margin-top:4px">Teclado</div>

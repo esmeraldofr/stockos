@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-caixa-comparacao">
+<html lang="pt" data-stockos-ui="2026-05-19-aba-caixas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -720,7 +720,7 @@ const S = {
 
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
-const ALLOWED_TURNO_TABS = ['stock', 'vendas', 'pedidos', 'registos', 'escala'];
+const ALLOWED_TURNO_TABS = ['stock', 'caixas', 'vendas', 'pedidos', 'registos', 'escala'];
 const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria'];
 
 function _storageGet(key) {
@@ -3138,14 +3138,6 @@ async function loadTurno() {
         if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
         else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
 
-        /* Mesma lógica para Enc. caixa vs Deix. caixa do turno anterior (mostrado por baixo do input). */
-        const prevCx = s.prev_deixado_caixa;
-        const prevCxTxt = prevCx !== null && prevCx !== undefined ? `T. ant.: ${fmtNum(prevCx)}` : '';
-        let compCaixaHtml = '';
-        if (s.comparacao_caixa && s.comparacao_caixa.startsWith('falta')) compCaixaHtml = `<div class="stock-comp-caixa comp-falta" id="comp-caixa-${pid}">⚠ ${s.comparacao_caixa}</div>`;
-        else if (s.comparacao_caixa && s.comparacao_caixa.startsWith('sobra')) compCaixaHtml = `<div class="stock-comp-caixa comp-sobra" id="comp-caixa-${pid}">↑ ${s.comparacao_caixa}</div>`;
-        else compCaixaHtml = `<div class="stock-comp-caixa comp-null" id="comp-caixa-${pid}">${prevCxTxt}</div>`;
-
         const inputAttr = canEdit ? '' : 'disabled';
         const taraKg = parseFloat(s.peso_tara_kg) || 0;
         let metaLinha = medicaoSigla(s.tipo_medicao);
@@ -3162,16 +3154,10 @@ async function loadTurno() {
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div>${fbBtnHtml}</td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
-            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado_caixa)}"
-              onblur="stockNumberInputBlur(this)"
-              oninput="updateStock('${pid}','encontrado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="encontrado_caixa" data-prev-caixa="${prevCx !== null && prevCx !== undefined ? prevCx : ''}" title="Nº de caixas/fardos/grades inteiras encontradas — comparado com a Deix. caixa do turno anterior" ${inputAttr}/>${compCaixaHtml}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="encontrado" title="Obrigatório" ${inputAttr}/></td>
             <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
-            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado_caixa)}"
-              onblur="stockNumberInputBlur(this)"
-              oninput="updateStock('${pid}','deixado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="deixado_caixa" title="Nº de caixas/fardos/grades inteiras deixadas" ${inputAttr}/></td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="deixado" title="Obrigatório" ${inputAttr}/></td>
@@ -3181,10 +3167,41 @@ async function loadTurno() {
       }).join('');
     }
 
+    function caixaRows(items) {
+      return items.map((s) => {
+        const pid = prodIdKey(s.produto_id);
+        if (!pid) return '';
+        const inputAttr = canEdit ? '' : 'disabled';
+        const prevCx = s.prev_deixado_caixa;
+        const prevCxTxt = prevCx !== null && prevCx !== undefined ? `T. ant.: ${fmtNum(prevCx)}` : '';
+        let compCaixaHtml = `<div class="stock-comp-caixa comp-null" id="comp-caixa-${pid}">${prevCxTxt}</div>`;
+        if (s.comparacao_caixa && s.comparacao_caixa.startsWith('falta')) compCaixaHtml = `<div class="stock-comp-caixa comp-falta" id="comp-caixa-${pid}">⚠ ${s.comparacao_caixa}</div>`;
+        else if (s.comparacao_caixa && s.comparacao_caixa.startsWith('sobra')) compCaixaHtml = `<div class="stock-comp-caixa comp-sobra" id="comp-caixa-${pid}">↑ ${s.comparacao_caixa}</div>`;
+        return `
+          <tr class="stock-row">
+            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div></td>
+            <td class="td-calc" style="color:#94a3b8">${prevCx !== null && prevCx !== undefined ? fmtNum(prevCx) : '—'}</td>
+            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado_caixa)}"
+              onblur="stockNumberInputBlur(this)"
+              oninput="updateStock('${pid}','encontrado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="encontrado_caixa" data-prev-caixa="${prevCx !== null && prevCx !== undefined ? prevCx : ''}" title="Nº de caixas/fardos/grades inteiras encontradas" ${inputAttr}/>${compCaixaHtml}</td>
+            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado_caixa)}"
+              onblur="stockNumberInputBlur(this)"
+              oninput="updateStock('${pid}','deixado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="deixado_caixa" title="Nº de caixas/fardos/grades inteiras deixadas" ${inputAttr}/></td>
+          </tr>`;
+      }).join('');
+    }
+
+    function caixaTableFor(items, label) {
+      if (!items.length) return '';
+      return `
+        <tr><td colspan="4" class="section-header">${label}</td></tr>
+        ${caixaRows(items)}`;
+    }
+
     function tableFor(items, label) {
       if (!items.length) return '';
       return `
-        <tr><td colspan="10" class="section-header">${label}</td></tr>
+        <tr><td colspan="8" class="section-header">${label}</td></tr>
         ${stockRows(items)}`;
     }
 
@@ -3200,14 +3217,15 @@ async function loadTurno() {
     // Em turnos fechados (fiscalização) acrescentamos Vendas e Registos.
     const turnoFechado = turno.estado === 'fechado';
     const allowedTabs = turnoFechado
-      ? ['stock','vendas','pedidos','registos','escala']
-      : ['stock','pedidos','escala'];
+      ? ['stock','caixas','vendas','pedidos','registos','escala']
+      : ['stock','caixas','pedidos','escala'];
     const activeTab = allowedTabs.includes(S.turnoTab) ? S.turnoTab : 'stock';
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
     show('turno-content', `
       <div class="turno-tabs">
           <button type="button" class="${tabCls('stock')}" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
+          <button type="button" class="${tabCls('caixas')}" data-turno-tab="caixas" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixas', ev.currentTarget); })">📦 Caixas</button>
           ${turnoFechado ? `<button type="button" class="${tabCls('vendas')}" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>` : ''}
           <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
           ${turnoFechado ? `<button type="button" class="${tabCls('registos')}" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>` : ''}
@@ -3229,10 +3247,8 @@ async function loadTurno() {
                   <th>Produto</th>
                   <th style="text-align:right">T. Anterior</th>
                   <th>Comparação</th>
-                  <th style="text-align:right">Enc. caixa</th>
                   <th style="text-align:right">Encontrado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Entrada</th>
-                  <th style="text-align:right">Deix. caixa</th>
                   <th style="text-align:right">Deixado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(bloqueado)</span></th>
                   <th style="text-align:right">Vendido</th>
@@ -3254,6 +3270,32 @@ async function loadTurno() {
           <div style="margin-top:22px;padding-top:18px;border-top:1px solid #334155">
             <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Caixa — dinheiro que saiu</div>
             <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-caixas" class="${panelCls('caixas')}">
+        <div class="card" style="padding:0;overflow:hidden">
+          <div style="padding:14px 16px 0">
+            <div class="card-title">📦 Controlo de caixas</div>
+            <p style="font-size:12px;color:#64748b;margin:-2px 0 10px;line-height:1.45">Nº de caixas/fardos/grades inteiras encontradas e deixadas. Comparação com o último turno anterior registado por baixo do input de Encontrado.</p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Produto</th>
+                  <th style="text-align:right">T. Anterior</th>
+                  <th style="text-align:right">Enc. caixa</th>
+                  <th style="text-align:right">Deix. caixa</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${caixaTableFor(menu,'🍽️ Menu')}
+                ${caixaTableFor(comida,'🧂 Ingredientes')}
+                ${caixaTableFor(bebida,'🥤 Bebidas')}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>

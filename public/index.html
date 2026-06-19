@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-3col">
+<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-compacta">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -240,6 +240,9 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 }
 @media(max-width:900px){
   .pedidos-balcao-pos{grid-template-columns:1fr}
+  /* Empilhado: o painel não estica de ponta a ponta (evita espaço morto
+     no meio da Conta corrente e o Total colado à borda). */
+  .pedidos-balcao-side{max-width:460px;position:static}
 }
 .pedidos-balcao-tiles-wrap{
   background:linear-gradient(165deg,#0a1628 0%,#1a3a5c 42%,#0f172a 100%);

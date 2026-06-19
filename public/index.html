@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-t-anterior-mesmo-turno">
+<html lang="pt" data-stockos-ui="2026-05-19-stock-grosso">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3065,7 +3065,9 @@ async function loadTurno() {
         encontrado: parseEncontradoFromRow(s.encontrado),
         entrada: parseFloat(s.entrada)||0,
         deixado: parseEncontradoFromRow(s.deixado),
-        fechados: parseFloat(s.fechados)||0
+        fechados: parseFloat(s.fechados)||0,
+        encontrado_grosso: parseEncontradoFromRow(s.encontrado_grosso),
+        deixado_grosso: parseEncontradoFromRow(s.deixado_grosso)
       };
     });
     caixaBuf = {
@@ -3150,10 +3152,16 @@ async function loadTurno() {
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div>${fbBtnHtml}</td>
             <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td id="comp-${pid}">${compHtml}</td>
+            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado_grosso)}"
+              onblur="stockNumberInputBlur(this)"
+              oninput="updateStock('${pid}','encontrado_grosso',this.value)" data-stock-pid="${pid}" data-stock-field="encontrado_grosso" title="Nº de fardos/grades/caixas inteiras encontradas" ${inputAttr}/></td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="encontrado" title="Obrigatório" ${inputAttr}/></td>
             <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
+            <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado_grosso)}"
+              onblur="stockNumberInputBlur(this)"
+              oninput="updateStock('${pid}','deixado_grosso',this.value)" data-stock-pid="${pid}" data-stock-field="deixado_grosso" title="Nº de fardos/grades/caixas inteiras deixadas" ${inputAttr}/></td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="deixado" title="Obrigatório" ${inputAttr}/></td>
@@ -3166,7 +3174,7 @@ async function loadTurno() {
     function tableFor(items, label) {
       if (!items.length) return '';
       return `
-        <tr><td colspan="8" class="section-header">${label}</td></tr>
+        <tr><td colspan="10" class="section-header">${label}</td></tr>
         ${stockRows(items)}`;
     }
 
@@ -3211,8 +3219,10 @@ async function loadTurno() {
                   <th>Produto</th>
                   <th style="text-align:right">T. Anterior</th>
                   <th>Comparação</th>
+                  <th style="text-align:right">Enc. grosso</th>
                   <th style="text-align:right">Encontrado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Entrada</th>
+                  <th style="text-align:right">Deix. grosso</th>
                   <th style="text-align:right">Deixado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(bloqueado)</span></th>
                   <th style="text-align:right">Vendido</th>
@@ -5253,8 +5263,8 @@ async function vendaQtyInputBlur(inp) {
 function updateStock(pid, field, value) {
   const k = prodIdKey(pid);
   if (!k) return;
-  if (!stockBuf[k]) stockBuf[k] = { encontrado: null, entrada: 0, deixado: null, fechados: 0 };
-  if (field === 'encontrado' || field === 'deixado') {
+  if (!stockBuf[k]) stockBuf[k] = { encontrado: null, entrada: 0, deixado: null, fechados: 0, encontrado_grosso: null, deixado_grosso: null };
+  if (field === 'encontrado' || field === 'deixado' || field === 'encontrado_grosso' || field === 'deixado_grosso') {
     const t = String(value ?? '').trim();
     stockBuf[k][field] = t === '' ? null : parseRaw(value);
   } else {
@@ -6200,7 +6210,9 @@ async function guardarStock(turnoId) {
         produto_id: pid,
         encontrado: v.encontrado,
         deixado: v.deixado,
-        fechados: v.fechados
+        fechados: v.fechados,
+        encontrado_grosso: v.encontrado_grosso,
+        deixado_grosso: v.deixado_grosso
       })
     );
     await Promise.all(proms);

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-encontrados-popup">
+<html lang="pt" data-stockos-ui="2026-05-19-config-impressao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -724,7 +724,7 @@ const S = {
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
 const ALLOWED_TURNO_TABS = ['stock', 'caixas', 'vendas', 'pedidos', 'registos', 'escala'];
-const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria'];
+const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria', 'configuracoes'];
 
 function _storageGet(key) {
   try {
@@ -1320,6 +1320,10 @@ async function draw() {
       case 'produtos': await drawProdutos(); break;
       case 'escala':   await drawEscala(); break;
       case 'admin':    await drawAdmin(); break;
+      case 'configuracoes':
+        if (S.user?.role !== 'admin') { await navigate('dia'); return; }
+        await drawConfiguracoes();
+        break;
       case 'equipa':   await drawEquipa(); break;
       case 'presenca': await drawPresenca(); break;
       case 'perfil':   await drawPerfil(); break;
@@ -1444,6 +1448,8 @@ function menuEntries() {
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>' });
   if (isAdmin) entries.push({ page: 'admin', label: 'Admin',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' });
+  if (isAdmin) entries.push({ page: 'configuracoes', label: 'Configurações',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.6 1.65 1.65 0 0010 3.09V3a2 2 0 014 0v.09A1.65 1.65 0 0015 4.6a1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9c.36.18.65.46.83.83.18.36.27.79.27 1.22V11a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>' });
   entries.push({ page: 'equipa', label: 'Equipa',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>' });
   entries.push({ page: 'presenca', label: 'Presença',
@@ -3792,6 +3798,30 @@ async function pedidoBalcaoLogoOnFile(input) {
   }
 }
 
+/** Info row dentro do painel de Pedidos do balcão a mostrar o estado da
+ *  impressão automática + logo. A configuração editável vive em
+ *  Configurações (Menu → Configurações), acessível só a admin. */
+function pedidoBalcaoImpressaoInfoHtml() {
+  const autoOn = pedidoBalcaoAutoPrintEnabled();
+  const hasLogo = !!pedidoBalcaoLogoGetPreview();
+  const isAdmin = S.user?.role === 'admin';
+  const cfgLink = isAdmin
+    ? `<a href="#" onclick="event.preventDefault();navigate('configuracoes')" style="color:#60a5fa">Configurações</a>`
+    : `<span style="color:#64748b">Configurações (admin)</span>`;
+  return `
+    <div style="margin-bottom:10px;padding:8px 10px;border-radius:8px;background:#0f172a;border:1px dashed #334155;font-size:11px;color:#94a3b8;line-height:1.5">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span>🖨️ Impressão automática: <strong style="color:${autoOn ? '#86efac' : '#fca5a5'}">${autoOn ? 'ligada' : 'desligada'}</strong></span>
+        <span style="color:#475569">·</span>
+        <span>🖼️ Logo: <strong style="color:${hasLogo ? '#86efac' : '#94a3b8'}">${hasLogo ? 'definido' : 'sem logo'}</strong></span>
+      </div>
+      <div style="margin-top:4px;font-size:10px;color:#64748b">
+        Imprime via <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:#60a5fa">RawBT</a> ·
+        ${cfgLink}
+      </div>
+    </div>`;
+}
+
 function pedidoBalcaoAutoPrintEnabled() {
   try {
     const v = localStorage.getItem('stockos.pedidoAutoPrint');
@@ -3805,11 +3835,6 @@ function pedidoBalcaoSetAutoPrint(on) {
   try {
     localStorage.setItem('stockos.pedidoAutoPrint', on ? '1' : '0');
   } catch (_) {}
-}
-
-function pedidoBalcaoToggleAutoPrint(el) {
-  if (!el) return;
-  pedidoBalcaoSetAutoPrint(!!el.checked);
 }
 
 function togglePedidosTurnoLista() {
@@ -4647,33 +4672,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <input type="number" id="pedido-entrega-valor" min="0" step="any" value="0" oninput="pedidoBalcaoSyncDraftUI && pedidoBalcaoSyncDraftUI()"
             style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px"/>
         </div>
-        <label style="display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:8px 10px;border-radius:8px;background:#0f172a;border:1px dashed #334155;cursor:pointer;font-size:12px;color:#cbd5e1;user-select:none">
-          <input type="checkbox" id="pedido-auto-print" ${
-            pedidoBalcaoAutoPrintEnabled() ? 'checked' : ''
-          } onchange="pedidoBalcaoToggleAutoPrint(this)" style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer"/>
-          <span>🖨️ Imprimir talão automaticamente</span>
-        </label>
-        <div style="margin:-4px 0 10px;font-size:11px;color:#94a3b8">
-          Imprime via <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:#60a5fa">RawBT</a> ·
-          <a href="#" onclick="event.preventDefault();pedidoBalcaoMostrarAjudaImpressao()" style="color:#60a5fa">ⓘ Como configurar</a>
-        </div>
-        <details style="margin-bottom:12px;font-size:12px;color:#cbd5e1" ${
-          pedidoBalcaoLogoGetPreview() ? '' : ''
-        }>
-          <summary style="cursor:pointer;padding:6px 0;list-style:none;display:flex;align-items:center;gap:8px">
-            <span>🖼️ Logo do talão</span>
-            <span style="font-size:10px;color:#64748b">(opcional · 58 mm)</span>
-          </summary>
-          <div style="padding:10px;background:#0f172a;border:1px dashed #334155;border-radius:8px;display:flex;flex-direction:column;gap:8px;align-items:flex-start">
-            <div id="pedido-logo-preview-wrap" style="min-height:40px;display:flex;align-items:center;justify-content:center;width:100%"></div>
-            <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">
-              <span>Escolher imagem…</span>
-              <input type="file" accept="image/*" style="display:none" onchange="pedidoBalcaoLogoOnFile(this)"/>
-            </label>
-            <button type="button" id="pedido-logo-clear-btn" class="btn btn-ghost btn-sm" style="display:none" onclick="pedidoBalcaoLogoClear()">Remover logo</button>
-            <span style="font-size:10px;color:#64748b;line-height:1.35">PNG/JPG. É reduzido a 384 px e convertido para preto-e-branco para a impressora térmica.</span>
-          </div>
-        </details>
+        ${pedidoBalcaoImpressaoInfoHtml()}
         <div class="pedido-side-title" style="margin-top:4px">Teclado</div>
         <div class="pedido-keypad">
           <button type="button" class="pedido-kp-act" onclick="pedidoBalcaoKeypad('bs')">← Apagar</button>
@@ -9880,6 +9879,70 @@ async function deleteReceita(receitaId, produtoId) {
 }
 
 // ── ADMIN ─────────────────────────────────────────────────────
+/* ─── Página Configurações (só admin) ─────────────────────────────
+ * Para já: impressão de talão automática (RawBT) + logo do talão.
+ * Continuam guardados em localStorage (são definições POR DISPOSITIVO,
+ * porque cada terminal liga a uma impressora diferente). A página
+ * existe para que só o admin possa alterar a configuração desse
+ * dispositivo. ----------------------------------------------------- */
+async function drawConfiguracoes() {
+  const autoOn = pedidoBalcaoAutoPrintEnabled();
+  const logoPreview = pedidoBalcaoLogoGetPreview();
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Configurações</div>
+      <div class="header-sub" style="font-size:11px;color:#94a3b8">Definições deste dispositivo · acesso restrito a administradores</div></div>
+    </div>
+    <div id="content">
+      <div class="card mb-12">
+        <div class="card-title">🖨️ Impressão automática de talão</div>
+        <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
+          Quando activo, cada pedido registado no balcão é impresso automaticamente
+          via <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:#60a5fa">RawBT</a>
+          na impressora Bluetooth definida na app. ·
+          <a href="#" onclick="event.preventDefault();pedidoBalcaoMostrarAjudaImpressao()" style="color:#60a5fa">ⓘ Como configurar</a>
+        </p>
+        <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#0f172a;border:1px dashed #334155;cursor:pointer;font-size:13px;color:#cbd5e1;user-select:none">
+          <input type="checkbox" id="cfg-pedido-auto-print" ${autoOn ? 'checked' : ''}
+            onchange="configPedidoAutoPrintChange(this)"
+            style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer"/>
+          <span>Imprimir talão automaticamente após registar pedido</span>
+        </label>
+        <div id="cfg-pedido-auto-print-msg" style="margin-top:6px;font-size:11px;color:#64748b">${autoOn ? 'Activo neste dispositivo.' : 'Desactivado neste dispositivo.'}</div>
+      </div>
+
+      <div class="card mb-12">
+        <div class="card-title">🖼️ Logo do talão</div>
+        <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
+          Imagem impressa no topo de cada talão (opcional · até 58 mm de largura).
+          PNG/JPG. É reduzida a 384 px e convertida para preto-e-branco para a impressora térmica.
+        </p>
+        <div style="display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:12px;background:#0f172a;border:1px dashed #334155;border-radius:8px">
+          <div id="pedido-logo-preview-wrap" style="min-height:50px;display:flex;align-items:center;justify-content:center;width:100%"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">
+              <span>${logoPreview ? 'Substituir logo…' : 'Escolher imagem…'}</span>
+              <input type="file" accept="image/*" style="display:none" onchange="pedidoBalcaoLogoOnFile(this)"/>
+            </label>
+            <button type="button" id="pedido-logo-clear-btn" class="btn btn-ghost btn-sm"
+              style="display:${logoPreview ? 'inline-block' : 'none'}" onclick="pedidoBalcaoLogoClear()">Remover logo</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    ${navBar()}
+  `);
+  // Refresca o preview do logo (mesma função usada antes no painel do balcão).
+  pedidoBalcaoLogoRefreshUI();
+}
+
+function configPedidoAutoPrintChange(el) {
+  if (!el) return;
+  pedidoBalcaoSetAutoPrint(!!el.checked);
+  const msg = document.getElementById('cfg-pedido-auto-print-msg');
+  if (msg) msg.textContent = el.checked ? 'Activo neste dispositivo.' : 'Desactivado neste dispositivo.';
+}
+
 async function drawAdmin() {
   render(`
     <div id="header">

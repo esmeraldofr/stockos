@@ -3981,6 +3981,7 @@ app.get('/api/dia', auth, async (req, res) => {
     }
 
     const prevMapByTurnoId = {};
+    const prevCaixaMapByTurnoId = {};
     if (ids.length) {
       // Para cada turno actual, encontra o ÚLTIMO turno anterior que foi
       // registado (tem stock com deixado) e usa o `deixado` desse turno para
@@ -4009,16 +4010,22 @@ app.get('/api/dia', auth, async (req, res) => {
              LIMIT 1
            ) p ON TRUE
          )
-         SELECT pr.turno_id, ts.produto_id, ts.deixado
+         SELECT pr.turno_id, ts.produto_id, ts.deixado, ts.deixado_caixa
          FROM prev pr
          JOIN turno_stock ts ON ts.turno_id = pr.prev_turno_id
          JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
-         WHERE ts.deixado IS NOT NULL`,
+         WHERE ts.deixado IS NOT NULL OR ts.deixado_caixa IS NOT NULL`,
         [ids]
       );
       for (const r of prevStock.rows) {
-        if (!prevMapByTurnoId[r.turno_id]) prevMapByTurnoId[r.turno_id] = {};
-        prevMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.deixado);
+        if (r.deixado !== null) {
+          if (!prevMapByTurnoId[r.turno_id]) prevMapByTurnoId[r.turno_id] = {};
+          prevMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.deixado);
+        }
+        if (r.deixado_caixa !== null) {
+          if (!prevCaixaMapByTurnoId[r.turno_id]) prevCaixaMapByTurnoId[r.turno_id] = {};
+          prevCaixaMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.deixado_caixa);
+        }
       }
     }
 
@@ -4026,6 +4033,7 @@ app.get('/api/dia', auth, async (req, res) => {
     for (const turno of turnos.rows) {
       const stock = stockByTurno[turno.id] || [];
       const prevMap = prevMapByTurnoId[turno.id] || {};
+      const prevCaixaMap = prevCaixaMapByTurnoId[turno.id] || {};
 
       const stockFinal = stock.map((s) => {
         const enc =
@@ -4052,7 +4060,29 @@ app.get('/api/dia', auth, async (req, res) => {
           else comparacao = `sobra ${diff}`;
         }
         const prevDeixado = prevMap[s.produto_id] !== undefined ? prevMap[s.produto_id] : null;
-        return { ...s, vendido: vend, valor: val, comparacao, prev_deixado: prevDeixado };
+
+        // Mesma lógica para a coluna "a caixa": Enc. caixa vs Deix. caixa do turno anterior.
+        const encCaixa =
+          s.encontrado_caixa != null && s.encontrado_caixa !== '' ? parseFloat(s.encontrado_caixa) : NaN;
+        let comparacaoCaixa = null;
+        if (prevCaixaMap[s.produto_id] !== undefined && Number.isFinite(encCaixa)) {
+          const diffC = encCaixa - prevCaixaMap[s.produto_id];
+          if (Math.abs(diffC) < 0.001) comparacaoCaixa = 'igual';
+          else if (diffC < 0) comparacaoCaixa = `falta ${Math.abs(diffC)}`;
+          else comparacaoCaixa = `sobra ${diffC}`;
+        }
+        const prevDeixadoCaixa =
+          prevCaixaMap[s.produto_id] !== undefined ? prevCaixaMap[s.produto_id] : null;
+
+        return {
+          ...s,
+          vendido: vend,
+          valor: val,
+          comparacao,
+          prev_deixado: prevDeixado,
+          comparacao_caixa: comparacaoCaixa,
+          prev_deixado_caixa: prevDeixadoCaixa
+        };
       });
 
       const c = caixaByTurno[turno.id] || { tpa: null, transferencia: null, dinheiro: null, saida: 0 };

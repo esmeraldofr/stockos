@@ -424,7 +424,7 @@ function markDbReady() {
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
  */
-const STOCKOS_BOOTSTRAP_VERSION = '2026-05-19-stock-grosso';
+const STOCKOS_BOOTSTRAP_VERSION = '2026-05-19-stock-caixa';
 
 /** Versão das migrações realmente aplicada na BD (lida de stockos_meta.bootstrap).
  *  Cacheada para que /api/health não bata na BD a cada pedido. */
@@ -475,8 +475,8 @@ async function initDB() {
     deixado NUMERIC(10,3), fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id, produto_id)
   )`, [], 'turno_stock');
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS fechados NUMERIC(10,3) NOT NULL DEFAULT 0`, [], 'turno_stock-fechados');
-  await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS encontrado_grosso NUMERIC(10,3)`, [], 'turno_stock-encontrado-grosso');
-  await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS deixado_grosso NUMERIC(10,3)`, [], 'turno_stock-deixado-grosso');
+  await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS encontrado_caixa NUMERIC(10,3)`, [], 'turno_stock-encontrado-caixa');
+  await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS deixado_caixa NUMERIC(10,3)`, [], 'turno_stock-deixado-caixa');
   await qry(`CREATE TABLE IF NOT EXISTS turno_caixa (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
     tpa NUMERIC(15,2), transferencia NUMERIC(15,2), dinheiro NUMERIC(15,2),
@@ -4266,7 +4266,7 @@ function sumCaixaGeradoRow(row) {
 
 app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   try {
-    const { produto_id, encontrado, deixado, fechados, encontrado_grosso, deixado_grosso } = req.body;
+    const { produto_id, encontrado, deixado, fechados, encontrado_caixa, deixado_caixa } = req.body;
     const chk = await query(
       `SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS}`,
       [produto_id]
@@ -4278,13 +4278,13 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
     }
     const enc = parseOptionalNumericBody(encontrado);
     const deix = parseOptionalNumericBody(deixado);
-    const encG = parseOptionalNumericBody(encontrado_grosso);
-    const deixG = parseOptionalNumericBody(deixado_grosso);
+    const encG = parseOptionalNumericBody(encontrado_caixa);
+    const deixG = parseOptionalNumericBody(deixado_caixa);
     const r = await query(
-      `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados, encontrado_grosso, deixado_grosso)
+      `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados, encontrado_caixa, deixado_caixa)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (turno_id, produto_id)
-       DO UPDATE SET encontrado=$3, deixado=$4, fechados=$5, encontrado_grosso=$6, deixado_grosso=$7
+       DO UPDATE SET encontrado=$3, deixado=$4, fechados=$5, encontrado_caixa=$6, deixado_caixa=$7
        RETURNING *`,
       [req.params.id, produto_id, enc, deix, fechados || 0, encG, deixG]
     );

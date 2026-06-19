@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-aba-caixa-dinheiro">
+<html lang="pt" data-stockos-ui="2026-05-19-resumo-na-aba-caixa">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3367,6 +3367,10 @@ async function loadTurno() {
             <span class="caixa-total-value" id="c-total-final">${fmtKzOrEmpty(tf)}</span>
           </div>
         </div>
+        <div class="card mt-16" id="pedidos-resumo-card">
+          <div class="card-title">📊 Resumo dos pedidos</div>
+          <div id="pedidos-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
+        </div>
         <div class="card mt-16">
           <div class="card-title">📝 Observações</div>
           <textarea id="turno-notas" rows="3" placeholder="Escreve aqui as observações do turno..."
@@ -4568,6 +4572,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   if (!produtosParaPedido.length) {
     mount.innerHTML =
       '<span style="color:#64748b">Sem artigos para pedido ao balcão. Configure produtos Menu, avulso ou bebidas (por copo ou por unidade).</span>';
+    const rm = document.getElementById('pedidos-resumo-mount');
+    if (rm) rm.innerHTML = '<span style="color:#64748b">Ainda não há pedidos neste turno.</span>';
     return;
   }
   pedidoBalcaoInitDraftForTurno(turnoId);
@@ -4576,6 +4582,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     pedidos = await api('GET', `/turnos/${encodeURIComponent(turnoId)}/pedidos`);
   } catch (e) {
     mount.innerHTML = `<span style="color:#ef4444">${escapeHtml(e.message)}</span>`;
+    const rm = document.getElementById('pedidos-resumo-mount');
+    if (rm) rm.innerHTML = `<span style="color:#ef4444">${escapeHtml(e.message)}</span>`;
     return;
   }
   window.__stockosPedidosBalcao = pedidos;
@@ -4873,11 +4881,18 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         </div>
       </div>`;
   })();
-  mount.innerHTML =
-    formHtml +
-    resumoHtml +
-    resumoProdutosHtml +
-    `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
+  // Aba "Pedidos ao balcão": só o formulário POS (grelha + Conta corrente + teclado).
+  mount.innerHTML = formHtml;
+  // Aba "Caixa": Resumo do turno + Produtos vendidos + Pedidos do turno.
+  const resumoMount = document.getElementById('pedidos-resumo-mount');
+  if (resumoMount) {
+    const semDados = !resumoHtml && !resumoProdutosHtml && !pedidos.length;
+    resumoMount.innerHTML = semDados
+      ? '<span style="color:#64748b">Ainda não há pedidos neste turno.</span>'
+      : resumoHtml +
+        resumoProdutosHtml +
+        `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
+  }
   pedidoBalcaoSyncDraftUI();
   pedidoBalcaoLogoRefreshUI();
   if (canEdit) { pedidoBalcaoLoadPromotores().catch(() => {}); }

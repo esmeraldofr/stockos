@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-config-teclado">
+<html lang="pt" data-stockos-ui="2026-05-19-aba-caixa-dinheiro">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3235,8 +3235,8 @@ async function loadTurno() {
     const encontradosFechados = !!turno.encontrados_fechados_em;
     const isAdminUserScope = S.user && (S.user.role === 'admin' || S.user.role === 'gestor');
     const allowedTabs = turnoFechado
-      ? ['stock','caixas','vendas','pedidos','registos','escala']
-      : ['stock','caixas','pedidos','escala'];
+      ? ['stock','caixas','vendas','pedidos','caixa','registos','escala']
+      : ['stock','caixas','pedidos','caixa','escala'];
     const activeTab = allowedTabs.includes(S.turnoTab) ? S.turnoTab : 'stock';
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
@@ -3246,6 +3246,7 @@ async function loadTurno() {
           <button type="button" class="${tabCls('caixas')}" data-turno-tab="caixas" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixas', ev.currentTarget); })">📦 Caixas</button>
           ${turnoFechado ? `<button type="button" class="${tabCls('vendas')}" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>` : ''}
           <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
+          <button type="button" class="${tabCls('caixa')}" data-turno-tab="caixa" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixa', ev.currentTarget); })">💰 Caixa</button>
           ${turnoFechado ? `<button type="button" class="${tabCls('registos')}" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>` : ''}
           <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
       </div>
@@ -3333,6 +3334,9 @@ async function loadTurno() {
           <p style="font-size:12px;color:#64748b;margin:-4px 0 10px;line-height:1.45">Um pedido por cliente ou mesa. Cada pedido tem a sua fatura; as quantidades somam nas vendas do turno.</p>
           <div id="pedidos-balcao-mount"><span style="color:#64748b">A carregar…</span></div>
         </div>
+      </div>
+
+      <div id="tab-caixa" class="${panelCls('caixa')}">
         <div class="card">
           <div class="card-title">💰 Caixa</div>
           <div id="caixa-esperado-pedidos" style="margin-bottom:10px"></div>
@@ -3404,7 +3408,7 @@ async function loadTurno() {
     await loadTurnoResumoTab(turno.id);
     renderIrregularidadesTurno();
     loadTurnoAreasEscalados();
-    if (activeTab === 'vendas' || activeTab === 'pedidos') {
+    if (activeTab === 'vendas' || activeTab === 'pedidos' || activeTab === 'caixa') {
       try { await loadVendasMenu(turno.id, !!S.turnoCanEdit); } catch (_) {}
     } else if (activeTab === 'escala') {
       try { await loadEscalaTurno(); } catch (_) {}
@@ -6415,7 +6419,7 @@ async function switchTurnoTab(name, btn) {
     const stock = S.turnoData?.stock || [];
     if (tid) await loadRegistosMovimentosSection(tid, stock, !!S.turnoCanEdit);
   }
-  if (name === 'vendas' || name === 'pedidos') {
+  if (name === 'vendas' || name === 'pedidos' || name === 'caixa') {
     const tid = S.turnoData?.id;
     if (tid) await loadVendasMenu(tid, !!S.turnoCanEdit);
   }

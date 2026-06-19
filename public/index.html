@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-config-impressao">
+<html lang="pt" data-stockos-ui="2026-05-19-balcao-sem-impressao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3798,30 +3798,6 @@ async function pedidoBalcaoLogoOnFile(input) {
   }
 }
 
-/** Info row dentro do painel de Pedidos do balcão a mostrar o estado da
- *  impressão automática + logo. A configuração editável vive em
- *  Configurações (Menu → Configurações), acessível só a admin. */
-function pedidoBalcaoImpressaoInfoHtml() {
-  const autoOn = pedidoBalcaoAutoPrintEnabled();
-  const hasLogo = !!pedidoBalcaoLogoGetPreview();
-  const isAdmin = S.user?.role === 'admin';
-  const cfgLink = isAdmin
-    ? `<a href="#" onclick="event.preventDefault();navigate('configuracoes')" style="color:#60a5fa">Configurações</a>`
-    : `<span style="color:#64748b">Configurações (admin)</span>`;
-  return `
-    <div style="margin-bottom:10px;padding:8px 10px;border-radius:8px;background:#0f172a;border:1px dashed #334155;font-size:11px;color:#94a3b8;line-height:1.5">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <span>🖨️ Impressão automática: <strong style="color:${autoOn ? '#86efac' : '#fca5a5'}">${autoOn ? 'ligada' : 'desligada'}</strong></span>
-        <span style="color:#475569">·</span>
-        <span>🖼️ Logo: <strong style="color:${hasLogo ? '#86efac' : '#94a3b8'}">${hasLogo ? 'definido' : 'sem logo'}</strong></span>
-      </div>
-      <div style="margin-top:4px;font-size:10px;color:#64748b">
-        Imprime via <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:#60a5fa">RawBT</a> ·
-        ${cfgLink}
-      </div>
-    </div>`;
-}
-
 function pedidoBalcaoAutoPrintEnabled() {
   try {
     const v = localStorage.getItem('stockos.pedidoAutoPrint');
@@ -4672,7 +4648,6 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <input type="number" id="pedido-entrega-valor" min="0" step="any" value="0" oninput="pedidoBalcaoSyncDraftUI && pedidoBalcaoSyncDraftUI()"
             style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box;margin-top:4px"/>
         </div>
-        ${pedidoBalcaoImpressaoInfoHtml()}
         <div class="pedido-side-title" style="margin-top:4px">Teclado</div>
         <div class="pedido-keypad">
           <button type="button" class="pedido-kp-act" onclick="pedidoBalcaoKeypad('bs')">← Apagar</button>

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-encontrados-fechar">
+<html lang="pt" data-stockos-ui="2026-05-19-encontrados-popup">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6356,22 +6356,14 @@ async function reabrirEncontrados(turnoId) {
   } catch (e) { turnoMsgErr(e.message); }
 }
 
-/** Aviso transitório quando o utilizador navega com encontrados ainda por fechar. */
-let _encontradosNotifyT = null;
+/** Popup bloqueante quando o utilizador navega com encontrados ainda por
+ *  fechar. Mostrado sempre — só para de aparecer depois de o registo
+ *  inicial ficar fechado. */
 function notifyEncontradosPendente() {
   const t = S.turnoData;
   if (!t || t.estado !== 'aberto' || t.encontrados_fechados_em) return;
-  let el = document.getElementById('encontrados-toast');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'encontrados-toast';
-    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:24px;background:#7c2d12;color:#fed7aa;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600;z-index:10000;box-shadow:0 4px 16px rgba(0,0,0,0.4);max-width:90%;text-align:center';
-    document.body.appendChild(el);
-  }
-  el.textContent = '⚠ Tens encontrados por registar — volta ao turno e fecha o registo inicial';
-  el.style.display = 'block';
-  clearTimeout(_encontradosNotifyT);
-  _encontradosNotifyT = setTimeout(() => { if (el) el.style.display = 'none'; }, 3500);
+  const titulo = t.nome ? `turno “${t.nome}”` : `turno desta data`;
+  alert(`⚠ Tens encontrados por registar no ${titulo}.\n\nVai à aba Stock e/ou Caixas, preenche os valores em Encontrado / Enc. caixa e clica em «🔒 Fechar registo inicial».\n\nEnquanto não fechares o registo, este aviso vai aparecer sempre que mudares de aba ou de página.`);
 }
 
 async function guardarStock(turnoId) {

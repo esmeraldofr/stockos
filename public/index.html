@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-historico-faturas-compras">
+<html lang="pt" data-stockos-ui="2026-05-19-historico-precos-fix">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -8762,24 +8762,28 @@ async function abrirHistoricoArmazem(kind) {
     const datas = [...grupos.keys()].sort().reverse();
     body.innerHTML = datas.map((d) => {
       const arr = grupos.get(d);
-      const totalKz = arr.reduce((s, r) => s + (parseFloat(r.total) || parseFloat(r.subtotal) || 0), 0);
+      const totalKz = arr.reduce(
+        (s, r) => s + (parseFloat(isFat ? r.total_valor : r.valor_total) || 0),
+        0
+      );
       const linhas = isFat
         ? arr.map((f) => `
           <tr>
             <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(f.numero_fatura || '—')}</td>
-            <td style="padding:5px 8px;color:#94a3b8">${escapeHtml(f.fornecedor_nome || f.fornecedor_livre || '—')}</td>
-            <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(parseFloat(f.total) || 0)}</td>
+            <td style="padding:5px 8px;color:#94a3b8">${escapeHtml(f.fornecedor || f.fornecedor_livre || '—')}</td>
+            <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(parseFloat(f.total_valor) || 0)}</td>
           </tr>`).join('')
         : arr.map((c) => `
           <tr>
             <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(c.produto_nome || '—')}</td>
-            <td style="padding:5px 8px;color:#94a3b8;text-align:right;font-variant-numeric:tabular-nums">${fmt(parseFloat(c.quantidade) || 0)}</td>
-            <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(parseFloat(c.subtotal) || 0)}</td>
+            <td style="padding:5px 8px;text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums">${fmt(parseFloat(c.quantidade) || 0)} ${medicaoSigla(c.tipo_medicao)}</td>
+            <td style="padding:5px 8px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums">${fmt(parseFloat(c.preco_unitario) || 0)}</td>
+            <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(parseFloat(c.valor_total) || 0)}</td>
             <td style="padding:5px 8px;color:#64748b;font-size:11px">${escapeHtml(c.fatura_numero || '—')}</td>
           </tr>`).join('');
       const ths = isFat
         ? '<th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Nº fatura</th><th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Fornecedor</th><th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Total</th>'
-        : '<th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Produto</th><th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Qtd</th><th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Subtotal</th><th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Fatura</th>';
+        : '<th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Produto</th><th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Qtd</th><th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Unit.</th><th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Total</th><th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Fatura</th>';
       return `
         <div class="card" style="margin-bottom:10px;padding:10px 12px">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;flex-wrap:wrap">

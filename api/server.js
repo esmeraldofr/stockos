@@ -5395,6 +5395,29 @@ async function produtoPermitePedidoVenda(client, produto_id) {
 
 const TIPOS_PAGAMENTO_PEDIDO = ['dinheiro', 'tpa', 'transferencia', 'mbway', 'outro'];
 
+/** Popularidade dos produtos: total pedido (soma de quantidades) por
+ *  produto em TODOS os turnos. Usado para ordenar os tiles em Pedidos
+ *  ao balcão pelos mais solicitados. */
+app.get('/api/pedidos/popularidade', auth, async (req, res) => {
+  try {
+    await ensureTurnoPedidos();
+    const r = await query(
+      `SELECT tpl.produto_id::text AS produto_id,
+              COALESCE(SUM(tpl.quantidade),0) AS total_qtd,
+              COUNT(*) AS n_linhas
+       FROM turno_pedido_linhas tpl
+       GROUP BY tpl.produto_id`
+    );
+    res.json(r.rows.map((row) => ({
+      produto_id: row.produto_id,
+      total_qtd: parseFloat(row.total_qtd) || 0,
+      n_linhas: parseInt(row.n_linhas, 10) || 0
+    })));
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
   try {
     await ensureTurnoPedidos();

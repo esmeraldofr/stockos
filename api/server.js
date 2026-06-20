@@ -5690,13 +5690,13 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
     let promotor = null;
     if (promotor_id) {
       const pr = await client.query(
-        `SELECT id, nome, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total
-         FROM utilizadores WHERE id=$1 AND ativo=true AND promotor=true`,
+        `SELECT id, nome, COALESCE(comissao_modo,'produto') AS comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total
+         FROM utilizadores WHERE id=$1 AND ativo=true`,
         [promotor_id]
       );
       if (!pr.rows.length) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ erro: 'Promotor inválido ou inactivo.' });
+        return res.status(400).json({ erro: 'Utilizador inválido ou inactivo.' });
       }
       promotor = pr.rows[0];
     }
@@ -6022,7 +6022,7 @@ app.get('/api/equipa', auth, requireRole('admin','gestor','operador','compras'),
 app.get('/api/promotores', auth, async (req, res) => {
   try {
     const r = await query(
-      "SELECT id, nome, username, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total FROM utilizadores WHERE ativo=true AND promotor=true ORDER BY nome"
+      "SELECT id, nome, username, COALESCE(comissao_modo,'produto') AS comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total FROM utilizadores WHERE ativo=true ORDER BY nome"
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }

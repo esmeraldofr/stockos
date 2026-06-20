@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pos-2col-cedo">
+<html lang="pt" data-stockos-ui="2026-05-19-pos-revert-stack900">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -232,18 +232,17 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 /* Pedidos ao balcão — layout tipo POS (grelha + painel lateral) */
 .pedidos-balcao-pos{
   display:grid;
-  grid-template-columns:minmax(0,1fr) minmax(280px,340px);
+  grid-template-columns:minmax(0,1fr) minmax(260px,300px);
   gap:14px;
   align-items:start;
   width:100%;
   max-width:min(1180px,100%);
 }
-/* Só empilha em ecrãs estreitos (telemóvel). Acima disso, a Conta
-   corrente fica ao lado dos produtos e ocupa a largura (sem espaço
-   morto à direita). */
-@media(max-width:520px){
+@media(max-width:900px){
   .pedidos-balcao-pos{grid-template-columns:1fr}
-  .pedidos-balcao-side{position:static}
+  /* Empilhado: o painel não estica de ponta a ponta (evita espaço morto
+     no meio da Conta corrente e o Total colado à borda). */
+  .pedidos-balcao-side{max-width:380px;position:static}
 }
 .pedidos-balcao-tiles-wrap{
   background:linear-gradient(165deg,#0a1628 0%,#1a3a5c 42%,#0f172a 100%);

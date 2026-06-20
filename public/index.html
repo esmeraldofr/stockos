@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-sticky">
+<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-drawer">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -240,9 +240,25 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 }
 @media(max-width:900px){
   .pedidos-balcao-pos{grid-template-columns:1fr}
-  /* Empilhado: o painel não estica de ponta a ponta (evita espaço morto
-     no meio da Conta corrente e o Total colado à borda). */
-  .pedidos-balcao-side{max-width:380px;position:static}
+  /* Mobile/tablet: Conta corrente fixa no fundo do ecrã (drawer).
+     Colapsada por defeito (mostra só Total + items). Expande ao tocar
+     no cabeçalho. */
+  .pedidos-balcao-side{
+    position:fixed;
+    left:8px;right:8px;bottom:8px;top:auto;
+    max-width:none;
+    overflow-y:auto;
+    z-index:60;
+    box-shadow:0 -8px 24px rgba(0,0,0,0.55);
+    max-height:14vh;
+    transition:max-height .2s ease;
+  }
+  .pedidos-balcao-side.is-open{max-height:75vh}
+  .pedidos-balcao-side .pedido-side-title{cursor:pointer;display:flex;align-items:center;justify-content:space-between}
+  .pedidos-balcao-side .pedido-side-title::after{content:'▾';font-size:14px;color:#94a3b8;transition:transform .2s}
+  .pedidos-balcao-side.is-open .pedido-side-title::after{transform:rotate(180deg)}
+  /* Reserva espaço para o cabeçalho do drawer não tapar tiles. */
+  .pedidos-balcao-tiles-wrap{padding-bottom:16vh}
 }
 .pedidos-balcao-tiles-wrap{
   background:linear-gradient(165deg,#0a1628 0%,#1a3a5c 42%,#0f172a 100%);
@@ -4282,6 +4298,12 @@ function pedidoBalcaoSetFilter(btn) {
 }
 
 /** Aplica o filtro de grupo (botões) + a pesquisa por nome em simultâneo. */
+/** Alterna o drawer da Conta corrente (só visível em mobile). */
+function pedidoBalcaoToggleDrawer() {
+  const side = document.getElementById('pedidos-balcao-side');
+  if (side) side.classList.toggle('is-open');
+}
+
 function pedidoBalcaoApplyTileFilter() {
   const activeBtn = document.querySelector('#pedidos-balcao-mount .pedidos-balcao-filters button.pedido-filter--on');
   const grupo = activeBtn ? activeBtn.getAttribute('data-grupo') : 'all';
@@ -4664,8 +4686,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         <div class="pedidos-balcao-tiles">${tilesHtml}</div>
         <div id="pedido-balcao-sem-resultados" style="display:none;color:#64748b;font-size:13px;padding:10px 2px">Nenhum produto corresponde à pesquisa.</div>
       </div>
-      <div class="pedidos-balcao-side">
-        <div class="pedido-side-title">Conta corrente</div>
+      <div class="pedidos-balcao-side" id="pedidos-balcao-side">
+        <div class="pedido-side-title" onclick="pedidoBalcaoToggleDrawer(this)"><span>Conta corrente</span></div>
         <div class="pedido-draft-table-wrap">
           <table>
             <thead>

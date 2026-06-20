@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pos-revert-stack900">
+<html lang="pt" data-stockos-ui="2026-05-19-balcao-ordena-popularidade">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2714,6 +2714,8 @@ let avulsoProdIds = []; // ids dos ingredientes com venda_avulso=true
 let vendasProdPrecos = {}; // { produto_id: preco } para todos os produtos de vendas
 /** Nome a partir do catálogo (evita «Produto uuid» quando stock e vendas diferem no id). */
 let vendasProdNomes = {};
+/** { produto_id: total pedido em todos os turnos } — ordena tiles do balcão. */
+let pedidoPopularidade = {};
 
 /** Fino Barril só na folha de stock (kg), não na aba Vendas nem nos totais de vendas. */
 function isFinoBarrilNome(nome) {
@@ -5018,12 +5020,19 @@ async function loadTurnoResumoTab(turnoId) {
 
 async function loadVendasMenu(turnoId, canEdit) {
   try {
-    const [prods, vendas, todasReceitas] = await Promise.all([
+    const [prods, vendas, todasReceitas, popularidade] = await Promise.all([
       api('GET', '/produtos?todos=0'),
       api('GET', `/turnos/${turnoId}/vendas`),
-      api('GET', '/receitas')
+      api('GET', '/receitas'),
+      api('GET', '/pedidos/popularidade').catch(() => [])
     ]);
     lastVendasApiRows = Array.isArray(vendas) ? vendas : [];
+    // Mapa produto_id → total pedido (todos os turnos), para ordenar os tiles.
+    pedidoPopularidade = {};
+    (Array.isArray(popularidade) ? popularidade : []).forEach((p) => {
+      const k = prodIdKey(p.produto_id);
+      if (k) pedidoPopularidade[k] = parseFloat(p.total_qtd) || 0;
+    });
     const menuProds   = prods.filter(p => p.categoria === 'menu');
     const bebidaProds = prods.filter(p => p.categoria === 'bebida').filter((p) => !isFinoBarrilNome(p.nome));
     const avulsoProds = prods.filter(p => p.venda_avulso && p.categoria !== 'menu' && p.categoria !== 'bebida');
@@ -5312,7 +5321,14 @@ async function loadVendasMenu(turnoId, canEdit) {
         imagem: p.imagem || null
       });
     }
-    pedidoCatalog.sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
+    // Ordena pelos mais solicitados (total pedido em todos os turnos);
+    // empate ou sem histórico → ordem alfabética.
+    const popDe = (o) => pedidoPopularidade[prodIdKey(o.id)] || 0;
+    pedidoCatalog.sort((a, b) => {
+      const d = popDe(b) - popDe(a);
+      if (d !== 0) return d;
+      return a.nome.localeCompare(b.nome, 'pt');
+    });
     await renderPedidosBalcao(turnoId, canEdit, pedidoCatalog);
   } catch(e) {
     lastVendasApiRows = [];

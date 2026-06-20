@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-historico-filtros">
+<html lang="pt" data-stockos-ui="2026-05-19-produtos-filtros">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9734,9 +9734,21 @@ function setProdutoFiltro(f) {
   renderProdutos();
 }
 
+function setProdutoCategoriaFiltro(c) {
+  S.produtosCategoriaFiltro = c;
+  renderProdutos();
+}
+
+function setProdutoSearch(q) {
+  S.produtosSearch = q || '';
+  renderProdutos();
+}
+
 function renderProdutos() {
   const isAdmin = ['admin', 'gestor', 'compras'].includes(S.user?.role);
   const filtro = S.produtosFiltro || 'todos';
+  const filtroCat = S.produtosCategoriaFiltro || 'todas';
+  const termo = (S.produtosSearch || '').trim().toLowerCase();
   const todos = S.produtos || [];
   const contagem = {
     todos: todos.length,
@@ -9745,25 +9757,57 @@ function renderProdutos() {
     consumivel: todos.filter(p => !p.vendavel && !p.is_ingrediente).length,
     sem_stock: todos.filter(p => p.em_stock_turno === false).length
   };
+  const contCat = {
+    todas: todos.length,
+    menu: todos.filter(p => p.categoria === 'menu').length,
+    ingredientes: todos.filter(p => p.categoria === 'ingredientes').length,
+    bebida: todos.filter(p => p.categoria === 'bebida').length,
+    outros: todos.filter(p => !['menu','ingredientes','bebida'].includes(p.categoria)).length
+  };
   let lista = todos;
-  if (filtro === 'vendemos') lista = todos.filter(p => p.vendavel);
-  else if (filtro === 'ingrediente') lista = todos.filter(p => p.is_ingrediente);
-  else if (filtro === 'consumivel') lista = todos.filter(p => !p.vendavel && !p.is_ingrediente);
-  else if (filtro === 'sem_stock') lista = todos.filter(p => p.em_stock_turno === false);
+  if (filtro === 'vendemos') lista = lista.filter(p => p.vendavel);
+  else if (filtro === 'ingrediente') lista = lista.filter(p => p.is_ingrediente);
+  else if (filtro === 'consumivel') lista = lista.filter(p => !p.vendavel && !p.is_ingrediente);
+  else if (filtro === 'sem_stock') lista = lista.filter(p => p.em_stock_turno === false);
+  if (filtroCat !== 'todas') {
+    if (filtroCat === 'outros') lista = lista.filter(p => !['menu','ingredientes','bebida'].includes(p.categoria));
+    else lista = lista.filter(p => p.categoria === filtroCat);
+  }
+  if (termo) lista = lista.filter(p => String(p.nome || '').toLowerCase().includes(termo));
 
   const chip = (id, label, count) => `
     <button type="button" class="prod-chip ${filtro===id?'active':''}" data-filtro="${id}"
       style="padding:6px 12px;border-radius:999px;border:1px solid ${filtro===id?'#3b82f6':'#334155'};background:${filtro===id?'#1e3a8a':'#0f172a'};color:${filtro===id?'#dbeafe':'#94a3b8'};font-size:12px;cursor:pointer;white-space:nowrap">
       ${label} <span style="opacity:.7">${count}</span>
     </button>`;
+  const chipCat = (id, label, count) => `
+    <button type="button" class="prod-chip-cat ${filtroCat===id?'active':''}" data-cat="${id}"
+      style="padding:6px 12px;border-radius:999px;border:1px solid ${filtroCat===id?'#10b981':'#334155'};background:${filtroCat===id?'#064e3b':'#0f172a'};color:${filtroCat===id?'#a7f3d0':'#94a3b8'};font-size:12px;cursor:pointer;white-space:nowrap">
+      ${label} <span style="opacity:.7">${count}</span>
+    </button>`;
+
+  const search = `
+    <div style="margin-bottom:8px">
+      <input type="search" id="prod-search" placeholder="🔍 Procurar produto…" value="${escapeHtml(termo)}"
+        autocomplete="off" oninput="setProdutoSearch(this.value)"
+        style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;color:#f1f5f9;font-size:14px;box-sizing:border-box"/>
+    </div>`;
 
   const chips = `
-    <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px;-webkit-overflow-scrolling:touch">
+    ${search}
+    <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:6px;-webkit-overflow-scrolling:touch">
       ${chip('todos','Todos', contagem.todos)}
       ${chip('vendemos','Vendemos', contagem.vendemos)}
       ${chip('ingrediente','Ingredientes', contagem.ingrediente)}
       ${chip('consumivel','Consumíveis', contagem.consumivel)}
       ${chip('sem_stock','Sem stock', contagem.sem_stock)}
+    </div>
+    <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px;-webkit-overflow-scrolling:touch">
+      ${chipCat('todas','Todas categorias', contCat.todas)}
+      ${chipCat('menu','🍽️ Menu', contCat.menu)}
+      ${chipCat('ingredientes','🧂 Ingredientes', contCat.ingredientes)}
+      ${chipCat('bebida','🥤 Bebidas', contCat.bebida)}
+      ${contCat.outros > 0 ? chipCat('outros','📦 Outros', contCat.outros) : ''}
     </div>`;
 
   const menu   = lista.filter(p => p.categoria==='menu');
@@ -9812,12 +9856,25 @@ function renderProdutos() {
       prodList(bebida,'🥤 Bebidas') +
       prodList(outro,'📦 Outros');
 
+  // Preserva foco/cursor no input de pesquisa durante o re-render.
+  const prevSearch = document.getElementById('prod-search');
+  const hadFocus = prevSearch === document.activeElement;
+  const selStart = hadFocus ? prevSearch.selectionStart : null;
   show('prod-list', chips + corpo);
+  if (hadFocus) {
+    const next = document.getElementById('prod-search');
+    if (next) {
+      next.focus();
+      try { next.setSelectionRange(selStart ?? next.value.length, selStart ?? next.value.length); } catch (_) {}
+    }
+  }
 
   const root = document.getElementById('prod-list');
   root.onclick = function(e) {
     const chipBtn = e.target.closest('[data-filtro]');
     if (chipBtn) { setProdutoFiltro(chipBtn.getAttribute('data-filtro')); return; }
+    const catBtn = e.target.closest('[data-cat]');
+    if (catBtn) { setProdutoCategoriaFiltro(catBtn.getAttribute('data-cat')); return; }
     const btn = e.target.closest('[data-edit-id]');
     if (btn) showProdutoForm(btn.getAttribute('data-edit-id'));
   };

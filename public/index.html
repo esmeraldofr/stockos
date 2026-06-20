@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-balcao-ordena-popularidade">
+<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-sticky">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -343,8 +343,10 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
   border-radius:10px;
   padding:8px 10px 10px;
   position:sticky;
-  top:6px;
+  top:8px;
   min-width:0;
+  max-height:calc(100vh - 16px);
+  overflow-y:auto;
 }
 .pedidos-balcao-side .pedido-side-title{font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
 /* Form compacto dentro do painel POS — campos em grelha de 3 colunas */

@@ -424,7 +424,7 @@ function markDbReady() {
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
  */
-const STOCKOS_BOOTSTRAP_VERSION = '2026-05-19-encontrados-fechados';
+const STOCKOS_BOOTSTRAP_VERSION = '2026-05-19-turno-vendas-unique';
 
 /** Versão das migrações realmente aplicada na BD (lida de stockos_meta.bootstrap).
  *  Cacheada para que /api/health não bata na BD a cada pedido. */
@@ -1495,6 +1495,24 @@ async function ensurePrecosVendasSnapshots() {
     await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2)`, [], 'turno_vendas-precio-snap');
     await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2)`, [], 'turno_vendas-preco-copo-snap');
     await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTEGER`, [], 'turno_vendas-qtd-copo-snap');
+    // Garante o UNIQUE (turno_id, produto_id) — caso a tabela tenha sido criada
+    // sem ele (ambientes antigos), o INSERT ... ON CONFLICT (turno_id, produto_id)
+    // falhava com "there is no unique or exclusion constraint matching the ON
+    // CONFLICT specification" ao registar pedidos.
+    try {
+      const hasUnique = await query(
+        `SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='turno_vendas'
+           AND indexdef ILIKE '%UNIQUE%' AND indexdef ILIKE '%turno_id%' AND indexdef ILIKE '%produto_id%'`
+      );
+      if (!hasUnique.rows.length) {
+        // Remove duplicados (mantém o id mais alto) antes de aplicar o UNIQUE.
+        await query(`DELETE FROM turno_vendas a USING turno_vendas b
+          WHERE a.turno_id=b.turno_id AND a.produto_id=b.produto_id AND a.id<b.id`).catch(() => {});
+        await query(`CREATE UNIQUE INDEX IF NOT EXISTS turno_vendas_turno_id_produto_id_key ON turno_vendas(turno_id, produto_id)`);
+      }
+    } catch (e) {
+      console.warn('[ensureTurnoVendasUnique]', e && e.message);
+    }
     await qry(`INSERT INTO stockos_meta(k,v) VALUES('preco_snap_ddl_v1','done') ON CONFLICT(k) DO UPDATE SET v='done'`, [], 'preco-snap-meta');
     precosVendasSnapshotsReady = true;
     // Backfill runs in background — never blocks markDbReady()

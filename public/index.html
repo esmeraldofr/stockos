@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-drawer">
+<html lang="pt" data-stockos-ui="2026-05-19-historico-faturas-compras">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -8565,11 +8565,17 @@ async function drawArmazem() {
         </div>
       </div>
       <div class="card">
-        <div class="card-title">📑 Faturas do dia</div>
+        <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <span>📑 Faturas do dia</span>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => abrirHistoricoArmazem('faturas'))">📜 Histórico</button>
+        </div>
         <div id="armazem-faturas"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
       </div>
       <div class="card">
-        <div class="card-title">🧾 Compras do dia</div>
+        <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <span>🧾 Compras do dia</span>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => abrirHistoricoArmazem('compras'))">📜 Histórico</button>
+        </div>
         <div id="armazem-compras"><div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div></div>
       </div>
       </div>
@@ -8710,6 +8716,100 @@ async function saveArmazemInventarioDiaFromRow(tr) {
     }
     err('armazem-msg', e.message);
   }
+}
+
+/** Histórico das Faturas / Compras (todos os dias, agrupado por data).
+ *  Click numa data → muda S.date e fecha o modal. */
+async function abrirHistoricoArmazem(kind) {
+  const isFat = kind === 'faturas';
+  const titulo = isFat ? '📑 Histórico de Faturas' : '🧾 Histórico de Compras';
+  let modal = document.getElementById('hist-armazem-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'hist-armazem-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:9999;display:flex;align-items:stretch;justify-content:center';
+    modal.onclick = (e) => { if (e.target === modal) fecharHistoricoArmazem(); };
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
+  modal.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;width:100%;max-width:880px;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:12px 14px;border-bottom:1px solid #334155;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap">
+        <div style="font-weight:700;color:#e2e8f0;font-size:14px">${titulo}</div>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, fecharHistoricoArmazem)">Fechar ✕</button>
+      </div>
+      <div id="hist-armazem-body" style="padding:12px 14px;overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch">
+        <div class="text-center" style="padding:32px;color:#64748b"><div class="spinner"></div></div>
+      </div>
+    </div>`;
+  const body = document.getElementById('hist-armazem-body');
+  try {
+    const rows = await api('GET', isFat ? '/armazem/faturas?limit=100' : '/armazem/compras?limit=200');
+    if (!Array.isArray(rows) || !rows.length) {
+      body.innerHTML = `<div style="color:#64748b">Sem ${isFat ? 'faturas' : 'compras'} registadas.</div>`;
+      return;
+    }
+    // Agrupa por data (data_emissao para faturas; data_emissao da fatura ou criado_em para compras).
+    const grupos = new Map();
+    for (const r of rows) {
+      const d = isFat
+        ? String(r.data_emissao || r.criado_em || '').slice(0, 10)
+        : String(r.fatura_data_emissao || r.criado_em || '').slice(0, 10);
+      if (!d) continue;
+      if (!grupos.has(d)) grupos.set(d, []);
+      grupos.get(d).push(r);
+    }
+    const datas = [...grupos.keys()].sort().reverse();
+    body.innerHTML = datas.map((d) => {
+      const arr = grupos.get(d);
+      const totalKz = arr.reduce((s, r) => s + (parseFloat(r.total) || parseFloat(r.subtotal) || 0), 0);
+      const linhas = isFat
+        ? arr.map((f) => `
+          <tr>
+            <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(f.numero_fatura || '—')}</td>
+            <td style="padding:5px 8px;color:#94a3b8">${escapeHtml(f.fornecedor_nome || f.fornecedor_livre || '—')}</td>
+            <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(parseFloat(f.total) || 0)}</td>
+          </tr>`).join('')
+        : arr.map((c) => `
+          <tr>
+            <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(c.produto_nome || '—')}</td>
+            <td style="padding:5px 8px;color:#94a3b8;text-align:right;font-variant-numeric:tabular-nums">${fmt(parseFloat(c.quantidade) || 0)}</td>
+            <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(parseFloat(c.subtotal) || 0)}</td>
+            <td style="padding:5px 8px;color:#64748b;font-size:11px">${escapeHtml(c.fatura_numero || '—')}</td>
+          </tr>`).join('');
+      const ths = isFat
+        ? '<th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Nº fatura</th><th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Fornecedor</th><th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Total</th>'
+        : '<th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Produto</th><th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Qtd</th><th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Subtotal</th><th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase">Fatura</th>';
+      return `
+        <div class="card" style="margin-bottom:10px;padding:10px 12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;flex-wrap:wrap">
+            <div>
+              <div style="font-weight:700;color:#f1f5f9;font-size:14px">${escapeHtml(dateLabelWithWeekday(d))}</div>
+              <div style="font-size:11px;color:#64748b">${arr.length} ${isFat ? (arr.length === 1 ? 'fatura' : 'faturas') : (arr.length === 1 ? 'linha' : 'linhas')} · <strong style="color:#4ade80">${fmt(totalKz)}</strong></div>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => irParaDiaArmazem('${d}'))">Abrir dia →</button>
+          </div>
+          <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>${ths}</tr></thead><tbody>${linhas}</tbody></table></div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function fecharHistoricoArmazem() {
+  const m = document.getElementById('hist-armazem-modal');
+  if (m) m.style.display = 'none';
+}
+
+async function irParaDiaArmazem(data) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return;
+  S.date = data;
+  try { persistUiState(); } catch (_) {}
+  fecharHistoricoArmazem();
+  syncDatePickersAcrossPages();
+  await refreshArmazemFundos();
+  await loadArmazemData();
 }
 
 async function loadArmazemData() {

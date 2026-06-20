@@ -3194,7 +3194,7 @@ app.get('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), a
     const filtroDia = /^\d{4}-\d{2}-\d{2}$/.test(dataDia);
     const r = filtroDia
       ? await query(
-          `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero
+          `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero, f.data_emissao as fatura_data_emissao
            FROM armazem_compras c
            JOIN produtos p ON p.id = c.produto_id
            LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
@@ -3206,7 +3206,7 @@ app.get('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), a
           [dataDia]
         )
       : await query(
-          `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero
+          `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero, f.data_emissao as fatura_data_emissao
            FROM armazem_compras c
            JOIN produtos p ON p.id = c.produto_id
            LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text

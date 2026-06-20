@@ -5461,7 +5461,7 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
               u.nome AS promotor_nome,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
-              p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct
+              p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct, p.categoria AS produto_categoria
        FROM turno_pedidos tp
        LEFT JOIN utilizadores u ON u.id = tp.promotor_id
        LEFT JOIN turno_pedido_linhas tpl ON tpl.pedido_id = tp.id
@@ -5501,7 +5501,8 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
           kg_por_copo: parseFloat(row.kg_por_copo) || 0,
           preco_copos_pacote: parseFloat(row.preco_copos_pacote) || 0,
           qtd_copos_pacote: parseInt(row.qtd_copos_pacote, 10) || 0,
-          comissao_pct: parseFloat(row.comissao_pct) || 0
+          comissao_pct: parseFloat(row.comissao_pct) || 0,
+          produto_categoria: row.produto_categoria || null
         });
       }
     }
@@ -5548,7 +5549,7 @@ app.get('/api/pedidos', auth, async (req, res) => {
               u.nome AS promotor_nome,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
-              p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct
+              p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct, p.categoria AS produto_categoria
        FROM turno_pedidos tp
        JOIN turnos t ON t.id = tp.turno_id
        LEFT JOIN utilizadores u ON u.id = tp.promotor_id
@@ -5589,7 +5590,8 @@ app.get('/api/pedidos', auth, async (req, res) => {
           kg_por_copo: parseFloat(row.kg_por_copo) || 0,
           preco_copos_pacote: parseFloat(row.preco_copos_pacote) || 0,
           qtd_copos_pacote: parseInt(row.qtd_copos_pacote, 10) || 0,
-          comissao_pct: parseFloat(row.comissao_pct) || 0
+          comissao_pct: parseFloat(row.comissao_pct) || 0,
+          produto_categoria: row.produto_categoria || null
         });
       }
     }

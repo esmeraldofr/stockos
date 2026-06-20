@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-produtos-vendidos-comissao">
+<html lang="pt" data-stockos-ui="2026-05-19-produtos-vendidos-categoria">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4865,10 +4865,12 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   })();
   const resumoProdutosHtml = (() => {
     if (!pedidos.length) return '';
-    const byProd = new Map();
+    // Mapa por categoria → Map<produto_id, agregado>.
+    const porCat = new Map();
     for (const p of pedidos) {
       for (const ln of (p.linhas || [])) {
         const key = String(ln.produto_id);
+        const cat = String(ln.produto_categoria || 'outros').toLowerCase();
         const isCopo = ln.venda_por_copo === true && (parseFloat(ln.kg_por_copo) || 0) > 0;
         const qtd = parseFloat(ln.quantidade) || 0;
         const u = parseFloat(ln.preco) || 0;
@@ -4882,6 +4884,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         } else {
           subtotal = qtd * u;
         }
+        if (!porCat.has(cat)) porCat.set(cat, new Map());
+        const byProd = porCat.get(cat);
         if (!byProd.has(key)) {
           byProd.set(key, {
             nome: ln.produto_nome || 'Sem nome',
@@ -4901,36 +4905,35 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         e.comissao += subtotal * pct / 100;
       }
     }
-    if (!byProd.size) return '';
-    const arr = [...byProd.values()].sort((a, b) => b.valor - a.valor);
-    const totalQtd = arr.reduce((s, r) => s + r.qtd, 0);
-    const totalKz = arr.reduce((s, r) => s + r.valor, 0);
-    const totalCom = arr.reduce((s, r) => s + r.comissao, 0);
+    if (!porCat.size) return '';
     const num2 = (v) => (parseFloat(v) || 0).toLocaleString('pt-AO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const trs = arr.map((r) => {
-      let unidadeStr = r.unidade;
-      if (r.isCopo && r.pacoteN >= 2 && r.pacotePreco > 0) {
-        const c = Math.floor(r.qtd);
-        const pacotes = Math.floor(c / r.pacoteN);
-        const avulsos = c % r.pacoteN;
-        if (pacotes > 0) {
-          const pT = `${pacotes} pacote${pacotes !== 1 ? 's' : ''}`;
-          const aT = avulsos > 0 ? ` + ${avulsos} copo${avulsos !== 1 ? 's' : ''}` : '';
-          unidadeStr = `copos (${pT}${aT})`;
+    const renderTabela = (byProd) => {
+      const arr = [...byProd.values()].sort((a, b) => b.valor - a.valor);
+      const totalQtd = arr.reduce((s, r) => s + r.qtd, 0);
+      const totalKz = arr.reduce((s, r) => s + r.valor, 0);
+      const totalCom = arr.reduce((s, r) => s + r.comissao, 0);
+      const trs = arr.map((r) => {
+        let unidadeStr = r.unidade;
+        if (r.isCopo && r.pacoteN >= 2 && r.pacotePreco > 0) {
+          const c = Math.floor(r.qtd);
+          const pacotes = Math.floor(c / r.pacoteN);
+          const avulsos = c % r.pacoteN;
+          if (pacotes > 0) {
+            const pT = `${pacotes} pacote${pacotes !== 1 ? 's' : ''}`;
+            const aT = avulsos > 0 ? ` + ${avulsos} copo${avulsos !== 1 ? 's' : ''}` : '';
+            unidadeStr = `copos (${pT}${aT})`;
+          }
         }
-      }
-      const pctTxt = r.pct > 0 ? ` <span style="color:#64748b;font-size:11px">(${r.pct.toFixed(1)}%)</span>` : '';
+        const pctTxt = r.pct > 0 ? ` <span style="color:#64748b;font-size:11px">(${r.pct.toFixed(1)}%)</span>` : '';
+        return `
+        <tr>
+          <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)}</td>
+          <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums">${num2(r.qtd)} <span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span></td>
+          <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.valor)}</td>
+          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(r.comissao)}${pctTxt}</td>
+        </tr>`;
+      }).join('');
       return `
-      <tr>
-        <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)}</td>
-        <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums">${num2(r.qtd)} <span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span></td>
-        <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.valor)}</td>
-        <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(r.comissao)}${pctTxt}</td>
-      </tr>`;
-    }).join('');
-    return `
-      <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
-        <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">Produtos vendidos</div>
         <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
           <table style="width:100%;border-collapse:collapse;font-size:13px">
             <thead>
@@ -4944,13 +4947,47 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             <tbody>${trs}</tbody>
             <tfoot>
               <tr style="border-top:1px solid #334155">
-                <td style="padding:6px 8px;color:#cbd5e1;font-weight:700">Total</td>
+                <td style="padding:6px 8px;color:#cbd5e1;font-weight:700">Subtotal</td>
                 <td style="padding:6px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700">${num2(totalQtd)}</td>
                 <td style="padding:6px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalKz)}</td>
                 <td style="padding:6px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalCom)}</td>
               </tr>
             </tfoot>
           </table>
+        </div>`;
+    };
+    const ordemCats = ['menu', 'ingredientes', 'bebida', 'outros'];
+    const tituloCat = (c) => ({
+      menu: '🍽️ Menu',
+      ingredientes: '🧂 Ingredientes',
+      bebida: '🥤 Bebidas',
+      outros: '📦 Outros'
+    }[c] || c);
+    let totalQtdGeral = 0, totalKzGeral = 0, totalComGeral = 0;
+    porCat.forEach((byProd) => {
+      byProd.forEach((r) => {
+        totalQtdGeral += r.qtd;
+        totalKzGeral += r.valor;
+        totalComGeral += r.comissao;
+      });
+    });
+    const blocos = ordemCats
+      .filter((c) => porCat.has(c))
+      .map((c) => `
+        <div style="margin-top:10px">
+          <div style="font-size:12px;font-weight:700;color:#cbd5e1;margin:0 0 4px">${tituloCat(c)}</div>
+          ${renderTabela(porCat.get(c))}
+        </div>`)
+      .join('');
+    return `
+      <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
+        <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 4px">Produtos vendidos</div>
+        ${blocos}
+        <div style="margin-top:10px;padding:8px 10px;background:#1e293b;border-radius:8px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:12px">
+          <span style="color:#cbd5e1;font-weight:700">Total geral</span>
+          <span style="color:#a5b4fc;font-variant-numeric:tabular-nums">${num2(totalQtdGeral)} itens</span>
+          <span style="color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalKzGeral)}</span>
+          <span style="color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">Comissão ${fmt(totalComGeral)}</span>
         </div>
       </div>`;
   })();

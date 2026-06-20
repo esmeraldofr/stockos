@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-produtos-vendidos-categoria">
+<html lang="pt" data-stockos-ui="2026-05-19-conta-corrente-comissao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4503,8 +4503,17 @@ function pedidoBalcaoCalcComissao() {
 function pedidoBalcaoRefreshComissao() {
   const el = document.getElementById('pedido-comissao-valor');
   const nota = document.getElementById('pedido-comissao-nota');
-  if (!el) return;
   const c = pedidoBalcaoCalcComissao();
+  // Sincroniza a linha "🪙 Comissão" da Conta corrente (sempre visível).
+  const draftEl = document.getElementById('pedido-draft-comissao');
+  if (draftEl) {
+    const v = c.promotor ? c.valor : c.potencial;
+    draftEl.textContent = fmt(v);
+    draftEl.title = c.promotor
+      ? `Atribuída a ${c.promotor.nome} (${c.modo === 'total' ? 'modo total' : 'por produto'})`
+      : 'Potencial — sem promotor escolhido';
+  }
+  if (!el) return;
   if (c.promotor) {
     el.textContent = fmt(c.valor);
     if (nota) nota.textContent = `Atribuída a ${c.promotor.nome} (${c.modo === 'total' ? (parseFloat(c.promotor.comissao_pct_total) || 0).toFixed(1) + '% do total' : '% por produto'}).`;
@@ -4703,6 +4712,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           </table>
         </div>
         <div class="pedido-total-bar"><span>Total</span><span id="pedido-draft-total">0 Kz</span></div>
+        <div class="pedido-comissao-bar" style="display:flex;justify-content:space-between;align-items:center;padding:5px 10px;margin:-4px 0 8px;background:#0b1322;border:1px dashed #334155;border-radius:6px;font-size:11px;color:#94a3b8">
+          <span>🪙 Comissão</span>
+          <span id="pedido-draft-comissao" style="color:#fbbf24;font-weight:600;font-variant-numeric:tabular-nums">0 Kz</span>
+        </div>
         <div class="pedido-form-grid">
           <div class="field">
             <label>Mesa / cliente <span style="color:#64748b">(opc.)</span></label>

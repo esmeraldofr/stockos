@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-saidas-caixa-aba-caixa">
+<html lang="pt" data-stockos-ui="2026-05-19-caixa-reordena">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3404,6 +3404,13 @@ async function loadTurno() {
             <span class="caixa-total-value" id="c-total-final">${fmtKzOrEmpty(tf)}</span>
           </div>
         </div>
+        <div class="card mt-16">
+          <div class="card-title">📝 Observações</div>
+          <textarea id="turno-notas" rows="3" placeholder="Escreve aqui as observações do turno..."
+            style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
+            ${canEdit ? '' : 'disabled'}
+            onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
+        </div>
         <div class="card mt-16" id="saidas-caixa-card">
           <div class="card-title">💸 Caixa — dinheiro que saiu</div>
           <p style="font-size:12px;color:#64748b;margin:-2px 0 12px;line-height:1.45">Despesas e compras de stock pagas pela caixa do turno. Aparecem também associadas às entradas por compra.</p>
@@ -3412,13 +3419,6 @@ async function loadTurno() {
         <div class="card mt-16" id="pedidos-resumo-card">
           <div class="card-title">📊 Resumo dos pedidos</div>
           <div id="pedidos-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
-        </div>
-        <div class="card mt-16">
-          <div class="card-title">📝 Observações</div>
-          <textarea id="turno-notas" rows="3" placeholder="Escreve aqui as observações do turno..."
-            style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
-            ${canEdit ? '' : 'disabled'}
-            onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
         </div>
       </div>
 
@@ -4834,70 +4834,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           })
           .join('')
       : '<span style="color:#64748b">Nenhum pedido registado neste turno.</span>';
-  const resumoHtml = (() => {
-    if (!pedidos.length) return '';
-    const sumBy = (pred) => pedidos.reduce((s, p) => s + (pred(p) ? (parseFloat(p.total_kz) || 0) : 0), 0);
-    const total = pedidos.reduce((s, p) => s + (parseFloat(p.total_kz) || 0), 0);
-    const porPg = {
-      dinheiro: { n: 0, kz: 0 },
-      tpa: { n: 0, kz: 0 },
-      transferencia: { n: 0, kz: 0 }
-    };
-    let entregaN = 0;
-    let entregaKz = 0;
-    let entregaFees = 0;
-    let comissaoAtrib = 0;
-    let comissaoPot = 0;
-    for (const p of pedidos) {
-      const tp = String(p.tipo_pagamento || 'dinheiro').toLowerCase();
-      const slot = porPg[tp] || porPg.dinheiro;
-      slot.n += 1;
-      slot.kz += parseFloat(p.total_kz) || 0;
-      if (p.com_entrega) { entregaN += 1; entregaKz += parseFloat(p.total_kz) || 0; entregaFees += parseFloat(p.valor_entrega) || 0; }
-      const cV = parseFloat(p.comissao_valor) || 0;
-      const cP = parseFloat(p.comissao_valor_potencial) || 0;
-      if (p.promotor_id) comissaoAtrib += cV;
-      else comissaoPot += cP;
-    }
-    const pgBlocks = [
-      { k: 'dinheiro', label: 'Dinheiro', cor: '#86efac' },
-      { k: 'tpa', label: 'TPA', cor: '#c4b5fd' },
-      { k: 'transferencia', label: 'Transf.', cor: '#60a5fa' }
-    ].map((b) => {
-      const n = porPg[b.k].n;
-      const kz = porPg[b.k].kz;
-      const dim = n === 0;
-      return `
-      <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px 10px;text-align:center;${dim ? 'opacity:0.55' : ''}">
-        <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">${b.label}</div>
-        <div style="font-weight:700;color:${dim ? '#475569' : b.cor};font-variant-numeric:tabular-nums;font-size:14px;margin-top:2px">${fmt(kz)}</div>
-        <div style="font-size:11px;color:#64748b;margin-top:2px">${n} ${n === 1 ? 'pedido' : 'pedidos'}</div>
-      </div>`;
-    }).join('');
-    const comLine = (comissaoAtrib > 0 || comissaoPot > 0)
-      ? `<div style="margin-top:8px;font-size:12px;color:#94a3b8">Comissão: <strong style="color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(comissaoAtrib)}</strong> atribuída${comissaoPot > 0 ? ` · <span style="color:#a16207">${fmt(comissaoPot)} potencial</span>` : ''}</div>`
-      : '';
-    const entregaLine = entregaN > 0
-      ? `<div style="margin-top:4px;font-size:12px;color:#94a3b8">🛵 Entrega: <strong style="color:#cbd5e1">${entregaN}</strong> de ${pedidos.length} pedido(s) — <strong style="color:#60a5fa;font-variant-numeric:tabular-nums">${fmt(entregaKz)}</strong>${entregaFees > 0 ? ` · taxas de entrega <strong style="color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(entregaFees)}</strong>` : ''}</div>`
-      : '';
-    return `
-      <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:8px">
-        <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">Resumo do turno</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px">
-          <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px;text-align:center">
-            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">Pedidos</div>
-            <div style="font-weight:700;color:#e2e8f0;font-variant-numeric:tabular-nums;font-size:20px;margin-top:2px">${pedidos.length}</div>
-          </div>
-          <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px;text-align:center">
-            <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">Total</div>
-            <div style="font-weight:700;color:#4ade80;font-variant-numeric:tabular-nums;font-size:18px;margin-top:2px">${fmt(total)}</div>
-          </div>
-          ${pgBlocks}
-        </div>
-        ${entregaLine}
-        ${comLine}
-      </div>`;
-  })();
+  // "Resumo do turno" removido — os totais de caixa já estão no card 💰 Caixa.
   const resumoProdutosHtml = (() => {
     if (!pedidos.length) return '';
     // Mapa por categoria → Map<produto_id, agregado>.
@@ -5118,14 +5055,13 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   })();
   // Aba "Pedidos ao balcão": só o formulário POS (grelha + Conta corrente + teclado).
   mount.innerHTML = formHtml;
-  // Aba "Caixa": Resumo do turno + Produtos vendidos + Pedidos do turno.
+  // Aba "Caixa": Produtos vendidos + Comissões + Pedidos do turno.
   const resumoMount = document.getElementById('pedidos-resumo-mount');
   if (resumoMount) {
-    const semDados = !resumoHtml && !resumoProdutosHtml && !resumoComissoesHtml && !pedidos.length;
+    const semDados = !resumoProdutosHtml && !resumoComissoesHtml && !pedidos.length;
     resumoMount.innerHTML = semDados
       ? '<span style="color:#64748b">Ainda não há pedidos neste turno.</span>'
-      : resumoHtml +
-        resumoProdutosHtml +
+      : resumoProdutosHtml +
         resumoComissoesHtml +
         `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
   }

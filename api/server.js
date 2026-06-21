@@ -2463,12 +2463,13 @@ app.post('/api/auth/alterar-password', auth, async (req, res) => {
  *  existência via information_schema (leitura, não precisa de owner) e, só se
  *  faltar, tentamos criar — falhando em silêncio se não houver permissão.
  *  Quando indisponível, o resto do código trata forca_pacote como false. */
-let _forcaPacoteAvail = null; // null=desconhecido, true/false=conhecido
+let _forcaPacoteAvail = null; // null/false=re-verifica; true=fica fixo
 async function forcaPacoteAvailable() {
-  if (_forcaPacoteAvail !== null) return _forcaPacoteAvail;
-  // APENAS deteção (leitura em information_schema). NÃO tentamos ALTER aqui:
-  // a app pode não ter permissão ("must be owner") e um ALTER falhado em
-  // tempo de pedido pode poluir a ligação e partir queries seguintes.
+  // Só cacheamos o resultado positivo: uma vez que a coluna existe, não
+  // desaparece. Se ainda for false/desconhecido, RE-VERIFICAMOS sempre —
+  // assim, quando a coluna for criada (por um owner), é apanhada sem ser
+  // preciso reiniciar o servidor (evita instância quente colada em false).
+  if (_forcaPacoteAvail === true) return true;
   try {
     const r = await query(
       `SELECT 1 FROM information_schema.columns

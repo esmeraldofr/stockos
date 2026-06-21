@@ -424,7 +424,7 @@ function markDbReady() {
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
  */
-const STOCKOS_BOOTSTRAP_VERSION = '2026-05-19-turno-vendas-unique';
+const STOCKOS_BOOTSTRAP_VERSION = '2026-05-19-forca-pacote';
 
 /** Versão das migrações realmente aplicada na BD (lida de stockos_meta.bootstrap).
  *  Cacheada para que /api/health não bata na BD a cada pedido. */
@@ -509,6 +509,11 @@ async function initDB() {
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote SMALLINT NOT NULL DEFAULT 0`,
     [],
     'produtos-qtd-copos-pacote'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS forca_pacote BOOLEAN NOT NULL DEFAULT FALSE`,
+    [],
+    'produtos-forca-pacote'
   );
   await qry(
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem TEXT`,
@@ -2444,6 +2449,7 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
       kg_por_copo,
       preco_copos_pacote,
       qtd_copos_pacote,
+      forca_pacote,
       comissao_pct,
       imagem
     } = req.body;
@@ -2460,9 +2466,10 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
     const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
     const cpct = Math.max(0, Math.min(100, parseFloat(comissao_pct) || 0));
     const img = typeof imagem === 'string' && imagem.trim() ? imagem.trim() : null;
+    const fp = !!forca_pacote && qcp >= 2;
     const r = await query(
-      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel,comissao_pct,imagem)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,forca_pacote,vendavel,comissao_pct,imagem)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
       [
         nome,
         preco || 0,
@@ -2475,6 +2482,7 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
         kgc,
         pcp,
         qcp,
+        fp,
         vendavelFinal,
         cpct,
         img
@@ -2508,6 +2516,7 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
       kg_por_copo,
       preco_copos_pacote,
       qtd_copos_pacote,
+      forca_pacote,
       comissao_pct,
       imagem
     } = req.body;
@@ -2522,6 +2531,7 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
     const kgc = parseFloat(kg_por_copo) || 0;
     const pcp = parseFloat(preco_copos_pacote) || 0;
     const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
+    const fp = !!forca_pacote && qcp >= 2;
     const cpct = comissao_pct === undefined || comissao_pct === null
       ? undefined
       : Math.max(0, Math.min(100, parseFloat(comissao_pct) || 0));
@@ -2536,8 +2546,9 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
             `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
              venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11,vendavel=$12,
              comissao_pct=COALESCE($13, comissao_pct),
-             imagem = CASE WHEN $14::boolean THEN $15::text ELSE imagem END
-             WHERE id=$16 RETURNING *`,
+             forca_pacote=$14,
+             imagem = CASE WHEN $15::boolean THEN $16::text ELSE imagem END
+             WHERE id=$17 RETURNING *`,
             [
               nome,
               preco,
@@ -2552,6 +2563,7 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               qcp,
               vendavelFinal,
               cpct === undefined ? null : cpct,
+              fp,
               imgArg !== undefined,
               imgArg === undefined ? null : imgArg,
               req.params.id
@@ -2561,8 +2573,9 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
             `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
              venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12,vendavel=$13,
              comissao_pct=COALESCE($14, comissao_pct),
-             imagem = CASE WHEN $15::boolean THEN $16::text ELSE imagem END
-             WHERE id=$17 RETURNING *`,
+             forca_pacote=$15,
+             imagem = CASE WHEN $16::boolean THEN $17::text ELSE imagem END
+             WHERE id=$18 RETURNING *`,
             [
               nome,
               preco,
@@ -2578,6 +2591,7 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               qcp,
               vendavelFinal,
               cpct === undefined ? null : cpct,
+              fp,
               imgArg !== undefined,
               imgArg === undefined ? null : imgArg,
               req.params.id
@@ -5723,11 +5737,22 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
     let comissaoPotencial = 0;
     for (const line of normalized) {
       const pr = await client.query(
-        `SELECT preco, venda_por_copo, kg_por_copo, qtd_copos_pacote, preco_copos_pacote, COALESCE(comissao_pct,0) AS comissao_pct
+        `SELECT nome, preco, venda_por_copo, kg_por_copo, qtd_copos_pacote, preco_copos_pacote, COALESCE(forca_pacote,false) AS forca_pacote, COALESCE(comissao_pct,0) AS comissao_pct
          FROM produtos WHERE id=$1`,
         [line.produto_id]
       );
       const p = pr.rows[0];
+      // Produtos com "Só em lote" exigem quantidade múltipla de qtd_copos_pacote.
+      if (p && p.forca_pacote && parseInt(p.qtd_copos_pacote, 10) >= 2) {
+        const lote = parseInt(p.qtd_copos_pacote, 10);
+        const q = Math.floor(parseFloat(line.quantidade) || 0);
+        if (q <= 0 || q % lote !== 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            erro: `«${p.nome}» só pode ser vendido em lotes de ${lote} copos (recebido: ${q}).`
+          });
+        }
+      }
       const sub = calcLinhaSubtotal(p.preco, line.quantidade, p.venda_por_copo, p.kg_por_copo, p.qtd_copos_pacote, p.preco_copos_pacote);
       totalPedido += sub;
       comissaoPotencial += sub * (parseFloat(p.comissao_pct) || 0) / 100;

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pagar-comissao-protecao">
+<html lang="pt" data-stockos-ui="2026-05-19-pagar-comissao-fix-onclick">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5037,7 +5037,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         acaoHtml = `<span title="Comissão já paga (${fmt(pago)})" style="margin-left:6px;font-size:10px;color:#86efac;font-weight:700">✓ Pago</span>`;
       } else if (canEdit && porPagar > 0.009) {
         const parcial = pago > 0 ? ` <span style="font-size:9px;color:#64748b">(pago ${fmt(pago)})</span>` : '';
-        acaoHtml = `<button type="button" class="btn btn-ghost btn-sm" title="Registar saída de caixa para pagar ${pago > 0 ? 'o que falta' : 'esta comissão'} (${fmt(porPagar)})" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="runAction(event, () => pagarComissaoPromotor('${turnoId}', ${JSON.stringify(r.nome)}, ${porPagar}))">💸 Pagar</button>${parcial}`;
+        acaoHtml = `<button type="button" class="btn btn-ghost btn-sm pagar-comissao-btn" title="Registar saída de caixa para pagar ${pago > 0 ? 'o que falta' : 'esta comissão'} (${fmt(porPagar)})" style="padding:2px 8px;font-size:11px;margin-left:6px" data-pc-turno="${escapeHtml(String(turnoId))}" data-pc-nome="${escapeHtml(String(r.nome))}" data-pc-valor="${porPagar}" onclick="runAction(event, () => pagarComissaoFromBtn(this))">💸 Pagar</button>${parcial}`;
       }
       return `
         <tr>
@@ -7568,6 +7568,16 @@ async function decidirJustifPresenca(id, aceite) {
     await api('POST', '/presencas/justificacao/decisao', { id, aceite, observacao });
     await loadEscalaTurno();
   } catch (e) { alert(e.message); }
+}
+
+/** Lê os data-attributes do botão e delega no pagamento (evita problemas
+ *  de aspas ao injectar o nome no onclick). */
+function pagarComissaoFromBtn(btn) {
+  if (!btn || !btn.getAttribute) return;
+  const turnoId = btn.getAttribute('data-pc-turno');
+  const nome = btn.getAttribute('data-pc-nome');
+  const valor = parseFloat(btn.getAttribute('data-pc-valor'));
+  return pagarComissaoPromotor(turnoId, nome, valor);
 }
 
 /** Cria uma saída de caixa pré-preenchida para pagar a comissão de um

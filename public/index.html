@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-pagar-comissao">
+<html lang="pt" data-stockos-ui="2026-05-19-pagar-comissao-protecao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4670,6 +4670,12 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   }
   pedidoBalcaoInitDraftForTurno(turnoId);
   let pedidos = [];
+  // Saídas de caixa do turno — usadas para saber quanto de comissão já foi
+  // pago a cada promotor (descrição "Comissão — <nome>"), evitando pagar 2x.
+  let saidasTurno = [];
+  try {
+    saidasTurno = await api('GET', `/turnos/${encodeURIComponent(turnoId)}/saidas`).catch(() => []);
+  } catch (_) { saidasTurno = []; }
   try {
     pedidos = await api('GET', `/turnos/${encodeURIComponent(turnoId)}/pedidos`);
   } catch (e) {
@@ -4963,6 +4969,19 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         </div>
       </div>`;
   })();
+  // Comissão já paga por promotor (saídas de caixa "Comissão — <nome>").
+  const comissaoPagaPorNome = (() => {
+    const m = Object.create(null);
+    for (const s of (saidasTurno || [])) {
+      const d = String(s.descricao || '');
+      const mt = d.match(/^Comiss[aã]o\s*[—-]\s*(.+)$/i);
+      if (mt) {
+        const nome = mt[1].trim();
+        m[nome] = (m[nome] || 0) + (parseFloat(s.valor) || 0);
+      }
+    }
+    return m;
+  })();
   // Relatório de comissões por promotor — agregado dos pedidos do turno.
   const resumoComissoesHtml = (() => {
     if (!pedidos.length) return '';
@@ -5010,15 +5029,22 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const modoTxt = r.modo === 'total' && r.pct != null
         ? `${r.pct.toFixed(1)}% do total`
         : '% por produto';
-      const pagarBtn = canEdit && r.comissao > 0
-        ? `<button type="button" class="btn btn-ghost btn-sm" title="Registar saída de caixa para pagar esta comissão" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="runAction(event, () => pagarComissaoPromotor('${turnoId}', ${JSON.stringify(r.nome)}, ${r.comissao}))">💸 Pagar</button>`
-        : '';
+      const pago = comissaoPagaPorNome[r.nome] || 0;
+      const porPagar = Math.max(0, Math.round((r.comissao - pago) * 100) / 100);
+      let acaoHtml = '';
+      if (pago > 0 && porPagar <= 0.009) {
+        // Tudo pago.
+        acaoHtml = `<span title="Comissão já paga (${fmt(pago)})" style="margin-left:6px;font-size:10px;color:#86efac;font-weight:700">✓ Pago</span>`;
+      } else if (canEdit && porPagar > 0.009) {
+        const parcial = pago > 0 ? ` <span style="font-size:9px;color:#64748b">(pago ${fmt(pago)})</span>` : '';
+        acaoHtml = `<button type="button" class="btn btn-ghost btn-sm" title="Registar saída de caixa para pagar ${pago > 0 ? 'o que falta' : 'esta comissão'} (${fmt(porPagar)})" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="runAction(event, () => pagarComissaoPromotor('${turnoId}', ${JSON.stringify(r.nome)}, ${porPagar}))">💸 Pagar</button>${parcial}`;
+      }
       return `
         <tr>
           <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)} <span style="color:#64748b;font-size:11px">(${escapeHtml(modoTxt)})</span></td>
           <td style="padding:5px 8px;text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums">${r.n}</td>
           <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.vendido)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap">${fmt(r.comissao)}${pagarBtn}</td>
+          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap">${fmt(r.comissao)}${acaoHtml}</td>
         </tr>`;
     }).join('');
     const semPromHtml = semPromN > 0

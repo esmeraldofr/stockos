@@ -1632,11 +1632,20 @@ async function applyTurnoVendaQuantity(client, turnoId, produto_id, newQty) {
   const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
   const delta = nq - oldQty;
 
-  await client.query(
-    `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
-     ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
-    [turnoId, produto_id, nq]
-  );
+  // Upsert SEM ON CONFLICT (não depende do índice único existir na BD —
+  // algumas BDs/ambientes têm turno_vendas sem a constraint, e a app pode
+  // não ter permissão para a criar).
+  if (old.rows.length) {
+    await client.query(
+      `UPDATE turno_vendas SET quantidade=$3 WHERE turno_id=$1 AND produto_id=$2`,
+      [turnoId, produto_id, nq]
+    );
+  } else {
+    await client.query(
+      `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)`,
+      [turnoId, produto_id, nq]
+    );
+  }
 
   if (delta === 0) return;
 
@@ -6034,11 +6043,18 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
     const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
     const delta = qtyCopos - oldQty;
 
-    await client.query(
-      `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
-       ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
-      [turnoId, produto_id, qtyCopos]
-    );
+    // Upsert sem ON CONFLICT (ver applyTurnoVendaQuantity).
+    if (old.rows.length) {
+      await client.query(
+        `UPDATE turno_vendas SET quantidade=$3 WHERE turno_id=$1 AND produto_id=$2`,
+        [turnoId, produto_id, qtyCopos]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)`,
+        [turnoId, produto_id, qtyCopos]
+      );
+    }
 
     if (delta !== 0) {
       if (vendeCopo) {

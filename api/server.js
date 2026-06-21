@@ -511,7 +511,7 @@ async function initDB() {
     'produtos-qtd-copos-pacote'
   );
   await qry(
-    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS forca_pacote BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS forca_pacote BOOLEAN`,
     [],
     'produtos-forca-pacote'
   );
@@ -2430,28 +2430,41 @@ app.post('/api/auth/alterar-password', auth, async (req, res) => {
 });
 
 // ── PRODUTOS ──────────────────────────────────────────────────
-/** Garante (uma vez por instância) que a coluna produtos.forca_pacote existe.
- *  Necessário porque o fast-path do bootstrap pode pular as DDLs em BDs já
- *  marcadas, e ambientes diferentes (develop/qualidade/prod) podem usar BDs
- *  distintas onde a migração ainda não correu. */
-let _forcaPacoteColReady = false;
-async function ensureForcaPacoteColumn() {
-  if (_forcaPacoteColReady) return;
-  // Coluna NULLABLE (sem NOT NULL/DEFAULT) → ALTER metadata-only e instantâneo,
-  // muito menos sujeito a timeout/lock do que a versão NOT NULL DEFAULT.
-  // NULL é tratado como false em todo o código (!!forca_pacote / COALESCE).
-  // NÃO apanhamos o erro: se falhar, queremos vê-lo na resposta em vez de
-  // a coluna ficar em falta silenciosamente.
-  await query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS forca_pacote BOOLEAN`);
-  _forcaPacoteColReady = true;
+/** Indica se a coluna produtos.forca_pacote está disponível.
+ *  A BD da app pode usar um role SEM permissão de owner (erro "must be owner
+ *  of table produtos"), por isso NÃO podemos depender de ALTER. Detectamos a
+ *  existência via information_schema (leitura, não precisa de owner) e, só se
+ *  faltar, tentamos criar — falhando em silêncio se não houver permissão.
+ *  Quando indisponível, o resto do código trata forca_pacote como false. */
+let _forcaPacoteAvail = null; // null=desconhecido, true/false=conhecido
+async function forcaPacoteAvailable() {
+  if (_forcaPacoteAvail !== null) return _forcaPacoteAvail;
+  try {
+    const r = await query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='produtos' AND column_name='forca_pacote' LIMIT 1`
+    );
+    if (r.rows.length) { _forcaPacoteAvail = true; return true; }
+  } catch (_) { /* segue para tentar criar */ }
+  try {
+    await query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS forca_pacote BOOLEAN`);
+    _forcaPacoteAvail = true;
+  } catch (e) {
+    console.warn('[forcaPacoteAvailable] coluna em falta e sem permissão para criar:', e && e.message);
+    _forcaPacoteAvail = false;
+  }
+  return _forcaPacoteAvail;
 }
 
 app.get('/api/produtos', auth, async (req, res) => {
   try {
-    await ensureForcaPacoteColumn();
+    const hasFP = await forcaPacoteAvailable();
     const todos = req.query.todos === '1';
+    // Quando a coluna não existe, devolve forca_pacote=false para o frontend
+    // não depender dela. Quando existe, p.* já a inclui.
+    const fpSel = hasFP ? '' : ', false AS forca_pacote';
     const r = await query(
-      `SELECT p.*, EXISTS(SELECT 1 FROM receitas r WHERE r.componente_id = p.id) AS is_ingrediente
+      `SELECT p.*${fpSel}, EXISTS(SELECT 1 FROM receitas r WHERE r.componente_id = p.id) AS is_ingrediente
        FROM produtos p ${todos ? '' : 'WHERE p.ativo=true'} ORDER BY p.ordem, p.nome`
     );
     res.json(r.rows);
@@ -2460,7 +2473,6 @@ app.get('/api/produtos', auth, async (req, res) => {
 
 app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    await ensureForcaPacoteColumn();
     const { nome, preco, categoria, venda_avulso, tipo_medicao, em_stock_turno, vendavel } = req.body;
     const {
       venda_por_copo,
@@ -2486,8 +2498,8 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
     const img = typeof imagem === 'string' && imagem.trim() ? imagem.trim() : null;
     const fp = !!forca_pacote && qcp >= 2;
     const r = await query(
-      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,forca_pacote,vendavel,comissao_pct,imagem)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel,comissao_pct,imagem)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
       [
         nome,
         preco || 0,
@@ -2500,13 +2512,22 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
         kgc,
         pcp,
         qcp,
-        fp,
         vendavelFinal,
         cpct,
         img
       ]
     );
     const row = r.rows[0];
+    // forca_pacote em escrita separada e opcional (coluna pode não existir
+    // se a BD não permitir ALTER — feature degrada sem partir o save).
+    if (await forcaPacoteAvailable()) {
+      try {
+        await query(`UPDATE produtos SET forca_pacote=$1 WHERE id=$2`, [fp, row.id]);
+        row.forca_pacote = fp;
+      } catch (e) { console.warn('[produtos POST forca_pacote]', e && e.message); }
+    } else {
+      row.forca_pacote = false;
+    }
     if (_sqlUsePrecoHistorico) {
       try {
         await query(
@@ -2565,9 +2586,8 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
             `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,
              venda_por_copo=$8,kg_por_copo=$9,preco_copos_pacote=$10,qtd_copos_pacote=$11,vendavel=$12,
              comissao_pct=COALESCE($13, comissao_pct),
-             forca_pacote=$14,
-             imagem = CASE WHEN $15::boolean THEN $16::text ELSE imagem END
-             WHERE id=$17 RETURNING *`,
+             imagem = CASE WHEN $14::boolean THEN $15::text ELSE imagem END
+             WHERE id=$16 RETURNING *`,
             [
               nome,
               preco,
@@ -2582,7 +2602,6 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               qcp,
               vendavelFinal,
               cpct === undefined ? null : cpct,
-              fp,
               imgArg !== undefined,
               imgArg === undefined ? null : imgArg,
               req.params.id
@@ -2592,9 +2611,8 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
             `UPDATE produtos SET nome=$1,preco=$2,categoria=$3,ordem=$4,ativo=$5,venda_avulso=$6,tipo_medicao=$7,em_stock_turno=$8,
              venda_por_copo=$9,kg_por_copo=$10,preco_copos_pacote=$11,qtd_copos_pacote=$12,vendavel=$13,
              comissao_pct=COALESCE($14, comissao_pct),
-             forca_pacote=$15,
-             imagem = CASE WHEN $16::boolean THEN $17::text ELSE imagem END
-             WHERE id=$18 RETURNING *`,
+             imagem = CASE WHEN $15::boolean THEN $16::text ELSE imagem END
+             WHERE id=$17 RETURNING *`,
             [
               nome,
               preco,
@@ -2610,13 +2628,22 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               qcp,
               vendavelFinal,
               cpct === undefined ? null : cpct,
-              fp,
               imgArg !== undefined,
               imgArg === undefined ? null : imgArg,
               req.params.id
             ]
           );
-    res.json(r.rows[0]);
+    const out = r.rows[0];
+    // forca_pacote em escrita separada e opcional.
+    if (out && await forcaPacoteAvailable()) {
+      try {
+        await query(`UPDATE produtos SET forca_pacote=$1 WHERE id=$2`, [fp, req.params.id]);
+        out.forca_pacote = fp;
+      } catch (e) { console.warn('[produtos PUT forca_pacote]', e && e.message); }
+    } else if (out) {
+      out.forca_pacote = false;
+    }
+    res.json(out);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -5752,11 +5779,12 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
       promotor = pr.rows[0];
     }
 
+    const fpOn = await forcaPacoteAvailable();
     let totalPedido = 0;
     let comissaoPotencial = 0;
     for (const line of normalized) {
       const pr = await client.query(
-        `SELECT nome, preco, venda_por_copo, kg_por_copo, qtd_copos_pacote, preco_copos_pacote, COALESCE(forca_pacote,false) AS forca_pacote, COALESCE(comissao_pct,0) AS comissao_pct
+        `SELECT nome, preco, venda_por_copo, kg_por_copo, qtd_copos_pacote, preco_copos_pacote, ${fpOn ? 'COALESCE(forca_pacote,false)' : 'false'} AS forca_pacote, COALESCE(comissao_pct,0) AS comissao_pct
          FROM produtos WHERE id=$1`,
         [line.produto_id]
       );

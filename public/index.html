@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-caixa-reordena2">
+<html lang="pt" data-stockos-ui="2026-05-19-pagar-comissao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5010,12 +5010,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const modoTxt = r.modo === 'total' && r.pct != null
         ? `${r.pct.toFixed(1)}% do total`
         : '% por produto';
+      const pagarBtn = canEdit && r.comissao > 0
+        ? `<button type="button" class="btn btn-ghost btn-sm" title="Registar saída de caixa para pagar esta comissão" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="runAction(event, () => pagarComissaoPromotor('${turnoId}', ${JSON.stringify(r.nome)}, ${r.comissao}))">💸 Pagar</button>`
+        : '';
       return `
         <tr>
           <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)} <span style="color:#64748b;font-size:11px">(${escapeHtml(modoTxt)})</span></td>
           <td style="padding:5px 8px;text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums">${r.n}</td>
           <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.vendido)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(r.comissao)}</td>
+          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap">${fmt(r.comissao)}${pagarBtn}</td>
         </tr>`;
     }).join('');
     const semPromHtml = semPromN > 0
@@ -7539,6 +7542,32 @@ async function decidirJustifPresenca(id, aceite) {
     await api('POST', '/presencas/justificacao/decisao', { id, aceite, observacao });
     await loadEscalaTurno();
   } catch (e) { alert(e.message); }
+}
+
+/** Cria uma saída de caixa pré-preenchida para pagar a comissão de um
+ *  promotor (descrição padronizada com o nome). Recarrega as secções de
+ *  saídas e do resumo dos pedidos. */
+async function pagarComissaoPromotor(turnoId, nome, valor) {
+  const v = parseFloat(valor);
+  if (!turnoId || !Number.isFinite(v) || v <= 0) return;
+  const txt = `Registar saída de caixa para pagar comissão a ${nome}?\n\nValor: ${fmt(v)}`;
+  if (!confirm(txt)) return;
+  try {
+    turnoMsgPending('A registar saída…');
+    await api('POST', `/turnos/${turnoId}/saidas`, {
+      descricao: `Comissão — ${nome}`,
+      valor: v,
+      notas: 'Pagamento de comissão (gerado a partir do relatório do turno).'
+    });
+    turnoMsgOk('Saída registada');
+    // Recarrega o resumo dos pedidos (para o relatório de comissões reflectir)
+    // e a secção de saídas/entradas.
+    try { await loadVendasMenu(turnoId, !!S.turnoCanEdit); } catch (_) {}
+    try { await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], !!S.turnoCanEdit); } catch (_) {}
+    setTimeout(() => turnoMsgIdle(), 1500);
+  } catch (e) {
+    turnoMsgErr(e.message);
+  }
 }
 
 async function submitSaida(turnoId) {

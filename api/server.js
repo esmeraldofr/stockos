@@ -2437,12 +2437,13 @@ app.post('/api/auth/alterar-password', auth, async (req, res) => {
 let _forcaPacoteColReady = false;
 async function ensureForcaPacoteColumn() {
   if (_forcaPacoteColReady) return;
-  try {
-    await query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS forca_pacote BOOLEAN NOT NULL DEFAULT FALSE`);
-    _forcaPacoteColReady = true;
-  } catch (e) {
-    console.warn('[ensureForcaPacoteColumn]', e && e.message);
-  }
+  // Coluna NULLABLE (sem NOT NULL/DEFAULT) → ALTER metadata-only e instantâneo,
+  // muito menos sujeito a timeout/lock do que a versão NOT NULL DEFAULT.
+  // NULL é tratado como false em todo o código (!!forca_pacote / COALESCE).
+  // NÃO apanhamos o erro: se falhar, queremos vê-lo na resposta em vez de
+  // a coluna ficar em falta silenciosamente.
+  await query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS forca_pacote BOOLEAN`);
+  _forcaPacoteColReady = true;
 }
 
 app.get('/api/produtos', auth, async (req, res) => {

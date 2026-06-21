@@ -2439,18 +2439,17 @@ app.post('/api/auth/alterar-password', auth, async (req, res) => {
 let _forcaPacoteAvail = null; // null=desconhecido, true/false=conhecido
 async function forcaPacoteAvailable() {
   if (_forcaPacoteAvail !== null) return _forcaPacoteAvail;
+  // APENAS deteção (leitura em information_schema). NÃO tentamos ALTER aqui:
+  // a app pode não ter permissão ("must be owner") e um ALTER falhado em
+  // tempo de pedido pode poluir a ligação e partir queries seguintes.
   try {
     const r = await query(
       `SELECT 1 FROM information_schema.columns
        WHERE table_schema='public' AND table_name='produtos' AND column_name='forca_pacote' LIMIT 1`
     );
-    if (r.rows.length) { _forcaPacoteAvail = true; return true; }
-  } catch (_) { /* segue para tentar criar */ }
-  try {
-    await query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS forca_pacote BOOLEAN`);
-    _forcaPacoteAvail = true;
+    _forcaPacoteAvail = r.rows.length > 0;
   } catch (e) {
-    console.warn('[forcaPacoteAvailable] coluna em falta e sem permissão para criar:', e && e.message);
+    console.warn('[forcaPacoteAvailable]', e && e.message);
     _forcaPacoteAvail = false;
   }
   return _forcaPacoteAvail;

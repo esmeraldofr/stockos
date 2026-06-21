@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-forca-pacote">
+<html lang="pt" data-stockos-ui="2026-05-19-forca-pacote-diag">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10203,7 +10203,7 @@ async function saveProduto(id) {
     const copo = readProdutoCopoFields();
     const med = copo.venda_por_copo && copo.kg_por_copo > 0 ? 'peso' : val('p-medicao');
     const cat = val('p-cat');
-    await api('PUT',`/produtos/${id}`,{
+    const corpo = {
       nome: val('p-nome'), preco: parseFloat(val('p-preco'))||0,
       tipo_medicao: med,
       categoria: cat, ordem: parseInt(val('p-ordem'))||0,
@@ -10214,7 +10214,12 @@ async function saveProduto(id) {
       comissao_pct: parseFloat(val('p-comissao')) || 0,
       imagem: val('p-imagem') || null,
       ...payloadProdutoCopo()
-    });
+    };
+    const resp = await api('PUT',`/produtos/${id}`, corpo);
+    // DIAGNÓSTICO temporário: mostra o que foi enviado vs gravado.
+    const enviado = corpo.forca_pacote;
+    const gravado = resp && resp.forca_pacote;
+    alert('DIAGNÓSTICO forca_pacote\nEnviado: ' + JSON.stringify(enviado) + '\nGravado (resposta servidor): ' + JSON.stringify(gravado));
     closeProdutoModal();
     suc('prod-msg','Produto actualizado!');
     setTimeout(()=>show('prod-msg',''),2000);

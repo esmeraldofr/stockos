@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-turno-vendas-no-onconflict">
+<html lang="pt" data-stockos-ui="2026-05-19-relatorio-comissoes-turno">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5025,16 +5025,107 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         </div>
       </div>`;
   })();
+  // Relatório de comissões por promotor — agregado dos pedidos do turno.
+  const resumoComissoesHtml = (() => {
+    if (!pedidos.length) return '';
+    const porProm = new Map();
+    let comTotal = 0, semPromTotal = 0, semPromN = 0;
+    for (const p of pedidos) {
+      const promId = p.promotor_id ? String(p.promotor_id) : '';
+      const promNome = p.promotor_nome || '— Sem promotor —';
+      const modo = p.promotor_modo === 'total' ? 'total' : 'produto';
+      const pct = p.promotor_pct_total == null ? null : parseFloat(p.promotor_pct_total) || 0;
+      const com = parseFloat(p.comissao_valor) || 0;
+      const subtotal = (p.linhas || []).reduce((s, ln) => {
+        const isCopo = ln.venda_por_copo === true && (parseFloat(ln.kg_por_copo) || 0) > 0;
+        const qtd = parseFloat(ln.quantidade) || 0;
+        const u = parseFloat(ln.preco) || 0;
+        const n = parseInt(ln.qtd_copos_pacote, 10) || 0;
+        const pp = parseFloat(ln.preco_copos_pacote) || 0;
+        if (isCopo) {
+          const c = Math.floor(qtd);
+          return s + ((n >= 2 && pp > 0) ? Math.floor(c / n) * pp + (c % n) * u : c * u);
+        }
+        return s + qtd * u;
+      }, 0);
+      if (!promId) {
+        // Sem promotor: comissão potencial — não atribuída.
+        const pot = parseFloat(p.comissao_valor_potencial) || 0;
+        semPromTotal += pot;
+        semPromN += 1;
+        continue;
+      }
+      comTotal += com;
+      if (!porProm.has(promId)) {
+        porProm.set(promId, { nome: promNome, modo, pct, n: 0, vendido: 0, comissao: 0 });
+      }
+      const a = porProm.get(promId);
+      a.n += 1;
+      a.vendido += subtotal;
+      a.comissao += com;
+      a.modo = modo;
+      a.pct = pct;
+    }
+    if (!porProm.size && !semPromN) return '';
+    const arr = [...porProm.values()].sort((a, b) => b.comissao - a.comissao);
+    const linhasProm = arr.map((r) => {
+      const modoTxt = r.modo === 'total' && r.pct != null
+        ? `${r.pct.toFixed(1)}% do total`
+        : '% por produto';
+      return `
+        <tr>
+          <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)} <span style="color:#64748b;font-size:11px">(${escapeHtml(modoTxt)})</span></td>
+          <td style="padding:5px 8px;text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums">${r.n}</td>
+          <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.vendido)}</td>
+          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(r.comissao)}</td>
+        </tr>`;
+    }).join('');
+    const semPromHtml = semPromN > 0
+      ? `<div style="margin-top:8px;padding:6px 10px;background:#0b1322;border:1px dashed #334155;border-radius:6px;font-size:11px;color:#94a3b8;line-height:1.5">
+          ⚠ <strong>${semPromN}</strong> pedido${semPromN === 1 ? '' : 's'} sem promotor — comissão potencial <strong style="color:#fbbf24">${fmt(semPromTotal)}</strong> (não atribuída).
+        </div>`
+      : '';
+    const tabela = porProm.size
+      ? `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Promotor</th>
+                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Pedidos</th>
+                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Vendido</th>
+                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Comissão</th>
+              </tr>
+            </thead>
+            <tbody>${linhasProm}</tbody>
+            <tfoot>
+              <tr style="border-top:1px solid #334155">
+                <td style="padding:6px 8px;color:#cbd5e1;font-weight:700">Total atribuído</td>
+                <td style="padding:6px 8px;text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums;font-weight:700">${arr.reduce((s,r)=>s+r.n,0)}</td>
+                <td style="padding:6px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(arr.reduce((s,r)=>s+r.vendido,0))}</td>
+                <td style="padding:6px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(comTotal)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>`
+      : '';
+    return `
+      <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
+        <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">🪙 Comissões do turno</div>
+        ${tabela}
+        ${semPromHtml}
+      </div>`;
+  })();
   // Aba "Pedidos ao balcão": só o formulário POS (grelha + Conta corrente + teclado).
   mount.innerHTML = formHtml;
   // Aba "Caixa": Resumo do turno + Produtos vendidos + Pedidos do turno.
   const resumoMount = document.getElementById('pedidos-resumo-mount');
   if (resumoMount) {
-    const semDados = !resumoHtml && !resumoProdutosHtml && !pedidos.length;
+    const semDados = !resumoHtml && !resumoProdutosHtml && !resumoComissoesHtml && !pedidos.length;
     resumoMount.innerHTML = semDados
       ? '<span style="color:#64748b">Ainda não há pedidos neste turno.</span>'
       : resumoHtml +
         resumoProdutosHtml +
+        resumoComissoesHtml +
         `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
   }
   pedidoBalcaoSyncDraftUI();

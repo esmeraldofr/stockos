@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-forca-pacote-nullable">
+<html lang="pt" data-stockos-ui="2026-05-19-forca-pacote-resiliente">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10215,11 +10215,7 @@ async function saveProduto(id) {
       imagem: val('p-imagem') || null,
       ...payloadProdutoCopo()
     };
-    const resp = await api('PUT',`/produtos/${id}`, corpo);
-    // DIAGNÓSTICO temporário: mostra o que foi enviado vs gravado.
-    const enviado = corpo.forca_pacote;
-    const gravado = resp && resp.forca_pacote;
-    alert('DIAGNÓSTICO forca_pacote\nEnviado: ' + JSON.stringify(enviado) + '\nGravado (resposta servidor): ' + JSON.stringify(gravado));
+    await api('PUT',`/produtos/${id}`, corpo);
     closeProdutoModal();
     suc('prod-msg','Produto actualizado!');
     setTimeout(()=>show('prod-msg',''),2000);

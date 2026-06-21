@@ -805,6 +805,33 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '6mb' }));
 /** Antes de await dbReady: health não bloqueia em initDB (dezenas de queries DDL em cold start). */
+app.get('/api/_diag/forca-pacote', async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT column_name, data_type, column_default, is_nullable
+       FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='produtos' AND column_name='forca_pacote'`
+    );
+    let fino = null;
+    if (r.rows.length) {
+      try {
+        const f = await query(`SELECT id, nome, forca_pacote, qtd_copos_pacote FROM produtos WHERE nome ILIKE 'Fino 1000%' LIMIT 1`);
+        fino = f.rows[0] || null;
+      } catch (e) { fino = { erro: e.message }; }
+    }
+    res.json({
+      columnExists: r.rows.length > 0,
+      column: r.rows[0] || null,
+      cached: _forcaPacoteAvail,
+      fino1000: fino,
+      bootstrap_target: STOCKOS_BOOTSTRAP_VERSION,
+      bootstrap_applied: STOCKOS_DB_APPLIED || null
+    });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 app.get('/api/health', (req, res) =>
   res.json({
     status: 'ok',

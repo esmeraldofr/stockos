@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-todos-podem-ser-promotor">
+<html lang="pt" data-stockos-ui="2026-05-19-forca-pacote">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4262,7 +4262,14 @@ function pedidoBalcaoTileClick(pid) {
   if (!pid) return;
   if (!window.__pedidoBalcaoDraft) window.__pedidoBalcaoDraft = {};
   const k = String(pid);
-  window.__pedidoBalcaoDraft[k] = (parseFloat(window.__pedidoBalcaoDraft[k]) || 0) + 1;
+  // Produtos com "Só em lote" são adicionados em múltiplos do pacote
+  // (ex.: Fino 1000 a 3 em 3); os outros, 1 a 1.
+  const catalog = window.__pedidoProdutosOpts || [];
+  const o = catalog.find((x) => String(x.id) === k);
+  const lote = o && o.forca_pacote && parseInt(o.qtd_copos_pacote, 10) >= 2
+    ? parseInt(o.qtd_copos_pacote, 10)
+    : 1;
+  window.__pedidoBalcaoDraft[k] = (parseFloat(window.__pedidoBalcaoDraft[k]) || 0) + lote;
   pedidoBalcaoSyncDraftUI();
 }
 
@@ -4369,6 +4376,14 @@ function pedidoBalcaoDraftQtyFromInput(inp) {
     pedidoBalcaoSyncDraftUI();
     return;
   }
+  // Arredonda para múltiplo do pacote quando o produto é "Só em lote".
+  const catalog = window.__pedidoProdutosOpts || [];
+  const o = catalog.find((x) => String(x.id) === String(pid));
+  if (o && o.forca_pacote && parseInt(o.qtd_copos_pacote, 10) >= 2) {
+    const lote = parseInt(o.qtd_copos_pacote, 10);
+    q = Math.max(lote, Math.round(q / lote) * lote);
+    inp.value = String(q);
+  }
   if (!window.__pedidoBalcaoDraft) window.__pedidoBalcaoDraft = {};
   window.__pedidoBalcaoDraft[pid] = q;
   pedidoBalcaoRecalcDraftTotal();
@@ -4402,12 +4417,18 @@ function pedidoBalcaoSyncDraftUI() {
     const { line, unitHtml } = pedidoBalcaoValorLinha(o, q);
     sum += line;
     const pidAttr = escapeHtml(String(pid));
+    const forceLote = o.forca_pacote && parseInt(o.qtd_copos_pacote, 10) >= 2;
+    const qStep = forceLote ? parseInt(o.qtd_copos_pacote, 10) : 1;
+    const qMin = forceLote ? parseInt(o.qtd_copos_pacote, 10) : 0.001;
+    const loteHint = forceLote
+      ? `<div style="font-size:10px;color:#fbbf24;margin-top:3px;line-height:1.2">só em lotes de ${qStep}</div>`
+      : '';
     rows += `<tr data-pid="${pidAttr}">
       <td style="text-align:right;vertical-align:top">
-        <input type="number" min="0.001" step="any" class="pedido-draft-qty" data-pid="${pidAttr}" value="${escapeHtml(String(q))}"
+        <input type="number" min="${qMin}" step="${qStep}" class="pedido-draft-qty" data-pid="${pidAttr}" value="${escapeHtml(String(q))}"
           oninput="pedidoBalcaoDraftQtyInput(this)" onchange="pedidoBalcaoDraftQtyFromInput(this)"/>
       </td>
-      <td style="vertical-align:top;color:#e2e8f0">${escapeHtml(o.nome)}</td>
+      <td style="vertical-align:top;color:#e2e8f0">${escapeHtml(o.nome)}${loteHint}</td>
       <td class="pedido-line-unit" style="text-align:right;vertical-align:top;word-break:break-word">${unitHtml}</td>
       <td class="pedido-line-total" data-pid="${pidAttr}" style="text-align:right;vertical-align:top;color:#4ade80;word-break:break-word;font-weight:700">${escapeHtml(
         fmt(line)
@@ -5390,6 +5411,7 @@ async function loadVendasMenu(turnoId, canEdit) {
         preco_copos_pacote: parseFloat(p.preco_copos_pacote) || 0,
         venda_por_copo: true,
         kg_por_copo: parseFloat(p.kg_por_copo) || 0,
+        forca_pacote: !!p.forca_pacote,
         comissao_pct: parseFloat(p.comissao_pct) || 0,
         imagem: p.imagem || null
       });
@@ -9978,6 +10000,7 @@ function showProdutoForm(id) {
       '<div class="field"><label>Kg por copo servido</label><input id="p-kg-copo" type="number" min="0.001" step="0.001" value="0.27"/></div>' +
       '<div class="field"><label>Preço do pacote (Kz) — ex. 1000 por 3 copos</label><input id="p-preco-pacote" type="number" min="0" step="1" value="0"/></div>' +
       '<div class="field"><label>Número de copos no pacote — ex. 3</label><input id="p-qtd-pacote" type="number" min="0" step="1" value="0"/></div>' +
+      '<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="p-forca-pacote" style="width:16px;height:16px"/> Só vende em lotes (múltiplos do pacote)</label><div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:24px">Quando ligado, este produto só pode ser pedido em quantidades múltiplas de «Número de copos no pacote» (ex.: 3, 6, 9…).</div></div>' +
       '<p style="font-size:11px;color:#64748b;margin:0;line-height:1.4">O campo «Preço» acima é o valor de <strong>1 copo</strong> (ex. 400 Kz). Se preencheres pacote (ex. 3 copos / 1000 Kz), o total usa pacotes completos + resto ao preço unitário.</p>' +
       '</div></div>' +
       '<div class="field"><label>Ordem</label><input id="p-ordem" type="number" value="0"/></div>' +
@@ -10029,6 +10052,8 @@ function showProdutoForm(id) {
   if (ppp) ppp.value = p ? (p.preco_copos_pacote || 0) : 0;
   const pqp = document.getElementById('p-qtd-pacote');
   if (pqp) pqp.value = p ? (p.qtd_copos_pacote || 0) : 0;
+  const pfp = document.getElementById('p-forca-pacote');
+  if (pfp) pfp.checked = !!(p && p.forca_pacote);
 
   function toggleCopoBebida() {
     const cat = document.getElementById('p-cat').value;
@@ -10142,11 +10167,13 @@ function showProdutoForm(id) {
 function payloadProdutoCopo() {
   const cat = val('p-cat');
   const copo = cat === 'bebida' && document.getElementById('p-venda-copo')?.checked;
+  const qcp = copo ? parseInt(val('p-qtd-pacote'), 10) || 0 : 0;
   return {
     venda_por_copo: !!copo,
     kg_por_copo: copo ? parseFloat(val('p-kg-copo')) || 0 : 0,
     preco_copos_pacote: copo ? parseFloat(val('p-preco-pacote')) || 0 : 0,
-    qtd_copos_pacote: copo ? parseInt(val('p-qtd-pacote'), 10) || 0 : 0
+    qtd_copos_pacote: qcp,
+    forca_pacote: copo && qcp >= 2 && !!document.getElementById('p-forca-pacote')?.checked
   };
 }
 

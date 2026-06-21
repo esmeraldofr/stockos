@@ -2430,8 +2430,24 @@ app.post('/api/auth/alterar-password', auth, async (req, res) => {
 });
 
 // ── PRODUTOS ──────────────────────────────────────────────────
+/** Garante (uma vez por instância) que a coluna produtos.forca_pacote existe.
+ *  Necessário porque o fast-path do bootstrap pode pular as DDLs em BDs já
+ *  marcadas, e ambientes diferentes (develop/qualidade/prod) podem usar BDs
+ *  distintas onde a migração ainda não correu. */
+let _forcaPacoteColReady = false;
+async function ensureForcaPacoteColumn() {
+  if (_forcaPacoteColReady) return;
+  try {
+    await query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS forca_pacote BOOLEAN NOT NULL DEFAULT FALSE`);
+    _forcaPacoteColReady = true;
+  } catch (e) {
+    console.warn('[ensureForcaPacoteColumn]', e && e.message);
+  }
+}
+
 app.get('/api/produtos', auth, async (req, res) => {
   try {
+    await ensureForcaPacoteColumn();
     const todos = req.query.todos === '1';
     const r = await query(
       `SELECT p.*, EXISTS(SELECT 1 FROM receitas r WHERE r.componente_id = p.id) AS is_ingrediente
@@ -2443,6 +2459,7 @@ app.get('/api/produtos', auth, async (req, res) => {
 
 app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
+    await ensureForcaPacoteColumn();
     const { nome, preco, categoria, venda_avulso, tipo_medicao, em_stock_turno, vendavel } = req.body;
     const {
       venda_por_copo,
@@ -2510,6 +2527,7 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
 
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
+    await ensureForcaPacoteColumn();
     const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno, vendavel } = req.body;
     const {
       venda_por_copo,

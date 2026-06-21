@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-caixa-reordena">
+<html lang="pt" data-stockos-ui="2026-05-19-caixa-reordena2">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3374,7 +3374,16 @@ async function loadTurno() {
           <div id="turno-irregularidades-equipa" style="font-size:11px;color:#64748b;margin:0 0 10px;line-height:1.4"></div>
           <div id="turno-irregularidades-list"></div>
         </div>
-        <div class="card">
+        <div class="card" id="pedidos-resumo-card">
+          <div class="card-title">📊 Resumo dos pedidos</div>
+          <div id="pedidos-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
+        </div>
+        <div class="card mt-16" id="saidas-caixa-card">
+          <div class="card-title">💸 Caixa — dinheiro que saiu</div>
+          <p style="font-size:12px;color:#64748b;margin:-2px 0 12px;line-height:1.45">Despesas e compras de stock pagas pela caixa do turno. Aparecem também associadas às entradas por compra.</p>
+          <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
+        </div>
+        <div class="card mt-16">
           <div class="card-title">💰 Caixa</div>
           <div id="caixa-esperado-pedidos" style="margin-bottom:10px"></div>
           <div class="caixa-grid">
@@ -3410,15 +3419,6 @@ async function loadTurno() {
             style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
             ${canEdit ? '' : 'disabled'}
             onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
-        </div>
-        <div class="card mt-16" id="saidas-caixa-card">
-          <div class="card-title">💸 Caixa — dinheiro que saiu</div>
-          <p style="font-size:12px;color:#64748b;margin:-2px 0 12px;line-height:1.45">Despesas e compras de stock pagas pela caixa do turno. Aparecem também associadas às entradas por compra.</p>
-          <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
-        </div>
-        <div class="card mt-16" id="pedidos-resumo-card">
-          <div class="card-title">📊 Resumo dos pedidos</div>
-          <div id="pedidos-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
         </div>
       </div>
 

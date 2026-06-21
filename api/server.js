@@ -2548,7 +2548,6 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
 
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
-    await ensureForcaPacoteColumn();
     const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno, vendavel } = req.body;
     const {
       venda_por_copo,

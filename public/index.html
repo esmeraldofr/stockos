@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-entradas-caixa">
+<html lang="pt" data-stockos-ui="2026-05-19-caixa-movimentos-unificado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3378,15 +3378,10 @@ async function loadTurno() {
           <div class="card-title">📊 Resumo dos pedidos</div>
           <div id="pedidos-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
         </div>
-        <div class="card mt-16" id="saidas-caixa-card">
-          <div class="card-title">💸 Caixa — dinheiro que saiu</div>
-          <p style="font-size:12px;color:#64748b;margin:-2px 0 12px;line-height:1.45">Despesas e compras de stock pagas pela caixa do turno. Aparecem também associadas às entradas por compra.</p>
-          <div id="saidas-section"><span style="color:#64748b">A carregar...</span></div>
-        </div>
-        <div class="card mt-16" id="entradas-caixa-card">
-          <div class="card-title">💵 Caixa — dinheiro que entrou</div>
-          <p style="font-size:12px;color:#64748b;margin:-2px 0 12px;line-height:1.45">Entradas extra de dinheiro na caixa do turno: fundo de caixa, devoluções, reposição de troco, etc. Não substituem as vendas (TPA/Transf/Dinheiro), são <strong style="color:#cbd5e1">adicionais</strong>.</p>
-          <div id="entradas-caixa-section"><span style="color:#64748b">A carregar...</span></div>
+        <div class="card mt-16" id="caixa-movimentos-card">
+          <div class="card-title">💰 Caixa — movimentos</div>
+          <p style="font-size:12px;color:#64748b;margin:-2px 0 12px;line-height:1.45"><strong style="color:#4ade80">Entradas (+)</strong> e <strong style="color:#f87171">saídas (−)</strong> de dinheiro na caixa do turno: despesas, compras de stock, comissões pagas, fundo de caixa, devoluções, etc.</p>
+          <div id="caixa-movimentos-section"><span style="color:#64748b">A carregar...</span></div>
         </div>
         <div class="card mt-16">
           <div class="card-title">💰 Caixa</div>
@@ -3449,7 +3444,6 @@ async function loadTurno() {
       }
     }
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
-    try { await loadEntradasCaixaSection(turno.id, canEdit); } catch (_) {}
     if (finoBarrilAjustadoRecipiente && turno.id) {
       try {
         await guardarStock(turno.id);
@@ -6652,16 +6646,12 @@ async function switchTurnoTab(name, btn) {
     await loadEscalaTurno();
   }
   if (name === 'stock' || name === 'caixa') {
-    // Stock (entradas-section) e Caixa (saidas-section) partilham o loader;
+    // Stock (entradas-section) e Caixa (caixa-movimentos-section) partilham o loader;
     // ambos os mounts existem no DOM, por isso correr em qualquer das abas
     // mantém as duas secções actualizadas.
     const tid = S.turnoData?.id;
     const stock = S.turnoData?.stock || [];
     if (tid) await loadRegistosMovimentosSection(tid, stock, !!S.turnoCanEdit);
-  }
-  if (name === 'caixa') {
-    const tid = S.turnoData?.id;
-    if (tid) await loadEntradasCaixaSection(tid, !!S.turnoCanEdit);
   }
   if (name === 'vendas' || name === 'pedidos' || name === 'caixa') {
     const tid = S.turnoData?.id;
@@ -6810,22 +6800,23 @@ async function reabrirTurno(ev, id) {
 
 // ── REGISTOS: STOCK + SAÍDAS DE CAIXA (unificado) ──────────────
 async function loadRegistosMovimentosSection(turnoId, stocks, canEdit) {
-  const elE = document.getElementById('entradas-section');
-  const elS = document.getElementById('saidas-section');
-  if (!elE || !elS) return;
-  elE.innerHTML = '<span style="color:#64748b">A carregar...</span>';
-  elS.innerHTML = '<span style="color:#64748b">A carregar...</span>';
+  const elE = document.getElementById('entradas-section');             // stock (aba Stock)
+  const elM = document.getElementById('caixa-movimentos-section');     // dinheiro (aba Caixa)
+  if (!elE && !elM) return;
+  if (elE) elE.innerHTML = '<span style="color:#64748b">A carregar...</span>';
+  if (elM) elM.innerHTML = '<span style="color:#64748b">A carregar...</span>';
   try {
-    const [entradas, saidas] = await Promise.all([
+    const [entradas, saidas, caixaEntradas] = await Promise.all([
       api('GET', `/turnos/${turnoId}/entradas`),
-      api('GET', `/turnos/${turnoId}/saidas`)
+      api('GET', `/turnos/${turnoId}/saidas`),
+      api('GET', `/turnos/${turnoId}/caixa-entradas`).catch(() => [])
     ]);
-    renderEntradasSection(turnoId, stocks, canEdit, entradas);
-    renderSaidasSection(turnoId, canEdit, saidas, entradas);
+    if (elE) renderEntradasSection(turnoId, stocks, canEdit, entradas);
+    if (elM) renderCaixaMovimentos(turnoId, canEdit, saidas, entradas, caixaEntradas);
   } catch (e) {
     const msg = `<div class="alert alert-error">${e.message}</div>`;
-    elE.innerHTML = msg;
-    elS.innerHTML = msg;
+    if (elE) elE.innerHTML = msg;
+    if (elM) elM.innerHTML = msg;
   }
 }
 
@@ -7021,123 +7012,62 @@ async function adicionarFinoBarrilNovo(produtoId) {
   await loadRegistosMovimentosSection(turnoId, stocks, true);
 }
 
-async function loadEntradasCaixaSection(turnoId, canEdit) {
-  const el = document.getElementById('entradas-caixa-section');
-  if (!el) return;
-  el.innerHTML = '<span style="color:#64748b">A carregar...</span>';
-  try {
-    const linhas = await api('GET', `/turnos/${turnoId}/caixa-entradas`).catch(() => []);
-    renderEntradasCaixaSection(turnoId, canEdit, linhas);
-  } catch (e) {
-    el.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
-  }
-}
-
-function renderEntradasCaixaSection(turnoId, canEdit, linhas) {
-  const el = document.getElementById('entradas-caixa-section');
-  if (!el) return;
-  const total = (linhas || []).reduce((s, r) => s + (parseFloat(r.valor) || 0), 0);
-  const formHtml = canEdit ? `
-    <div class="entradas-form">
-      <input id="ec-desc" type="text" placeholder="Descrição (ex: fundo de caixa, devolução)" class="entradas-notas" style="flex:2"/>
-      <input id="ec-valor" type="number" min="0.01" step="any" placeholder="Valor" class="entradas-qty"/>
-      <input id="ec-notas" type="text" placeholder="Notas (opcional)" class="entradas-notas" style="flex:1.5"/>
-      <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, () => submitEntradaCaixa('${turnoId}'))">Registar</button>
-    </div>
-    <div id="ec-form-msg" style="margin-bottom:8px"></div>` : '';
-  const rows = (linhas || []).map(s => {
-    const dt = s.criado_em ? new Date(s.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' }) : '';
-    return `<tr>
-      <td style="color:#64748b;font-size:12px;white-space:nowrap">${escapeHtml(dt)}</td>
-      <td style="font-size:13px">${escapeHtml(s.descricao || '')}</td>
-      <td style="text-align:right;font-weight:600;color:#4ade80">${fmt(s.valor)}</td>
-      <td style="color:#94a3b8;font-size:12px">${escapeHtml(s.notas || '')}</td>
-    </tr>`;
-  });
-  const listaHtml = rows.length === 0
-    ? '<div style="color:#475569;font-size:13px;padding:8px 0">Nenhuma entrada extra de caixa neste turno.</div>'
-    : `<div class="table-wrap"><table>
-        <thead><tr>
-          <th style="text-align:left">Hora</th>
-          <th style="text-align:left">Descrição</th>
-          <th style="text-align:right">Valor</th>
-          <th style="text-align:left">Nota</th>
-        </tr></thead>
-        <tbody>
-          ${rows.join('')}
-          <tr style="font-weight:700;border-top:2px solid #334155">
-            <td colspan="2" style="color:#94a3b8;font-size:12px;padding:6px 10px">Total entradas extra</td>
-            <td style="text-align:right;color:#4ade80">${fmt(total)}</td>
-            <td></td>
-          </tr>
-        </tbody>
-      </table></div>`;
-  el.innerHTML = formHtml + listaHtml;
-}
-
-async function submitEntradaCaixa(turnoId) {
-  const desc  = document.getElementById('ec-desc')?.value.trim() || '';
-  const valor = parseFloat(document.getElementById('ec-valor')?.value);
-  const notas = document.getElementById('ec-notas')?.value.trim() || '';
-  const msg   = document.getElementById('ec-form-msg');
-  if (!desc)  { if (msg) { msg.className='alert alert-error'; msg.textContent='Descrição obrigatória.'; } return; }
-  if (!valor || valor <= 0) { if (msg) { msg.className='alert alert-error'; msg.textContent='Valor inválido.'; } return; }
-  try {
-    await api('POST', `/turnos/${turnoId}/caixa-entradas`, { descricao: desc, valor, notas });
-    const dEl = document.getElementById('ec-desc');
-    const vEl = document.getElementById('ec-valor');
-    const nEl = document.getElementById('ec-notas');
-    if (dEl) dEl.value = '';
-    if (vEl) vEl.value = '';
-    if (nEl) nEl.value = '';
-    await loadEntradasCaixaSection(turnoId, true);
-  } catch(e) {
-    if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
-  }
-}
-
-function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
-  const el = document.getElementById('saidas-section');
+/** Secção unificada de movimentos de caixa: entradas (+, verde) e saídas
+ *  (−, vermelho) numa só tabela cronológica, com saldo. As saídas vêm de
+ *  despesas (turno_saidas) + compras de stock; as entradas de
+ *  turno_caixa_entradas. Actualiza o campo "Saída" e os totais do card Caixa. */
+function renderCaixaMovimentos(turnoId, canEdit, saidas, entradas, caixaEntradas) {
+  const el = document.getElementById('caixa-movimentos-section');
   if (!el) return;
   try {
-    const totalDespesas = saidas.reduce((s, r) => s + parseFloat(r.valor), 0);
-    const totalCompras  = entradas.filter(e => e.origem === 'compra' && e.tipo === 'entrada')
-                                  .reduce((s, e) => s + parseFloat(e.preco), 0);
-    const total = totalDespesas + totalCompras;
+    const hora = (d) => d ? new Date(d).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }) : '';
+    const movimentos = [];
+    // Saídas: compras de stock
+    (entradas || []).filter(e => e.origem === 'compra' && e.tipo === 'entrada').forEach(e => {
+      movimentos.push({ ts: e.criado_em, dir: 'out', desc: `${e.produto_nome || 'Compra'}`, tag: 'compra', valor: parseFloat(e.preco) || 0, notas: e.notas || '' });
+    });
+    // Saídas: despesas
+    (saidas || []).forEach(s => {
+      movimentos.push({ ts: s.criado_em, dir: 'out', desc: s.descricao || '', tag: '', valor: parseFloat(s.valor) || 0, notas: s.notas || '' });
+    });
+    // Entradas extra
+    (caixaEntradas || []).forEach(s => {
+      movimentos.push({ ts: s.criado_em, dir: 'in', desc: s.descricao || '', tag: '', valor: parseFloat(s.valor) || 0, notas: s.notas || '' });
+    });
+    movimentos.sort((a, b) => new Date(b.ts || 0) - new Date(a.ts || 0));
+
+    const totalSaidas = movimentos.filter(m => m.dir === 'out').reduce((s, m) => s + m.valor, 0);
+    const totalEntradas = movimentos.filter(m => m.dir === 'in').reduce((s, m) => s + m.valor, 0);
+    const saldo = totalEntradas - totalSaidas;
 
     const formHtml = canEdit ? `
       <div class="entradas-form">
-        <input id="s-desc" type="text" placeholder="Descrição (ex: gasóleo, embalagens)" class="entradas-notas" style="flex:2"/>
-        <input id="s-valor" type="number" min="0.01" step="any" placeholder="Valor" class="entradas-qty"/>
-        <input id="s-notas" type="text" placeholder="Notas (opcional)" class="entradas-notas" style="flex:1.5"/>
-        <button type="button" class="btn btn-danger btn-sm" onclick="runAction(event, () => submitSaida(${turnoId}))">Registar</button>
+        <select id="mc-tipo" class="entradas-qty" style="flex:0 0 96px;cursor:pointer">
+          <option value="saida">− Saída</option>
+          <option value="entrada">+ Entrada</option>
+        </select>
+        <input id="mc-desc" type="text" placeholder="Descrição (ex: gasóleo, fundo de caixa)" class="entradas-notas" style="flex:2"/>
+        <input id="mc-valor" type="number" min="0.01" step="any" placeholder="Valor" class="entradas-qty"/>
+        <input id="mc-notas" type="text" placeholder="Notas (opcional)" class="entradas-notas" style="flex:1.3"/>
+        <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, () => submitMovimentoCaixa('${turnoId}'))">Registar</button>
       </div>
-      <div id="saida-form-msg" style="margin-bottom:8px"></div>` : '';
+      <div id="mc-form-msg" style="margin-bottom:8px"></div>` : '';
 
-    const comprasRows = entradas.filter(e => e.origem === 'compra' && e.tipo === 'entrada').map(e => {
-      const dt = new Date(e.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
+    const rows = movimentos.map(m => {
+      const isIn = m.dir === 'in';
+      const cor = isIn ? '#4ade80' : '#f87171';
+      const sinal = isIn ? '+' : '−';
+      const tag = m.tag ? ` <span style="color:#fb923c;font-size:11px">(${escapeHtml(m.tag)})</span>` : '';
       return `<tr>
-        <td style="color:#64748b;font-size:12px;white-space:nowrap">${dt}</td>
-        <td style="font-size:13px">${e.produto_nome} <span style="color:#fb923c;font-size:11px">(compra)</span></td>
-        <td style="text-align:right;font-weight:600;color:#f87171">${fmt(e.preco)}</td>
-        <td style="color:#94a3b8;font-size:12px">${e.notas}</td>
+        <td style="color:#64748b;font-size:12px;white-space:nowrap">${escapeHtml(hora(m.ts))}</td>
+        <td style="font-size:13px">${escapeHtml(m.desc)}${tag}</td>
+        <td style="text-align:right;font-weight:600;color:${cor};white-space:nowrap">${sinal} ${fmt(m.valor)}</td>
+        <td style="color:#94a3b8;font-size:12px">${escapeHtml(m.notas)}</td>
       </tr>`;
     });
 
-    const despesasRows = saidas.map(s => {
-      const dt = new Date(s.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
-      return `<tr>
-        <td style="color:#64748b;font-size:12px;white-space:nowrap">${dt}</td>
-        <td style="font-size:13px">${s.descricao}</td>
-        <td style="text-align:right;font-weight:600;color:#f87171">${fmt(s.valor)}</td>
-        <td style="color:#94a3b8;font-size:12px">${s.notas}</td>
-      </tr>`;
-    });
-
-    const todasLinhas = [...comprasRows, ...despesasRows];
-
-    const listaHtml = todasLinhas.length === 0
-      ? '<div style="color:#475569;font-size:13px;padding:8px 0">Nenhuma saída registada neste turno.</div>'
+    const listaHtml = rows.length === 0
+      ? '<div style="color:#475569;font-size:13px;padding:8px 0">Nenhum movimento de caixa neste turno.</div>'
       : `<div class="table-wrap"><table>
           <thead><tr>
             <th style="text-align:left">Hora</th>
@@ -7146,29 +7076,55 @@ function renderSaidasSection(turnoId, canEdit, saidas, entradas) {
             <th style="text-align:left">Nota</th>
           </tr></thead>
           <tbody>
-            ${todasLinhas.join('')}
-            <tr style="font-weight:700;border-top:2px solid #334155">
-              <td colspan="2" style="color:#94a3b8;font-size:12px;padding:6px 10px">Total saídas</td>
-              <td style="text-align:right;color:#f87171">${fmt(total)}</td>
-              <td></td>
+            ${rows.join('')}
+            <tr style="border-top:2px solid #334155">
+              <td colspan="2" style="color:#94a3b8;font-size:12px;padding:6px 10px;font-weight:700">Total saídas</td>
+              <td style="text-align:right;color:#f87171;font-weight:700">− ${fmt(totalSaidas)}</td><td></td>
+            </tr>
+            <tr>
+              <td colspan="2" style="color:#94a3b8;font-size:12px;padding:6px 10px;font-weight:700">Total entradas</td>
+              <td style="text-align:right;color:#4ade80;font-weight:700">+ ${fmt(totalEntradas)}</td><td></td>
+            </tr>
+            <tr style="border-top:1px solid #334155">
+              <td colspan="2" style="color:#cbd5e1;font-size:12px;padding:6px 10px;font-weight:700">Saldo (entradas − saídas)</td>
+              <td style="text-align:right;color:${saldo >= 0 ? '#4ade80' : '#f87171'};font-weight:700">${saldo >= 0 ? '+' : '−'} ${fmt(Math.abs(saldo))}</td><td></td>
             </tr>
           </tbody>
         </table></div>`;
 
     el.innerHTML = formHtml + listaHtml;
-    // Actualizar campo saída na caixa
+    // O campo "Saída" do card Caixa continua a refletir só o dinheiro que saiu.
     const cSaida = document.getElementById('c-saida');
-    if (cSaida) cSaida.value = total.toFixed(2);
+    if (cSaida) cSaida.value = totalSaidas.toFixed(2);
     const elTG = document.getElementById('c-total-gerado');
     const elTF = document.getElementById('c-total-final');
     if (elTG && elTF) {
       const tg = parseCaixaTriploFromInputs();
-      const tf = Number.isFinite(tg) ? tg - total : NaN;
+      const tf = Number.isFinite(tg) ? tg - totalSaidas : NaN;
       elTG.textContent = Number.isFinite(tg) ? fmtKzOrEmpty(tg) : '—';
       elTF.textContent = Number.isFinite(tf) ? fmtKzOrEmpty(tf) : '—';
     }
-  } catch(e) {
-    el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function submitMovimentoCaixa(turnoId) {
+  const tipo  = document.getElementById('mc-tipo')?.value || 'saida';
+  const desc  = document.getElementById('mc-desc')?.value.trim() || '';
+  const valor = parseFloat(document.getElementById('mc-valor')?.value);
+  const notas = document.getElementById('mc-notas')?.value.trim() || '';
+  const msg   = document.getElementById('mc-form-msg');
+  const setErr = (t) => { if (msg) { msg.className = 'alert alert-error'; msg.textContent = t; } };
+  if (!desc) { setErr('Descrição obrigatória.'); return; }
+  if (!valor || valor <= 0) { setErr('Valor inválido.'); return; }
+  try {
+    const endpoint = tipo === 'entrada' ? 'caixa-entradas' : 'saidas';
+    await api('POST', `/turnos/${turnoId}/${endpoint}`, { descricao: desc, valor, notas });
+    ['mc-desc', 'mc-valor', 'mc-notas'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], true);
+  } catch (e) {
+    setErr(e.message);
   }
 }
 
@@ -7685,28 +7641,9 @@ async function pagarComissaoPromotor(turnoId, nome, valor) {
     // e a secção de saídas/entradas.
     try { await loadVendasMenu(turnoId, !!S.turnoCanEdit); } catch (_) {}
     try { await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], !!S.turnoCanEdit); } catch (_) {}
-    try { await loadEntradasCaixaSection(turnoId, !!S.turnoCanEdit); } catch (_) {}
     setTimeout(() => turnoMsgIdle(), 1500);
   } catch (e) {
     turnoMsgErr(e.message);
-  }
-}
-
-async function submitSaida(turnoId) {
-  const desc  = document.getElementById('s-desc')?.value.trim() || '';
-  const valor = parseFloat(document.getElementById('s-valor')?.value);
-  const notas = document.getElementById('s-notas')?.value.trim() || '';
-  const msg   = document.getElementById('saida-form-msg');
-  if (!desc)  { if (msg) { msg.className='alert alert-error'; msg.textContent='Descrição obrigatória.'; } return; }
-  if (!valor || valor <= 0) { if (msg) { msg.className='alert alert-error'; msg.textContent='Valor inválido.'; } return; }
-  try {
-    await api('POST', `/turnos/${turnoId}/saidas`, { descricao: desc, valor, notas });
-    document.getElementById('s-desc').value  = '';
-    document.getElementById('s-valor').value = '';
-    document.getElementById('s-notas').value = '';
-    await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], true);
-  } catch(e) {
-    if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
   }
 }
 

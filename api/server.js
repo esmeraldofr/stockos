@@ -6704,7 +6704,7 @@ app.post('/api/turnos/:id/equipa-real', auth, async (req, res) => {
     const cobre = cobrindo_utilizador_id ? String(cobrindo_utilizador_id) : null;
     const he = !!hora_extra;
     const motivo = (motivo_falta || '').trim();
-    if (cobre && !motivo) return res.status(400).json({ erro: 'motivo_falta é obrigatório quando há cobertura' });
+    // "Motivo" deixou de ser obrigatório quando há cobertura.
     const r = await query(
       `INSERT INTO turno_equipa_real (turno_id, utilizador_id, cobrindo_utilizador_id, hora_extra, motivo_falta, notas)
        VALUES ($1,$2,$3,$4,$5,$6)

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-comissao-equipa-real">
+<html lang="pt" data-stockos-ui="2026-05-19-presenca-cobrindo-opcional">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7582,10 +7582,10 @@ async function addTurnoPresenca(turnoId) {
   const template = await api('GET', '/escala/template');
   const escaladosIds = new Set(template.filter(r => Number(r.dia_semana) === diaSemana && r.turno === turnoNome).map(r => String(r.utilizador_id || '')).filter(Boolean));
   const naoEscalado = !escaladosIds.has(String(utilizador_id));
-  if (naoEscalado && !cobrindo_utilizador_id) return err('turno-presenca-msg', 'Seleciona quem este funcionário está cobrindo');
-  if (naoEscalado && !motivo_falta.trim()) return err('turno-presenca-msg', 'Regista o motivo da falta');
+  // "Cobrindo quem" e "motivo da falta" passam a ser opcionais — antes
+  // eram exigidos quando o funcionário não estava escalado.
   try {
-    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, cobrindo_utilizador_id: naoEscalado ? cobrindo_utilizador_id : null, hora_extra, motivo_falta: naoEscalado ? motivo_falta.trim() : '', notas });
+    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, cobrindo_utilizador_id: naoEscalado ? (cobrindo_utilizador_id || null) : null, hora_extra, motivo_falta: naoEscalado ? motivo_falta.trim() : '', notas });
     show('turno-presenca-msg', '');
     if (document.getElementById('tp-notas')) document.getElementById('tp-notas').value = '';
     await loadEscalaTurno();

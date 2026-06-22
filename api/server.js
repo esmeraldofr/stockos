@@ -4672,6 +4672,69 @@ app.post('/api/turnos/:id/saidas', auth, async (req, res) => {
   } finally { client.release(); }
 });
 
+// ── Entradas extras de caixa (dinheiro que entrou — sangria reversa,
+// devoluções, fundo de caixa, etc). Tabela própria, formato análogo a
+// turno_saidas. Resiliente: se a tabela não existir e a app não puder
+// criar (sem owner), GET devolve [] e POST falha com mensagem clara. ──
+let _turnoCaixaEntradasAvail = null;
+async function ensureTurnoCaixaEntradas() {
+  if (_turnoCaixaEntradasAvail === true) return true;
+  try {
+    const r = await query(
+      `SELECT 1 FROM information_schema.tables
+       WHERE table_schema='public' AND table_name='turno_caixa_entradas' LIMIT 1`
+    );
+    if (r.rows.length) { _turnoCaixaEntradasAvail = true; return true; }
+  } catch (_) {}
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS turno_caixa_entradas (
+      id SERIAL PRIMARY KEY,
+      turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+      descricao TEXT NOT NULL DEFAULT '',
+      valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+      notas TEXT NOT NULL DEFAULT '',
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    _turnoCaixaEntradasAvail = true;
+  } catch (e) {
+    console.warn('[ensureTurnoCaixaEntradas]', e && e.message);
+    _turnoCaixaEntradasAvail = false;
+  }
+  return _turnoCaixaEntradasAvail;
+}
+
+app.get('/api/turnos/:id/caixa-entradas', auth, async (req, res) => {
+  try {
+    const ok = await ensureTurnoCaixaEntradas();
+    if (!ok) return res.json([]);
+    const r = await query(
+      `SELECT * FROM turno_caixa_entradas WHERE turno_id=$1 ORDER BY criado_em DESC`,
+      [req.params.id]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    if (e.message && e.message.includes('does not exist')) { res.json([]); return; }
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.post('/api/turnos/:id/caixa-entradas', auth, async (req, res) => {
+  try {
+    const ok = await ensureTurnoCaixaEntradas();
+    if (!ok) return res.status(503).json({
+      erro: 'Tabela turno_caixa_entradas em falta e sem permissão para a criar. Pede ao admin para a criar no SQL Editor do Supabase.'
+    });
+    const { descricao, valor, notas } = req.body;
+    if (!descricao || !descricao.trim()) return res.status(400).json({ erro: 'Descrição é obrigatória' });
+    if (!valor || parseFloat(valor) <= 0) return res.status(400).json({ erro: 'Valor deve ser maior que 0' });
+    const r = await query(
+      'INSERT INTO turno_caixa_entradas (turno_id, descricao, valor, notas) VALUES ($1,$2,$3,$4) RETURNING *',
+      [req.params.id, descricao.trim(), valor, String(notas || '').trim()]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 /** Resposta de /escala/semana (template muda raramente). */
 const _escalaSemanaCache = new Map();
 const ESCALA_SEMANA_CACHE_MS = Math.max(

@@ -5610,10 +5610,24 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
               COALESCE(tp.comissao_valor,0) AS comissao_valor,
               COALESCE(tp.comissao_valor_potencial,0) AS comissao_valor_potencial,
               u.nome AS promotor_nome,
+              t.data AS turno_data, t.nome AS turno_nome,
+              EXISTS (
+                SELECT 1 FROM escala e
+                WHERE e.data = t.data AND e.turno = t.nome
+                  AND e.utilizador_id = tp.promotor_id::text
+              ) AS promotor_tem_escala,
+              (
+                SELECT pr.tipo FROM presencas pr
+                WHERE pr.utilizador_id = tp.promotor_id
+                  AND pr.criado_em <= tp.criado_em
+                ORDER BY pr.criado_em DESC
+                LIMIT 1
+              ) = 'entrada' AS promotor_clocked_in,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
               p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct, p.categoria AS produto_categoria
        FROM turno_pedidos tp
+       JOIN turnos t ON t.id = tp.turno_id
        LEFT JOIN utilizadores u ON u.id = tp.promotor_id
        LEFT JOIN turno_pedido_linhas tpl ON tpl.pedido_id = tp.id
        LEFT JOIN produtos p ON p.id = tpl.produto_id
@@ -5639,6 +5653,9 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
           operador_id: row.operador_id || null,
           comissao_valor: parseFloat(row.comissao_valor) || 0,
           comissao_valor_potencial: parseFloat(row.comissao_valor_potencial) || 0,
+          promotor_tem_escala: row.promotor_tem_escala === true,
+          promotor_clocked_in: row.promotor_clocked_in === true,
+          promotor_a_trabalhar: row.promotor_tem_escala === true && row.promotor_clocked_in === true,
           linhas: []
         });
       }

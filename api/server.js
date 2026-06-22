@@ -5616,13 +5616,12 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
                 WHERE e.data = t.data AND e.turno = t.nome
                   AND e.utilizador_id = tp.promotor_id::text
               ) AS promotor_tem_escala,
-              (
-                SELECT pr.tipo FROM presencas pr
+              EXISTS (
+                SELECT 1 FROM presencas pr
                 WHERE pr.utilizador_id = tp.promotor_id
-                  AND pr.criado_em <= tp.criado_em
-                ORDER BY pr.criado_em DESC
-                LIMIT 1
-              ) = 'entrada' AS promotor_clocked_in,
+                  AND pr.tipo = 'entrada'
+                  AND pr.criado_em::date = t.data
+              ) AS promotor_clocked_in,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
               p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct, p.categoria AS produto_categoria
@@ -6004,13 +6003,12 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
                WHERE e.data = t.data AND e.turno = t.nome
                  AND e.utilizador_id = tp.promotor_id::text
              ) AS promotor_tem_escala,
-             (
-               SELECT pr.tipo FROM presencas pr
+             EXISTS (
+               SELECT 1 FROM presencas pr
                WHERE pr.utilizador_id = tp.promotor_id
-                 AND pr.criado_em <= tp.criado_em
-               ORDER BY pr.criado_em DESC
-               LIMIT 1
-             ) = 'entrada' AS promotor_clocked_in,
+                 AND pr.tipo = 'entrada'
+                 AND pr.criado_em::date = t.data
+             ) AS promotor_clocked_in,
              (SELECT COALESCE(SUM(
                 CASE WHEN p.venda_por_copo = TRUE AND p.kg_por_copo > 0 THEN
                   CASE WHEN COALESCE(p.qtd_copos_pacote,0) >= 2 AND COALESCE(p.preco_copos_pacote,0) > 0

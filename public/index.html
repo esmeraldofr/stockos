@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-entradas-no-total-final">
+<html lang="pt" data-stockos-ui="2026-05-19-caixa-input-entradas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3404,6 +3404,10 @@ async function loadTurno() {
             <div class="caixa-item">
               <label>Saída</label>
               <input type="number" step="any" id="c-saida" value="${fmtCaixaAttr(caixa.saida)}" disabled style="opacity:.6"/>
+            </div>
+            <div class="caixa-item">
+              <label>Entradas extra</label>
+              <input type="number" step="any" id="c-entradas" value="0" disabled style="opacity:.6"/>
             </div>
           </div>
           <div class="caixa-total">
@@ -7100,6 +7104,8 @@ function renderCaixaMovimentos(turnoId, canEdit, saidas, entradas, caixaEntradas
     // as entradas extra entram no Total Final via __turnoEntradasExtraTotal.
     const cSaida = document.getElementById('c-saida');
     if (cSaida) cSaida.value = totalSaidas.toFixed(2);
+    const cEntradas = document.getElementById('c-entradas');
+    if (cEntradas) cEntradas.value = totalEntradas.toFixed(2);
     window.__turnoEntradasExtraTotal = totalEntradas;
     const elTG = document.getElementById('c-total-gerado');
     const elTF = document.getElementById('c-total-final');

@@ -5617,10 +5617,9 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
                   AND e.utilizador_id = tp.promotor_id::text
               ) AS promotor_tem_escala,
               EXISTS (
-                SELECT 1 FROM presencas pr
-                WHERE pr.utilizador_id = tp.promotor_id
-                  AND pr.tipo = 'entrada'
-                  AND pr.criado_em::date = t.data
+                SELECT 1 FROM turno_equipa_real er
+                WHERE er.turno_id = tp.turno_id
+                  AND er.utilizador_id = tp.promotor_id::text
               ) AS promotor_clocked_in,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
@@ -5654,7 +5653,9 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
           comissao_valor_potencial: parseFloat(row.comissao_valor_potencial) || 0,
           promotor_tem_escala: row.promotor_tem_escala === true,
           promotor_clocked_in: row.promotor_clocked_in === true,
-          promotor_a_trabalhar: row.promotor_tem_escala === true && row.promotor_clocked_in === true,
+          // "A trabalhar" = consta na equipa real do turno (quem realmente
+          // trabalhou). Não exige escala (cobre quem cobriu turnos).
+          promotor_a_trabalhar: row.promotor_clocked_in === true,
           linhas: []
         });
       }
@@ -6032,7 +6033,9 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
       const auto = row.promotor_id && row.operador_id && row.promotor_id === row.operador_id;
       const temEscala = row.promotor_tem_escala === true;
       const clockedIn = row.promotor_clocked_in === true;
-      const aTrabalhar = temEscala && clockedIn;
+      // "A trabalhar" = consta na equipa real do turno (quem realmente
+      // trabalhou); não exige escala.
+      const aTrabalhar = clockedIn;
       return {
         pedido_id: row.pedido_id,
         turno_id: row.turno_id,

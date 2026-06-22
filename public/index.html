@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-entradas-via-saidas">
+<html lang="pt" data-stockos-ui="2026-05-19-comissao-metade-trabalhando">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5018,14 +5018,20 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         semPromN += 1;
         continue;
       }
-      comTotal += com;
+      // Regra: quem REALMENTE TRABALHOU (escalado + clock-in à hora do
+      // pedido) recebe metade da comissão (a outra metade fica para a casa).
+      const aTrabalhar = p.promotor_a_trabalhar === true;
+      const comEfetiva = aTrabalhar ? com / 2 : com;
+      comTotal += comEfetiva;
       if (!porProm.has(promId)) {
-        porProm.set(promId, { nome: promNome, modo, pct, n: 0, vendido: 0, comissao: 0 });
+        porProm.set(promId, { nome: promNome, modo, pct, n: 0, vendido: 0, comissao: 0, comissaoOriginal: 0, nTrabalhados: 0 });
       }
       const a = porProm.get(promId);
       a.n += 1;
       a.vendido += subtotal;
-      a.comissao += com;
+      a.comissao += comEfetiva;
+      a.comissaoOriginal += com;
+      if (aTrabalhar) a.nTrabalhados += 1;
       a.modo = modo;
       a.pct = pct;
     }
@@ -5045,12 +5051,16 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         const parcial = pago > 0 ? ` <span style="font-size:9px;color:#64748b">(pago ${fmt(pago)})</span>` : '';
         acaoHtml = `<button type="button" class="btn btn-ghost btn-sm pagar-comissao-btn" title="Registar saída de caixa para pagar ${pago > 0 ? 'o que falta' : 'esta comissão'} (${fmt(porPagar)})" style="padding:2px 8px;font-size:11px;margin-left:6px" data-pc-turno="${escapeHtml(String(turnoId))}" data-pc-nome="${escapeHtml(String(r.nome))}" data-pc-valor="${porPagar}" onclick="runAction(event, () => pagarComissaoFromBtn(this))">💸 Pagar</button>${parcial}`;
       }
+      const reducao = r.comissaoOriginal > r.comissao + 0.009;
+      const reducaoTag = reducao
+        ? ` <span title="Recebe metade (${r.nTrabalhados}/${r.n} pedido${r.n===1?'':'s'} com o promotor a trabalhar — outra metade fica para a casa). Total original ${fmt(r.comissaoOriginal)}." style="font-size:9px;color:#fb923c;font-weight:700;margin-left:4px;cursor:help">½</span>`
+        : '';
       return `
         <tr>
           <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)} <span style="color:#64748b;font-size:11px">(${escapeHtml(modoTxt)})</span></td>
           <td style="padding:5px 8px;text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums">${r.n}</td>
           <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.vendido)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap">${fmt(r.comissao)}${acaoHtml}</td>
+          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap">${fmt(r.comissao)}${reducaoTag}${acaoHtml}</td>
         </tr>`;
     }).join('');
     const semPromHtml = semPromN > 0
@@ -5081,10 +5091,12 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           </table>
         </div>`
       : '';
+    const regraNota = `<div style="margin-top:6px;font-size:10px;color:#64748b;line-height:1.4">Regra: promotores que estão a <strong style="color:#cbd5e1">trabalhar no turno</strong> (escalados + clock-in à hora do pedido) recebem <strong style="color:#fb923c">metade</strong> da comissão; a outra metade fica para a casa. Marcado com <span style="color:#fb923c;font-weight:700">½</span>.</div>`;
     return `
       <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
         <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">🪙 Comissões do turno</div>
         ${tabela}
+        ${regraNota}
         ${semPromHtml}
       </div>`;
   })();

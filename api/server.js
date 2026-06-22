@@ -4574,7 +4574,9 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
 // saida = despesas directas + compras de stock
 async function calcSaidaTotal(turnoId, client) {
   const q = client ? (s, p) => client.query(s, p) : query;
-  const despesas = await q(`SELECT COALESCE(SUM(valor),0) as t FROM turno_saidas WHERE turno_id=$1`, [turnoId]).catch(() => ({ rows: [{ t: 0 }] }));
+  // Exclui entradas de caixa guardadas em turno_saidas (notas começa por
+  // 'ENTRADA::') — essas são dinheiro que ENTROU, não saídas.
+  const despesas = await q(`SELECT COALESCE(SUM(valor),0) as t FROM turno_saidas WHERE turno_id=$1 AND COALESCE(notas,'') NOT LIKE 'ENTRADA::%'`, [turnoId]).catch(() => ({ rows: [{ t: 0 }] }));
   const compras  = await q(`SELECT COALESCE(SUM(preco),0) as t FROM turno_entradas WHERE turno_id=$1 AND origem='compra' AND tipo='entrada'`, [turnoId]).catch(() => ({ rows: [{ t: 0 }] }));
   return parseFloat(despesas.rows[0].t) + parseFloat(compras.rows[0].t);
 }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-caixa-input-entradas">
+<html lang="pt" data-stockos-ui="2026-05-19-entradas-via-saidas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7029,15 +7029,22 @@ function renderCaixaMovimentos(turnoId, canEdit, saidas, entradas, caixaEntradas
   try {
     const hora = (d) => d ? new Date(d).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }) : '';
     const movimentos = [];
+    // Entradas guardadas em turno_saidas marcadas com ENTRADA_MARK nas notas
+    // (não precisam de tabela própria — funciona em qualquer BD).
+    const isEntradaMarcada = (s) => String(s.notas || '').startsWith(ENTRADA_MARK);
     // Saídas: compras de stock
     (entradas || []).filter(e => e.origem === 'compra' && e.tipo === 'entrada').forEach(e => {
       movimentos.push({ ts: e.criado_em, dir: 'out', desc: `${e.produto_nome || 'Compra'}`, tag: 'compra', valor: parseFloat(e.preco) || 0, notas: e.notas || '' });
     });
-    // Saídas: despesas
+    // turno_saidas: separa saídas reais de entradas marcadas
     (saidas || []).forEach(s => {
-      movimentos.push({ ts: s.criado_em, dir: 'out', desc: s.descricao || '', tag: '', valor: parseFloat(s.valor) || 0, notas: s.notas || '' });
+      if (isEntradaMarcada(s)) {
+        movimentos.push({ ts: s.criado_em, dir: 'in', desc: s.descricao || '', tag: '', valor: parseFloat(s.valor) || 0, notas: String(s.notas).slice(ENTRADA_MARK.length) });
+      } else {
+        movimentos.push({ ts: s.criado_em, dir: 'out', desc: s.descricao || '', tag: '', valor: parseFloat(s.valor) || 0, notas: s.notas || '' });
+      }
     });
-    // Entradas extra
+    // Entradas da tabela dedicada (turno_caixa_entradas), se existir/usada.
     (caixaEntradas || []).forEach(s => {
       movimentos.push({ ts: s.criado_em, dir: 'in', desc: s.descricao || '', tag: '', valor: parseFloat(s.valor) || 0, notas: s.notas || '' });
     });
@@ -7120,6 +7127,11 @@ function renderCaixaMovimentos(turnoId, canEdit, saidas, entradas, caixaEntradas
   }
 }
 
+/** Marcador (no campo notas) que distingue uma ENTRADA de caixa guardada na
+ *  tabela turno_saidas. Permite registar entradas sem precisar de uma tabela
+ *  própria (que a app pode não ter permissão para criar). */
+const ENTRADA_MARK = 'ENTRADA::';
+
 async function submitMovimentoCaixa(turnoId) {
   const tipo  = document.getElementById('mc-tipo')?.value || 'saida';
   const desc  = document.getElementById('mc-desc')?.value.trim() || '';
@@ -7130,8 +7142,10 @@ async function submitMovimentoCaixa(turnoId) {
   if (!desc) { setErr('Descrição obrigatória.'); return; }
   if (!valor || valor <= 0) { setErr('Valor inválido.'); return; }
   try {
-    const endpoint = tipo === 'entrada' ? 'caixa-entradas' : 'saidas';
-    await api('POST', `/turnos/${turnoId}/${endpoint}`, { descricao: desc, valor, notas });
+    // Entradas e saídas vão ambas para turno_saidas; a entrada leva o
+    // marcador nas notas e é tratada como dinheiro que entrou.
+    const notasFinal = tipo === 'entrada' ? (ENTRADA_MARK + notas) : notas;
+    await api('POST', `/turnos/${turnoId}/saidas`, { descricao: desc, valor, notas: notasFinal });
     ['mc-desc', 'mc-valor', 'mc-notas'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
     await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], true);
   } catch (e) {

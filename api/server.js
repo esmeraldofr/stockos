@@ -6697,10 +6697,45 @@ app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
   }
 });
 
+/** Verifica se o turno já tem comissões pagas (saídas de caixa com
+ *  descrição "Comissão — ..."). Devolve { paga: boolean, total: number }. */
+async function comissoesJaPagasNoTurno(turnoId) {
+  try {
+    const r = await query(
+      `SELECT COALESCE(SUM(valor),0) AS total, COUNT(*) AS n
+       FROM turno_saidas
+       WHERE turno_id=$1 AND descricao ~* '^Comiss[aã]o\\s*[—-]'`,
+      [turnoId]
+    );
+    const total = parseFloat(r.rows[0].total) || 0;
+    const n = parseInt(r.rows[0].n, 10) || 0;
+    return { paga: n > 0, total, n };
+  } catch (_) {
+    return { paga: false, total: 0, n: 0 };
+  }
+}
+
 app.post('/api/turnos/:id/equipa-real', auth, async (req, res) => {
   try {
     const { utilizador_id, cobrindo_utilizador_id, hora_extra, motivo_falta, notas } = req.body || {};
     if (!utilizador_id) return res.status(400).json({ erro: 'utilizador_id é obrigatório' });
+    // Bloqueia alterações à equipa real depois de já haver comissão paga
+    // no turno — mudar quem trabalhou recalcula a regra "metade" e
+    // tornaria os pagamentos já feitos inconsistentes.
+    const pago = await comissoesJaPagasNoTurno(req.params.id);
+    if (pago.paga) {
+      // Permite UPDATE de quem já está registado (notas/hora_extra), mas
+      // bloqueia INSERT de um novo nome.
+      const ja = await query(
+        'SELECT 1 FROM turno_equipa_real WHERE turno_id=$1 AND utilizador_id=$2 LIMIT 1',
+        [req.params.id, String(utilizador_id)]
+      );
+      if (!ja.rows.length) {
+        return res.status(409).json({
+          erro: `Já há ${pago.n} pagamento${pago.n === 1 ? '' : 's'} de comissão neste turno (total ${pago.total.toLocaleString('pt-AO')} Kz). Para adicionar alguém a «Quem realmente trabalhou», anula primeiro as saídas de caixa de comissão.`
+        });
+      }
+    }
     const cobre = cobrindo_utilizador_id ? String(cobrindo_utilizador_id) : null;
     const he = !!hora_extra;
     const motivo = (motivo_falta || '').trim();
@@ -6722,6 +6757,14 @@ app.post('/api/turnos/:id/equipa-real', auth, async (req, res) => {
 
 app.delete('/api/turnos/:id/equipa-real/:utilizador_id', auth, async (req, res) => {
   try {
+    // Mesma protecção: não permitir remover alguém depois de pagamentos
+    // de comissão no turno.
+    const pago = await comissoesJaPagasNoTurno(req.params.id);
+    if (pago.paga) {
+      return res.status(409).json({
+        erro: `Já há ${pago.n} pagamento${pago.n === 1 ? '' : 's'} de comissão neste turno. Para remover de «Quem realmente trabalhou», anula primeiro as saídas de caixa de comissão.`
+      });
+    }
     await query('DELETE FROM turno_equipa_real WHERE turno_id=$1 AND utilizador_id=$2', [req.params.id, req.params.utilizador_id]);
     res.json({ sucesso: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }

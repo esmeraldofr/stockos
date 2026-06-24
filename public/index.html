@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-stock-coluna-balcao">
+<html lang="pt" data-stockos-ui="2026-05-19-stock-balcao-preload">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2978,14 +2978,14 @@ function getPedidosBalcaoBreakdown() {
 }
 
 /** Quantidades vendidas no balcão (todos os pedidos do turno), agregadas
- *  por produto_id. Para bebidas por copo: devolve copos; converte também
- *  para kg (usando kg_por_copo) — útil para a coluna stock. */
+ *  por produto_id (normalizado com prodIdKey). Para bebidas por copo:
+ *  devolve copos; converte também para kg (usando kg_por_copo). */
 function getVendasBalcaoPorProduto() {
   const map = Object.create(null);
   const pedidos = window.__stockosPedidosBalcao || [];
   for (const p of pedidos) {
     for (const ln of (p.linhas || [])) {
-      const pid = String(ln.produto_id || '');
+      const pid = prodIdKey(ln.produto_id);
       if (!pid) continue;
       const qtd = parseFloat(ln.quantidade) || 0;
       const isCopo = ln.venda_por_copo === true && (parseFloat(ln.kg_por_copo) || 0) > 0;
@@ -3110,6 +3110,12 @@ async function loadTurno() {
     if (!turno) { show('turno-content','<div class="alert alert-error">Turno não encontrado</div>'); return; }
 
     S.turnoData = turno;
+    // Pré-carrega pedidos do balcão para a coluna "Balcão" da tabela
+    // Stock aparecer mesmo quando o user nunca abre a aba Pedidos/Caixa.
+    try {
+      const ped = await api('GET', `/turnos/${encodeURIComponent(turno.id)}/pedidos`);
+      if (mySeq === loadTurnoSeq) window.__stockosPedidosBalcao = ped || [];
+    } catch (_) { /* silencioso — fica vazio */ }
     S.turnoDeposito = undefined;
     S.turnoDecisoes = {};
     S.turnoComentarios = {};
@@ -3226,7 +3232,7 @@ async function loadTurno() {
         const inputAttr = canEdit ? '' : 'disabled';
         const encInputAttr = canEdit && !encontradosFechados ? '' : 'disabled';
         // Vendas no balcão deste produto (todos os pedidos do turno).
-        const balcao = (stockBalcaoMap && stockBalcaoMap[String(s.produto_id)]) || null;
+        const balcao = (stockBalcaoMap && stockBalcaoMap[pid]) || null;
         let balcaoTxt = '';
         if (balcao) {
           if (balcao.isCopo && balcao.copos > 0) {

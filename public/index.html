@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-resumo-validacao">
+<html lang="pt" data-stockos-ui="2026-05-19-resumo-validacao-valor">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5311,6 +5311,20 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       ? getVendasBalcaoPorProduto()
       : {};
     const items = [];
+    /** Converte uma quantidade em "nativo do stock" (kg para bebida por
+     *  copo, unidades para os outros) para Kz, usando os preços do produto. */
+    function valorKzPorDiff(s, diffNativo) {
+      const preco = parseFloat(s.preco) || 0;
+      if (!preco || !Number.isFinite(diffNativo)) return 0;
+      const kgPorCopo = parseFloat(s.kg_por_copo) || 0;
+      // Bebidas por copo: stock em kg → converter para copos antes de
+      // multiplicar pelo preço do copo.
+      if (s.venda_por_copo === true && kgPorCopo > 0) {
+        const copos = diffNativo / kgPorCopo;
+        return copos * preco;
+      }
+      return diffNativo * preco;
+    }
     for (const s of stocks) {
       const pid = prodIdKey(s.produto_id);
       if (!pid) continue;
@@ -5341,6 +5355,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
               produto: nome,
               campo: 'Vendido vs Balcão',
               valor: `Δ ${sinal}${fmtNum(Math.abs(diff))}`,
+              valorKz: Math.abs(valorKzPorDiff(s, diff)),
               dica: diff > 0
                 ? `Stock indica ${fmtNum(Math.abs(diff))} a mais que o balcão (possível desperdício/oferta ou Deixado contado a menos).`
                 : `Balcão registou ${fmtNum(Math.abs(diff))} a mais do que o stock indica (provável erro de contagem em Encontrado/Deixado).`
@@ -5364,6 +5379,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             produto: nome,
             campo: 'Deixado vs Próx. Enc.',
             valor: `Δ ${sinal}${fmtNum(Math.abs(diff))}`,
+            valorKz: Math.abs(valorKzPorDiff(s, diff)),
             dica: diff > 0
               ? `Próximo turno encontrou ${fmtNum(Math.abs(diff))} A MAIS — entrou stock entre turnos?`
               : `Próximo turno encontrou ${fmtNum(Math.abs(diff))} A MENOS — sumiu stock entre turnos, possível erro de contagem.`
@@ -5396,12 +5412,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const comp = s.comparacao;
       if (comp && (comp.startsWith('falta') || comp.startsWith('sobra'))) {
         const isFalta = comp.startsWith('falta');
+        const qtdComp = parseFloat(String(comp).replace(/[^0-9.,-]/g, '').replace(',', '.')) || 0;
+        const diffComp = isFalta ? -qtdComp : qtdComp;
         items.push({
           cor: isFalta ? '#f87171' : '#fb923c',
           tag: '⬅ Turno anterior',
           produto: nome,
           campo: 'Encontrado vs Deixado anterior',
           valor: `${isFalta ? '⚠' : '↑'} ${comp}`,
+          valorKz: Math.abs(valorKzPorDiff(s, diffComp)),
           dica: isFalta
             ? 'Encontrado está abaixo do Deixado do turno anterior — possível falta.'
             : 'Encontrado está acima do Deixado do turno anterior — possível sobra ou reposição não registada.'
@@ -5431,13 +5450,25 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <div style="padding:8px 10px;background:#0b1322;border:1px dashed #334155;border-radius:6px;font-size:12px;color:#86efac">✓ Nenhuma divergência detectada.</div>
         </div>`;
     }
-    const linhasHtml = items.map((it) => `
+    const linhasHtml = items.map((it) => {
+      const kz = parseFloat(it.valorKz) || 0;
+      const kzTxt = kz > 0 ? `<span style="color:${it.cor};font-weight:700">${fmt(kz)}</span>` : '<span style="color:#475569">—</span>';
+      return `
       <tr title="${escapeHtml(it.dica)}">
         <td style="padding:5px 8px;color:#64748b;font-size:11px;white-space:nowrap">${it.tag}</td>
         <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(it.produto)}</td>
         <td style="padding:5px 8px;color:#94a3b8;font-size:11px">${escapeHtml(it.campo)}</td>
         <td style="padding:5px 8px;text-align:right;color:${it.cor};font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums">${escapeHtml(it.valor)}</td>
-      </tr>`).join('');
+        <td style="padding:5px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums">${kzTxt}</td>
+      </tr>`;
+    }).join('');
+    const totalKz = items.reduce((s, it) => s + (parseFloat(it.valorKz) || 0), 0);
+    const totalKzRow = totalKz > 0
+      ? `<tr style="border-top:1px solid #334155">
+          <td colspan="4" style="padding:6px 8px;color:#cbd5e1;font-weight:700;text-align:right">Total estimado</td>
+          <td style="padding:6px 8px;text-align:right;color:#fbbf24;font-weight:700;font-variant-numeric:tabular-nums">${fmt(totalKz)}</td>
+        </tr>`
+      : '';
     return `
       <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
         ${titulo}
@@ -5449,9 +5480,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
                 <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Produto</th>
                 <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Campo</th>
                 <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Diferença</th>
+                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em" title="Valor estimado em Kz da diferença (preço × diff). Caixas/fardos não têm preço unitário, ficam «—».">Valor (Kz)</th>
               </tr>
             </thead>
-            <tbody>${linhasHtml}</tbody>
+            <tbody>${linhasHtml}${totalKzRow}</tbody>
           </table>
         </div>
         <div style="margin-top:6px;font-size:10px;color:#64748b;line-height:1.4">${items.length} divergência${items.length === 1 ? '' : 's'} — passa o rato em cada linha para ler a explicação.</div>

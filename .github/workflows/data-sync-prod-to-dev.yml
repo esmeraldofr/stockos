@@ -4,10 +4,12 @@
 # Diferenças face a `sync-db-prod-to-dev.yml` (clone completo):
 #  - pg_dump --data-only --column-inserts (gera INSERTs explícitos por
 #    coluna; ignora DDL).
-#  - TRUNCATE prévio em CASCATA das tabelas do schema public no develop
-#    (preserva o schema, apaga só rows). Reinicia sequências.
+#  - DELETE iterativo das tabelas do schema public no develop
+#    (preserva o schema; mais permissivo que TRUNCATE quando há tabelas
+#    com owners diferentes). FKs/triggers off via session_replication_role.
 #  - session_replication_role = replica desactiva FKs/triggers durante o
 #    restore (ordem dos INSERTs não importa).
+#  - setval às sequências para max(id) após restore.
 #  - Colunas que existem no develop mas NÃO em produção mantêm o DEFAULT
 #    (ex.: turno_pedido_linhas.qtd_devolvida = 0).
 #
@@ -15,8 +17,8 @@
 #   DATABASE_URL              — URI postgres de produção (a usada no deploy).
 #   DATABASE_URL_DEV_ADMIN    — URI com user postgres.<ref-dev> do projecto
 #                               dev (pooler Supabase: porta 5432).
-#                               Não uses stockos_app — precisa de TRUNCATE
-#                               e desactivar triggers de sessão.
+#                               Não uses stockos_app — precisa de privilégio
+#                               DELETE generalizado e desactivar triggers.
 
 name: Sync DADOS produção → desenvolvimento
 
@@ -79,8 +81,6 @@ jobs:
           # --column-inserts: gera INSERT INTO tabela (col1, col2,…) — robusto a
           #   colunas existentes no destino que não existem na origem
           #   (essas ficam com o DEFAULT do schema).
-          # --disable-triggers: o restore desactiva triggers durante os INSERTs;
-          #   é descartado mais à frente porque preferimos session_replication_role.
           # --no-owner / --no-acl: ignora dono e privilégios.
           pg_dump \
             --data-only \
@@ -93,31 +93,48 @@ jobs:
           ls -la prod-data.sql
           echo "Linhas no ficheiro: $(wc -l < prod-data.sql)"
 
-      - name: Limpar tabelas do develop (TRUNCATE em cascata)
+      - name: Limpar tabelas do develop (DELETE com FKs off)
         env:
           DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
-          # TRUNCATE em cascata de TODAS as tabelas do schema public, mantendo
-          # o schema intacto. RESTART IDENTITY reinicia sequências para 1.
+          # TRUNCATE exige owner. Usamos DELETE (só precisa de privilégio DELETE,
+          # que o user da connection tem na maior parte das tabelas). FKs são
+          # desactivadas via session_replication_role=replica para a ordem dos
+          # DELETEs não importar. Erros por tabela são logados como warnings e
+          # não abortam — tabelas sem permissão (raras) ficam com dados antigos.
           psql -v ON_ERROR_STOP=1 <<'SQL'
+          SET session_replication_role = 'replica';
           DO $$
           DECLARE
-            stmt text;
+            tbl text;
+            ok int := 0;
+            ko int := 0;
+            skipped text := '';
           BEGIN
-            SELECT string_agg(format('%I.%I', schemaname, tablename), ', ')
-              INTO stmt
-              FROM pg_tables
-             WHERE schemaname = 'public';
-            IF stmt IS NULL THEN
-              RAISE NOTICE 'Sem tabelas em public — nada a truncar.';
-            ELSE
-              EXECUTE 'TRUNCATE TABLE ' || stmt || ' RESTART IDENTITY CASCADE';
-              RAISE NOTICE 'Truncadas: %', stmt;
+            FOR tbl IN
+              SELECT format('%I.%I', schemaname, tablename)
+                FROM pg_tables
+               WHERE schemaname = 'public'
+               ORDER BY tablename
+            LOOP
+              BEGIN
+                EXECUTE 'DELETE FROM ' || tbl;
+                ok := ok + 1;
+              EXCEPTION WHEN OTHERS THEN
+                ko := ko + 1;
+                skipped := skipped || ' ' || tbl;
+                RAISE WARNING 'Falhou DELETE em %: %', tbl, SQLERRM;
+              END;
+            END LOOP;
+            RAISE NOTICE 'DELETE concluido: % OK, % falhas.', ok, ko;
+            IF ko > 0 THEN
+              RAISE NOTICE 'Tabelas que ficaram sem limpar:%', skipped;
             END IF;
           END
           $$;
+          RESET session_replication_role;
           SQL
 
       - name: Restaurar dados no develop
@@ -138,6 +155,49 @@ jobs:
           } | psql -v ON_ERROR_STOP=1 2>&1 | tee restore.log
           echo "Restore terminado. Avisos (não-fatais):"
           grep -E '^WARNING:|^NOTICE:' restore.log | head -50 || true
+
+      - name: Sincronizar sequências (max(id) → setval)
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          # Como usámos DELETE (não TRUNCATE RESTART IDENTITY), as sequências
+          # SERIAL/IDENTITY mantiveram o nextval anterior. Os INSERTs trouxeram
+          # IDs explícitos vindos de produção — sincronizamos cada sequência ao
+          # max(id) da tabela associada para os próximos INSERTs não colidirem.
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE
+            r record;
+            max_id bigint;
+          BEGIN
+            FOR r IN
+              SELECT
+                n.nspname AS schema_name,
+                c.relname AS table_name,
+                a.attname AS column_name,
+                pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname) AS seq_name
+              FROM pg_attribute a
+              JOIN pg_class c ON c.oid = a.attrelid
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'public'
+                AND c.relkind = 'r'
+                AND a.attnum > 0
+                AND NOT a.attisdropped
+                AND pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname) IS NOT NULL
+            LOOP
+              BEGIN
+                EXECUTE format('SELECT COALESCE(MAX(%I), 0) FROM %I.%I', r.column_name, r.schema_name, r.table_name) INTO max_id;
+                PERFORM setval(r.seq_name, GREATEST(max_id, 1), max_id > 0);
+                RAISE NOTICE 'setval(%) = %', r.seq_name, max_id;
+              EXCEPTION WHEN OTHERS THEN
+                RAISE WARNING 'Falhou setval para %: %', r.seq_name, SQLERRM;
+              END;
+            END LOOP;
+          END
+          $$;
+          SQL
 
       - name: Re-conceder privilégios a stockos_app
         env:
@@ -163,5 +223,7 @@ jobs:
         run: |
           echo "## Sync de DADOS concluído"
           echo "- Produção: read-only (apenas leitura via pg_dump --data-only)."
-          echo "- Develop: rows substituídos; estrutura PRESERVADA (colunas extra, índices, sequências reiniciadas)."
+          echo "- Develop: rows substituídos via DELETE (FKs off); estrutura PRESERVADA (colunas extra, índices)."
+          echo "- Sequências sincronizadas (setval = max(id) por tabela)."
           echo "- Colunas só do develop (ex.: turno_pedido_linhas.qtd_devolvida) mantêm o DEFAULT (0)."
+          echo "- Tabelas que falharem DELETE (sem permissão) ficam com dados antigos — ver warnings acima."

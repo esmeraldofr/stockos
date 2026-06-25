@@ -4098,6 +4098,8 @@ app.get('/api/dia', auth, async (req, res) => {
 
     const prevMapByTurnoId = {};
     const prevCaixaMapByTurnoId = {};
+    const nextMapByTurnoId = {};
+    const nextCaixaMapByTurnoId = {};
     if (ids.length) {
       // Para cada turno actual, encontra o ÚLTIMO turno anterior que foi
       // registado (tem stock com deixado) e usa o `deixado` desse turno para
@@ -4143,6 +4145,47 @@ app.get('/api/dia', auth, async (req, res) => {
           prevCaixaMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.deixado_caixa);
         }
       }
+      // ── Mesma lógica, ao contrário: encontra o PRÓXIMO turno (já com
+      // encontrado registado) para podermos comparar Deixado(actual) vs
+      // Encontrado(próximo) — útil para detectar erros de contagem. ──
+      const nextStock = await query(
+        `WITH cur AS (
+           SELECT id AS turno_id, data, ${slotCase} AS slot
+           FROM turnos WHERE id = ANY($1::int[])
+         ),
+         nxt AS (
+           SELECT c.turno_id, p.next_turno_id
+           FROM cur c
+           LEFT JOIN LATERAL (
+             SELECT t.id AS next_turno_id
+             FROM turnos t
+             WHERE (t.data > c.data OR (t.data = c.data AND ${slotCaseT} > c.slot))
+               AND EXISTS (
+                 SELECT 1 FROM turno_stock ts
+                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+                 WHERE ts.turno_id = t.id AND ts.encontrado IS NOT NULL
+               )
+             ORDER BY t.data ASC, ${slotCaseT} ASC
+             LIMIT 1
+           ) p ON TRUE
+         )
+         SELECT nx.turno_id, ts.produto_id, ts.encontrado, ts.encontrado_caixa
+         FROM nxt nx
+         JOIN turno_stock ts ON ts.turno_id = nx.next_turno_id
+         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+         WHERE ts.encontrado IS NOT NULL OR ts.encontrado_caixa IS NOT NULL`,
+        [ids]
+      );
+      for (const r of nextStock.rows) {
+        if (r.encontrado !== null) {
+          if (!nextMapByTurnoId[r.turno_id]) nextMapByTurnoId[r.turno_id] = {};
+          nextMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.encontrado);
+        }
+        if (r.encontrado_caixa !== null) {
+          if (!nextCaixaMapByTurnoId[r.turno_id]) nextCaixaMapByTurnoId[r.turno_id] = {};
+          nextCaixaMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.encontrado_caixa);
+        }
+      }
     }
 
     const result = [];
@@ -4150,6 +4193,8 @@ app.get('/api/dia', auth, async (req, res) => {
       const stock = stockByTurno[turno.id] || [];
       const prevMap = prevMapByTurnoId[turno.id] || {};
       const prevCaixaMap = prevCaixaMapByTurnoId[turno.id] || {};
+      const nextMap = nextMapByTurnoId[turno.id] || {};
+      const nextCaixaMap = nextCaixaMapByTurnoId[turno.id] || {};
 
       const stockFinal = stock.map((s) => {
         const enc =
@@ -4190,6 +4235,8 @@ app.get('/api/dia', auth, async (req, res) => {
         const prevDeixadoCaixa =
           prevCaixaMap[s.produto_id] !== undefined ? prevCaixaMap[s.produto_id] : null;
 
+        const nextEncontrado = nextMap[s.produto_id] !== undefined ? nextMap[s.produto_id] : null;
+        const nextEncontradoCaixa = nextCaixaMap[s.produto_id] !== undefined ? nextCaixaMap[s.produto_id] : null;
         return {
           ...s,
           vendido: vend,
@@ -4197,7 +4244,9 @@ app.get('/api/dia', auth, async (req, res) => {
           comparacao,
           prev_deixado: prevDeixado,
           comparacao_caixa: comparacaoCaixa,
-          prev_deixado_caixa: prevDeixadoCaixa
+          prev_deixado_caixa: prevDeixadoCaixa,
+          next_encontrado: nextEncontrado,
+          next_encontrado_caixa: nextEncontradoCaixa
         };
       });
 

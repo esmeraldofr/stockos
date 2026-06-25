@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-stock-balcao-delta">
+<html lang="pt" data-stockos-ui="2026-05-19-stock-prox-encontrado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3292,6 +3292,29 @@ async function loadTurno() {
             <td class="td-calc stock-fechados-bloq" style="color:#94a3b8" title="Coluna bloqueada — valor mantido no registo">${fmtNum(parseFloat(s.fechados) || 0)}</td>
             <td class="td-calc" id="vend-${pid}">${vendTxt}</td>
             <td class="td-calc" id="balcao-${pid}" style="color:#a5b4fc">${balcaoTxt}${balcaoDelta}</td>
+            <td class="td-calc" id="next-enc-${pid}">${(() => {
+              const nx = s.next_encontrado;
+              if (nx === null || nx === undefined) return '<span style="color:#475569">—</span>';
+              const nxV = parseFloat(nx);
+              const med = medicaoSigla(s.tipo_medicao);
+              const txt = `${fmtNum(nxV)} ${med}`;
+              const dVal = stockBuf[pid]?.deixado;
+              const dNum = dVal === null || dVal === undefined || dVal === '' ? NaN : parseFloat(dVal);
+              if (!Number.isFinite(dNum)) {
+                return `<span style="color:#94a3b8">${escapeHtml(txt)}</span>`;
+              }
+              const diff = nxV - dNum;
+              const tol = s.tipo_medicao === 'peso' ? 0.001 : 0.5;
+              if (Math.abs(diff) <= tol) {
+                return `<span style="color:#86efac" title="Bate certo com o Deixado (${fmtNum(dNum)} ${med}).">✓ ${escapeHtml(txt)}</span>`;
+              }
+              const cor = diff > 0 ? '#fb923c' : '#f87171';
+              const sinal = diff > 0 ? '+' : '−';
+              const dica = diff > 0
+                ? `Próximo turno encontrou ${fmtNum(Math.abs(diff))} ${med} A MAIS que o Deixado deste (${fmtNum(dNum)} ${med}). Entrou stock entre turnos?`
+                : `Próximo turno encontrou ${fmtNum(Math.abs(diff))} ${med} A MENOS que o Deixado deste (${fmtNum(dNum)} ${med}). Sumiu stock entre turnos — possível erro de contagem.`;
+              return `<span style="color:${cor};cursor:help" title="${escapeHtml(dica)}">${escapeHtml(txt)}<div style="font-size:10px;line-height:1.2;margin-top:2px">Δ ${sinal}${fmtNum(Math.abs(diff))} ${med}</div></span>`;
+            })()}</td>
           </tr>`;
       }).join('');
     }
@@ -3331,7 +3354,7 @@ async function loadTurno() {
     function tableFor(items, label) {
       if (!items.length) return '';
       return `
-        <tr><td colspan="9" class="section-header">${label}</td></tr>
+        <tr><td colspan="10" class="section-header">${label}</td></tr>
         ${stockRows(items)}`;
     }
 
@@ -3383,6 +3406,7 @@ async function loadTurno() {
                   <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(bloqueado)</span></th>
                   <th style="text-align:right">Vendido</th>
                   <th style="text-align:right" title="Quantidade vendida em Pedidos ao balcão (deste turno)">Balcão</th>
+                  <th style="text-align:right" title="Encontrado registado no próximo turno — deve bater certo com o Deixado deste">Próx. Enc.</th>
                 </tr>
               </thead>
               <tbody>

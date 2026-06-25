@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-aba-validacao">
+<html lang="pt" data-stockos-ui="2026-05-19-stock-3-colunas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3218,59 +3218,10 @@ async function loadTurno() {
       return items.map((s) => {
         const pid = prodIdKey(s.produto_id);
         if (!pid) return '';
-        const vend = vendidoQtyFromStockParts(
-          stockBuf[pid]?.encontrado,
-          stockBuf[pid]?.entrada,
-          stockBuf[pid]?.deixado
-        );
-        const vendTxt =
-          Number.isFinite(vend) && vend > 0 ? `${fmtNum(vend)} ${medicaoSigla(s.tipo_medicao)}` : '';
-        /* Comparação: só falta/sobra visíveis; sem ✓ verde quando enc. = T. anterior (não «mencionar» o normal). */
-        let compHtml = '<span class="comp-null">—</span>';
-        if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
-        else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
-
         const inputAttr = canEdit ? '' : 'disabled';
         const encInputAttr = canEdit && !encontradosFechados ? '' : 'disabled';
-        // Vendas no balcão deste produto (todos os pedidos do turno).
-        const balcao = (stockBalcaoMap && stockBalcaoMap[pid]) || null;
-        let balcaoTxt = '';
-        let balcaoDelta = '';
-        if (balcao) {
-          if (balcao.isCopo && balcao.copos > 0) {
-            balcaoTxt = `${fmtNum(balcao.copos)} copos`;
-            if (balcao.kg > 0) balcaoTxt += ` <span style="color:#64748b;font-size:11px">(${fmtNum(balcao.kg)} kg)</span>`;
-          } else if (balcao.unidades > 0) {
-            balcaoTxt = `${fmtNum(balcao.unidades)} ${medicaoSigla(s.tipo_medicao)}`;
-          }
-        }
-        // Comparar Vendido (do stock: enc+ent-dei) com Balcão (pedidos).
-        // Para bebidas por copo: kg vs kg. Para outros: qtd nativa.
-        if (Number.isFinite(vend) && vend >= 0) {
-          const balcaoNativo = balcao
-            ? (balcao.isCopo ? balcao.kg : balcao.unidades)
-            : 0;
-          const diff = vend - balcaoNativo;
-          const absDiff = Math.abs(diff);
-          // Tolerância: 1 g para kg, 0.5 para unidades.
-          const tol = (s.tipo_medicao === 'peso' || (balcao && balcao.isCopo)) ? 0.001 : 0.5;
-          if (balcaoNativo > 0 && absDiff > tol) {
-            const med = (balcao && balcao.isCopo) ? 'kg' : medicaoSigla(s.tipo_medicao);
-            // diff > 0 → stock diz vendido mais que o balcão registou
-            //   (possível desperdício, oferta, contagem do Deixado a menos).
-            // diff < 0 → balcão registou mais que o stock dá
-            //   (Encontrado ou Deixado mal contados — confirma no próximo turno).
-            const cor = diff > 0 ? '#fb923c' : '#f87171';
-            const sinal = diff > 0 ? '+' : '−';
-            const dica = diff > 0
-              ? `Stock diz vendido ${fmtNum(absDiff)} ${med} a mais que o balcão. Possível desperdício/oferta, ou Deixado contado a menos. Verifica no Encontrado do próximo turno.`
-              : `Balcão registou ${fmtNum(absDiff)} ${med} a mais do que o stock indica. Erro de contagem provável: revê o Encontrado ou Deixado. Verifica no Encontrado do próximo turno.`;
-            balcaoDelta = `<div style="font-size:10px;color:${cor};margin-top:2px;line-height:1.2;cursor:help" title="${escapeHtml(dica)}">Δ ${sinal}${fmtNum(absDiff)} ${med}</div>`;
-          }
-        }
         const taraKg = parseFloat(s.peso_tara_kg) || 0;
-        let metaLinha = medicaoSigla(s.tipo_medicao);
-        if (taraKg > 0) metaLinha += ` · recipiente ${fmtNum(taraKg)} kg`;
+        const metaLinha = taraKg > 0 ? `recipiente ${fmtNum(taraKg)} kg` : '';
         const isFB = isFinoBarrilNome(s.produto_nome);
         const fbPid = String(s.produto_id || '').replace(/[^0-9a-zA-Z-]/g, '');
         const fbBtnHtml =
@@ -3280,9 +3231,7 @@ async function loadTurno() {
             : '';
         return `
           <tr class="stock-row">
-            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div><div class="stock-prod-meta">${metaLinha}</div>${fbBtnHtml}</td>
-            <td class="td-calc" style="color:#94a3b8">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
-            <td id="comp-${pid}">${compHtml}</td>
+            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div>${metaLinha ? `<div class="stock-prod-meta">${metaLinha}</div>` : ''}${fbBtnHtml}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="encontrado" title="Obrigatório" ${encInputAttr}/></td>
@@ -3290,32 +3239,6 @@ async function loadTurno() {
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="deixado" title="Obrigatório" ${inputAttr}/></td>
-            <td class="td-calc stock-fechados-bloq" style="color:#94a3b8" title="Coluna bloqueada — valor mantido no registo">${fmtNum(parseFloat(s.fechados) || 0)}</td>
-            <td class="td-calc" id="vend-${pid}">${vendTxt}</td>
-            <td class="td-calc" id="balcao-${pid}" style="color:#a5b4fc">${balcaoTxt}${balcaoDelta}</td>
-            <td class="td-calc" id="next-enc-${pid}">${(() => {
-              const nx = s.next_encontrado;
-              if (nx === null || nx === undefined) return '<span style="color:#475569">—</span>';
-              const nxV = parseFloat(nx);
-              const med = medicaoSigla(s.tipo_medicao);
-              const txt = `${fmtNum(nxV)} ${med}`;
-              const dVal = stockBuf[pid]?.deixado;
-              const dNum = dVal === null || dVal === undefined || dVal === '' ? NaN : parseFloat(dVal);
-              if (!Number.isFinite(dNum)) {
-                return `<span style="color:#94a3b8">${escapeHtml(txt)}</span>`;
-              }
-              const diff = nxV - dNum;
-              const tol = s.tipo_medicao === 'peso' ? 0.001 : 0.5;
-              if (Math.abs(diff) <= tol) {
-                return `<span style="color:#86efac" title="Bate certo com o Deixado (${fmtNum(dNum)} ${med}).">✓ ${escapeHtml(txt)}</span>`;
-              }
-              const cor = diff > 0 ? '#fb923c' : '#f87171';
-              const sinal = diff > 0 ? '+' : '−';
-              const dica = diff > 0
-                ? `Próximo turno encontrou ${fmtNum(Math.abs(diff))} ${med} A MAIS que o Deixado deste (${fmtNum(dNum)} ${med}). Entrou stock entre turnos?`
-                : `Próximo turno encontrou ${fmtNum(Math.abs(diff))} ${med} A MENOS que o Deixado deste (${fmtNum(dNum)} ${med}). Sumiu stock entre turnos — possível erro de contagem.`;
-              return `<span style="color:${cor};cursor:help" title="${escapeHtml(dica)}">${escapeHtml(txt)}<div style="font-size:10px;line-height:1.2;margin-top:2px">Δ ${sinal}${fmtNum(Math.abs(diff))} ${med}</div></span>`;
-            })()}</td>
           </tr>`;
       }).join('');
     }
@@ -3443,7 +3366,7 @@ async function loadTurno() {
     function tableFor(items, label) {
       if (!items.length) return '';
       return `
-        <tr><td colspan="10" class="section-header">${label}</td></tr>
+        <tr><td colspan="4" class="section-header">${label}</td></tr>
         ${stockRows(items)}`;
     }
 
@@ -3488,15 +3411,9 @@ async function loadTurno() {
               <thead>
                 <tr>
                   <th>Produto</th>
-                  <th style="text-align:right">T. Anterior</th>
-                  <th>Comparação</th>
                   <th style="text-align:right">Encontrado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Entrada</th>
                   <th style="text-align:right">Deixado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
-                  <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(bloqueado)</span></th>
-                  <th style="text-align:right">Vendido</th>
-                  <th style="text-align:right" title="Quantidade vendida em Pedidos ao balcão (deste turno)">Balcão</th>
-                  <th style="text-align:right" title="Encontrado registado no próximo turno — deve bater certo com o Deixado deste">Próx. Enc.</th>
                 </tr>
               </thead>
               <tbody>

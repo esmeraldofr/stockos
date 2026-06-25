@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-tabs-reordenadas">
+<html lang="pt" data-stockos-ui="2026-05-19-devolucao-balcao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5027,14 +5027,39 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             const entregaTxt = p.com_entrega && valEnt > 0
               ? `<strong style="color:#cbd5e1">${ent}</strong> · <strong style="color:#60a5fa">${escapeHtml(fmt(valEnt))}</strong>`
               : `<strong style="color:#cbd5e1">${ent}</strong>`;
-            return `<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #334155">
-      <div>
-        <div style="font-weight:600;color:#e2e8f0">Pedido #${p.id}</div>
+            // Linhas do pedido com botão "↩ -1" por linha. canEdit é
+            // necessário para mostrar o botão. Linhas totalmente devolvidas
+            // ficam riscadas.
+            const linhasHtml = (p.linhas || []).map((ln) => {
+              const qtd = parseFloat(ln.quantidade) || 0;
+              const dev = parseFloat(ln.quantidade_devolvida) || 0;
+              const liq = Math.max(0, qtd - dev);
+              const isCopo = ln.venda_por_copo === true && (parseFloat(ln.kg_por_copo) || 0) > 0;
+              const unidLabel = isCopo ? 'copo' : 'unidade';
+              const nomeLinha = escapeHtml(ln.produto_nome || 'Item');
+              const devTxt = dev > 0 ? ` <span style="color:#f87171;font-size:11px">(↩ ${fmtNum(dev)} devolv.)</span>` : '';
+              const corQtd = liq <= 0 ? '#64748b;text-decoration:line-through' : '#a5b4fc';
+              const btnDev = canEdit && liq > 0
+                ? `<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;color:#f87171" title="Devolver 1 ${unidLabel} desta linha (estorno automático na caixa)" onclick="runAction(event, () => devolverLinhaPedido('${p.turno_id || (S.turnoData && S.turnoData.id) || ''}', ${p.id}, ${ln.linha_id}))">↩ −1</button>`
+                : '';
+              return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px">
+                <div style="flex:1;min-width:0;color:${corQtd};">${fmtNum(liq)}/${fmtNum(qtd)} ${unidLabel}${liq === 1 ? '' : 's'} · <span style="color:#cbd5e1">${nomeLinha}</span>${devTxt}</div>
+                ${btnDev}
+              </div>`;
+            }).join('');
+            const totalDevolvido = (p.linhas || []).reduce((s, l) => s + (parseFloat(l.quantidade_devolvida) || 0), 0);
+            const badgeDev = totalDevolvido > 0
+              ? ` <span style="font-size:10px;background:#7f1d1d;color:#fecaca;padding:1px 6px;border-radius:6px;margin-left:4px">↩ ${fmtNum(totalDevolvido)} devolv.</span>`
+              : '';
+            return `<div style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #334155">
+      <div style="flex:1;min-width:220px">
+        <div style="font-weight:600;color:#e2e8f0">Pedido #${p.id}${badgeDev}</div>
         <div style="font-size:12px;color:#64748b">${escapeHtml(when)} · ${cli}</div>
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">Pagamento: <strong style="color:#cbd5e1">${tp}</strong></div>
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">Entrega: ${entregaTxt}</div>
         <div style="font-size:13px;color:#94a3b8;margin-top:4px">Total <strong style="color:#4ade80">${tot}</strong></div>
         ${comissaoLinha}
+        ${linhasHtml ? `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #334155">${linhasHtml}</div>` : ''}
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
         <button type="button" class="btn btn-ghost btn-sm" onclick="pedidoBalcaoImprimirTalaoPorId(${p.id})" title="Imprimir talão na impressora térmica (Bluetooth)">🖨️ Talão</button>
@@ -8049,6 +8074,25 @@ function pagarComissaoFromBtn(btn) {
 /** Cria uma saída de caixa pré-preenchida para pagar a comissão de um
  *  promotor (descrição padronizada com o nome). Recarrega as secções de
  *  saídas e do resumo dos pedidos. */
+/** Devolve 1 unidade de uma linha de pedido — chama o endpoint backend
+ *  que ajusta stock (turno_vendas), comissão e cria saída de caixa
+ *  proporcional ao estorno. */
+async function devolverLinhaPedido(turnoId, pedidoId, linhaId) {
+  if (!turnoId || !pedidoId || !linhaId) return;
+  if (!confirm('Devolver 1 unidade desta linha?\n\n• Stock volta\n• Valor sai da caixa (saída automática)\n• Comissão ajusta')) return;
+  try {
+    turnoMsgPending('A processar devolução…');
+    const resp = await api('POST', `/turnos/${turnoId}/pedidos/${pedidoId}/devolver`, { linha_id: linhaId });
+    turnoMsgOk(`Devolvido · estorno ${fmt(resp.valor_devolvido || 0)}`);
+    // Recarrega tudo (pedidos, comissões, caixa).
+    try { await loadVendasMenu(turnoId, !!S.turnoCanEdit); } catch (_) {}
+    try { await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], !!S.turnoCanEdit); } catch (_) {}
+    setTimeout(() => turnoMsgIdle(), 1800);
+  } catch (e) {
+    turnoMsgErr(e.message);
+  }
+}
+
 async function pagarComissaoPromotor(turnoId, nome, valor) {
   const v = parseFloat(valor);
   if (!turnoId || !Number.isFinite(v) || v <= 0) return;

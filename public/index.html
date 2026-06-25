@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-devolucao-fix-onclick">
+<html lang="pt" data-stockos-ui="2026-05-19-produtos-vendidos-ordem">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5131,13 +5131,13 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             unidadeStr = `copos (${pT}${aT})`;
           }
         }
-        const pctTxt = r.pct > 0 ? ` <span style="color:#64748b;font-size:11px">(${r.pct.toFixed(1)}%)</span>` : '';
+        const pctTxt = r.pct > 0 ? `<span style="color:#64748b;font-size:11px">(${r.pct.toFixed(1)}%)</span> ` : '';
         return `
         <tr>
           <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums">${num2(r.qtd)} <span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span></td>
+          <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums"><span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span> ${num2(r.qtd)}</td>
           <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.valor)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${fmt(r.comissao)}${pctTxt}</td>
+          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${pctTxt}${fmt(r.comissao)}</td>
         </tr>`;
       }).join('');
       return `

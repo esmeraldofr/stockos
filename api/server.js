@@ -2465,6 +2465,25 @@ async function forcaPacoteAvailable() {
   return _forcaPacoteAvail;
 }
 
+/** Indica se a coluna turno_pedido_linhas.qtd_devolvida existe (devoluções
+ *  por unidade). Apenas leitura via information_schema; nunca tenta ALTER
+ *  em runtime (a app pode não ter permissão). */
+let _qtdDevolvidaAvail = null;
+async function qtdDevolvidaAvailable() {
+  if (_qtdDevolvidaAvail === true) return true;
+  try {
+    const r = await query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='turno_pedido_linhas' AND column_name='qtd_devolvida' LIMIT 1`
+    );
+    _qtdDevolvidaAvail = r.rows.length > 0;
+  } catch (e) {
+    console.warn('[qtdDevolvidaAvailable]', e && e.message);
+    _qtdDevolvidaAvail = false;
+  }
+  return _qtdDevolvidaAvail;
+}
+
 app.get('/api/produtos', auth, async (req, res) => {
   try {
     const hasFP = await forcaPacoteAvailable();
@@ -5651,6 +5670,8 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
   try {
     await ensureTurnoPedidos();
     await ensureTurnoPedidosEntrega();
+    const hasDev = await qtdDevolvidaAvailable();
+    const devSel = hasDev ? 'COALESCE(tpl.qtd_devolvida,0)' : '0';
     const turnoId = req.params.id;
     const r = await query(
       `SELECT tp.id, tp.turno_id, tp.cliente_nome, tp.tipo_pagamento, tp.com_entrega, tp.criado_em,
@@ -5671,6 +5692,7 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
                   AND er.utilizador_id = tp.promotor_id::text
               ) AS promotor_clocked_in,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
+              ${devSel} AS quantidade_devolvida,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
               p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct, p.categoria AS produto_categoria
        FROM turno_pedidos tp
@@ -5711,7 +5733,9 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
       if (row.linha_id != null && row.produto_id != null) {
         map.get(row.id).linhas.push({
           produto_id: row.produto_id,
+          linha_id: row.linha_id,
           quantidade: parseFloat(row.quantidade),
+          quantidade_devolvida: parseFloat(row.quantidade_devolvida) || 0,
           produto_nome: row.produto_nome,
           preco: parseFloat(row.preco) || 0,
           venda_por_copo: row.venda_por_copo,
@@ -5752,6 +5776,8 @@ app.get('/api/pedidos', auth, async (req, res) => {
   try {
     await ensureTurnoPedidos();
     await ensureTurnoPedidosEntrega();
+    const hasDev = await qtdDevolvidaAvailable();
+    const devSel = hasDev ? 'COALESCE(tpl.qtd_devolvida,0)' : '0';
     const data = String(req.query.data || '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) {
       return res.status(400).json({ erro: 'Indica ?data=YYYY-MM-DD' });
@@ -5765,6 +5791,7 @@ app.get('/api/pedidos', auth, async (req, res) => {
               COALESCE(tp.comissao_valor_potencial,0) AS comissao_valor_potencial,
               u.nome AS promotor_nome,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
+              ${devSel} AS quantidade_devolvida,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
               p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct, p.categoria AS produto_categoria
        FROM turno_pedidos tp
@@ -5800,7 +5827,9 @@ app.get('/api/pedidos', auth, async (req, res) => {
       if (row.linha_id != null && row.produto_id != null) {
         map.get(row.id).linhas.push({
           produto_id: row.produto_id,
+          linha_id: row.linha_id,
           quantidade: parseFloat(row.quantidade),
+          quantidade_devolvida: parseFloat(row.quantidade_devolvida) || 0,
           produto_nome: row.produto_nome,
           preco: parseFloat(row.preco) || 0,
           venda_por_copo: row.venda_por_copo,
@@ -5846,6 +5875,166 @@ function calcLinhaSubtotal(preco, quantidade, vendaPorCopo, kgPorCopo, qtdCoposP
     return n >= 2 && p > 0 ? Math.floor(c / n) * p + (c % n) * u : c * u;
   }
   return (parseFloat(quantidade) || 0) * (parseFloat(preco) || 0);
+}
+
+/** Devolve 1 unidade de uma linha de pedido. Acumula em qtd_devolvida,
+ *  ajusta turno_vendas (subtrai 1), recalcula comissão proporcional ao
+ *  total líquido e cria uma saída de caixa com a etiqueta "Devolução —
+ *  pedido #N (Produto)". Requer a coluna turno_pedido_linhas.qtd_devolvida. */
+app.post('/api/turnos/:turnoId/pedidos/:pedidoId/devolver', auth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const hasDev = await qtdDevolvidaAvailable();
+    if (!hasDev) {
+      return res.status(503).json({
+        erro: 'Devoluções indisponíveis: a coluna turno_pedido_linhas.qtd_devolvida não existe. Pede ao admin para a criar no SQL Editor do Supabase: ALTER TABLE turno_pedido_linhas ADD COLUMN qtd_devolvida NUMERIC(10,3) NOT NULL DEFAULT 0;'
+      });
+    }
+    await client.query('BEGIN');
+    const turnoId = req.params.turnoId;
+    const pedidoId = parseInt(req.params.pedidoId, 10);
+    const linhaIdRaw = req.body && req.body.linha_id;
+    const linhaId = parseInt(linhaIdRaw, 10);
+    if (!Number.isFinite(linhaId)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ erro: 'linha_id obrigatório.' });
+    }
+    // Garante que a linha pertence ao pedido e ao turno.
+    const lr = await client.query(
+      `SELECT tpl.id, tpl.pedido_id, tpl.produto_id, tpl.quantidade,
+              COALESCE(tpl.qtd_devolvida,0) AS qtd_devolvida,
+              tp.turno_id, tp.tipo_pagamento, tp.promotor_id,
+              tp.promotor_modo, COALESCE(tp.promotor_pct_total,0) AS promotor_pct_total,
+              p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
+              COALESCE(p.qtd_copos_pacote,0) AS qtd_copos_pacote,
+              COALESCE(p.preco_copos_pacote,0) AS preco_copos_pacote,
+              COALESCE(p.comissao_pct,0) AS comissao_pct
+       FROM turno_pedido_linhas tpl
+       JOIN turno_pedidos tp ON tp.id = tpl.pedido_id
+       JOIN produtos p ON p.id = tpl.produto_id
+       WHERE tpl.id = $1 AND tpl.pedido_id = $2 AND tp.turno_id = $3
+       FOR UPDATE`,
+      [linhaId, pedidoId, turnoId]
+    );
+    if (!lr.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ erro: 'Linha de pedido não encontrada neste turno.' });
+    }
+    const ln = lr.rows[0];
+    const qtdTotal = parseFloat(ln.quantidade) || 0;
+    const qtdDevAntes = parseFloat(ln.qtd_devolvida) || 0;
+    const restante = qtdTotal - qtdDevAntes;
+    if (restante <= 0.0001) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ erro: 'Nada para devolver — todas as unidades desta linha já foram devolvidas.' });
+    }
+    const passo = 1;
+    const qtdDevNova = Math.min(qtdTotal, qtdDevAntes + passo);
+    const realmenteDevolvido = qtdDevNova - qtdDevAntes; // pode ser < 1 só na última
+    // Calcula o valor estornado: comparando o subtotal da linha ANTES vs
+    // DEPOIS (respeitando regra de pacote para copos).
+    const calcSub = (qtd) => {
+      const isCopo = ln.venda_por_copo === true && parseFloat(ln.kg_por_copo) > 0;
+      const u = parseFloat(ln.preco) || 0;
+      const n = parseInt(ln.qtd_copos_pacote, 10) || 0;
+      const pp = parseFloat(ln.preco_copos_pacote) || 0;
+      if (isCopo) {
+        const c = Math.floor(qtd);
+        return (n >= 2 && pp > 0) ? Math.floor(c / n) * pp + (c % n) * u : c * u;
+      }
+      return qtd * u;
+    };
+    const subAntes = calcSub(qtdTotal - qtdDevAntes);
+    const subDepois = calcSub(qtdTotal - qtdDevNova);
+    const valorDevolvido = Math.max(0, subAntes - subDepois);
+    // 1) Actualiza a linha (qtd_devolvida).
+    await client.query(
+      `UPDATE turno_pedido_linhas SET qtd_devolvida=$1 WHERE id=$2`,
+      [qtdDevNova, linhaId]
+    );
+    // 2) Subtrai a quantidade de turno_vendas.
+    const oldRow = await client.query(
+      `SELECT quantidade FROM turno_vendas WHERE turno_id=$1 AND produto_id=$2`,
+      [turnoId, ln.produto_id]
+    );
+    const oldQ = oldRow.rows.length ? parseFloat(oldRow.rows[0].quantidade) : 0;
+    const novoTotal = Math.max(0, oldQ - realmenteDevolvido);
+    await applyTurnoVendaQuantity(client, turnoId, ln.produto_id, novoTotal);
+    // 3) Recalcula comissão do pedido com os totais novos (líquidos).
+    const linhasPedido = await client.query(
+      `SELECT tpl.quantidade, COALESCE(tpl.qtd_devolvida,0) AS qtd_devolvida,
+              p.preco, p.venda_por_copo, p.kg_por_copo,
+              COALESCE(p.qtd_copos_pacote,0) AS qtd_copos_pacote,
+              COALESCE(p.preco_copos_pacote,0) AS preco_copos_pacote,
+              COALESCE(p.comissao_pct,0) AS comissao_pct
+       FROM turno_pedido_linhas tpl JOIN produtos p ON p.id=tpl.produto_id
+       WHERE tpl.pedido_id=$1`,
+      [pedidoId]
+    );
+    let totalPedido = 0;
+    let comissaoPotencial = 0;
+    for (const l of linhasPedido.rows) {
+      const isCopo2 = l.venda_por_copo === true && parseFloat(l.kg_por_copo) > 0;
+      const u = parseFloat(l.preco) || 0;
+      const n = parseInt(l.qtd_copos_pacote, 10) || 0;
+      const pp = parseFloat(l.preco_copos_pacote) || 0;
+      const qLiq = Math.max(0, parseFloat(l.quantidade) - parseFloat(l.qtd_devolvida));
+      let sub;
+      if (isCopo2) {
+        const c = Math.floor(qLiq);
+        sub = (n >= 2 && pp > 0) ? Math.floor(c / n) * pp + (c % n) * u : c * u;
+      } else {
+        sub = qLiq * u;
+      }
+      totalPedido += sub;
+      comissaoPotencial += sub * (parseFloat(l.comissao_pct) || 0) / 100;
+    }
+    let comissaoValor = 0;
+    if (ln.promotor_id) {
+      const modo = ln.promotor_modo === 'total' ? 'total' : 'produto';
+      if (modo === 'total') {
+        comissaoValor = totalPedido * (parseFloat(ln.promotor_pct_total) || 0) / 100;
+      } else {
+        comissaoValor = comissaoPotencial;
+      }
+    }
+    await client.query(
+      `UPDATE turno_pedidos SET comissao_valor=$1, comissao_valor_potencial=$2 WHERE id=$3`,
+      [Math.round(comissaoValor * 100) / 100, Math.round(comissaoPotencial * 100) / 100, pedidoId]
+    );
+    // 4) Cria saída de caixa pelo valor devolvido (se > 0).
+    if (valorDevolvido > 0.0001) {
+      const descricao = `Devolução — pedido #${pedidoId} (${ln.produto_nome})`;
+      await client.query(
+        `INSERT INTO turno_saidas (turno_id, descricao, valor, notas)
+         VALUES ($1,$2,$3,$4)`,
+        [turnoId, descricao, Math.round(valorDevolvido * 100) / 100, `Devolução de ${fmtNumPlain(realmenteDevolvido)} unidade(s) ao cliente.`]
+      );
+      const novasSaida = await calcSaidaTotal(turnoId, client);
+      await client.query(`UPDATE turno_caixa SET saida=$1 WHERE turno_id=$2`, [novasSaida, turnoId]);
+    }
+    await client.query('COMMIT');
+    res.json({
+      sucesso: true,
+      pedido_id: pedidoId,
+      linha_id: linhaId,
+      qtd_devolvida_total: qtdDevNova,
+      qtd_devolvida_agora: realmenteDevolvido,
+      valor_devolvido: Math.round(valorDevolvido * 100) / 100,
+      comissao_valor: Math.round(comissaoValor * 100) / 100
+    });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ erro: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+function fmtNumPlain(n) {
+  const v = parseFloat(n);
+  if (!Number.isFinite(v)) return '0';
+  return v.toLocaleString('pt-AO', { maximumFractionDigits: 3 });
 }
 
 app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {

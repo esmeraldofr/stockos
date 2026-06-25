@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-stock-prox-encontrado">
+<html lang="pt" data-stockos-ui="2026-05-19-sem-sigla-un">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -987,7 +987,7 @@ function stockInputBlurQty(el) {
   el.value = n === 0 ? '' : fmtNum(n);
 }
 function medicaoSigla(tipo) {
-  return tipo === 'peso' ? 'kg' : 'un';
+  return tipo === 'peso' ? 'kg' : '';
 }
 /** Aceita número, decimal ISO (16.5) ou texto pt (1.234,5). */
 function parseRaw(v) {

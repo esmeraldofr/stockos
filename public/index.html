@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-devolucao-balcao">
+<html lang="pt" data-stockos-ui="2026-05-19-devolucao-fix-onclick">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5040,7 +5040,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
               const devTxt = dev > 0 ? ` <span style="color:#f87171;font-size:11px">(↩ ${fmtNum(dev)} devolv.)</span>` : '';
               const corQtd = liq <= 0 ? '#64748b;text-decoration:line-through' : '#a5b4fc';
               const btnDev = canEdit && liq > 0
-                ? `<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;color:#f87171" title="Devolver 1 ${unidLabel} desta linha (estorno automático na caixa)" onclick="runAction(event, () => devolverLinhaPedido('${p.turno_id || (S.turnoData && S.turnoData.id) || ''}', ${p.id}, ${ln.linha_id}))">↩ −1</button>`
+                ? `<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;color:#f87171" title="Devolver 1 ${unidLabel} desta linha (estorno automático na caixa)" data-dev-turno="${escapeHtml(String(p.turno_id || (S.turnoData && S.turnoData.id) || ''))}" data-dev-pedido="${p.id}" data-dev-linha="${ln.linha_id}" onclick="runAction(event, () => devolverLinhaFromBtn(this))">↩ −1</button>`
                 : '';
               return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px">
                 <div style="flex:1;min-width:0;color:${corQtd};">${fmtNum(liq)}/${fmtNum(qtd)} ${unidLabel}${liq === 1 ? '' : 's'} · <span style="color:#cbd5e1">${nomeLinha}</span>${devTxt}</div>
@@ -8074,6 +8074,16 @@ function pagarComissaoFromBtn(btn) {
 /** Cria uma saída de caixa pré-preenchida para pagar a comissão de um
  *  promotor (descrição padronizada com o nome). Recarrega as secções de
  *  saídas e do resumo dos pedidos. */
+/** Lê os data-attributes do botão e delega na devolução (evita problemas
+ *  de aspas/strings ao injetar IDs no onclick). */
+function devolverLinhaFromBtn(btn) {
+  if (!btn || !btn.getAttribute) return;
+  const turnoId = btn.getAttribute('data-dev-turno');
+  const pedidoId = parseInt(btn.getAttribute('data-dev-pedido'), 10);
+  const linhaId = parseInt(btn.getAttribute('data-dev-linha'), 10);
+  return devolverLinhaPedido(turnoId, pedidoId, linhaId);
+}
+
 /** Devolve 1 unidade de uma linha de pedido — chama o endpoint backend
  *  que ajusta stock (turno_vendas), comissão e cria saída de caixa
  *  proporcional ao estorno. */

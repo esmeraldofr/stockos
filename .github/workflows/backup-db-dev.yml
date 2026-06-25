@@ -1,0 +1,117 @@
+# Backup da BD de DESENVOLVIMENTO (schema public) — guardado como artifact
+# do workflow para download. Útil antes de correr o data-sync prod → dev
+# (segurança extra para restaurar o estado actual).
+#
+# Pré-requisitos (GitHub → Settings → Secrets → Actions):
+#   DATABASE_URL_DEV_ADMIN — URI postgres do projecto dev (pooler Supabase,
+#                            user postgres.<ref-dev>, porta 5432).
+#
+# Como restaurar (manual, no SQL Editor ou via psql):
+#   psql "$DATABASE_URL_DEV_ADMIN" < dev-backup.sql
+# Ou (formato custom):
+#   pg_restore --clean --if-exists --no-owner --no-acl \
+#              --schema=public --dbname="$DATABASE_URL_DEV_ADMIN" dev-backup.dump
+
+name: Backup BD desenvolvimento
+
+on:
+  workflow_dispatch:
+    inputs:
+      formato:
+        description: 'Formato do dump (sql = texto SQL, custom = binário comprimido para pg_restore)'
+        required: true
+        default: 'custom'
+        type: choice
+        options:
+          - custom
+          - sql
+      retencao_dias:
+        description: 'Dias para guardar o artifact (1–90)'
+        required: true
+        default: '14'
+        type: string
+
+jobs:
+  backup:
+    name: pg_dump → artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar cliente PostgreSQL 17 (igual ao Supabase)
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          pg_dump --version
+
+      - name: Validar secret
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          if [ -z "${DATABASE_URL_DEV_ADMIN}" ]; then
+            echo "::error::Secret DATABASE_URL_DEV_ADMIN em falta. Define em Settings → Secrets → Actions."
+            exit 1
+          fi
+          python3 <<'PY'
+          import os, urllib.parse
+          raw = os.environ['DATABASE_URL_DEV_ADMIN']
+          u = urllib.parse.urlparse(raw)
+          host = (u.hostname or '').lower()
+          user = urllib.parse.unquote(u.username or '')
+          if 'pooler.supabase.com' in host and not user.startswith('postgres.'):
+              print('::error::Com host pooler Supabase o utilizador na URI deve ser postgres.<project_ref>.')
+              raise SystemExit(1)
+          PY
+
+      - name: pg_dump (schema public + dados)
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+          FORMATO: ${{ inputs.formato }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          STAMP=$(date -u +%Y%m%d-%H%M%SZ)
+          if [ "$FORMATO" = "sql" ]; then
+            OUT="dev-backup-${STAMP}.sql"
+            pg_dump --no-owner --no-acl --schema=public --file="$OUT"
+          else
+            OUT="dev-backup-${STAMP}.dump"
+            pg_dump --format=custom --no-owner --no-acl --schema=public --file="$OUT"
+          fi
+          ls -lh "$OUT"
+          echo "ARTIFACT_NAME=dev-backup-${STAMP}" >> "$GITHUB_ENV"
+          echo "BACKUP_FILE=$OUT" >> "$GITHUB_ENV"
+
+      - name: Guardar como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.BACKUP_FILE }}
+          retention-days: ${{ inputs.retencao_dias }}
+
+      - name: Resumo
+        run: |
+          echo "## Backup concluído"
+          echo "- Ficheiro: \`${BACKUP_FILE}\`"
+          echo "- Formato: \`${{ inputs.formato }}\`"
+          echo "- Retenção: ${{ inputs.retencao_dias }} dias"
+          echo ""
+          echo "Descarrega em **Actions → Backup BD desenvolvimento → run actual → Artifacts**."
+          echo ""
+          echo "### Como restaurar"
+          if [ "${{ inputs.formato }}" = "sql" ]; then
+            echo '\`\`\`bash'
+            echo 'psql "$DATABASE_URL_DEV_ADMIN" < dev-backup-XXXX.sql'
+            echo '\`\`\`'
+          else
+            echo '\`\`\`bash'
+            echo 'pg_restore --clean --if-exists --no-owner --no-acl \\'
+            echo '           --schema=public --dbname="$DATABASE_URL_DEV_ADMIN" \\'
+            echo '           dev-backup-XXXX.dump'
+            echo '\`\`\`'
+          fi

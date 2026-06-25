@@ -1,0 +1,167 @@
+# Sincroniza APENAS DADOS (rows) de PRODUÇÃO para DESENVOLVIMENTO,
+# preservando a ESTRUTURA do develop (colunas extra, índices, etc).
+#
+# Diferenças face a `sync-db-prod-to-dev.yml` (clone completo):
+#  - pg_dump --data-only --column-inserts (gera INSERTs explícitos por
+#    coluna; ignora DDL).
+#  - TRUNCATE prévio em CASCATA das tabelas do schema public no develop
+#    (preserva o schema, apaga só rows). Reinicia sequências.
+#  - session_replication_role = replica desactiva FKs/triggers durante o
+#    restore (ordem dos INSERTs não importa).
+#  - Colunas que existem no develop mas NÃO em produção mantêm o DEFAULT
+#    (ex.: turno_pedido_linhas.qtd_devolvida = 0).
+#
+# Pré-requisitos (GitHub → Settings → Secrets → Actions):
+#   DATABASE_URL              — URI postgres de produção (a usada no deploy).
+#   DATABASE_URL_DEV_ADMIN    — URI com user postgres.<ref-dev> do projecto
+#                               dev (pooler Supabase: porta 5432).
+#                               Não uses stockos_app — precisa de TRUNCATE
+#                               e desactivar triggers de sessão.
+
+name: Sync DADOS produção → desenvolvimento
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: pg_dump --data-only prod → restore dev
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar cliente PostgreSQL 17 (igual ao Supabase)
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          pg_dump --version
+
+      - name: Validar secrets
+        env:
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          if [ -z "${DATABASE_URL_PROD}" ]; then
+            echo "::error::Secret DATABASE_URL em falta."
+            exit 1
+          fi
+          if [ -z "${DATABASE_URL_DEV_ADMIN}" ]; then
+            echo "::error::Define DATABASE_URL_DEV_ADMIN — ver cabeçalho deste workflow."
+            exit 1
+          fi
+          python3 <<'PY'
+          import os, urllib.parse
+          for name, key in [
+              ("DATABASE_URL (prod)", "DATABASE_URL_PROD"),
+              ("DATABASE_URL_DEV_ADMIN", "DATABASE_URL_DEV_ADMIN"),
+          ]:
+              raw = os.environ[key]
+              u = urllib.parse.urlparse(raw)
+              host = (u.hostname or "").lower()
+              user = urllib.parse.unquote(u.username or "")
+              if "pooler.supabase.com" in host and not user.startswith("postgres."):
+                  print(f"::error::{name}: com host pooler Supabase o utilizador deve ser postgres.<project_ref>.")
+                  raise SystemExit(1)
+          PY
+
+      - name: Dump produção (data-only, INSERTs por coluna)
+        env:
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD")"
+          # --data-only: sem DDL.
+          # --column-inserts: gera INSERT INTO tabela (col1, col2,…) — robusto a
+          #   colunas existentes no destino que não existem na origem
+          #   (essas ficam com o DEFAULT do schema).
+          # --disable-triggers: o restore desactiva triggers durante os INSERTs;
+          #   é descartado mais à frente porque preferimos session_replication_role.
+          # --no-owner / --no-acl: ignora dono e privilégios.
+          pg_dump \
+            --data-only \
+            --column-inserts \
+            --no-owner \
+            --no-acl \
+            --schema=public \
+            --file=prod-data.sql
+          echo "Dump gerado:"
+          ls -la prod-data.sql
+          echo "Linhas no ficheiro: $(wc -l < prod-data.sql)"
+
+      - name: Limpar tabelas do develop (TRUNCATE em cascata)
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          # TRUNCATE em cascata de TODAS as tabelas do schema public, mantendo
+          # o schema intacto. RESTART IDENTITY reinicia sequências para 1.
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE
+            stmt text;
+          BEGIN
+            SELECT string_agg(format('%I.%I', schemaname, tablename), ', ')
+              INTO stmt
+              FROM pg_tables
+             WHERE schemaname = 'public';
+            IF stmt IS NULL THEN
+              RAISE NOTICE 'Sem tabelas em public — nada a truncar.';
+            ELSE
+              EXECUTE 'TRUNCATE TABLE ' || stmt || ' RESTART IDENTITY CASCADE';
+              RAISE NOTICE 'Truncadas: %', stmt;
+            END IF;
+          END
+          $$;
+          SQL
+
+      - name: Restaurar dados no develop
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          # session_replication_role = replica desactiva FKs e triggers para
+          # esta sessão — ordem dos INSERTs não importa. Mais permissivo que
+          # ALTER TABLE … DISABLE TRIGGER (que requer superuser).
+          # Anteceder com SET e seguir com RESET garante que o INSERT roda sem
+          # validação cruzada e que a configuração não fica colada na pool.
+          {
+            echo "SET session_replication_role = 'replica';"
+            cat prod-data.sql
+            echo "RESET session_replication_role;"
+          } | psql -v ON_ERROR_STOP=1 2>&1 | tee restore.log
+          echo "Restore terminado. Avisos (não-fatais):"
+          grep -E '^WARNING:|^NOTICE:' restore.log | head -50 || true
+
+      - name: Re-conceder privilégios a stockos_app
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'stockos_app') THEN
+              GRANT USAGE ON SCHEMA public TO stockos_app;
+              GRANT ALL ON ALL TABLES IN SCHEMA public TO stockos_app;
+              GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO stockos_app;
+              ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON TABLES TO stockos_app;
+              ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON SEQUENCES TO stockos_app;
+            END IF;
+          END
+          $$;
+          SQL
+
+      - name: Resumo
+        run: |
+          echo "## Sync de DADOS concluído"
+          echo "- Produção: read-only (apenas leitura via pg_dump --data-only)."
+          echo "- Develop: rows substituídos; estrutura PRESERVADA (colunas extra, índices, sequências reiniciadas)."
+          echo "- Colunas só do develop (ex.: turno_pedido_linhas.qtd_devolvida) mantêm o DEFAULT (0)."

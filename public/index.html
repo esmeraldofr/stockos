@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-armazem-prox-enc">
+<html lang="pt" data-stockos-ui="2026-05-19-validacao-com-armazem">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3308,6 +3308,35 @@ async function loadTurno() {
 
         const enc = s.encontrado != null && s.encontrado !== '' ? fmtNum(parseFloat(s.encontrado)) : '—';
         const dei = s.deixado != null && s.deixado !== '' ? fmtNum(parseFloat(s.deixado)) : '—';
+
+        // ── Colunas de Armazém (caixas/fardos) ──
+        const encCx = s.encontrado_caixa != null && s.encontrado_caixa !== '' ? fmtNum(parseFloat(s.encontrado_caixa)) : '—';
+        const deiCx = s.deixado_caixa != null && s.deixado_caixa !== '' ? fmtNum(parseFloat(s.deixado_caixa)) : '—';
+        let compCxHtml = '<span class="comp-null">—</span>';
+        if (s.comparacao_caixa && s.comparacao_caixa.startsWith('falta')) compCxHtml = `<span class="comp-falta">⚠ ${s.comparacao_caixa}</span>`;
+        else if (s.comparacao_caixa && s.comparacao_caixa.startsWith('sobra')) compCxHtml = `<span class="comp-sobra">↑ ${s.comparacao_caixa}</span>`;
+        let proxCxHtml = '<span style="color:#475569">—</span>';
+        const nxCx = s.next_encontrado_caixa;
+        if (nxCx !== null && nxCx !== undefined) {
+          const nxVCx = parseFloat(nxCx);
+          const txtCx = fmtNum(nxVCx);
+          const dValCx = stockBuf[pid]?.deixado_caixa;
+          const dNumCx = dValCx === null || dValCx === undefined || dValCx === '' ? NaN : parseFloat(dValCx);
+          if (!Number.isFinite(dNumCx)) {
+            proxCxHtml = `<span style="color:#94a3b8">${escapeHtml(txtCx)}</span>`;
+          } else {
+            const diffCx = nxVCx - dNumCx;
+            if (Math.abs(diffCx) <= 0.5) {
+              proxCxHtml = `<span style="color:#86efac">✓ ${escapeHtml(txtCx)}</span>`;
+            } else {
+              const corCx = diffCx > 0 ? '#fb923c' : '#f87171';
+              const sinalCx = diffCx > 0 ? '+' : '−';
+              proxCxHtml = `<span style="color:${corCx}">${escapeHtml(txtCx)}<div style="font-size:10px;line-height:1.2;margin-top:2px">Δ ${sinalCx}${fmtNum(Math.abs(diffCx))}</div></span>`;
+            }
+          }
+        }
+        // Fundo distinto para o grupo de armazém — facilita ler a tabela.
+        const cxBg = 'background:rgba(124,58,237,0.06)';
         return `
           <tr class="stock-row">
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div></td>
@@ -3320,6 +3349,11 @@ async function loadTurno() {
             <td class="td-calc" style="text-align:right">${vendTxt}</td>
             <td class="td-calc" style="text-align:right;color:#a5b4fc">${balcaoTxt}${balcaoDelta}</td>
             <td class="td-calc" style="text-align:right">${proxHtml}</td>
+            <td class="td-calc" style="text-align:right;color:#94a3b8;${cxBg}">${s.prev_deixado_caixa !== null && s.prev_deixado_caixa !== undefined ? fmtNum(s.prev_deixado_caixa) : '—'}</td>
+            <td style="${cxBg}">${compCxHtml}</td>
+            <td class="td-calc" style="text-align:right;${cxBg}">${encCx}</td>
+            <td class="td-calc" style="text-align:right;${cxBg}">${deiCx}</td>
+            <td class="td-calc" style="text-align:right;${cxBg}">${proxCxHtml}</td>
           </tr>`;
       }).join('');
     }
@@ -3327,7 +3361,7 @@ async function loadTurno() {
     function validacaoTableFor(items, label) {
       if (!items.length) return '';
       return `
-        <tr><td colspan="10" class="section-header">${label}</td></tr>
+        <tr><td colspan="15" class="section-header">${label}</td></tr>
         ${validacaoRows(items)}`;
     }
 
@@ -3473,6 +3507,11 @@ async function loadTurno() {
                   <th style="text-align:right">Vendido</th>
                   <th style="text-align:right" title="Quantidade vendida em Pedidos ao balcão (deste turno)">Balcão</th>
                   <th style="text-align:right" title="Encontrado registado no próximo turno — deve bater com o Deixado deste">Próx. Enc.</th>
+                  <th style="text-align:right;background:rgba(124,58,237,0.10)" title="Caixas/fardos deixados no turno anterior">T. Ant. caixa</th>
+                  <th style="background:rgba(124,58,237,0.10)" title="Comparação de caixas com o turno anterior">Comp. caixa</th>
+                  <th style="text-align:right;background:rgba(124,58,237,0.10)">Enc. caixa</th>
+                  <th style="text-align:right;background:rgba(124,58,237,0.10)">Deix. caixa</th>
+                  <th style="text-align:right;background:rgba(124,58,237,0.10)" title="Enc. caixa registado no próximo turno">Próx. Enc. caixa</th>
                 </tr>
               </thead>
               <tbody>

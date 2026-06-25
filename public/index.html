@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-produtos-vendidos-ordem">
+<html lang="pt" data-stockos-ui="2026-05-19-comissao-acao-em-frente">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5268,22 +5268,22 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const porPagar = Math.max(0, Math.round((r.comissao - pago) * 100) / 100);
       let acaoHtml = '';
       if (pago > 0 && porPagar <= 0.009) {
-        // Tudo pago.
-        acaoHtml = `<span title="Comissão já paga (${fmt(pago)})" style="margin-left:6px;font-size:10px;color:#86efac;font-weight:700">✓ Pago</span>`;
+        // Tudo pago — fica em frente do valor.
+        acaoHtml = `<span title="Comissão já paga (${fmt(pago)})" style="margin-right:6px;font-size:10px;color:#86efac;font-weight:700">✓ Pago</span>`;
       } else if (canEdit && porPagar > 0.009) {
-        const parcial = pago > 0 ? ` <span style="font-size:9px;color:#64748b">(pago ${fmt(pago)})</span>` : '';
-        acaoHtml = `<button type="button" class="btn btn-ghost btn-sm pagar-comissao-btn" title="Registar saída de caixa para pagar ${pago > 0 ? 'o que falta' : 'esta comissão'} (${fmt(porPagar)})" style="padding:2px 8px;font-size:11px;margin-left:6px" data-pc-turno="${escapeHtml(String(turnoId))}" data-pc-nome="${escapeHtml(String(r.nome))}" data-pc-valor="${porPagar}" onclick="runAction(event, () => pagarComissaoFromBtn(this))">💸 Pagar</button>${parcial}`;
+        const parcial = pago > 0 ? `<span style="font-size:9px;color:#64748b;margin-right:6px">(pago ${fmt(pago)})</span>` : '';
+        acaoHtml = `${parcial}<button type="button" class="btn btn-ghost btn-sm pagar-comissao-btn" title="Registar saída de caixa para pagar ${pago > 0 ? 'o que falta' : 'esta comissão'} (${fmt(porPagar)})" style="padding:2px 8px;font-size:11px;margin-right:6px" data-pc-turno="${escapeHtml(String(turnoId))}" data-pc-nome="${escapeHtml(String(r.nome))}" data-pc-valor="${porPagar}" onclick="runAction(event, () => pagarComissaoFromBtn(this))">💸 Pagar</button>`;
       }
       const reducao = r.comissaoOriginal > r.comissao + 0.009;
       const reducaoTag = reducao
-        ? ` <span title="Recebe metade (${r.nTrabalhados}/${r.n} pedido${r.n===1?'':'s'} com o promotor a trabalhar — outra metade fica para a casa). Total original ${fmt(r.comissaoOriginal)}." style="font-size:9px;color:#fb923c;font-weight:700;margin-left:4px;cursor:help">½</span>`
+        ? `<span title="Recebe metade (${r.nTrabalhados}/${r.n} pedido${r.n===1?'':'s'} com o promotor a trabalhar — outra metade fica para a casa). Total original ${fmt(r.comissaoOriginal)}." style="font-size:9px;color:#fb923c;font-weight:700;margin-right:4px;cursor:help">½</span>`
         : '';
       return `
         <tr>
           <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)} <span style="color:#64748b;font-size:11px">(${escapeHtml(modoTxt)})</span></td>
           <td style="padding:5px 8px;text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums">${r.n}</td>
           <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.vendido)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap">${fmt(r.comissao)}${reducaoTag}${acaoHtml}</td>
+          <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap">${acaoHtml}${reducaoTag}${fmt(r.comissao)}</td>
         </tr>`;
     }).join('');
     const semPromHtml = semPromN > 0

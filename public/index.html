@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-validacao-com-armazem">
+<html lang="pt" data-stockos-ui="2026-05-19-resumo-validacao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5300,13 +5300,171 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   })();
   // Aba "Pedidos ao balcão": só o formulário POS (grelha + Conta corrente + teclado).
   mount.innerHTML = formHtml;
-  // Aba "Caixa": Produtos vendidos + Comissões + Pedidos do turno.
+  // Aba "Caixa": Validação + Produtos vendidos + Comissões + Pedidos do turno.
+  // Bloco de validação — lista as divergências detectadas entre stock,
+  // balcão e próximo turno (mesma lógica da aba 🧪 Validação, em formato
+  // de lista resumida).
+  const resumoValidacaoHtml = (() => {
+    const stocks = (S.turnoData && Array.isArray(S.turnoData.stock)) ? S.turnoData.stock : [];
+    if (!stocks.length) return '';
+    const balcaoMap = (typeof getVendasBalcaoPorProduto === 'function')
+      ? getVendasBalcaoPorProduto()
+      : {};
+    const items = [];
+    for (const s of stocks) {
+      const pid = prodIdKey(s.produto_id);
+      if (!pid) continue;
+      const nome = s.produto_nome || 'Sem nome';
+      const isPeso = s.tipo_medicao === 'peso';
+      const tolKg = 0.001;
+      const tolUn = 0.5;
+      // Vendido (stock) — usa buffer editável (estado actual).
+      const buf = (typeof stockBuf !== 'undefined' && stockBuf) ? stockBuf[pid] : null;
+      const enc = buf ? buf.encontrado : s.encontrado;
+      const ent = buf ? buf.entrada : s.entrada;
+      const dei = buf ? buf.deixado : s.deixado;
+      const vend = vendidoQtyFromStockParts(enc, ent, dei);
+      const balcao = balcaoMap[pid] || null;
+      const isCopo = balcao && balcao.isCopo;
+      // 1) Vendido vs Balcão
+      if (Number.isFinite(vend) && balcao) {
+        const balNativo = isCopo ? balcao.kg : balcao.unidades;
+        const tol = (isPeso || isCopo) ? tolKg : tolUn;
+        if (balNativo > 0) {
+          const diff = vend - balNativo;
+          if (Math.abs(diff) > tol) {
+            const sinal = diff > 0 ? '+' : '−';
+            const cor = diff > 0 ? '#fb923c' : '#f87171';
+            items.push({
+              cor,
+              tag: '📊 Stock',
+              produto: nome,
+              campo: 'Vendido vs Balcão',
+              valor: `Δ ${sinal}${fmtNum(Math.abs(diff))}`,
+              dica: diff > 0
+                ? `Stock indica ${fmtNum(Math.abs(diff))} a mais que o balcão (possível desperdício/oferta ou Deixado contado a menos).`
+                : `Balcão registou ${fmtNum(Math.abs(diff))} a mais do que o stock indica (provável erro de contagem em Encontrado/Deixado).`
+            });
+          }
+        }
+      }
+      // 2) Deixado vs Próx. Enc.
+      const dNum = dei === null || dei === undefined || dei === '' ? NaN : parseFloat(dei);
+      const nx = s.next_encontrado;
+      if (Number.isFinite(dNum) && nx !== null && nx !== undefined) {
+        const nxV = parseFloat(nx);
+        const tol = isPeso ? tolKg : tolUn;
+        const diff = nxV - dNum;
+        if (Math.abs(diff) > tol) {
+          const sinal = diff > 0 ? '+' : '−';
+          const cor = diff > 0 ? '#fb923c' : '#f87171';
+          items.push({
+            cor,
+            tag: '🔁 Próximo turno',
+            produto: nome,
+            campo: 'Deixado vs Próx. Enc.',
+            valor: `Δ ${sinal}${fmtNum(Math.abs(diff))}`,
+            dica: diff > 0
+              ? `Próximo turno encontrou ${fmtNum(Math.abs(diff))} A MAIS — entrou stock entre turnos?`
+              : `Próximo turno encontrou ${fmtNum(Math.abs(diff))} A MENOS — sumiu stock entre turnos, possível erro de contagem.`
+          });
+        }
+      }
+      // 3) Deix. caixa vs Próx. Enc. caixa
+      const deiCxRaw = buf ? buf.deixado_caixa : s.deixado_caixa;
+      const dCx = deiCxRaw === null || deiCxRaw === undefined || deiCxRaw === '' ? NaN : parseFloat(deiCxRaw);
+      const nxCx = s.next_encontrado_caixa;
+      if (Number.isFinite(dCx) && nxCx !== null && nxCx !== undefined) {
+        const nxVCx = parseFloat(nxCx);
+        const diff = nxVCx - dCx;
+        if (Math.abs(diff) > 0.5) {
+          const sinal = diff > 0 ? '+' : '−';
+          const cor = diff > 0 ? '#fb923c' : '#f87171';
+          items.push({
+            cor,
+            tag: '🏬 Armazém',
+            produto: nome,
+            campo: 'Deix. caixa vs Próx. Enc. caixa',
+            valor: `Δ ${sinal}${fmtNum(Math.abs(diff))} caixa${Math.abs(diff) === 1 ? '' : 's'}`,
+            dica: diff > 0
+              ? `Próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) A MAIS — entrou stock entre turnos?`
+              : `Próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) A MENOS — sumiu entre turnos.`
+          });
+        }
+      }
+      // 4) Comparação com o turno anterior (falta/sobra no Encontrado).
+      const comp = s.comparacao;
+      if (comp && (comp.startsWith('falta') || comp.startsWith('sobra'))) {
+        const isFalta = comp.startsWith('falta');
+        items.push({
+          cor: isFalta ? '#f87171' : '#fb923c',
+          tag: '⬅ Turno anterior',
+          produto: nome,
+          campo: 'Encontrado vs Deixado anterior',
+          valor: `${isFalta ? '⚠' : '↑'} ${comp}`,
+          dica: isFalta
+            ? 'Encontrado está abaixo do Deixado do turno anterior — possível falta.'
+            : 'Encontrado está acima do Deixado do turno anterior — possível sobra ou reposição não registada.'
+        });
+      }
+      // 5) Comparação caixa com o turno anterior.
+      const compCx = s.comparacao_caixa;
+      if (compCx && (compCx.startsWith('falta') || compCx.startsWith('sobra'))) {
+        const isFalta = compCx.startsWith('falta');
+        items.push({
+          cor: isFalta ? '#f87171' : '#fb923c',
+          tag: '⬅ Armazém anterior',
+          produto: nome,
+          campo: 'Enc. caixa vs Deix. caixa anterior',
+          valor: `${isFalta ? '⚠' : '↑'} ${compCx}`,
+          dica: isFalta
+            ? 'Caixas encontradas abaixo do que ficou no turno anterior.'
+            : 'Caixas encontradas acima do que ficou no turno anterior.'
+        });
+      }
+    }
+    const titulo = `<div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">🧪 Validação — diferenças detectadas</div>`;
+    if (!items.length) {
+      return `
+        <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
+          ${titulo}
+          <div style="padding:8px 10px;background:#0b1322;border:1px dashed #334155;border-radius:6px;font-size:12px;color:#86efac">✓ Nenhuma divergência detectada.</div>
+        </div>`;
+    }
+    const linhasHtml = items.map((it) => `
+      <tr title="${escapeHtml(it.dica)}">
+        <td style="padding:5px 8px;color:#64748b;font-size:11px;white-space:nowrap">${it.tag}</td>
+        <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(it.produto)}</td>
+        <td style="padding:5px 8px;color:#94a3b8;font-size:11px">${escapeHtml(it.campo)}</td>
+        <td style="padding:5px 8px;text-align:right;color:${it.cor};font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums">${escapeHtml(it.valor)}</td>
+      </tr>`).join('');
+    return `
+      <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
+        ${titulo}
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Fonte</th>
+                <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Produto</th>
+                <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Campo</th>
+                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Diferença</th>
+              </tr>
+            </thead>
+            <tbody>${linhasHtml}</tbody>
+          </table>
+        </div>
+        <div style="margin-top:6px;font-size:10px;color:#64748b;line-height:1.4">${items.length} divergência${items.length === 1 ? '' : 's'} — passa o rato em cada linha para ler a explicação.</div>
+      </div>`;
+  })();
+  // Aba "Caixa": Validação + Produtos vendidos + Comissões + Pedidos do turno.
   const resumoMount = document.getElementById('pedidos-resumo-mount');
   if (resumoMount) {
-    const semDados = !resumoProdutosHtml && !resumoComissoesHtml && !pedidos.length;
+    const semDados = !resumoProdutosHtml && !resumoComissoesHtml && !resumoValidacaoHtml && !pedidos.length;
     resumoMount.innerHTML = semDados
       ? '<span style="color:#64748b">Ainda não há pedidos neste turno.</span>'
-      : resumoProdutosHtml +
+      : resumoValidacaoHtml +
+        resumoProdutosHtml +
         resumoComissoesHtml +
         `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
   }

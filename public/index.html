@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-sem-siglas">
+<html lang="pt" data-stockos-ui="2026-05-19-aba-validacao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3320,6 +3320,94 @@ async function loadTurno() {
       }).join('');
     }
 
+    /** Linhas da tabela "Validação": só leitura, com cruzamentos para
+     *  detectar erros (Vendido vs Balcão e Deixado vs Próx. Enc.). */
+    function validacaoRows(items) {
+      return items.map((s) => {
+        const pid = prodIdKey(s.produto_id);
+        if (!pid) return '';
+        const vend = vendidoQtyFromStockParts(
+          stockBuf[pid]?.encontrado,
+          stockBuf[pid]?.entrada,
+          stockBuf[pid]?.deixado
+        );
+        const vendTxt = Number.isFinite(vend) && vend > 0 ? fmtNum(vend) : '';
+        let compHtml = '<span class="comp-null">—</span>';
+        if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
+        else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
+
+        // Balcão (vendas dos pedidos do turno).
+        const balcao = (stockBalcaoMap && stockBalcaoMap[pid]) || null;
+        let balcaoTxt = '';
+        let balcaoDelta = '';
+        if (balcao) {
+          if (balcao.isCopo && balcao.copos > 0) {
+            balcaoTxt = `${fmtNum(balcao.copos)} copos`;
+            if (balcao.kg > 0) balcaoTxt += ` <span style="color:#64748b;font-size:11px">(${fmtNum(balcao.kg)})</span>`;
+          } else if (balcao.unidades > 0) {
+            balcaoTxt = `${fmtNum(balcao.unidades)}`;
+          }
+        }
+        if (Number.isFinite(vend) && vend >= 0) {
+          const balcaoNativo = balcao ? (balcao.isCopo ? balcao.kg : balcao.unidades) : 0;
+          const diff = vend - balcaoNativo;
+          const absDiff = Math.abs(diff);
+          const tol = (s.tipo_medicao === 'peso' || (balcao && balcao.isCopo)) ? 0.001 : 0.5;
+          if (balcaoNativo > 0 && absDiff > tol) {
+            const cor = diff > 0 ? '#fb923c' : '#f87171';
+            const sinal = diff > 0 ? '+' : '−';
+            balcaoDelta = `<div style="font-size:10px;color:${cor};margin-top:2px;line-height:1.2">Δ ${sinal}${fmtNum(absDiff)}</div>`;
+          }
+        }
+
+        // Próx. Encontrado.
+        let proxHtml = '<span style="color:#475569">—</span>';
+        const nx = s.next_encontrado;
+        if (nx !== null && nx !== undefined) {
+          const nxV = parseFloat(nx);
+          const txt = fmtNum(nxV);
+          const dVal = stockBuf[pid]?.deixado;
+          const dNum = dVal === null || dVal === undefined || dVal === '' ? NaN : parseFloat(dVal);
+          if (!Number.isFinite(dNum)) {
+            proxHtml = `<span style="color:#94a3b8">${escapeHtml(txt)}</span>`;
+          } else {
+            const diff = nxV - dNum;
+            const tol = s.tipo_medicao === 'peso' ? 0.001 : 0.5;
+            if (Math.abs(diff) <= tol) {
+              proxHtml = `<span style="color:#86efac">✓ ${escapeHtml(txt)}</span>`;
+            } else {
+              const cor = diff > 0 ? '#fb923c' : '#f87171';
+              const sinal = diff > 0 ? '+' : '−';
+              proxHtml = `<span style="color:${cor}">${escapeHtml(txt)}<div style="font-size:10px;line-height:1.2;margin-top:2px">Δ ${sinal}${fmtNum(Math.abs(diff))}</div></span>`;
+            }
+          }
+        }
+
+        const enc = s.encontrado != null && s.encontrado !== '' ? fmtNum(parseFloat(s.encontrado)) : '—';
+        const dei = s.deixado != null && s.deixado !== '' ? fmtNum(parseFloat(s.deixado)) : '—';
+        return `
+          <tr class="stock-row">
+            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div></td>
+            <td class="td-calc" style="color:#94a3b8;text-align:right">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
+            <td>${compHtml}</td>
+            <td class="td-calc" style="text-align:right">${enc}</td>
+            <td class="td-calc" style="text-align:right">${fmtQtyInput(s.entrada)}</td>
+            <td class="td-calc" style="text-align:right">${dei}</td>
+            <td class="td-calc" style="text-align:right;color:#94a3b8">${fmtNum(parseFloat(s.fechados) || 0)}</td>
+            <td class="td-calc" style="text-align:right">${vendTxt}</td>
+            <td class="td-calc" style="text-align:right;color:#a5b4fc">${balcaoTxt}${balcaoDelta}</td>
+            <td class="td-calc" style="text-align:right">${proxHtml}</td>
+          </tr>`;
+      }).join('');
+    }
+
+    function validacaoTableFor(items, label) {
+      if (!items.length) return '';
+      return `
+        <tr><td colspan="10" class="section-header">${label}</td></tr>
+        ${validacaoRows(items)}`;
+    }
+
     function caixaRows(items) {
       return items.map((s) => {
         const pid = prodIdKey(s.produto_id);
@@ -3375,14 +3463,15 @@ async function loadTurno() {
     const encontradosFechados = !!turno.encontrados_fechados_em;
     const isAdminUserScope = S.user && (S.user.role === 'admin' || S.user.role === 'gestor');
     const allowedTabs = turnoFechado
-      ? ['stock','caixas','vendas','pedidos','caixa','registos','escala']
-      : ['stock','caixas','pedidos','caixa','escala'];
+      ? ['stock','validacao','caixas','vendas','pedidos','caixa','registos','escala']
+      : ['stock','validacao','caixas','pedidos','caixa','escala'];
     const activeTab = allowedTabs.includes(S.turnoTab) ? S.turnoTab : 'stock';
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
     show('turno-content', `
       <div class="turno-tabs">
           <button type="button" class="${tabCls('stock')}" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
+          <button type="button" class="${tabCls('validacao')}" data-turno-tab="validacao" onclick="runAction(event, async (ev) => { await switchTurnoTab('validacao', ev.currentTarget); })">🧪 Validação</button>
           <button type="button" class="${tabCls('caixas')}" data-turno-tab="caixas" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixas', ev.currentTarget); })">🏬 Armazém</button>
           ${turnoFechado ? `<button type="button" class="${tabCls('vendas')}" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>` : ''}
           <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
@@ -3423,6 +3512,38 @@ async function loadTurno() {
           <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 18px"><strong style="color:#cbd5e1">Quantidades</strong> que entram ou saem do stock (armazém ou compra). As <strong style="color:#cbd5e1">saídas de caixa</strong> (despesas e compras) estão agora na aba <strong style="color:#cbd5e1">💰 Caixa</strong>.</p>
           <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Stock — quantidades</div>
           <div id="entradas-section"><span style="color:#64748b">A carregar...</span></div>
+        </div>
+      </div>
+
+      <div id="tab-validacao" class="${panelCls('validacao')}">
+        <div class="card" style="padding:0;overflow:hidden">
+          <div style="padding:14px 16px 0">
+            <div class="card-title">🧪 Validação do stock</div>
+            <p style="font-size:12px;color:#64748b;margin:-2px 0 10px;line-height:1.45">Vista cruzada (só leitura). Cruza Vendido com Balcão e Deixado com o Encontrado do próximo turno para detectar erros de contagem.</p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Produto</th>
+                  <th style="text-align:right">T. Anterior</th>
+                  <th>Comparação</th>
+                  <th style="text-align:right">Encontrado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
+                  <th style="text-align:right">Entrada</th>
+                  <th style="text-align:right">Deixado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
+                  <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(bloqueado)</span></th>
+                  <th style="text-align:right">Vendido</th>
+                  <th style="text-align:right" title="Quantidade vendida em Pedidos ao balcão (deste turno)">Balcão</th>
+                  <th style="text-align:right" title="Encontrado registado no próximo turno — deve bater com o Deixado deste">Próx. Enc.</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${validacaoTableFor(menu,'🍽️ Menu')}
+                ${validacaoTableFor(comida,'🧂 Ingredientes')}
+                ${validacaoTableFor(bebida,'🥤 Bebidas')}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 

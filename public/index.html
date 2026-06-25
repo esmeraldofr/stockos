@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-05-19-stock-3-colunas">
+<html lang="pt" data-stockos-ui="2026-05-19-armazem-prox-enc">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3352,6 +3352,27 @@ async function loadTurno() {
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado_caixa)}"
               onblur="stockNumberInputBlur(this)"
               oninput="updateStock('${pid}','deixado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="deixado_caixa" title="Nº de caixas/fardos/grades inteiras deixadas" ${inputAttr}/></td>
+            <td class="td-calc" id="next-enc-caixa-${pid}">${(() => {
+              const nx = s.next_encontrado_caixa;
+              if (nx === null || nx === undefined) return '<span style="color:#475569">—</span>';
+              const nxV = parseFloat(nx);
+              const txt = fmtNum(nxV);
+              const dVal = stockBuf[pid]?.deixado_caixa;
+              const dNum = dVal === null || dVal === undefined || dVal === '' ? NaN : parseFloat(dVal);
+              if (!Number.isFinite(dNum)) {
+                return `<span style="color:#94a3b8">${escapeHtml(txt)}</span>`;
+              }
+              const diff = nxV - dNum;
+              if (Math.abs(diff) <= 0.5) {
+                return `<span style="color:#86efac" title="Bate certo com o Deix. caixa (${fmtNum(dNum)}).">✓ ${escapeHtml(txt)}</span>`;
+              }
+              const cor = diff > 0 ? '#fb923c' : '#f87171';
+              const sinal = diff > 0 ? '+' : '−';
+              const dica = diff > 0
+                ? `Próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) A MAIS do que o Deix. caixa deste (${fmtNum(dNum)}). Entrou stock entre turnos?`
+                : `Próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) A MENOS do que o Deix. caixa deste (${fmtNum(dNum)}). Sumiu stock entre turnos — possível erro de contagem.`;
+              return `<span style="color:${cor};cursor:help" title="${escapeHtml(dica)}">${escapeHtml(txt)}<div style="font-size:10px;line-height:1.2;margin-top:2px">Δ ${sinal}${fmtNum(Math.abs(diff))}</div></span>`;
+            })()}</td>
           </tr>`;
       }).join('');
     }
@@ -3359,7 +3380,7 @@ async function loadTurno() {
     function caixaTableFor(items, label) {
       if (!items.length) return '';
       return `
-        <tr><td colspan="4" class="section-header">${label}</td></tr>
+        <tr><td colspan="5" class="section-header">${label}</td></tr>
         ${caixaRows(items)}`;
     }
 
@@ -3479,6 +3500,7 @@ async function loadTurno() {
                   <th style="text-align:right">T. Anterior</th>
                   <th style="text-align:right">Enc. caixa</th>
                   <th style="text-align:right">Deix. caixa</th>
+                  <th style="text-align:right" title="Encontrado de caixas registado no próximo turno — deve bater certo com o Deix. caixa deste">Próx. Enc.</th>
                 </tr>
               </thead>
               <tbody>

@@ -2,13 +2,15 @@
 # preservando a ESTRUTURA do develop (colunas extra, índices, etc).
 #
 # Diferenças face a `sync-db-prod-to-dev.yml` (clone completo):
-#  - pg_dump --data-only --column-inserts (gera INSERTs explícitos por
-#    coluna; ignora DDL).
+#  - pg_dump --data-only (gera COPY table (col1,col2,...) FROM stdin;
+#    ignora DDL). COPY é 100–1000× mais rápido que --column-inserts e
+#    continua robusto a colunas existentes só no destino (ficam com
+#    o DEFAULT do schema).
 #  - DELETE iterativo das tabelas do schema public no develop
 #    (preserva o schema; mais permissivo que TRUNCATE quando há tabelas
 #    com owners diferentes). FKs/triggers off via session_replication_role.
 #  - session_replication_role = replica desactiva FKs/triggers durante o
-#    restore (ordem dos INSERTs não importa).
+#    restore (ordem dos COPYs não importa).
 #  - setval às sequências para max(id) após restore.
 #  - Colunas que existem no develop mas NÃO em produção mantêm o DEFAULT
 #    (ex.: turno_pedido_linhas.qtd_devolvida = 0).
@@ -71,20 +73,23 @@ jobs:
                   raise SystemExit(1)
           PY
 
-      - name: Dump produção (data-only, INSERTs por coluna)
+      - name: Dump produção (data-only, COPY)
         env:
           DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD")"
           # --data-only: sem DDL.
-          # --column-inserts: gera INSERT INTO tabela (col1, col2,…) — robusto a
-          #   colunas existentes no destino que não existem na origem
-          #   (essas ficam com o DEFAULT do schema).
+          # Sem --column-inserts: pg_dump default emite
+          #   COPY tabela (col1, col2,…) FROM stdin;
+          # — 100–1000× mais rápido que INSERTs individuais (uma única
+          # operação por tabela em vez de centenas de milhares de
+          # round-trips pelo pooler). A lista explícita de colunas
+          # mantém-no robusto a colunas existentes no destino que não
+          # existem na origem (essas ficam com o DEFAULT do schema).
           # --no-owner / --no-acl: ignora dono e privilégios.
           pg_dump \
             --data-only \
-            --column-inserts \
             --no-owner \
             --no-acl \
             --schema=public \
@@ -144,9 +149,9 @@ jobs:
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
           # session_replication_role = replica desactiva FKs e triggers para
-          # esta sessão — ordem dos INSERTs não importa. Mais permissivo que
+          # esta sessão — ordem dos COPYs não importa. Mais permissivo que
           # ALTER TABLE … DISABLE TRIGGER (que requer superuser).
-          # Anteceder com SET e seguir com RESET garante que o INSERT roda sem
+          # Anteceder com SET e seguir com RESET garante que o COPY roda sem
           # validação cruzada e que a configuração não fica colada na pool.
           {
             echo "SET session_replication_role = 'replica';"
@@ -163,7 +168,7 @@ jobs:
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
           # Como usámos DELETE (não TRUNCATE RESTART IDENTITY), as sequências
-          # SERIAL/IDENTITY mantiveram o nextval anterior. Os INSERTs trouxeram
+          # SERIAL/IDENTITY mantiveram o nextval anterior. Os COPYs trouxeram
           # IDs explícitos vindos de produção — sincronizamos cada sequência ao
           # max(id) da tabela associada para os próximos INSERTs não colidirem.
           psql -v ON_ERROR_STOP=1 <<'SQL'

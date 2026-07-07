@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-total-geral-alinhado">
+<html lang="pt" data-stockos-ui="2026-07-07-registo-deixados">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3221,6 +3221,7 @@ async function loadTurno() {
         if (!pid) return '';
         const inputAttr = canEdit ? '' : 'disabled';
         const encInputAttr = canEdit && !encontradosFechados ? '' : 'disabled';
+        const deixInputAttr = canEdit && !deixadosFechados ? '' : 'disabled';
         const taraKg = parseFloat(s.peso_tara_kg) || 0;
         const metaLinha = taraKg > 0 ? `recipiente ${fmtNum(taraKg)} kg` : '';
         const isFB = isFinoBarrilNome(s.produto_nome);
@@ -3239,7 +3240,7 @@ async function loadTurno() {
             <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado)}"
               onblur="stockNumberInputBlur(this)"
-              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="deixado" title="Obrigatório" ${inputAttr}/></td>
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="deixado" title="Obrigatório" ${deixInputAttr}/></td>
           </tr>`;
       }).join('');
     }
@@ -3372,6 +3373,7 @@ async function loadTurno() {
         if (!pid) return '';
         const inputAttr = canEdit ? '' : 'disabled';
         const encInputAttr = canEdit && !encontradosFechados ? '' : 'disabled';
+        const deixInputAttr = canEdit && !deixadosFechados ? '' : 'disabled';
         const prevCx = s.prev_deixado_caixa;
         const prevCxTxt = prevCx !== null && prevCx !== undefined ? `T. ant.: ${fmtNum(prevCx)}` : '';
         let compCaixaHtml = `<div class="stock-comp-caixa comp-null" id="comp-caixa-${pid}">${prevCxTxt}</div>`;
@@ -3386,7 +3388,7 @@ async function loadTurno() {
               oninput="updateStock('${pid}','encontrado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="encontrado_caixa" data-prev-caixa="${prevCx !== null && prevCx !== undefined ? prevCx : ''}" title="Nº de caixas/fardos/grades inteiras encontradas" ${encInputAttr}/>${compCaixaHtml}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado_caixa)}"
               onblur="stockNumberInputBlur(this)"
-              oninput="updateStock('${pid}','deixado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="deixado_caixa" title="Nº de caixas/fardos/grades inteiras deixadas" ${inputAttr}/></td>
+              oninput="updateStock('${pid}','deixado_caixa',this.value)" data-stock-pid="${pid}" data-stock-field="deixado_caixa" title="Nº de caixas/fardos/grades inteiras deixadas" ${deixInputAttr}/></td>
             <td class="td-calc" id="next-enc-caixa-${pid}">${(() => {
               const nx = s.next_encontrado_caixa;
               if (nx === null || nx === undefined) return '<span style="color:#475569">—</span>';
@@ -3440,6 +3442,7 @@ async function loadTurno() {
     // Em turnos fechados (fiscalização) acrescentamos Vendas e Registos.
     const turnoFechado = turno.estado === 'fechado';
     const encontradosFechados = !!turno.encontrados_fechados_em;
+    const deixadosFechados = !!turno.deixados_fechados_em;
     const isAdminUserScope = S.user && (S.user.role === 'admin' || S.user.role === 'gestor');
     const allowedTabs = turnoFechado
       ? ['pedidos','stock','validacao','caixas','caixa','escala','vendas','registos']
@@ -3461,6 +3464,7 @@ async function loadTurno() {
 
       <div id="tab-stock" class="${panelCls('stock')}">
         ${encontradosBannerHtml(turno, encontradosFechados, canEdit, isAdminUserScope)}
+        ${deixadosBannerHtml(turno, deixadosFechados, canEdit, isAdminUserScope, encontradosFechados)}
         <div class="card" style="padding:0;overflow:hidden">
           <div class="table-wrap">
             <table>
@@ -3527,6 +3531,7 @@ async function loadTurno() {
 
       <div id="tab-caixas" class="${panelCls('caixas')}">
         ${encontradosBannerHtml(turno, encontradosFechados, canEdit, isAdminUserScope)}
+        ${deixadosBannerHtml(turno, deixadosFechados, canEdit, isAdminUserScope, encontradosFechados)}
         <div class="card" style="padding:0;overflow:hidden">
           <div style="padding:14px 16px 0">
             <div class="card-title">📦 Controlo de caixas</div>
@@ -7008,6 +7013,66 @@ function encontradosBannerHtml(turno, fechado, canEdit, isAdmin) {
       </div>
       ${btn}
     </div>`;
+}
+
+/** Banner do registo dos DEIXADOS (fim do turno). Só aparece depois do
+ *  registo inicial de encontrados estar fechado — antes disso seria ruído. */
+function deixadosBannerHtml(turno, fechado, canEdit, isAdmin, encontradosFechados) {
+  if (!turno) return '';
+  if (fechado) {
+    const ts = turno.deixados_fechados_em
+      ? new Date(turno.deixados_fechados_em).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' })
+      : '';
+    const reabrir = isAdmin
+      ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="runAction(event, () => reabrirDeixados('${turno.id}'))">🔓 Reabrir</button>`
+      : '';
+    return `
+      <div class="card encontrados-banner encontrados-banner-ok mb-12" style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:18px">✓</span>
+        <div style="flex:1">
+          <div style="font-weight:600;color:#86efac">Registo dos deixados fechado</div>
+          <div style="font-size:11px;color:#94a3b8">${ts}${ts ? ' · ' : ''}Deixado e Deix. caixa estão bloqueados.</div>
+        </div>
+        ${reabrir}
+      </div>`;
+  }
+  if (!encontradosFechados) return '';
+  const btn = canEdit
+    ? `<button type="button" class="btn btn-primary btn-sm" style="margin-left:auto" onclick="runAction(event, () => fecharDeixados('${turno.id}'))">🔒 Fechar registo dos deixados</button>`
+    : '';
+  return `
+    <div class="card encontrados-banner encontrados-banner-pend mb-12" style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:18px">⚠</span>
+      <div style="flex:1">
+        <div style="font-weight:600;color:#fbbf24">Regista os deixados</div>
+        <div style="font-size:11px;color:#cbd5e1">No fim do turno, preenche o Deixado (Stock) e o Deix. caixa (Armazém) e fecha o registo para bloquear os valores.</div>
+      </div>
+      ${btn}
+    </div>`;
+}
+
+async function fecharDeixados(turnoId) {
+  if (!confirm('Fechar o registo dos deixados? Os campos Deixado e Deix. caixa ficam bloqueados a partir daqui.')) return;
+  try {
+    turnoMsgPending('A fechar registo…');
+    await api('POST', `/turnos/${turnoId}/deixados/fechar`, {});
+    turnoMsgOk('Registo fechado');
+    if (typeof loadTurnoPage === 'function') await loadTurnoPage();
+    else if (typeof drawTurno === 'function') await drawTurno();
+    setTimeout(() => turnoMsgIdle(), 1500);
+  } catch (e) { turnoMsgErr(e.message); }
+}
+
+async function reabrirDeixados(turnoId) {
+  if (!confirm('Reabrir o registo dos deixados? Os campos voltam a ficar editáveis.')) return;
+  try {
+    turnoMsgPending('A reabrir registo…');
+    await api('POST', `/turnos/${turnoId}/deixados/reabrir`, {});
+    turnoMsgOk('Registo reaberto');
+    if (typeof loadTurnoPage === 'function') await loadTurnoPage();
+    else if (typeof drawTurno === 'function') await drawTurno();
+    setTimeout(() => turnoMsgIdle(), 1500);
+  } catch (e) { turnoMsgErr(e.message); }
 }
 
 async function fecharEncontrados(turnoId) {

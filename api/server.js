@@ -424,7 +424,7 @@ function markDbReady() {
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
  */
-const STOCKOS_BOOTSTRAP_VERSION = '2026-07-07-pos-sync-dados';
+const STOCKOS_BOOTSTRAP_VERSION = '2026-07-07-registo-deixados';
 
 /** Versão das migrações realmente aplicada na BD (lida de stockos_meta.bootstrap).
  *  Cacheada para que /api/health não bata na BD a cada pedido. */
@@ -478,6 +478,7 @@ async function initDB() {
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS encontrado_caixa NUMERIC(10,3)`, [], 'turno_stock-encontrado-caixa');
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS deixado_caixa NUMERIC(10,3)`, [], 'turno_stock-deixado-caixa');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS encontrados_fechados_em TIMESTAMPTZ`, [], 'turnos-encontrados-fechados-em');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_fechados_em TIMESTAMPTZ`, [], 'turnos-deixados-fechados-em');
   await qry(`CREATE TABLE IF NOT EXISTS turno_caixa (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
     tpa NUMERIC(15,2), transferencia NUMERIC(15,2), dinheiro NUMERIC(15,2),
@@ -4526,18 +4527,29 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
         erro: 'Este produto não está incluído na folha de stock do turno. Activa «Stock no turno» em Produtos.'
       });
     }
-    // Encontrados fechados → nas linhas existentes ignora actualizações a
-    // encontrado/encontrado_caixa (preserva o valor original); só permite
-    // mudar deixado e os snapshots.
-    const turnoRow = await query(`SELECT encontrados_fechados_em FROM turnos WHERE id=$1`, [req.params.id]);
-    const encontradosFechados = turnoRow.rows.length && turnoRow.rows[0].encontrados_fechados_em != null;
+    // Registos fechados → nas linhas existentes ignora actualizações às
+    // colunas bloqueadas (preserva o valor original):
+    //  - encontrados fechados: bloqueia encontrado/encontrado_caixa;
+    //  - deixados fechados:    bloqueia deixado/deixado_caixa.
+    // Fallback sem a coluna deixados_fechados_em (BD ainda por migrar).
+    let encontradosFechados = false;
+    let deixadosFechados = false;
+    try {
+      const turnoRow = await query(`SELECT encontrados_fechados_em, deixados_fechados_em FROM turnos WHERE id=$1`, [req.params.id]);
+      encontradosFechados = turnoRow.rows.length && turnoRow.rows[0].encontrados_fechados_em != null;
+      deixadosFechados = turnoRow.rows.length && turnoRow.rows[0].deixados_fechados_em != null;
+    } catch (_) {
+      const turnoRow = await query(`SELECT encontrados_fechados_em FROM turnos WHERE id=$1`, [req.params.id]);
+      encontradosFechados = turnoRow.rows.length && turnoRow.rows[0].encontrados_fechados_em != null;
+    }
     const enc = parseOptionalNumericBody(encontrado);
     const deix = parseOptionalNumericBody(deixado);
     const encG = parseOptionalNumericBody(encontrado_caixa);
     const deixG = parseOptionalNumericBody(deixado_caixa);
-    const updateSet = encontradosFechados
-      ? `deixado=$4, fechados=$5, deixado_caixa=$7`
-      : `encontrado=$3, deixado=$4, fechados=$5, encontrado_caixa=$6, deixado_caixa=$7`;
+    const sets = ['fechados=$5'];
+    if (!encontradosFechados) sets.push('encontrado=$3', 'encontrado_caixa=$6');
+    if (!deixadosFechados) sets.push('deixado=$4', 'deixado_caixa=$7');
+    const updateSet = sets.join(', ');
     const r = await query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados, encontrado_caixa, deixado_caixa)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -4571,6 +4583,39 @@ app.post('/api/turnos/:id/encontrados/reabrir', auth, requireRole('admin', 'gest
   try {
     const r = await query(
       `UPDATE turnos SET encontrados_fechados_em = NULL WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** Fecha o registo dos deixados — bloqueia futuras alterações às colunas
+ *  Deixado e Deix. caixa no PUT /api/turnos/:id/stock. */
+app.post('/api/turnos/:id/deixados/fechar', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `UPDATE turnos SET deixados_fechados_em = COALESCE(deixados_fechados_em, NOW())
+       WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    const msg = /deixados_fechados_em/.test(e.message || '')
+      ? 'A coluna turnos.deixados_fechados_em ainda não existe nesta BD. Corre o workflow «Reparar schema develop» no GitHub Actions.'
+      : e.message;
+    res.status(500).json({ erro: msg });
+  }
+});
+
+/** Reabre o registo dos deixados — só admin/gestor. */
+app.post('/api/turnos/:id/deixados/reabrir', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const r = await query(
+      `UPDATE turnos SET deixados_fechados_em = NULL WHERE id = $1 RETURNING *`,
       [req.params.id]
     );
     if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });

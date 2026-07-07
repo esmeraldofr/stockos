@@ -107,6 +107,7 @@ jobs:
           ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTEGER;
           ALTER TABLE turnos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW();
           ALTER TABLE turnos ADD COLUMN IF NOT EXISTS encontrados_fechados_em TIMESTAMPTZ;
+          ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_fechados_em TIMESTAMPTZ;
           ALTER TABLE turnos ADD COLUMN IF NOT EXISTS estado VARCHAR(10) NOT NULL DEFAULT 'aberto';
           ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fechado_em TIMESTAMPTZ;
           ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT '';
@@ -144,6 +145,9 @@ jobs:
             (SELECT COUNT(*) FROM information_schema.columns
               WHERE table_schema='public' AND table_name='turnos'
                 AND column_name='encontrados_fechados_em') AS turnos_encontrados_fechados_em,
+            (SELECT COUNT(*) FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='turnos'
+                AND column_name='deixados_fechados_em') AS turnos_deixados_fechados_em,
             (SELECT COUNT(*) FROM information_schema.columns
               WHERE table_schema='public' AND table_name='turno_pedido_linhas'
                 AND column_name='qtd_devolvida') AS linhas_qtd_devolvida,

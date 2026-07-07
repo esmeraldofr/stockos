@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-mobile-mais-pequeno">
+<html lang="pt" data-stockos-ui="2026-07-07-keypad-off-padrao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4087,13 +4087,13 @@ function pedidoBalcaoSetAutoPrint(on) {
   } catch (_) {}
 }
 
-/** Mostrar o teclado numérico no painel de Pedidos ao balcão. Por defeito sim. */
+/** Mostrar o teclado numérico no painel de Pedidos ao balcão. Por defeito NÃO
+ *  — quem quiser activa nas definições (fica guardado em localStorage). */
 function pedidoBalcaoKeypadEnabled() {
   try {
-    const v = localStorage.getItem('stockos.pedidoKeypad');
-    return v === null ? true : v === '1';
+    return localStorage.getItem('stockos.pedidoKeypad') === '1';
   } catch (_) {
-    return true;
+    return false;
   }
 }
 

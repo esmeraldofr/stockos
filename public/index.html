@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-aba-entradas-saidas">
+<html lang="pt" data-stockos-ui="2026-07-07-comissao-bloqueio-vb">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5359,6 +5359,33 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     return m;
   })();
   // Relatório de comissões por promotor — agregado dos pedidos do turno.
+  // Divergência em «Vendido vs Balcão» (mesma lógica da validação) →
+  // bloqueia o pagamento de comissões a quem trabalhou no turno até o
+  // stock/pedidos serem corrigidos. Só comparável com deixados fechados.
+  const temDivergVendidoBalcao = (() => {
+    const gatesVB = compGatesForTurno(S.turnoData);
+    if (!gatesVB.deix) return false;
+    const stocksVB = (S.turnoData && Array.isArray(S.turnoData.stock)) ? S.turnoData.stock : [];
+    if (!stocksVB.length) return false;
+    const balcaoMapVB = (typeof getVendasBalcaoPorProduto === 'function') ? getVendasBalcaoPorProduto() : {};
+    for (const s of stocksVB) {
+      const pid = prodIdKey(s.produto_id);
+      if (!pid) continue;
+      const buf = (typeof stockBuf !== 'undefined' && stockBuf) ? stockBuf[pid] : null;
+      const vend = vendidoQtyFromStockParts(
+        buf ? buf.encontrado : s.encontrado,
+        buf ? buf.entrada : s.entrada,
+        buf ? buf.deixado : s.deixado
+      );
+      const balcao = balcaoMapVB[pid] || null;
+      if (!balcao || !Number.isFinite(vend)) continue;
+      const balNativo = balcao.isCopo ? balcao.kg : balcao.unidades;
+      if (!(balNativo > 0)) continue;
+      const tol = (s.tipo_medicao === 'peso' || balcao.isCopo) ? 0.001 : 0.5;
+      if (Math.abs(vend - balNativo) > tol) return true;
+    }
+    return false;
+  })();
   const resumoComissoesHtml = (() => {
     if (!pedidos.length) return '';
     const porProm = new Map();
@@ -5417,6 +5444,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       if (pago > 0 && porPagar <= 0.009) {
         // Tudo pago — fica em frente do valor.
         acaoHtml = `<span title="Comissão já paga (${fmt(pago)})" style="margin-right:6px;font-size:10px;color:#86efac;font-weight:700">✓ Pago</span>`;
+      } else if (porPagar > 0.009 && temDivergVendidoBalcao && r.nTrabalhados > 0) {
+        // Quem trabalhou no turno não recebe enquanto houver diferenças em
+        // Vendido vs Balcão — obriga a corrigir a validação primeiro.
+        acaoHtml = `<span title="Pagamento bloqueado: há diferenças em Vendido vs Balcão na validação deste turno. Corrige o stock/pedidos primeiro." style="margin-right:6px;font-size:10px;color:#f87171;font-weight:700;cursor:help">🔒 Bloqueada</span>`;
       } else if (canEdit && porPagar > 0.009) {
         const parcial = pago > 0 ? `<span style="font-size:9px;color:#64748b;margin-right:6px">(pago ${fmt(pago)})</span>` : '';
         acaoHtml = `${parcial}<button type="button" class="btn btn-ghost btn-sm pagar-comissao-btn" title="Registar saída de caixa para pagar ${pago > 0 ? 'o que falta' : 'esta comissão'} (${fmt(porPagar)})" style="padding:2px 8px;font-size:11px;margin-right:6px" data-pc-turno="${escapeHtml(String(turnoId))}" data-pc-nome="${escapeHtml(String(r.nome))}" data-pc-valor="${porPagar}" onclick="runAction(event, () => pagarComissaoFromBtn(this))">💸 Pagar</button>`;
@@ -5436,6 +5467,11 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     const semPromHtml = semPromN > 0
       ? `<div style="margin-top:8px;padding:6px 10px;background:#0b1322;border:1px dashed #334155;border-radius:6px;font-size:11px;color:#94a3b8;line-height:1.5">
           ⚠ <strong>${semPromN}</strong> pedido${semPromN === 1 ? '' : 's'} sem promotor — comissão potencial <strong style="color:#fbbf24">${fmt(semPromTotal)}</strong> (não atribuída).
+        </div>`
+      : '';
+    const avisoBloqueioHtml = temDivergVendidoBalcao && arr.some((r) => r.nTrabalhados > 0)
+      ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.4);border-radius:6px;font-size:11px;color:#fca5a5;line-height:1.5">
+          🔒 <strong>Comissões de quem trabalhou no turno bloqueadas:</strong> há diferenças em <strong>Vendido vs Balcão</strong> na validação. Corrige o stock/pedidos e volta aqui.
         </div>`
       : '';
     const tabela = porProm.size
@@ -5466,6 +5502,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
         <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">🪙 Comissões do turno</div>
         ${tabela}
+        ${avisoBloqueioHtml}
         ${regraNota}
         ${semPromHtml}
       </div>`;

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-esperado-com-total">
+<html lang="pt" data-stockos-ui="2026-07-07-aba-diferencas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3485,8 +3485,8 @@ async function loadTurno() {
     const compDeixOn = turnoFechado || deixadosFechados;
     const isAdminUserScope = S.user && (S.user.role === 'admin' || S.user.role === 'gestor');
     const allowedTabs = turnoFechado
-      ? ['pedidos','stock','validacao','caixas','caixa','movimentos','escala','vendas','registos']
-      : ['pedidos','stock','validacao','caixas','caixa','movimentos','escala'];
+      ? ['pedidos','stock','validacao','diferencas','caixas','caixa','movimentos','escala','vendas','registos']
+      : ['pedidos','stock','validacao','diferencas','caixas','caixa','movimentos','escala'];
     const activeTab = allowedTabs.includes(S.turnoTab) ? S.turnoTab : 'stock';
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
@@ -3496,6 +3496,7 @@ async function loadTurno() {
           <button type="button" class="${tabCls('stock')}" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
           <button type="button" class="${tabCls('caixas')}" data-turno-tab="caixas" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixas', ev.currentTarget); })">🏬 Armazém</button>
           <button type="button" class="${tabCls('validacao')}" data-turno-tab="validacao" onclick="runAction(event, async (ev) => { await switchTurnoTab('validacao', ev.currentTarget); })">🧪 Validação</button>
+          <button type="button" class="${tabCls('diferencas')}" data-turno-tab="diferencas" onclick="runAction(event, async (ev) => { await switchTurnoTab('diferencas', ev.currentTarget); })">⚠️ Diferenças</button>
           <button type="button" class="${tabCls('caixa')}" data-turno-tab="caixa" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixa', ev.currentTarget); })">💰 Caixa</button>
           <button type="button" class="${tabCls('movimentos')}" data-turno-tab="movimentos" onclick="runAction(event, async (ev) => { await switchTurnoTab('movimentos', ev.currentTarget); })">🔄 Entradas e Saídas</button>
           <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
@@ -3622,13 +3623,19 @@ async function loadTurno() {
         </div>
       </div>
 
-      <div id="tab-caixa" class="${panelCls('caixa')}">
+      <div id="tab-diferencas" class="${panelCls('diferencas')}">
         <div class="card mb-12" id="turno-irregularidades-card" style="display:none">
           <div class="card-title">⚠️ Irregularidades</div>
           <div id="turno-irregularidades-meta" style="font-size:12px;color:#94a3b8;margin:-4px 0 10px;line-height:1.4"></div>
           <div id="turno-irregularidades-equipa" style="font-size:11px;color:#64748b;margin:0 0 10px;line-height:1.4"></div>
           <div id="turno-irregularidades-list"></div>
         </div>
+        <div class="card" id="dif-validacao-card">
+          <div id="dif-validacao-mount"><span style="color:#64748b">A carregar…</span></div>
+        </div>
+      </div>
+
+      <div id="tab-caixa" class="${panelCls('caixa')}">
         <div class="card" id="pedidos-resumo-card">
           <div class="card-title">📊 Resumo dos pedidos</div>
           <div id="pedidos-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
@@ -5770,13 +5777,17 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   // Aba "Caixa": Validação + Produtos vendidos + Comissões + Pedidos do turno.
   const resumoMount = document.getElementById('pedidos-resumo-mount');
   if (resumoMount) {
-    const semDados = !resumoProdutosHtml && !resumoComissoesHtml && !resumoValidacaoHtml && !pedidos.length;
+    const semDados = !resumoProdutosHtml && !resumoComissoesHtml && !pedidos.length;
     resumoMount.innerHTML = semDados
       ? '<span style="color:#64748b">Ainda não há pedidos neste turno.</span>'
-      : resumoValidacaoHtml +
-        resumoProdutosHtml +
+      : resumoProdutosHtml +
         resumoComissoesHtml +
         `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
+  }
+  // Aba "⚠️ Diferenças": bloco Validação — diferenças detectadas.
+  const difMount = document.getElementById('dif-validacao-mount');
+  if (difMount) {
+    difMount.innerHTML = resumoValidacaoHtml || '<span style="color:#64748b">Sem dados de validação neste turno.</span>';
     try { difCampoFiltroApply(); } catch (_) {}
   }
   pedidoBalcaoSyncDraftUI();
@@ -7500,6 +7511,9 @@ async function switchTurnoTab(name, btn) {
   if (name === 'registos') {
     const tid = S.turnoData?.id;
     if (tid) await loadTurnoResumoTab(tid);
+    renderIrregularidadesTurno();
+  }
+  if (name === 'diferencas') {
     renderIrregularidadesTurno();
   }
 }

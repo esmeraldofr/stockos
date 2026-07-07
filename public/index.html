@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-proforma-caixas">
+<html lang="pt" data-stockos-ui="2026-07-07-proforma-un-cx-kg">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9809,7 +9809,11 @@ function addProformaLinha() {
   row.innerHTML =
     '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;margin-bottom:6px">' +
       '<select class="pf-prod" style="min-width:0;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:13px"></select>' +
-      '<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#94a3b8;cursor:pointer;white-space:nowrap" title="Comprar em caixa/fardo em vez de unidades"><input type="checkbox" class="pf-modo-caixa" style="width:14px;height:14px" onchange="toggleProformaLinhaCaixa(this)"/>Caixa</label>' +
+      '<select class="pf-modo" title="Como é comprado" style="padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:12px" onchange="proformaLinhaModoChange(this)">' +
+        '<option value="un">Unidade</option>' +
+        '<option value="cx">Caixa</option>' +
+        '<option value="kg">Peso (kg)</option>' +
+      '</select>' +
       '<button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'.proforma-linha\').remove();updateProformaTotal()">✕</button>' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">' +
@@ -9818,20 +9822,28 @@ function addProformaLinha() {
       '<input class="pf-qtd-caixa" type="number" min="0.001" step="any" placeholder="Qtd por caixa" style="display:none" oninput="updateProformaTotal()"/>' +
     '</div>';
   wrap.appendChild(row);
-  renderArmazemProdutoOptions(row.querySelector('.pf-prod'), '', '', false);
+  const sel = row.querySelector('.pf-prod');
+  renderArmazemProdutoOptions(sel, '', '', false);
+  // Produto medido a peso → modo kg automático (pode ser mudado à mão).
+  sel.addEventListener('change', () => {
+    const opt = sel.options[sel.selectedIndex];
+    const med = opt ? opt.getAttribute('data-medicao') : '';
+    const modo = row.querySelector('.pf-modo');
+    if (modo && med === 'peso') { modo.value = 'kg'; proformaLinhaModoChange(modo); }
+  });
 }
 
-/** Alterna a linha da proforma entre compra em unidades e em caixas. */
-function toggleProformaLinhaCaixa(chk) {
-  const row = chk.closest('.proforma-linha');
+/** Alterna a linha da proforma entre unidade, caixa e peso (kg). */
+function proformaLinhaModoChange(sel) {
+  const row = sel.closest('.proforma-linha');
   if (!row) return;
-  const on = !!chk.checked;
+  const modo = sel.value;
   const qty = row.querySelector('.pf-qty');
   const preco = row.querySelector('.pf-preco');
   const qtdCx = row.querySelector('.pf-qtd-caixa');
-  if (qty) qty.placeholder = on ? 'Nº de caixas' : 'Quantidade';
-  if (preco) preco.placeholder = on ? 'Preço da caixa (Kz)' : 'Preço unit. (Kz)';
-  if (qtdCx) qtdCx.style.display = on ? '' : 'none';
+  if (qty) qty.placeholder = modo === 'cx' ? 'Nº de caixas' : modo === 'kg' ? 'Peso (kg)' : 'Quantidade';
+  if (preco) preco.placeholder = modo === 'cx' ? 'Preço da caixa (Kz)' : modo === 'kg' ? 'Preço por kg (Kz)' : 'Preço unit. (Kz)';
+  if (qtdCx) qtdCx.style.display = modo === 'cx' ? '' : 'none';
   updateProformaTotal();
 }
 
@@ -9854,13 +9866,15 @@ async function submitProforma() {
     const pid = r.querySelector('.pf-prod')?.value;
     const q = parseFloat(r.querySelector('.pf-qty')?.value);
     const pu = parseFloat(r.querySelector('.pf-preco')?.value);
-    const modoCaixa = !!r.querySelector('.pf-modo-caixa')?.checked;
+    const modo = r.querySelector('.pf-modo')?.value || 'un';
     if (!pid || !(q > 0) || !(pu > 0)) return;
-    if (modoCaixa) {
+    if (modo === 'cx') {
       const qc = parseFloat(r.querySelector('.pf-qtd-caixa')?.value);
       if (!(qc > 0)) { erroLinha = 'Nas linhas em caixa indica a quantidade por caixa.'; return; }
       linhas.push({ produto_id: pid, caixas: q, qtd_por_caixa: qc, preco_caixa: pu });
     } else {
+      // Unidade e peso partilham a mesma matemática: qtd × preço.
+      // Para produtos a peso, a quantidade é em kg e o preço é por kg.
       linhas.push({ produto_id: pid, quantidade: q, preco_unitario: pu });
     }
   });
@@ -9905,9 +9919,9 @@ async function loadArmazemProformas() {
           : '<span class="badge badge-amber">Pendente</span>';
       const linhasTxt = (pf.linhas || []).map((l) => {
         const cx = parseFloat(l.caixas) || 0;
-        return cx > 0
-          ? `${fmtNum(cx)} cx (${fmtNum(l.qtd_por_caixa)}/cx) ${escapeHtml(l.produto_nome || '')}`
-          : `${fmtNum(l.quantidade)}× ${escapeHtml(l.produto_nome || '')}`;
+        if (cx > 0) return `${fmtNum(cx)} cx (${fmtNum(l.qtd_por_caixa)}/cx) ${escapeHtml(l.produto_nome || '')}`;
+        const isPeso = l.tipo_medicao === 'peso';
+        return `${fmtNum(l.quantidade)}${isPeso ? ' kg' : '×'} ${escapeHtml(l.produto_nome || '')}`;
       }).join(' · ');
       const acoes = [];
       if (pf.estado === 'pendente') {

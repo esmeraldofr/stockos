@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-abas-todas-visiveis">
+<html lang="pt" data-stockos-ui="2026-07-07-armazem-apos-stock">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3493,8 +3493,8 @@ async function loadTurno() {
       <div class="turno-tabs">
           <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
           <button type="button" class="${tabCls('stock')}" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
-          <button type="button" class="${tabCls('validacao')}" data-turno-tab="validacao" onclick="runAction(event, async (ev) => { await switchTurnoTab('validacao', ev.currentTarget); })">🧪 Validação</button>
           <button type="button" class="${tabCls('caixas')}" data-turno-tab="caixas" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixas', ev.currentTarget); })">🏬 Armazém</button>
+          <button type="button" class="${tabCls('validacao')}" data-turno-tab="validacao" onclick="runAction(event, async (ev) => { await switchTurnoTab('validacao', ev.currentTarget); })">🧪 Validação</button>
           <button type="button" class="${tabCls('caixa')}" data-turno-tab="caixa" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixa', ev.currentTarget); })">💰 Caixa</button>
           <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
           ${turnoFechado ? `<button type="button" class="${tabCls('vendas')}" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>` : ''}

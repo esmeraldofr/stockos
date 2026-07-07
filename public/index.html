@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-keypad-off-padrao">
+<html lang="pt" data-stockos-ui="2026-07-07-turnos-bloqueados">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2024,7 +2024,13 @@ async function loadDia() {
     const qMon = encodeURIComponent(monEsc);
     const qDom = encodeURIComponent(addDays(monEsc, 6));
 
-    const turnos = await api('GET', `/dia?data=${S.date}&resumo=1`);
+    const [turnos, cfgBloq] = await Promise.all([
+      api('GET', `/dia?data=${S.date}&resumo=1`),
+      api('GET', '/config/turnos-bloqueados').catch(() => null)
+    ]);
+    S.turnosBloqueados = cfgBloq && Array.isArray(cfgBloq.bloqueados)
+      ? cfgBloq.bloqueados
+      : (S.turnosBloqueados || []);
     S.turnosDia = turnos;
     const turnoMap = {};
     turnos.forEach(t => { turnoMap[t.nome] = t; });
@@ -2032,6 +2038,14 @@ async function loadDia() {
     const cards = ['manha','tarde','noite'].map(nome => {
       const t = turnoMap[nome];
       if (!t) {
+        if ((S.turnosBloqueados || []).includes(nome)) {
+          return `
+          <div class="turno-card turno-card--locked">
+            <div class="turno-card-nome">${turnoLabel(nome)}</div>
+            <div class="badge badge-grey" style="margin-bottom:8px">⛔ Bloqueado</div>
+            <div style="font-size:11px;color:#94a3b8;line-height:1.35">Abertura de novos turnos desactivada pelo administrador (Configurações).</div>
+          </div>`;
+        }
         const pr = podeAbrirTurnoAgora(S.date, nome);
         if (!pr.ok) {
           return `
@@ -2680,6 +2694,10 @@ async function removeBorderoDia(ev) {
 }
 
 async function abrirTurno(nome) {
+  if ((S.turnosBloqueados || []).includes(nome)) {
+    alert(`O turno ${turnoLabel(nome)} está bloqueado — abertura de novos turnos desactivada pelo administrador (Configurações).`);
+    return;
+  }
   const pr = podeAbrirTurnoAgora(S.date, nome);
   if (!pr.ok) {
     alert(pr.msg);
@@ -11080,6 +11098,17 @@ async function drawConfiguracoes() {
       </div>
 
       <div class="card mb-12">
+        <div class="card-title">⛔ Turnos bloqueados</div>
+        <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
+          Bloqueia a abertura de <strong style="color:#cbd5e1">novos turnos</strong> nos períodos marcados
+          (para períodos que não estão a ser utilizados). Aplica-se a <strong style="color:#cbd5e1">todos os dispositivos</strong>.
+          Turnos já abertos ou fechados não são afectados.
+        </p>
+        <div id="cfg-turnos-bloqueados" style="display:flex;flex-direction:column;gap:8px"><span style="color:#64748b;font-size:12px">A carregar…</span></div>
+        <div id="cfg-turnos-bloq-msg" style="margin-top:8px;font-size:11px;color:#64748b"></div>
+      </div>
+
+      <div class="card mb-12">
         <div class="card-title">🖼️ Logo do talão</div>
         <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
           Imagem impressa no topo de cada talão (opcional · até 58 mm de largura).
@@ -11102,6 +11131,49 @@ async function drawConfiguracoes() {
   `);
   // Refresca o preview do logo (mesma função usada antes no painel do balcão).
   pedidoBalcaoLogoRefreshUI();
+  void configTurnosBloqueadosLoad();
+}
+
+/** Carrega e desenha as checkboxes de turnos bloqueados (definição GLOBAL, servidor). */
+async function configTurnosBloqueadosLoad() {
+  const el = document.getElementById('cfg-turnos-bloqueados');
+  if (!el) return;
+  try {
+    const r = await api('GET', '/config/turnos-bloqueados');
+    const bloq = r && Array.isArray(r.bloqueados) ? r.bloqueados : [];
+    S.turnosBloqueados = bloq;
+    el.innerHTML = ['manha', 'tarde', 'noite'].map((n) => `
+      <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#0f172a;border:1px dashed #334155;cursor:pointer;font-size:13px;color:#cbd5e1;user-select:none">
+        <input type="checkbox" data-turno-bloq="${n}" ${bloq.includes(n) ? 'checked' : ''}
+          onchange="runAction(event, configTurnosBloqueadosChange)"
+          style="width:18px;height:18px;accent-color:#ef4444;cursor:pointer"/>
+        <span>${turnoLabel(n)} <span style="color:#64748b;font-size:11px">${turnoHorarioLabel(n)}</span></span>
+      </label>`).join('');
+    const msg = document.getElementById('cfg-turnos-bloq-msg');
+    if (msg) msg.textContent = bloq.length
+      ? `Bloqueados: ${bloq.map((n) => turnoLabel(n)).join(', ')}.`
+      : 'Nenhum turno bloqueado — todos podem ser abertos.';
+  } catch (e) {
+    el.innerHTML = `<span style="color:#ef4444;font-size:12px">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+async function configTurnosBloqueadosChange() {
+  const bloq = [...document.querySelectorAll('input[data-turno-bloq]')]
+    .filter((i) => i.checked)
+    .map((i) => i.getAttribute('data-turno-bloq'));
+  const msg = document.getElementById('cfg-turnos-bloq-msg');
+  try {
+    if (msg) { msg.style.color = '#64748b'; msg.textContent = 'A guardar…'; }
+    const r = await api('PUT', '/config/turnos-bloqueados', { bloqueados: bloq });
+    const saved = r && Array.isArray(r.bloqueados) ? r.bloqueados : bloq;
+    S.turnosBloqueados = saved;
+    if (msg) msg.textContent = saved.length
+      ? `Bloqueados: ${saved.map((n) => turnoLabel(n)).join(', ')}.`
+      : 'Nenhum turno bloqueado — todos podem ser abertos.';
+  } catch (e) {
+    if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Erro ao guardar: ' + e.message; }
+  }
 }
 
 function configPedidoAutoPrintChange(el) {

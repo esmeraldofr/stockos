@@ -4378,6 +4378,40 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
   }
 });
 
+// ── Config: turnos bloqueados (não permitir abrir NOVOS turnos) ──
+// Guardado em stockos_meta (k='turnos_bloqueados', v=JSON array) — aplica-se
+// a todos os dispositivos. Turnos já abertos não são afectados.
+const TURNOS_NOMES_VALIDOS = ['manha', 'tarde', 'noite'];
+async function getTurnosBloqueados() {
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turnos_bloqueados'`);
+    if (!r.rows.length) return [];
+    const arr = JSON.parse(r.rows[0].v);
+    return Array.isArray(arr) ? arr.filter((n) => TURNOS_NOMES_VALIDOS.includes(n)) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+app.get('/api/config/turnos-bloqueados', auth, async (req, res) => {
+  res.json({ bloqueados: await getTurnosBloqueados() });
+});
+
+app.put('/api/config/turnos-bloqueados', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body && req.body.bloqueados) ? req.body.bloqueados : [];
+    const bloq = [...new Set(raw.map(String))].filter((n) => TURNOS_NOMES_VALIDOS.includes(n));
+    await query(
+      `INSERT INTO stockos_meta (k,v) VALUES ('turnos_bloqueados',$1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+      [JSON.stringify(bloq)]
+    );
+    res.json({ bloqueados: bloq });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 app.post('/api/turnos/abrir', auth, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -4385,6 +4419,10 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
     const { data, nome } = req.body;
     if (!data || !nome) throw new Error('Data e nome obrigatórios');
     assertPodeAbrirTurno(data, nome);
+    const bloqueados = await getTurnosBloqueados();
+    if (bloqueados.includes(nome)) {
+      throw new Error(`O turno ${nome} está bloqueado — a abertura de novos turnos foi desactivada pelo administrador (Configurações).`);
+    }
 
     const exists = await client.query('SELECT id FROM turnos WHERE data=$1 AND nome=$2', [data, nome]);
     if (exists.rows.length) throw new Error(`Turno ${nome} já existe para ${data}`);

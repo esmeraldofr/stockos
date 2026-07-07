@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-comissao-bloqueio-total">
+<html lang="pt" data-stockos-ui="2026-07-07-comissao-bloqueio-total-v2">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5388,9 +5388,9 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   })();
   // Motivos que bloqueiam o pagamento de comissões a quem trabalhou:
   //  1) divergência em Vendido vs Balcão;
-  //  2) Total geral dos produtos vendidos (sem entrega) INFERIOR ao Total
-  //     gerado na caixa (TPA+transferência+dinheiro) — dinheiro a entrar
-  //     sem pedidos registados.
+  //  2) Total geral dos produtos vendidos (sem entrega) MAIOR do que o
+  //     Total gerado na caixa (TPA+transferência+dinheiro) — vendeu-se
+  //     mais do que o dinheiro que entrou: falta dinheiro na caixa.
   const motivosBloqueioComissao = (() => {
     const motivos = [];
     if (temDivergVendidoBalcao) motivos.push('há diferenças em <strong>Vendido vs Balcão</strong> na validação');
@@ -5398,8 +5398,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     const totalGeralArt = br ? (br.total - (br.entregaFees || 0)) : NaN;
     const totalGerado = (typeof getTotalGeradoCaixaKz === 'function') ? getTotalGeradoCaixaKz() : NaN;
     if (Number.isFinite(totalGeralArt) && Number.isFinite(totalGerado)
-        && Math.round(totalGeralArt * 100) < Math.round(totalGerado * 100)) {
-      motivos.push(`o <strong>Total geral</strong> dos produtos vendidos (${fmt(totalGeralArt)}) é inferior ao <strong>Total gerado</strong> na caixa (${fmt(totalGerado)})`);
+        && Math.round(totalGeralArt * 100) > Math.round(totalGerado * 100)) {
+      motivos.push(`o <strong>Total geral</strong> dos produtos vendidos (${fmt(totalGeralArt)}) é maior do que o <strong>Total gerado</strong> na caixa (${fmt(totalGerado)}) — falta dinheiro na caixa`);
     }
     return motivos;
   })();

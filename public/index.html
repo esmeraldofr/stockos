@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-registo-deixados">
+<html lang="pt" data-stockos-ui="2026-07-07-validacao-apos-registos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3258,8 +3258,10 @@ async function loadTurno() {
         );
         const vendTxt = Number.isFinite(vend) && vend > 0 ? fmtNum(vend) : '';
         let compHtml = '<span class="comp-null">—</span>';
-        if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
-        else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
+        if (compEncOn) {
+          if (s.comparacao && s.comparacao.startsWith('falta')) compHtml = `<span class="comp-falta">⚠ ${s.comparacao}</span>`;
+          else if (s.comparacao && s.comparacao.startsWith('sobra')) compHtml = `<span class="comp-sobra">↑ ${s.comparacao}</span>`;
+        }
 
         // Balcão (vendas dos pedidos do turno).
         const balcao = (stockBalcaoMap && stockBalcaoMap[pid]) || null;
@@ -3273,7 +3275,7 @@ async function loadTurno() {
             balcaoTxt = `${fmtNum(balcao.unidades)}`;
           }
         }
-        if (Number.isFinite(vend) && vend >= 0) {
+        if (compDeixOn && Number.isFinite(vend) && vend >= 0) {
           const balcaoNativo = balcao ? (balcao.isCopo ? balcao.kg : balcao.unidades) : 0;
           const diff = vend - balcaoNativo;
           const absDiff = Math.abs(diff);
@@ -3293,7 +3295,7 @@ async function loadTurno() {
           const txt = fmtNum(nxV);
           const dVal = stockBuf[pid]?.deixado;
           const dNum = dVal === null || dVal === undefined || dVal === '' ? NaN : parseFloat(dVal);
-          if (!Number.isFinite(dNum)) {
+          if (!compDeixOn || !Number.isFinite(dNum)) {
             proxHtml = `<span style="color:#94a3b8">${escapeHtml(txt)}</span>`;
           } else {
             const diff = nxV - dNum;
@@ -3315,8 +3317,10 @@ async function loadTurno() {
         const encCx = s.encontrado_caixa != null && s.encontrado_caixa !== '' ? fmtNum(parseFloat(s.encontrado_caixa)) : '—';
         const deiCx = s.deixado_caixa != null && s.deixado_caixa !== '' ? fmtNum(parseFloat(s.deixado_caixa)) : '—';
         let compCxHtml = '<span class="comp-null">—</span>';
-        if (s.comparacao_caixa && s.comparacao_caixa.startsWith('falta')) compCxHtml = `<span class="comp-falta">⚠ ${s.comparacao_caixa}</span>`;
-        else if (s.comparacao_caixa && s.comparacao_caixa.startsWith('sobra')) compCxHtml = `<span class="comp-sobra">↑ ${s.comparacao_caixa}</span>`;
+        if (compEncOn) {
+          if (s.comparacao_caixa && s.comparacao_caixa.startsWith('falta')) compCxHtml = `<span class="comp-falta">⚠ ${s.comparacao_caixa}</span>`;
+          else if (s.comparacao_caixa && s.comparacao_caixa.startsWith('sobra')) compCxHtml = `<span class="comp-sobra">↑ ${s.comparacao_caixa}</span>`;
+        }
         let proxCxHtml = '<span style="color:#475569">—</span>';
         const nxCx = s.next_encontrado_caixa;
         if (nxCx !== null && nxCx !== undefined) {
@@ -3324,7 +3328,7 @@ async function loadTurno() {
           const txtCx = fmtNum(nxVCx);
           const dValCx = stockBuf[pid]?.deixado_caixa;
           const dNumCx = dValCx === null || dValCx === undefined || dValCx === '' ? NaN : parseFloat(dValCx);
-          if (!Number.isFinite(dNumCx)) {
+          if (!compDeixOn || !Number.isFinite(dNumCx)) {
             proxCxHtml = `<span style="color:#94a3b8">${escapeHtml(txtCx)}</span>`;
           } else {
             const diffCx = nxVCx - dNumCx;
@@ -3377,8 +3381,10 @@ async function loadTurno() {
         const prevCx = s.prev_deixado_caixa;
         const prevCxTxt = prevCx !== null && prevCx !== undefined ? `T. ant.: ${fmtNum(prevCx)}` : '';
         let compCaixaHtml = `<div class="stock-comp-caixa comp-null" id="comp-caixa-${pid}">${prevCxTxt}</div>`;
-        if (s.comparacao_caixa && s.comparacao_caixa.startsWith('falta')) compCaixaHtml = `<div class="stock-comp-caixa comp-falta" id="comp-caixa-${pid}">⚠ ${s.comparacao_caixa}</div>`;
-        else if (s.comparacao_caixa && s.comparacao_caixa.startsWith('sobra')) compCaixaHtml = `<div class="stock-comp-caixa comp-sobra" id="comp-caixa-${pid}">↑ ${s.comparacao_caixa}</div>`;
+        if (compEncOn) {
+          if (s.comparacao_caixa && s.comparacao_caixa.startsWith('falta')) compCaixaHtml = `<div class="stock-comp-caixa comp-falta" id="comp-caixa-${pid}">⚠ ${s.comparacao_caixa}</div>`;
+          else if (s.comparacao_caixa && s.comparacao_caixa.startsWith('sobra')) compCaixaHtml = `<div class="stock-comp-caixa comp-sobra" id="comp-caixa-${pid}">↑ ${s.comparacao_caixa}</div>`;
+        }
         return `
           <tr class="stock-row">
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div></td>
@@ -3396,7 +3402,7 @@ async function loadTurno() {
               const txt = fmtNum(nxV);
               const dVal = stockBuf[pid]?.deixado_caixa;
               const dNum = dVal === null || dVal === undefined || dVal === '' ? NaN : parseFloat(dVal);
-              if (!Number.isFinite(dNum)) {
+              if (!compDeixOn || !Number.isFinite(dNum)) {
                 return `<span style="color:#94a3b8">${escapeHtml(txt)}</span>`;
               }
               const diff = nxV - dNum;
@@ -3443,6 +3449,9 @@ async function loadTurno() {
     const turnoFechado = turno.estado === 'fechado';
     const encontradosFechados = !!turno.encontrados_fechados_em;
     const deixadosFechados = !!turno.deixados_fechados_em;
+    // Comparações só depois dos registos fechados (turno fechado mostra tudo).
+    const compEncOn = turnoFechado || encontradosFechados;
+    const compDeixOn = turnoFechado || deixadosFechados;
     const isAdminUserScope = S.user && (S.user.role === 'admin' || S.user.role === 'gestor');
     const allowedTabs = turnoFechado
       ? ['pedidos','stock','validacao','caixas','caixa','escala','vendas','registos']
@@ -5358,6 +5367,16 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   const resumoValidacaoHtml = (() => {
     const stocks = (S.turnoData && Array.isArray(S.turnoData.stock)) ? S.turnoData.stock : [];
     if (!stocks.length) return '';
+    // Comparações só depois dos registos fechados: encontrados → vs turno
+    // anterior; deixados → vs próximo turno e vendido vs balcão.
+    const gates = compGatesForTurno(S.turnoData);
+    if (!gates.enc) {
+      return `
+        <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
+          <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">🧪 Validação — diferenças detectadas</div>
+          <div style="padding:8px 10px;background:#0b1322;border:1px dashed #334155;border-radius:6px;font-size:12px;color:#94a3b8">🔒 As comparações aparecem depois de fechares o <strong style="color:#cbd5e1">registo inicial de encontrados</strong> (aba Stock).</div>
+        </div>`;
+    }
     const balcaoMap = (typeof getVendasBalcaoPorProduto === 'function')
       ? getVendasBalcaoPorProduto()
       : {};
@@ -5391,8 +5410,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const vend = vendidoQtyFromStockParts(enc, ent, dei);
       const balcao = balcaoMap[pid] || null;
       const isCopo = balcao && balcao.isCopo;
-      // 1) Vendido vs Balcão
-      if (Number.isFinite(vend) && balcao) {
+      // 1) Vendido vs Balcão — precisa do Deixado final (registo fechado).
+      if (gates.deix && Number.isFinite(vend) && balcao) {
         const balNativo = isCopo ? balcao.kg : balcao.unidades;
         const tol = (isPeso || isCopo) ? tolKg : tolUn;
         if (balNativo > 0) {
@@ -5417,7 +5436,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       // 2) Deixado vs Próx. Enc.
       const dNum = dei === null || dei === undefined || dei === '' ? NaN : parseFloat(dei);
       const nx = s.next_encontrado;
-      if (Number.isFinite(dNum) && nx !== null && nx !== undefined) {
+      if (gates.deix && Number.isFinite(dNum) && nx !== null && nx !== undefined) {
         const nxV = parseFloat(nx);
         const tol = isPeso ? tolKg : tolUn;
         const diff = nxV - dNum;
@@ -5441,7 +5460,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const deiCxRaw = buf ? buf.deixado_caixa : s.deixado_caixa;
       const dCx = deiCxRaw === null || deiCxRaw === undefined || deiCxRaw === '' ? NaN : parseFloat(deiCxRaw);
       const nxCx = s.next_encontrado_caixa;
-      if (Number.isFinite(dCx) && nxCx !== null && nxCx !== undefined) {
+      if (gates.deix && Number.isFinite(dCx) && nxCx !== null && nxCx !== undefined) {
         const nxVCx = parseFloat(nxCx);
         const diff = nxVCx - dCx;
         if (Math.abs(diff) > 0.5) {
@@ -5494,11 +5513,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       }
     }
     const titulo = `<div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">🧪 Validação — diferenças detectadas</div>`;
+    const notaDeix = !gates.deix
+      ? `<div style="margin-top:8px;padding:6px 10px;background:#0b1322;border:1px dashed #334155;border-radius:6px;font-size:11px;color:#94a3b8">🔒 As comparações dos <strong style="color:#cbd5e1">deixados</strong> (próx. turno, vendido vs balcão) aparecem depois de fechares o registo dos deixados.</div>`
+      : '';
     if (!items.length) {
       return `
         <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
           ${titulo}
           <div style="padding:8px 10px;background:#0b1322;border:1px dashed #334155;border-radius:6px;font-size:12px;color:#86efac">✓ Nenhuma divergência detectada.</div>
+          ${notaDeix}
         </div>`;
     }
     const linhasHtml = items.map((it) => {
@@ -5538,6 +5561,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           </table>
         </div>
         <div style="margin-top:6px;font-size:10px;color:#64748b;line-height:1.4">${items.length} divergência${items.length === 1 ? '' : 's'} — passa o rato em cada linha para ler a explicação.</div>
+        ${notaDeix}
       </div>`;
   })();
   // Aba "Caixa": Validação + Produtos vendidos + Comissões + Pedidos do turno.
@@ -6052,6 +6076,12 @@ function refreshCompCaixa(k) {
     el.textContent = '';
     return;
   }
+  // Antes do registo dos encontrados fechado só mostra o valor anterior
+  // (sem falta/sobra) — a comparação faz-se depois do registo.
+  if (!compGatesForTurno(S.turnoData).enc) {
+    el.textContent = `T. ant.: ${fmtNum(prev)}`;
+    return;
+  }
   if (!Number.isFinite(encC)) {
     el.textContent = `T. ant.: ${fmtNum(prev)}`;
     return;
@@ -6099,6 +6129,18 @@ const KG_FINO_BARRIL_VAZIO = 12.9;  // tara
 const KG_FINO_BARRIL_NET = KG_FINO_BARRIL_CHEIO - KG_FINO_BARRIL_VAZIO; // 48,15 kg líquidos por barril novo
 function prodNomeNorm(n) {
   return String(n || '').trim().toLowerCase();
+}
+/** Comparações de validação/irregularidades só são fiáveis depois dos
+ *  registos estarem fechados: encontrados → comparações com o turno
+ *  anterior; deixados → comparações com o próximo turno e vendido.
+ *  Turno fechado (fiscalização) mostra sempre tudo. */
+function compGatesForTurno(t) {
+  const tt = t || S.turnoData || {};
+  const fech = tt.estado === 'fechado';
+  return {
+    enc: fech || !!tt.encontrados_fechados_em,
+    deix: fech || !!tt.deixados_fechados_em
+  };
 }
 /** Chave estável para mapas `produto_id` / `componente_id` (SERIAL ou UUID). Evita `parseInt` em UUIDs. */
 function prodIdKey(id) {
@@ -6952,6 +6994,17 @@ function renderIrregularidadesTurno() {
     }
   }
 
+  // Irregularidades só depois dos registos fechados: antes do registo dos
+  // encontrados não há comparações fiáveis; entre encontrados e deixados só
+  // as de encontrados (stock vs turno anterior).
+  const gates = compGatesForTurno(S.turnoData);
+  if (!gates.enc) {
+    mount.innerHTML = '';
+    setIrregCardVisible(false);
+    void refreshIrregularidadesEquipaLine(false);
+    return;
+  }
+
   const snap = buildIrregularidadesHtmlParts({
     turno: S.turnoData,
     stockBuf,
@@ -6963,6 +7016,15 @@ function renderIrregularidadesTurno() {
     receitasIrreg: receitasBuf,
     depositosTurno: S.turnoDeposito
   });
+  if (!gates.deix) {
+    // Vendido/caixa/Fino/ingredientes dependem do Deixado final — suprimir
+    // até o registo dos deixados fechar. Fica só stock vs turno anterior
+    // (encontrados) e banco.
+    snap.caixaHtml = '';
+    snap.finoHtml = '';
+    snap.ingredientesItems = [];
+    snap.hasAny = !!(snap.stockHtml || snap.bancoHtml);
+  }
   const tid = S.turnoData?.id;
   const decisoesByCat = (S.turnoDecisoes && tid) ? S.turnoDecisoes : {};
   const comentariosByCat = (S.turnoComentarios && tid) ? S.turnoComentarios : {};

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-filtros-fixos">
+<html lang="pt" data-stockos-ui="2026-07-07-pedidos-turno-no-balcao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5533,8 +5533,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         ${semPromHtml}
       </div>`;
   })();
-  // Aba "Pedidos ao balcão": só o formulário POS (grelha + Conta corrente + teclado).
-  mount.innerHTML = formHtml;
+  // Aba "Pedidos ao balcão": formulário POS + lista Pedidos do turno
+  // (montados mais abaixo, depois de listHtml e dos resumos estarem prontos).
   // Aba "Caixa": Validação + Produtos vendidos + Comissões + Pedidos do turno.
   // Bloco de validação — lista as divergências detectadas entre stock,
   // balcão e próximo turno (mesma lógica da aba 🧪 Validação, em formato
@@ -5777,15 +5777,16 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         ${notaDeix}
       </div>`;
   })();
-  // Aba "Caixa": Validação + Produtos vendidos + Comissões + Pedidos do turno.
+  // Aba "Pedidos ao balcão": lista Pedidos do turno por baixo do POS.
+  mount.innerHTML = formHtml +
+    `<div class="pedidos-balcao-lista-turno" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
+  // Aba "Caixa": Produtos vendidos + Comissões.
   const resumoMount = document.getElementById('pedidos-resumo-mount');
   if (resumoMount) {
-    const semDados = !resumoProdutosHtml && !resumoComissoesHtml && !pedidos.length;
+    const semDados = !resumoProdutosHtml && !resumoComissoesHtml;
     resumoMount.innerHTML = semDados
       ? '<span style="color:#64748b">Ainda não há pedidos neste turno.</span>'
-      : resumoProdutosHtml +
-        resumoComissoesHtml +
-        `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
+      : resumoProdutosHtml + resumoComissoesHtml;
   }
   // Aba "⚠️ Diferenças": bloco Validação — diferenças detectadas.
   const difMount = document.getElementById('dif-validacao-mount');

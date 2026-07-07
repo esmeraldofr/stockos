@@ -424,7 +424,7 @@ function markDbReady() {
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
  */
-const STOCKOS_BOOTSTRAP_VERSION = '2026-05-19-forca-pacote';
+const STOCKOS_BOOTSTRAP_VERSION = '2026-07-07-pos-sync-dados';
 
 /** Versão das migrações realmente aplicada na BD (lida de stockos_meta.bootstrap).
  *  Cacheada para que /api/health não bata na BD a cada pedido. */

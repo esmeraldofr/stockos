@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-vendido-balcao-falta-sobra">
+<html lang="pt" data-stockos-ui="2026-07-07-faltas-sobras-separadas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5529,6 +5529,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             const cor = isFalta ? '#f87171' : '#fb923c';
             items.push({
               cor,
+              tipo: isFalta ? 'falta' : 'sobra',
               tag: '📊 Stock',
               produto: nome,
               campo: 'Vendido vs Balcão',
@@ -5553,6 +5554,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           const cor = isFalta ? '#f87171' : '#fb923c';
           items.push({
             cor,
+            tipo: isFalta ? 'falta' : 'sobra',
             tag: '🔁 Próximo turno',
             produto: nome,
             campo: 'Deixado vs Próx. Enc.',
@@ -5576,6 +5578,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           const cor = isFalta ? '#f87171' : '#fb923c';
           items.push({
             cor,
+            tipo: isFalta ? 'falta' : 'sobra',
             tag: '🏬 Armazém',
             produto: nome,
             campo: 'Deix. caixa vs Próx. Enc. caixa',
@@ -5594,6 +5597,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         const diffComp = isFalta ? -qtdComp : qtdComp;
         items.push({
           cor: isFalta ? '#f87171' : '#fb923c',
+          tipo: isFalta ? 'falta' : 'sobra',
           tag: '⬅ Turno anterior',
           produto: nome,
           campo: 'Encontrado vs Deixado anterior',
@@ -5610,6 +5614,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         const isFalta = compCx.startsWith('falta');
         items.push({
           cor: isFalta ? '#f87171' : '#fb923c',
+          tipo: isFalta ? 'falta' : 'sobra',
           tag: '⬅ Armazém anterior',
           produto: nome,
           campo: 'Enc. caixa vs Deix. caixa anterior',
@@ -5632,7 +5637,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           ${notaDeix}
         </div>`;
     }
-    const linhasHtml = items.map((it) => {
+    const renderLinha = (it) => {
       const kz = parseFloat(it.valorKz) || 0;
       const kzTxt = kz > 0 ? `<span style="color:${it.cor};font-weight:700">${fmt(kz)}</span>` : '<span style="color:#475569">—</span>';
       return `
@@ -5643,14 +5648,26 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         <td style="padding:5px 8px;text-align:right;color:${it.cor};font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums">${escapeHtml(it.valor)}</td>
         <td style="padding:5px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums">${kzTxt}</td>
       </tr>`;
-    }).join('');
-    const totalKz = items.reduce((s, it) => s + (parseFloat(it.valorKz) || 0), 0);
-    const totalKzRow = totalKz > 0
-      ? `<tr style="border-top:1px solid #334155">
-          <td colspan="4" style="padding:6px 8px;color:#cbd5e1;font-weight:700;text-align:right">Total estimado</td>
-          <td style="padding:6px 8px;text-align:right;color:#fbbf24;font-weight:700;font-variant-numeric:tabular-nums">${fmt(totalKz)}</td>
-        </tr>`
-      : '';
+    };
+    // Secções separadas: primeiro as FALTAS (vermelho), depois as SOBRAS
+    // (laranja), cada uma com o seu total estimado em Kz.
+    const grupoHtml = (tipo, tituloGrupo, corGrupo) => {
+      const list = items.filter((it) => it.tipo === tipo);
+      if (!list.length) return '';
+      const totKz = list.reduce((s2, it) => s2 + (parseFloat(it.valorKz) || 0), 0);
+      const totRow = totKz > 0
+        ? `<tr style="border-top:1px solid #334155">
+            <td colspan="4" style="padding:6px 8px;color:#cbd5e1;font-weight:700;text-align:right">Total ${tipo === 'falta' ? 'faltas' : 'sobras'}</td>
+            <td style="padding:6px 8px;text-align:right;color:${corGrupo};font-weight:700;font-variant-numeric:tabular-nums">${fmt(totKz)}</td>
+          </tr>`
+        : '';
+      return `
+        <tr><td colspan="5" style="padding:8px;background:#0f172a;color:${corGrupo};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em">${tituloGrupo} (${list.length})</td></tr>
+        ${list.map(renderLinha).join('')}
+        ${totRow}`;
+    };
+    const linhasHtml = grupoHtml('falta', '⚠ Faltas', '#f87171') + grupoHtml('sobra', '↑ Sobras', '#fb923c');
+    const totalKzRow = '';
     return `
       <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
         ${titulo}

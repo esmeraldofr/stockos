@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-preview-pedido-v3">
+<html lang="pt" data-stockos-ui="2026-07-07-preview-pedido-v4">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4875,9 +4875,6 @@ async function registarPedidoBalcao(turnoId) {
         <button type="button" class="modal-close" onclick="closePedidoPreviewModal()" aria-label="Fechar">×</button>
       </div>
       <div style="padding:14px 18px;overflow-y:auto;flex:1">
-        <div style="font-size:12px;color:#94a3b8;margin-bottom:10px">
-          ${cliente ? `<strong style="color:#cbd5e1">${escapeHtml(cliente)}</strong> · ` : ''}${escapeHtml(pedidoTipoPagamentoLabel(tipoPag))}${comEntrega ? ` · Entrega${valorEntrega > 0 ? ' ' + escapeHtml(fmt(valorEntrega)) : ''}` : ''} · ${escapeHtml(promNome)}
-        </div>
         <div>
           <!-- min-width:0 anula o table{min-width:580px} global — senão a
                coluna Total fica cortada fora do modal. -->
@@ -4895,14 +4892,15 @@ async function registarPedidoBalcao(turnoId) {
                 <td style="padding:10px 8px;color:#f1f5f9;font-weight:700;font-size:15px">Total</td>
                 <td style="padding:10px 8px;text-align:right;color:#4ade80;font-weight:700;font-size:17px;font-variant-numeric:tabular-nums;white-space:nowrap">${fmt(totalGeral)}</td>
               </tr>
-              ${comValor > 0.009 ? `
-              <tr>
-                <td></td>
-                <td style="padding:2px 8px 6px;color:#64748b;font-size:11px">Comissão${cPrev.promotor ? ` — ${escapeHtml(promNome)}` : ' (sem promotor)'}</td>
-                <td style="padding:2px 8px 6px;text-align:right;color:#fbbf24;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap">${fmt(comValor)}</td>
-              </tr>` : ''}
             </tfoot>
           </table>
+        </div>
+        <div style="margin-top:10px;padding-top:12px;border-top:1px dashed #334155;display:grid;grid-template-columns:auto 1fr;gap:7px 18px;font-size:13px;align-items:baseline">
+          ${cliente ? `<span style="color:#64748b">Cliente</span><span style="text-align:right;color:#e2e8f0;font-weight:600">${escapeHtml(cliente)}</span>` : ''}
+          <span style="color:#64748b">Pagamento</span><span style="text-align:right;color:#e2e8f0;font-weight:600">${escapeHtml(pedidoTipoPagamentoLabel(tipoPag))}</span>
+          <span style="color:#64748b">Promotor</span><span style="text-align:right;color:#e2e8f0;font-weight:600">${escapeHtml(promNome)}</span>
+          <span style="color:#64748b">Entrega</span><span style="text-align:right;color:#e2e8f0;font-weight:600">${comEntrega ? `Sim${valorEntrega > 0 ? ` · <span style="color:#60a5fa">${escapeHtml(fmt(valorEntrega))}</span>` : ''}` : 'Não'}</span>
+          <span style="color:#64748b">Comissão${cPrev.promotor ? '' : ' <span style="font-size:10px">(potencial)</span>'}</span><span style="text-align:right;color:#fbbf24;font-weight:600;font-variant-numeric:tabular-nums">${fmt(comValor)}</span>
         </div>
       </div>
       <div style="padding:12px 18px;border-top:1px solid #334155;display:flex;gap:10px;flex-shrink:0">

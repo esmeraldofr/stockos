@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-preview-pedido-v5">
+<html lang="pt" data-stockos-ui="2026-07-07-abas-todas-visiveis">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -538,6 +538,13 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .turno-tab{flex-shrink:0;padding:8px 16px;border-radius:8px 8px 0 0;border:none;background:transparent;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;transition:color .15s,background .15s}
 .turno-tab:hover{color:#cbd5e1;background:#1e293b}
 .turno-tab.active{color:#f1f5f9;background:#1e293b;border-bottom:2px solid #3b82f6;margin-bottom:-2px}
+/* Ecrãs pequenos: sem scroll horizontal escondido — as abas quebram em
+   várias linhas para ficarem TODAS visíveis. (Este bloco tem de vir
+   DEPOIS das regras base .turno-tab, senão a cascata anula-o.) */
+@media(max-width:700px){
+  .turno-tabs{flex-wrap:wrap;overflow-x:visible}
+  .turno-tab{padding:7px 10px;font-size:12px}
+}
 .turno-tab-panel{display:none}.turno-tab-panel.active{display:block}
 #content > .armazem-tab-panel{display:none}#content > .armazem-tab-panel.active{display:block}
 input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-color:#f87171!important;box-shadow:0 0 0 1px rgba(248,113,113,.5)}

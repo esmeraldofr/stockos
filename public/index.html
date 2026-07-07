@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-comissao-bloqueio-vb">
+<html lang="pt" data-stockos-ui="2026-07-07-comissao-bloqueio-total">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5386,6 +5386,24 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     }
     return false;
   })();
+  // Motivos que bloqueiam o pagamento de comissões a quem trabalhou:
+  //  1) divergência em Vendido vs Balcão;
+  //  2) Total geral dos produtos vendidos (sem entrega) INFERIOR ao Total
+  //     gerado na caixa (TPA+transferência+dinheiro) — dinheiro a entrar
+  //     sem pedidos registados.
+  const motivosBloqueioComissao = (() => {
+    const motivos = [];
+    if (temDivergVendidoBalcao) motivos.push('há diferenças em <strong>Vendido vs Balcão</strong> na validação');
+    const br = (typeof getPedidosBalcaoBreakdown === 'function') ? getPedidosBalcaoBreakdown() : null;
+    const totalGeralArt = br ? (br.total - (br.entregaFees || 0)) : NaN;
+    const totalGerado = (typeof getTotalGeradoCaixaKz === 'function') ? getTotalGeradoCaixaKz() : NaN;
+    if (Number.isFinite(totalGeralArt) && Number.isFinite(totalGerado)
+        && Math.round(totalGeralArt * 100) < Math.round(totalGerado * 100)) {
+      motivos.push(`o <strong>Total geral</strong> dos produtos vendidos (${fmt(totalGeralArt)}) é inferior ao <strong>Total gerado</strong> na caixa (${fmt(totalGerado)})`);
+    }
+    return motivos;
+  })();
+  const comissaoTrabalhadorBloqueada = motivosBloqueioComissao.length > 0;
   const resumoComissoesHtml = (() => {
     if (!pedidos.length) return '';
     const porProm = new Map();
@@ -5444,10 +5462,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       if (pago > 0 && porPagar <= 0.009) {
         // Tudo pago — fica em frente do valor.
         acaoHtml = `<span title="Comissão já paga (${fmt(pago)})" style="margin-right:6px;font-size:10px;color:#86efac;font-weight:700">✓ Pago</span>`;
-      } else if (porPagar > 0.009 && temDivergVendidoBalcao && r.nTrabalhados > 0) {
-        // Quem trabalhou no turno não recebe enquanto houver diferenças em
-        // Vendido vs Balcão — obriga a corrigir a validação primeiro.
-        acaoHtml = `<span title="Pagamento bloqueado: há diferenças em Vendido vs Balcão na validação deste turno. Corrige o stock/pedidos primeiro." style="margin-right:6px;font-size:10px;color:#f87171;font-weight:700;cursor:help">🔒 Bloqueada</span>`;
+      } else if (porPagar > 0.009 && comissaoTrabalhadorBloqueada && r.nTrabalhados > 0) {
+        // Quem trabalhou no turno não recebe enquanto a validação tiver
+        // problemas — ver motivos no aviso por baixo da tabela.
+        acaoHtml = `<span title="Pagamento bloqueado — ver aviso por baixo da tabela. Corrige o stock/pedidos/caixa primeiro." style="margin-right:6px;font-size:10px;color:#f87171;font-weight:700;cursor:help">🔒 Bloqueada</span>`;
       } else if (canEdit && porPagar > 0.009) {
         const parcial = pago > 0 ? `<span style="font-size:9px;color:#64748b;margin-right:6px">(pago ${fmt(pago)})</span>` : '';
         acaoHtml = `${parcial}<button type="button" class="btn btn-ghost btn-sm pagar-comissao-btn" title="Registar saída de caixa para pagar ${pago > 0 ? 'o que falta' : 'esta comissão'} (${fmt(porPagar)})" style="padding:2px 8px;font-size:11px;margin-right:6px" data-pc-turno="${escapeHtml(String(turnoId))}" data-pc-nome="${escapeHtml(String(r.nome))}" data-pc-valor="${porPagar}" onclick="runAction(event, () => pagarComissaoFromBtn(this))">💸 Pagar</button>`;
@@ -5469,9 +5487,9 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           ⚠ <strong>${semPromN}</strong> pedido${semPromN === 1 ? '' : 's'} sem promotor — comissão potencial <strong style="color:#fbbf24">${fmt(semPromTotal)}</strong> (não atribuída).
         </div>`
       : '';
-    const avisoBloqueioHtml = temDivergVendidoBalcao && arr.some((r) => r.nTrabalhados > 0)
+    const avisoBloqueioHtml = comissaoTrabalhadorBloqueada && arr.some((r) => r.nTrabalhados > 0)
       ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.4);border-radius:6px;font-size:11px;color:#fca5a5;line-height:1.5">
-          🔒 <strong>Comissões de quem trabalhou no turno bloqueadas:</strong> há diferenças em <strong>Vendido vs Balcão</strong> na validação. Corrige o stock/pedidos e volta aqui.
+          🔒 <strong>Comissões de quem trabalhou no turno bloqueadas:</strong> ${motivosBloqueioComissao.join('; e ')}. Corrige e volta aqui.
         </div>`
       : '';
     const tabela = porProm.size

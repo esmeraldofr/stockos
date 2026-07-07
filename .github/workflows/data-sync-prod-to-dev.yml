@@ -14,6 +14,10 @@
 #  - setval às sequências para max(id) após restore.
 #  - Colunas que existem no develop mas NÃO em produção mantêm o DEFAULT
 #    (ex.: turno_pedido_linhas.qtd_devolvida = 0).
+#  - stockos_meta NUNCA é sincronizada: guarda os markers de migração do
+#    PRÓPRIO ambiente (bootstrap, *_ddl_v1). Copiar a de produção fazia o
+#    servidor do develop saltar migrações no arranque e endpoints partiam
+#    com "column … does not exist" (ex.: turnos.encontrados_fechados_em).
 #
 # Pré-requisitos (GitHub → Settings → Secrets → Actions):
 #   DATABASE_URL              — URI postgres de produção (a usada no deploy).
@@ -82,17 +86,18 @@ jobs:
           # --data-only: sem DDL.
           # Sem --column-inserts: pg_dump default emite
           #   COPY tabela (col1, col2,…) FROM stdin;
-          # — 100–1000× mais rápido que INSERTs individuais (uma única
-          # operação por tabela em vez de centenas de milhares de
-          # round-trips pelo pooler). A lista explícita de colunas
-          # mantém-no robusto a colunas existentes no destino que não
-          # existem na origem (essas ficam com o DEFAULT do schema).
+          # — 100–1000× mais rápido que INSERTs individuais. A lista
+          # explícita de colunas mantém-no robusto a colunas existentes no
+          # destino que não existem na origem (ficam com o DEFAULT).
+          # --exclude-table-data=stockos_meta: os markers de migração são do
+          # PRÓPRIO ambiente — nunca se copiam entre ambientes.
           # --no-owner / --no-acl: ignora dono e privilégios.
           pg_dump \
             --data-only \
             --no-owner \
             --no-acl \
             --schema=public \
+            --exclude-table-data=public.stockos_meta \
             --file=prod-data.sql
           echo "Dump gerado:"
           ls -la prod-data.sql
@@ -109,6 +114,7 @@ jobs:
           # desactivadas via session_replication_role=replica para a ordem dos
           # DELETEs não importar. Erros por tabela são logados como warnings e
           # não abortam — tabelas sem permissão (raras) ficam com dados antigos.
+          # stockos_meta fica intacta: são os markers de migração do develop.
           psql -v ON_ERROR_STOP=1 <<'SQL'
           SET session_replication_role = 'replica';
           DO $$
@@ -122,6 +128,7 @@ jobs:
               SELECT format('%I.%I', schemaname, tablename)
                 FROM pg_tables
                WHERE schemaname = 'public'
+                 AND tablename <> 'stockos_meta'
                ORDER BY tablename
             LOOP
               BEGIN
@@ -160,6 +167,18 @@ jobs:
           } | psql -v ON_ERROR_STOP=1 2>&1 | tee restore.log
           echo "Restore terminado. Avisos (não-fatais):"
           grep -E '^WARNING:|^NOTICE:' restore.log | head -50 || true
+
+      - name: Forçar re-arranque das migrações no develop
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          # Segurança extra: apaga o marker bootstrap para o próximo cold
+          # start do develop correr o initDB completo (idempotente). Garante
+          # que qualquer coluna/tabela nova do develop é criada mesmo que a
+          # stockos_meta tenha sido tocada por syncs antigos.
+          psql -v ON_ERROR_STOP=1 -c "DELETE FROM stockos_meta WHERE k = 'bootstrap';" || true
 
       - name: Sincronizar sequências (max(id) → setval)
         env:
@@ -229,6 +248,7 @@ jobs:
           echo "## Sync de DADOS concluído"
           echo "- Produção: read-only (apenas leitura via pg_dump --data-only)."
           echo "- Develop: rows substituídos via DELETE (FKs off); estrutura PRESERVADA (colunas extra, índices)."
+          echo "- stockos_meta do develop preservada; marker bootstrap apagado → próximo arranque corre migrações."
           echo "- Sequências sincronizadas (setval = max(id) por tabela)."
           echo "- Colunas só do develop (ex.: turno_pedido_linhas.qtd_devolvida) mantêm o DEFAULT (0)."
           echo "- Tabelas que falharem DELETE (sem permissão) ficam com dados antigos — ver warnings acima."

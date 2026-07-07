@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-conta-corrente-fixa">
+<html lang="pt" data-stockos-ui="2026-07-07-conta-corrente-fixa-v2">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -245,11 +245,15 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 }
 @media(max-width:900px){
   .pedidos-balcao-pos{grid-template-columns:1fr}
-  /* Mobile/tablet: Conta corrente fixa no fundo do ecrã (drawer).
-     Colapsada por defeito (mostra só Total + items). Expande ao tocar
-     no cabeçalho. Fica ACIMA da barra de navegação inferior (#navbar,
-     ~64px, z-index 100) — senão a navbar tapa o drawer. */
-  .pedidos-balcao-side{
+  /* Mobile/tablet: Conta corrente fixa no fundo do ecrã (drawer), como a
+     navbar. Colapsada por defeito (mostra só o cabeçalho/total); expande
+     ao tocar no cabeçalho. Fica ACIMA da barra de navegação inferior
+     (#navbar, ~64px, z-index 100).
+     IMPORTANTE: selector com .pedidos-balcao-pos à frente — o estilo BASE
+     de .pedidos-balcao-side (position:sticky;top:8px) vem DEPOIS no
+     ficheiro e, com igual especificidade, ganhava sempre a esta regra;
+     o drawer nunca chegava a ficar fixed. */
+  .pedidos-balcao-pos .pedidos-balcao-side{
     position:fixed;
     left:8px;right:8px;top:auto;
     bottom:calc(66px + env(safe-area-inset-bottom, 0px));
@@ -260,7 +264,7 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
     max-height:16vh;
     transition:max-height .2s ease;
   }
-  .pedidos-balcao-side.is-open{max-height:70vh}
+  .pedidos-balcao-pos .pedidos-balcao-side.is-open{max-height:70vh}
   .pedidos-balcao-side .pedido-side-title{cursor:pointer;display:flex;align-items:center;justify-content:space-between}
   .pedidos-balcao-side .pedido-side-title::after{content:'▾';font-size:14px;color:#94a3b8;transition:transform .2s}
   .pedidos-balcao-side.is-open .pedido-side-title::after{transform:rotate(180deg)}

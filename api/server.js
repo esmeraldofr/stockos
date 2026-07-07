@@ -3235,7 +3235,7 @@ let armazemProformasReady = false;
 async function ensureArmazemProformas() {
   if (armazemProformasReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='armazem_proformas_ddl_v1'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='armazem_proformas_ddl_v2'`);
     if (r.rows.length) { armazemProformasReady = true; return; }
   } catch (_) {}
   try {
@@ -3261,10 +3261,14 @@ async function ensureArmazemProformas() {
       proforma_id INTEGER NOT NULL REFERENCES armazem_proformas(id) ON DELETE CASCADE,
       produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
       quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+      caixas NUMERIC(12,3) NOT NULL DEFAULT 0,
+      qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0,
       preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
       valor_total NUMERIC(15,2) NOT NULL DEFAULT 0
     )`);
-    await query(`INSERT INTO stockos_meta (k,v) VALUES ('armazem_proformas_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+    await query(`ALTER TABLE armazem_proforma_linhas ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`ALTER TABLE armazem_proforma_linhas ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('armazem_proformas_ddl_v2','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
     armazemProformasReady = true;
   } catch (e) {
     console.warn('[ensureArmazemProformas]', e && e.message);
@@ -3309,14 +3313,30 @@ app.post('/api/armazem/proformas', auth, requireRole('admin','gestor','compras')
     let total = 0;
     const norm = [];
     for (const ln of linhas) {
-      const q = parseFloat(ln.quantidade);
-      const pu = parseFloat(ln.preco_unitario);
-      if (!ln.produto_id || !Number.isFinite(q) || q <= 0 || !Number.isFinite(pu) || pu <= 0) {
-        return res.status(400).json({ erro: 'Cada linha precisa de produto, quantidade e preço unitário válidos.' });
+      if (!ln.produto_id) return res.status(400).json({ erro: 'Cada linha precisa de um produto.' });
+      const caixas = parseFloat(ln.caixas) || 0;
+      const qtdPor = parseFloat(ln.qtd_por_caixa) || 0;
+      const precoCaixa = parseFloat(ln.preco_caixa) || 0;
+      let q, pu, vt;
+      if (caixas > 0) {
+        // Compra em CAIXA: quantidade = caixas × qtd/caixa; preço unitário
+        // derivado; total = caixas × preço da caixa.
+        if (qtdPor <= 0 || precoCaixa <= 0) {
+          return res.status(400).json({ erro: 'Nas linhas em caixa indica nº de caixas, qtd por caixa e preço da caixa.' });
+        }
+        q = Math.round(caixas * qtdPor * 1000) / 1000;
+        pu = Math.round((precoCaixa / qtdPor) * 100) / 100;
+        vt = Math.round(caixas * precoCaixa * 100) / 100;
+      } else {
+        q = parseFloat(ln.quantidade);
+        pu = parseFloat(ln.preco_unitario);
+        if (!Number.isFinite(q) || q <= 0 || !Number.isFinite(pu) || pu <= 0) {
+          return res.status(400).json({ erro: 'Cada linha precisa de quantidade e preço unitário válidos.' });
+        }
+        vt = Math.round(q * pu * 100) / 100;
       }
-      const vt = Math.round(q * pu * 100) / 100;
       total += vt;
-      norm.push({ produto_id: ln.produto_id, quantidade: q, preco_unitario: pu, valor_total: vt });
+      norm.push({ produto_id: ln.produto_id, quantidade: q, caixas, qtd_por_caixa: qtdPor, preco_unitario: pu, valor_total: vt });
     }
     const ins = await query(
       `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
@@ -3325,9 +3345,9 @@ app.post('/api/armazem/proformas', auth, requireRole('admin','gestor','compras')
     const pf = ins.rows[0];
     for (const ln of norm) {
       await query(
-        `INSERT INTO armazem_proforma_linhas (proforma_id, produto_id, quantidade, preco_unitario, valor_total)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [pf.id, ln.produto_id, ln.quantidade, ln.preco_unitario, ln.valor_total]
+        `INSERT INTO armazem_proforma_linhas (proforma_id, produto_id, quantidade, caixas, qtd_por_caixa, preco_unitario, valor_total)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [pf.id, ln.produto_id, ln.quantidade, ln.caixas, ln.qtd_por_caixa, ln.preco_unitario, ln.valor_total]
       );
     }
     res.json(pf);

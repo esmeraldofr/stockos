@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-faturas-proforma">
+<html lang="pt" data-stockos-ui="2026-07-07-proforma-caixas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9805,17 +9805,39 @@ function addProformaLinha() {
   if (!wrap) return;
   const row = document.createElement('div');
   row.className = 'proforma-linha';
-  row.style.cssText = 'display:grid;grid-template-columns:minmax(0,2fr) minmax(64px,1fr) minmax(84px,1fr) auto;gap:6px;align-items:center;margin-bottom:6px';
+  row.style.cssText = 'border:1px solid #334155;border-radius:8px;padding:8px;margin-bottom:8px;background:#0b1322';
   row.innerHTML =
-    '<select class="pf-prod" style="min-width:0;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:13px"></select>' +
-    '<input class="pf-qty" type="number" min="0.001" step="any" placeholder="Qtd" oninput="updateProformaTotal()"/>' +
-    '<input class="pf-preco" type="number" min="0.01" step="any" placeholder="Preço (Kz)" oninput="updateProformaTotal()"/>' +
-    '<button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'.proforma-linha\').remove();updateProformaTotal()">✕</button>';
+    '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;margin-bottom:6px">' +
+      '<select class="pf-prod" style="min-width:0;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:13px"></select>' +
+      '<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#94a3b8;cursor:pointer;white-space:nowrap" title="Comprar em caixa/fardo em vez de unidades"><input type="checkbox" class="pf-modo-caixa" style="width:14px;height:14px" onchange="toggleProformaLinhaCaixa(this)"/>Caixa</label>' +
+      '<button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'.proforma-linha\').remove();updateProformaTotal()">✕</button>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">' +
+      '<input class="pf-qty" type="number" min="0.001" step="any" placeholder="Quantidade" oninput="updateProformaTotal()"/>' +
+      '<input class="pf-preco" type="number" min="0.01" step="any" placeholder="Preço unit. (Kz)" oninput="updateProformaTotal()"/>' +
+      '<input class="pf-qtd-caixa" type="number" min="0.001" step="any" placeholder="Qtd por caixa" style="display:none" oninput="updateProformaTotal()"/>' +
+    '</div>';
   wrap.appendChild(row);
   renderArmazemProdutoOptions(row.querySelector('.pf-prod'), '', '', false);
 }
 
+/** Alterna a linha da proforma entre compra em unidades e em caixas. */
+function toggleProformaLinhaCaixa(chk) {
+  const row = chk.closest('.proforma-linha');
+  if (!row) return;
+  const on = !!chk.checked;
+  const qty = row.querySelector('.pf-qty');
+  const preco = row.querySelector('.pf-preco');
+  const qtdCx = row.querySelector('.pf-qtd-caixa');
+  if (qty) qty.placeholder = on ? 'Nº de caixas' : 'Quantidade';
+  if (preco) preco.placeholder = on ? 'Preço da caixa (Kz)' : 'Preço unit. (Kz)';
+  if (qtdCx) qtdCx.style.display = on ? '' : 'none';
+  updateProformaTotal();
+}
+
 function updateProformaTotal() {
+  // Em unidades: qtd × preço unit.; em caixas: nº caixas × preço da caixa —
+  // a mesma multiplicação (qtd/caixa só define as unidades totais).
   let t = 0;
   document.querySelectorAll('#proforma-linhas-body .proforma-linha').forEach((r) => {
     t += (parseFloat(r.querySelector('.pf-qty')?.value) || 0) * (parseFloat(r.querySelector('.pf-preco')?.value) || 0);
@@ -9827,12 +9849,25 @@ function updateProformaTotal() {
 async function submitProforma() {
   const msg = document.getElementById('proforma-form-msg');
   const linhas = [];
+  let erroLinha = '';
   document.querySelectorAll('#proforma-linhas-body .proforma-linha').forEach((r) => {
     const pid = r.querySelector('.pf-prod')?.value;
     const q = parseFloat(r.querySelector('.pf-qty')?.value);
     const pu = parseFloat(r.querySelector('.pf-preco')?.value);
-    if (pid && q > 0 && pu > 0) linhas.push({ produto_id: pid, quantidade: q, preco_unitario: pu });
+    const modoCaixa = !!r.querySelector('.pf-modo-caixa')?.checked;
+    if (!pid || !(q > 0) || !(pu > 0)) return;
+    if (modoCaixa) {
+      const qc = parseFloat(r.querySelector('.pf-qtd-caixa')?.value);
+      if (!(qc > 0)) { erroLinha = 'Nas linhas em caixa indica a quantidade por caixa.'; return; }
+      linhas.push({ produto_id: pid, caixas: q, qtd_por_caixa: qc, preco_caixa: pu });
+    } else {
+      linhas.push({ produto_id: pid, quantidade: q, preco_unitario: pu });
+    }
   });
+  if (erroLinha) {
+    if (msg) msg.innerHTML = `<div class="alert alert-error">${erroLinha}</div>`;
+    return;
+  }
   if (!linhas.length) {
     if (msg) msg.innerHTML = '<div class="alert alert-error">Adiciona pelo menos uma linha com produto, quantidade e preço.</div>';
     return;
@@ -9868,7 +9903,12 @@ async function loadArmazemProformas() {
         : pf.estado === 'libertada'
           ? '<span class="badge" style="background:#1e3a8a;color:#93c5fd">💰 Valor libertado</span>'
           : '<span class="badge badge-amber">Pendente</span>';
-      const linhasTxt = (pf.linhas || []).map((l) => `${fmtNum(l.quantidade)}× ${escapeHtml(l.produto_nome || '')}`).join(' · ');
+      const linhasTxt = (pf.linhas || []).map((l) => {
+        const cx = parseFloat(l.caixas) || 0;
+        return cx > 0
+          ? `${fmtNum(cx)} cx (${fmtNum(l.qtd_por_caixa)}/cx) ${escapeHtml(l.produto_nome || '')}`
+          : `${fmtNum(l.quantidade)}× ${escapeHtml(l.produto_nome || '')}`;
+      }).join(' · ');
       const acoes = [];
       if (pf.estado === 'pendente') {
         acoes.push(`<button type="button" class="btn btn-primary btn-sm" title="Cria uma libertação no valor total desta proforma para o dia seleccionado" onclick="runAction(event, () => libertarProforma(${pf.id}))">💰 Libertar valor</button>`);
@@ -9926,8 +9966,20 @@ async function usarProformaNaFatura(id) {
       renderArmazemProdutoOptions(sel, String(l.produto_id), '', true);
       sel.value = String(l.produto_id);
     }
-    const q = row.querySelector('.af-qty'); if (q) q.value = l.quantidade;
-    const p = row.querySelector('.af-preco'); if (p) p.value = l.preco_unitario;
+    const cx = parseFloat(l.caixas) || 0;
+    if (cx > 0) {
+      // Linha em caixa: activa o modo caixa da fatura e preenche os campos.
+      const chk = row.querySelector('.af-modo-caixa');
+      if (chk) { chk.checked = true; toggleFaturaLinhaCaixa(chk); }
+      const cs = row.querySelector('.af-caixas'); if (cs) cs.value = cx;
+      const qc = row.querySelector('.af-qtd-caixa'); if (qc) qc.value = l.qtd_por_caixa;
+      const pc = row.querySelector('.af-preco-caixa');
+      if (pc) pc.value = Math.round(((parseFloat(l.valor_total) || 0) / cx) * 100) / 100;
+      if (typeof syncFaturaLinhaPrecoUnit === 'function') syncFaturaLinhaPrecoUnit(row);
+    } else {
+      const q = row.querySelector('.af-qty'); if (q) q.value = l.quantidade;
+      const p = row.querySelector('.af-preco'); if (p) p.value = l.preco_unitario;
+    }
   }
   const forn = document.getElementById('fx-fornecedor-id');
   const liv = document.getElementById('fx-fornecedor-livre');

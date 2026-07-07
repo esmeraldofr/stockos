@@ -3228,6 +3228,144 @@ app.delete('/api/armazem/libertacoes/:id', auth, requireRole('admin','gestor','c
   } catch(e) { res.status(400).json({ erro: e.message }); }
 });
 
+// ── Faturas PROFORMA: lista de produtos a comprar, criada ANTES do dinheiro
+//    ser libertado. Fluxo: pendente → libertada (cria a libertação do dia)
+//    → comprada (ligada à fatura de compra real). ──
+let armazemProformasReady = false;
+async function ensureArmazemProformas() {
+  if (armazemProformasReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='armazem_proformas_ddl_v1'`);
+    if (r.rows.length) { armazemProformasReady = true; return; }
+  } catch (_) {}
+  try {
+    const t = await query(
+      `SELECT data_type FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
+    );
+    const dt = String((t.rows[0] && t.rows[0].data_type) || '').toLowerCase();
+    const pidCol = dt === 'uuid' ? 'UUID' : dt === 'bigint' ? 'BIGINT' : 'INTEGER';
+    await query(`CREATE TABLE IF NOT EXISTS armazem_proformas (
+      id SERIAL PRIMARY KEY,
+      fornecedor TEXT NOT NULL DEFAULT '',
+      notas TEXT NOT NULL DEFAULT '',
+      total_valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+      estado VARCHAR(12) NOT NULL DEFAULT 'pendente',
+      libertacao_id INTEGER,
+      fatura_id INTEGER,
+      criado_por TEXT NOT NULL DEFAULT '',
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await query(`CREATE TABLE IF NOT EXISTS armazem_proforma_linhas (
+      id SERIAL PRIMARY KEY,
+      proforma_id INTEGER NOT NULL REFERENCES armazem_proformas(id) ON DELETE CASCADE,
+      produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+      quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+      preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
+      valor_total NUMERIC(15,2) NOT NULL DEFAULT 0
+    )`);
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('armazem_proformas_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+    armazemProformasReady = true;
+  } catch (e) {
+    console.warn('[ensureArmazemProformas]', e && e.message);
+  }
+}
+
+app.get('/api/armazem/proformas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemProformas();
+    const r = await query(
+      `SELECT pf.*, u.nome AS criado_por_nome
+       FROM armazem_proformas pf
+       LEFT JOIN utilizadores u ON u.id::text = pf.criado_por::text
+       ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC
+       LIMIT 100`
+    );
+    const ids = r.rows.map((x) => x.id);
+    const byId = {};
+    r.rows.forEach((pf) => { byId[pf.id] = { ...pf, linhas: [] }; });
+    if (ids.length) {
+      const lr = await query(
+        `SELECT l.*, p.nome AS produto_nome, p.tipo_medicao
+         FROM armazem_proforma_linhas l
+         JOIN produtos p ON p.id = l.produto_id
+         WHERE l.proforma_id = ANY($1::int[])
+         ORDER BY l.id`,
+        [ids]
+      );
+      lr.rows.forEach((l) => { if (byId[l.proforma_id]) byId[l.proforma_id].linhas.push(l); });
+    }
+    res.json(r.rows.map((pf) => byId[pf.id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/armazem/proformas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemProformas();
+    const { fornecedor, notas, linhas } = req.body || {};
+    if (!Array.isArray(linhas) || !linhas.length) {
+      return res.status(400).json({ erro: 'Adiciona pelo menos uma linha (produto, quantidade e preço).' });
+    }
+    let total = 0;
+    const norm = [];
+    for (const ln of linhas) {
+      const q = parseFloat(ln.quantidade);
+      const pu = parseFloat(ln.preco_unitario);
+      if (!ln.produto_id || !Number.isFinite(q) || q <= 0 || !Number.isFinite(pu) || pu <= 0) {
+        return res.status(400).json({ erro: 'Cada linha precisa de produto, quantidade e preço unitário válidos.' });
+      }
+      const vt = Math.round(q * pu * 100) / 100;
+      total += vt;
+      norm.push({ produto_id: ln.produto_id, quantidade: q, preco_unitario: pu, valor_total: vt });
+    }
+    const ins = await query(
+      `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [String(fornecedor || '').trim(), String(notas || '').trim(), Math.round(total * 100) / 100, String(req.user.id || '')]
+    );
+    const pf = ins.rows[0];
+    for (const ln of norm) {
+      await query(
+        `INSERT INTO armazem_proforma_linhas (proforma_id, produto_id, quantidade, preco_unitario, valor_total)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [pf.id, ln.produto_id, ln.quantidade, ln.preco_unitario, ln.valor_total]
+      );
+    }
+    res.json(pf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+/** Liberta o valor total da proforma: cria uma libertação no dia indicado
+ *  e marca a proforma como «libertada». */
+app.post('/api/armazem/proformas/:id/libertar', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemProformas();
+    await ensureArmazemTables();
+    const pfr = await query(`SELECT * FROM armazem_proformas WHERE id=$1`, [req.params.id]);
+    if (!pfr.rows.length) return res.status(404).json({ erro: 'Proforma não encontrada' });
+    const pf = pfr.rows[0];
+    if (pf.estado !== 'pendente') return res.status(400).json({ erro: `Esta proforma já está ${pf.estado}.` });
+    const d = String((req.body && req.body.data) || new Date().toISOString().split('T')[0]).slice(0, 10);
+    const lib = await query(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [d, parseFloat(pf.total_valor) || 0, `Proforma #${pf.id}${pf.fornecedor ? ' — ' + pf.fornecedor : ''}`, String(req.user.id || '')]
+    );
+    const upd = await query(
+      `UPDATE armazem_proformas SET estado='libertada', libertacao_id=$1 WHERE id=$2 RETURNING *`,
+      [lib.rows[0].id, pf.id]
+    );
+    res.json(upd.rows[0]);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+app.delete('/api/armazem/proformas/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemProformas();
+    const r = await query(`DELETE FROM armazem_proformas WHERE id=$1 AND estado='pendente' RETURNING id`, [req.params.id]);
+    if (!r.rows.length) return res.status(400).json({ erro: 'Só proformas pendentes podem ser eliminadas.' });
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
 app.get('/api/armazem/inventario', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
@@ -3883,7 +4021,8 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
       turno_saida_id,
       foto_fatura_base64,
       fornecedor_id: fornecedorIdBody,
-      novo_fornecedor
+      novo_fornecedor,
+      proforma_id
     } = req.body || {};
     if (!Array.isArray(linhas) || !linhas.length) throw new Error('Adicione pelo menos uma linha à fatura');
     const dataFat = (data_emissao || new Date().toISOString().split('T')[0]).trim();
@@ -4001,6 +4140,17 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
     await client.query('UPDATE armazem_faturas SET total_valor=$1 WHERE id=$2', [sumTotal, fid]);
     const fotoRaw = String(foto_fatura_base64 || '').trim();
     if (fotoRaw) await applyFaturaFotoUrl(client, fid, fotoRaw);
+    // Fatura criada a partir de uma proforma → marca-a como comprada.
+    if (proforma_id != null && String(proforma_id).trim() !== '') {
+      const pfid = parseInt(proforma_id, 10);
+      if (!Number.isNaN(pfid)) {
+        await ensureArmazemProformas();
+        await client.query(
+          `UPDATE armazem_proformas SET estado='comprada', fatura_id=$1 WHERE id=$2 AND estado <> 'comprada'`,
+          [fid, pfid]
+        ).catch(() => {});
+      }
+    }
     await client.query('COMMIT');
   } catch(e) {
     await client.query('ROLLBACK').catch(() => {});

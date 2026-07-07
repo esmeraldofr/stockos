@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-validacao-apos-registos">
+<html lang="pt" data-stockos-ui="2026-07-07-mobile-mais-pequeno">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10,6 +10,11 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html{overflow-x:hidden;width:100%}
 body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;overflow-x:hidden;width:100%;position:relative}
+/* Telemóvel: reduz TUDO uniformemente (os tamanhos do app são px fixos).
+   zoom recalcula o layout, por isso a página continua a ocupar 100% da
+   largura — ao contrário de transform:scale. Suportado em Safari/Chrome/
+   Firefox 126+. */
+@media(max-width:600px){body{zoom:0.8}}
 #env-banner{position:fixed;top:0;left:0;right:0;z-index:9999;text-align:center;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:3px 8px;display:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 body.env-develop #env-banner{display:block;background:#d97706;color:#fff}
 body.env-qualidade #env-banner{display:block;background:#7c3aed;color:#fff}

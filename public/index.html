@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-aba-diferencas">
+<html lang="pt" data-stockos-ui="2026-07-07-filtros-fixos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5749,7 +5749,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     items.forEach((it) => { countByKey[it.campoKey] = (countByKey[it.campoKey] || 0) + 1; });
     const chipsHtml = CAMPO_DEFS
       .filter((c) => countByKey[c.key])
-      .map((c) => `<button type="button" data-dif-campo="${c.key}" onclick="difCampoFiltroToggle(this)" title="Mostrar/esconder ${escapeHtml(c.label)}">${escapeHtml(c.label)} (${countByKey[c.key]})</button>`)
+      .map((c) => {
+        const fixo = DIF_CAMPOS_FIXOS.includes(c.key);
+        return `<button type="button" data-dif-campo="${c.key}" ${fixo ? 'style="cursor:default;opacity:.95" title="Sempre activo"' : `onclick="difCampoFiltroToggle(this)" title="Mostrar/esconder ${escapeHtml(c.label)}"`}>${escapeHtml(c.label)} (${countByKey[c.key]})</button>`;
+      })
       .join('');
     return `
       <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px" id="dif-detectadas-wrap">
@@ -6348,10 +6351,15 @@ function prodNomeNorm(n) {
 /** Filtro por campo do bloco «Validação — diferenças detectadas».
  *  filtro[key] === false → campo escondido; ausente/true → visível.
  *  Guardado por dispositivo em localStorage. */
+/** Campos SEMPRE activos — não podem ser escondidos pelo filtro. */
+const DIF_CAMPOS_FIXOS = ['vend-balcao', 'enc-ant', 'deix-prox'];
+
 function difCampoFiltroGet() {
   try {
     const v = JSON.parse(localStorage.getItem('stockos.difCampoFiltro') || '{}');
-    return v && typeof v === 'object' ? v : {};
+    const f = v && typeof v === 'object' ? v : {};
+    DIF_CAMPOS_FIXOS.forEach((k) => { delete f[k]; });
+    return f;
   } catch (_) {
     return {};
   }
@@ -6360,7 +6368,7 @@ function difCampoFiltroGet() {
 function difCampoFiltroToggle(btn) {
   if (!btn) return;
   const key = btn.getAttribute('data-dif-campo');
-  if (!key) return;
+  if (!key || DIF_CAMPOS_FIXOS.includes(key)) return;
   const f = difCampoFiltroGet();
   f[key] = f[key] === false;
   try { localStorage.setItem('stockos.difCampoFiltro', JSON.stringify(f)); } catch (_) {}

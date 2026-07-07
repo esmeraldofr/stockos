@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-conta-corrente-revertida">
+<html lang="pt" data-stockos-ui="2026-07-07-preview-pedido">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4838,9 +4838,91 @@ async function registarPedidoBalcao(turnoId) {
   }
   const promotorId = promotorRaw || '';
   const tid = String(turnoId);
-  const idsAntes = new Set(
-    (window.__stockosPedidosBalcao || []).map((p) => String(p.id))
-  );
+
+  // Preview antes de gravar: modal com artigos, totais, pagamento e
+  // comissão. Só grava depois de o utilizador confirmar.
+  const catalogPrev = window.__pedidoProdutosOpts || [];
+  const mapPrev = {};
+  catalogPrev.forEach((o) => { mapPrev[String(o.id)] = o; });
+  let totalArtigos = 0;
+  const linhasPrevHtml = linhas.map((ln) => {
+    const o = mapPrev[String(ln.produto_id)] || {};
+    const { line } = pedidoBalcaoValorLinha(o, ln.quantidade);
+    totalArtigos += line;
+    const isCopo = o.venda_por_copo === true && (parseFloat(o.kg_por_copo) || 0) > 0;
+    const unid = isCopo ? (ln.quantidade === 1 ? 'copo' : 'copos') : 'un.';
+    return `
+      <tr>
+        <td style="padding:6px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;white-space:nowrap">${fmtNum(ln.quantidade)} <span style="color:#64748b;font-size:11px">${unid}</span></td>
+        <td style="padding:6px 8px;color:#e2e8f0">${escapeHtml(o.nome || 'Item')}</td>
+        <td style="padding:6px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;white-space:nowrap">${fmt(line)}</td>
+      </tr>`;
+  }).join('');
+  const cPrev = pedidoBalcaoCalcComissao();
+  const totalGeral = totalArtigos + valorEntrega;
+  const promNome = cPrev.promotor ? cPrev.promotor.nome : 'Sem promotor';
+  const comValor = cPrev.promotor ? cPrev.valor : cPrev.potencial;
+  window.__pedidoBalcaoPendente = { tid, linhas, cliente, tipoPag, comEntrega, valorEntrega, promotorId };
+  closePedidoPreviewModal();
+  const div = document.createElement('div');
+  div.id = 'pedido-preview-modal';
+  div.className = 'modal-overlay';
+  div.style.zIndex = '260';
+  div.innerHTML = `
+    <div class="modal" style="max-width:min(480px,94vw);max-height:90vh;display:flex;flex-direction:column;padding:0;overflow:hidden">
+      <div class="modal-header" style="padding:14px 18px;border-bottom:1px solid #334155;flex-shrink:0">
+        <div class="modal-title">🧾 Confirmar pedido</div>
+        <button type="button" class="modal-close" onclick="closePedidoPreviewModal()" aria-label="Fechar">×</button>
+      </div>
+      <div style="padding:14px 18px;overflow-y:auto;flex:1">
+        <div style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:#94a3b8;margin-bottom:10px">
+          <span>Cliente: <strong style="color:#cbd5e1">${escapeHtml(cliente || '—')}</strong></span>
+          <span>Pagamento: <strong style="color:#cbd5e1">${escapeHtml(pedidoTipoPagamentoLabel(tipoPag))}</strong></span>
+          <span>Entrega: <strong style="color:#cbd5e1">${comEntrega ? `Sim${valorEntrega > 0 ? ' · ' + escapeHtml(fmt(valorEntrega)) : ''}` : 'Não'}</strong></span>
+          <span>Promotor: <strong style="color:#cbd5e1">${escapeHtml(promNome)}</strong></span>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr>
+                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Qtd</th>
+                <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Artigo</th>
+                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Total</th>
+              </tr>
+            </thead>
+            <tbody>${linhasPrevHtml}</tbody>
+            <tfoot>
+              ${valorEntrega > 0 ? `<tr><td></td><td style="padding:6px 8px;color:#94a3b8">Entrega</td><td style="padding:6px 8px;text-align:right;color:#60a5fa;font-variant-numeric:tabular-nums">${fmt(valorEntrega)}</td></tr>` : ''}
+              <tr style="border-top:2px solid #334155">
+                <td></td>
+                <td style="padding:8px;color:#f1f5f9;font-weight:700">Total</td>
+                <td style="padding:8px;text-align:right;color:#4ade80;font-weight:700;font-size:15px;font-variant-numeric:tabular-nums">${fmt(totalGeral)}</td>
+              </tr>
+              ${comValor > 0 ? `<tr><td></td><td style="padding:2px 8px;color:#64748b;font-size:11px">Comissão${cPrev.promotor ? '' : ' potencial'}</td><td style="padding:2px 8px;text-align:right;color:#fbbf24;font-size:11px;font-variant-numeric:tabular-nums">${fmt(comValor)}</td></tr>` : ''}
+            </tfoot>
+          </table>
+        </div>
+      </div>
+      <div style="padding:12px 18px;border-top:1px solid #334155;display:flex;gap:10px;flex-shrink:0">
+        <button type="button" class="btn btn-success" style="flex:1;padding:12px;font-weight:700" onclick="runAction(event, pedidoBalcaoConfirmarRegisto)">✓ Confirmar e registar</button>
+        <button type="button" class="btn btn-ghost" onclick="closePedidoPreviewModal()">Voltar</button>
+      </div>
+    </div>`;
+  div.addEventListener('click', (e) => { if (e.target === div) closePedidoPreviewModal(); });
+  document.body.appendChild(div);
+}
+
+function closePedidoPreviewModal() {
+  document.getElementById('pedido-preview-modal')?.remove();
+}
+
+/** 2ª fase do registo: chamado pelo botão «Confirmar» do preview. */
+async function pedidoBalcaoConfirmarRegisto() {
+  const p = window.__pedidoBalcaoPendente;
+  closePedidoPreviewModal();
+  if (!p) return;
+  window.__pedidoBalcaoPendente = null;
+  const { tid, linhas, cliente, tipoPag, comEntrega, valorEntrega, promotorId } = p;
 
   // CRÍTICO: gravar PRIMEIRO. Antes imprimíamos antes do save para preservar o
   // gesto do utilizador (Web Share API), mas isso fazia talões "fantasma" se o

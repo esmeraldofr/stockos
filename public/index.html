@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-pos-mais-rapido">
+<html lang="pt" data-stockos-ui="2026-07-07-faturas-proforma">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9683,6 +9683,29 @@ async function drawArmazem() {
         <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, submitLibertacaoArmazem)">+ Registar libertação</button>
       </div>
       <div class="card">
+        <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <span>🧾 Faturas proforma</span>
+          <button type="button" class="btn btn-primary btn-sm" onclick="toggleProformaForm()">+ Nova proforma</button>
+        </div>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Lista de produtos que devem ser comprados, com preços estimados. Fluxo: <strong>criar proforma → 💰 libertar o valor → 🛒 usar na fatura de compra</strong> (fica marcada como comprada).</p>
+        <div id="proforma-form-wrap" style="display:none;border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:12px;background:#0f172a">
+          <div id="proforma-form-msg"></div>
+          <div class="field"><label>Fornecedor (opcional)</label><input id="pf-fornecedor" type="text" placeholder="Ex.: Grossista X"/></div>
+          <div class="field"><label>Notas (opcional)</label><input id="pf-notas" type="text" placeholder="Opcional"/></div>
+          <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Produtos a comprar</div>
+          <div id="proforma-linhas-body"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="addProformaLinha()">+ Linha</button>
+            <span style="margin-left:auto;font-size:13px;color:#94a3b8">Total: <strong id="pf-total" style="color:#4ade80">0 Kz</strong></span>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, submitProforma)">Guardar proforma</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="toggleProformaForm(false)">Cancelar</button>
+          </div>
+        </div>
+        <div id="proformas-list"><div class="text-center" style="padding:12px;color:#64748b"><div class="spinner"></div></div></div>
+      </div>
+      <div class="card">
         <div class="card-title">📄 Fatura de compra</div>
         <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha. Anexa a <strong>foto da fatura</strong> (obrigatório). Se o total exceder o saldo do dia, deves justificar a origem do dinheiro (podes associar uma saída de caixa do mesmo dia).</p>
         <div style="margin-bottom:10px">
@@ -9757,8 +9780,167 @@ async function drawArmazem() {
   }
   const fxSel = document.getElementById('fx-fornecedor-id');
   if (fxSel) fxSel.addEventListener('change', updateFxFornecedorLivreVisibility);
+  window.__faturaProformaId = null;
   await refreshArmazemFundos();
   await loadArmazemData();
+  loadArmazemProformas().catch(() => {});
+}
+
+// ── Faturas proforma (lista de compras a libertar/comprar) ──
+window.__faturaProformaId = null;
+
+function toggleProformaForm(show) {
+  const w = document.getElementById('proforma-form-wrap');
+  if (!w) return;
+  const vis = typeof show === 'boolean' ? show : w.style.display === 'none';
+  w.style.display = vis ? '' : 'none';
+  if (vis) {
+    const body = document.getElementById('proforma-linhas-body');
+    if (body && !body.children.length) addProformaLinha();
+  }
+}
+
+function addProformaLinha() {
+  const wrap = document.getElementById('proforma-linhas-body');
+  if (!wrap) return;
+  const row = document.createElement('div');
+  row.className = 'proforma-linha';
+  row.style.cssText = 'display:grid;grid-template-columns:minmax(0,2fr) minmax(64px,1fr) minmax(84px,1fr) auto;gap:6px;align-items:center;margin-bottom:6px';
+  row.innerHTML =
+    '<select class="pf-prod" style="min-width:0;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:13px"></select>' +
+    '<input class="pf-qty" type="number" min="0.001" step="any" placeholder="Qtd" oninput="updateProformaTotal()"/>' +
+    '<input class="pf-preco" type="number" min="0.01" step="any" placeholder="Preço (Kz)" oninput="updateProformaTotal()"/>' +
+    '<button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'.proforma-linha\').remove();updateProformaTotal()">✕</button>';
+  wrap.appendChild(row);
+  renderArmazemProdutoOptions(row.querySelector('.pf-prod'), '', '', false);
+}
+
+function updateProformaTotal() {
+  let t = 0;
+  document.querySelectorAll('#proforma-linhas-body .proforma-linha').forEach((r) => {
+    t += (parseFloat(r.querySelector('.pf-qty')?.value) || 0) * (parseFloat(r.querySelector('.pf-preco')?.value) || 0);
+  });
+  const el = document.getElementById('pf-total');
+  if (el) el.textContent = fmt(t);
+}
+
+async function submitProforma() {
+  const msg = document.getElementById('proforma-form-msg');
+  const linhas = [];
+  document.querySelectorAll('#proforma-linhas-body .proforma-linha').forEach((r) => {
+    const pid = r.querySelector('.pf-prod')?.value;
+    const q = parseFloat(r.querySelector('.pf-qty')?.value);
+    const pu = parseFloat(r.querySelector('.pf-preco')?.value);
+    if (pid && q > 0 && pu > 0) linhas.push({ produto_id: pid, quantidade: q, preco_unitario: pu });
+  });
+  if (!linhas.length) {
+    if (msg) msg.innerHTML = '<div class="alert alert-error">Adiciona pelo menos uma linha com produto, quantidade e preço.</div>';
+    return;
+  }
+  try {
+    await api('POST', '/armazem/proformas', { fornecedor: val('pf-fornecedor'), notas: val('pf-notas'), linhas });
+    if (msg) msg.innerHTML = '';
+    const body = document.getElementById('proforma-linhas-body');
+    if (body) body.innerHTML = '';
+    const f = document.getElementById('pf-fornecedor'); if (f) f.value = '';
+    const n = document.getElementById('pf-notas'); if (n) n.value = '';
+    updateProformaTotal();
+    toggleProformaForm(false);
+    await loadArmazemProformas();
+  } catch (e) {
+    if (msg) msg.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadArmazemProformas() {
+  const el = document.getElementById('proformas-list');
+  if (!el) return;
+  try {
+    const list = await api('GET', '/armazem/proformas');
+    S.armazemProformas = Array.isArray(list) ? list : [];
+    if (!S.armazemProformas.length) {
+      el.innerHTML = '<span style="color:#64748b;font-size:13px">Sem proformas. Cria a primeira com «+ Nova proforma».</span>';
+      return;
+    }
+    el.innerHTML = S.armazemProformas.map((pf) => {
+      const badge = pf.estado === 'comprada'
+        ? `<span class="badge badge-green" title="${pf.fatura_id ? 'Fatura #' + pf.fatura_id : ''}">✓ Comprada</span>`
+        : pf.estado === 'libertada'
+          ? '<span class="badge" style="background:#1e3a8a;color:#93c5fd">💰 Valor libertado</span>'
+          : '<span class="badge badge-amber">Pendente</span>';
+      const linhasTxt = (pf.linhas || []).map((l) => `${fmtNum(l.quantidade)}× ${escapeHtml(l.produto_nome || '')}`).join(' · ');
+      const acoes = [];
+      if (pf.estado === 'pendente') {
+        acoes.push(`<button type="button" class="btn btn-primary btn-sm" title="Cria uma libertação no valor total desta proforma para o dia seleccionado" onclick="runAction(event, () => libertarProforma(${pf.id}))">💰 Libertar valor</button>`);
+      }
+      if (pf.estado !== 'comprada') {
+        acoes.push(`<button type="button" class="btn btn-ghost btn-sm" title="Pré-preenche a fatura de compra com as linhas desta proforma" onclick="runAction(event, () => usarProformaNaFatura(${pf.id}))">🛒 Usar na fatura</button>`);
+      }
+      if (pf.estado === 'pendente') {
+        acoes.push(`<button type="button" class="btn btn-ghost btn-sm" style="color:#f87171" onclick="runAction(event, () => excluirProforma(${pf.id}))">🗑</button>`);
+      }
+      return `<div style="border:1px solid #334155;border-radius:10px;padding:10px 12px;margin-bottom:8px;background:#0f172a">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <strong style="color:#e2e8f0">Proforma #${pf.id}</strong>
+          ${badge}
+          ${pf.fornecedor ? `<span style="color:#94a3b8;font-size:12px">${escapeHtml(pf.fornecedor)}</span>` : ''}
+          <span style="margin-left:auto;color:#4ade80;font-weight:700;font-variant-numeric:tabular-nums">${fmt(pf.total_valor)}</span>
+        </div>
+        ${linhasTxt ? `<div style="font-size:12px;color:#94a3b8;margin-top:4px">${linhasTxt}</div>` : ''}
+        ${pf.notas ? `<div style="font-size:11px;color:#64748b;margin-top:2px">${escapeHtml(pf.notas)}</div>` : ''}
+        ${acoes.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${acoes.join('')}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function libertarProforma(id) {
+  if (!confirm('Libertar o valor total desta proforma? Cria uma libertação no saldo do armazém para o dia seleccionado.')) return;
+  await api('POST', `/armazem/proformas/${id}/libertar`, { data: String(S.date || '').slice(0, 10) });
+  await refreshArmazemFundos();
+  await loadArmazemProformas();
+}
+
+async function excluirProforma(id) {
+  if (!confirm('Eliminar esta proforma pendente?')) return;
+  await api('DELETE', `/armazem/proformas/${id}`);
+  await loadArmazemProformas();
+}
+
+/** Pré-preenche a fatura de compra com as linhas da proforma; ao registar a
+ *  fatura, a proforma fica marcada como comprada (proforma_id no payload). */
+async function usarProformaNaFatura(id) {
+  const pf = (S.armazemProformas || []).find((x) => String(x.id) === String(id));
+  if (!pf) { alert('Proforma não encontrada — recarrega a página.'); return; }
+  const body = document.getElementById('fatura-linhas-body');
+  if (!body) return;
+  body.innerHTML = '';
+  for (const l of (pf.linhas || [])) {
+    addFaturaLinha();
+    const row = body.lastElementChild;
+    if (!row) continue;
+    const sel = row.querySelector('.af-prod');
+    if (sel) {
+      renderArmazemProdutoOptions(sel, String(l.produto_id), '', true);
+      sel.value = String(l.produto_id);
+    }
+    const q = row.querySelector('.af-qty'); if (q) q.value = l.quantidade;
+    const p = row.querySelector('.af-preco'); if (p) p.value = l.preco_unitario;
+  }
+  const forn = document.getElementById('fx-fornecedor-id');
+  const liv = document.getElementById('fx-fornecedor-livre');
+  if (pf.fornecedor && forn) {
+    const opt = [...forn.options].find((o) => o.textContent.trim().toLowerCase() === pf.fornecedor.trim().toLowerCase());
+    if (opt) forn.value = opt.value;
+    else { forn.value = 'livre'; if (liv) { liv.style.display = ''; liv.value = pf.fornecedor; } }
+  }
+  window.__faturaProformaId = pf.id;
+  const msg = document.getElementById('fatura-form-msg');
+  if (msg) msg.innerHTML = `<div class="alert alert-success">Fatura pré-preenchida da proforma #${pf.id}. Ao registares, a proforma fica marcada como ✓ comprada.</div>`;
+  if (typeof updateFaturaExcessoUI === 'function') updateFaturaExcessoUI();
+  msg?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 /** Próximo número sugerido para a data de emissão: STK-YYYYMMDD-NNN (NNN = ordem no dia). */
@@ -10601,7 +10783,12 @@ async function submitFaturaArmazem() {
       const ts = val('fx-turno-saida');
       if (ts) payload.turno_saida_id = parseInt(ts, 10);
     }
+    if (window.__faturaProformaId) payload.proforma_id = window.__faturaProformaId;
     await api('POST', '/armazem/faturas', payload);
+    if (window.__faturaProformaId) {
+      window.__faturaProformaId = null;
+      loadArmazemProformas().catch(() => {});
+    }
     if (msg) msg.innerHTML = '<div class="alert alert-success">Fatura registada com sucesso.</div>';
     document.getElementById('fx-numero').value = '';
     const selR = document.getElementById('fx-fornecedor-id');

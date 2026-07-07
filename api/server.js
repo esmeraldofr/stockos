@@ -4052,7 +4052,7 @@ app.get('/api/dia', auth, async (req, res) => {
 
     /** Vista lista (página Dia, depósitos): sem linhas de stock nem comparação com turno anterior — muito mais rápido. */
     if (resumo) {
-      const [caixaAll, vendasAgg] = await Promise.all([
+      const [caixaAll, vendasAgg, pedidosAgg] = await Promise.all([
         query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids]),
         query(
           `SELECT ts.turno_id,
@@ -4063,7 +4063,33 @@ app.get('/api/dia', auth, async (req, res) => {
            WHERE ts.turno_id = ANY($1::int[])
            GROUP BY ts.turno_id`,
           [ids]
-        )
+        ),
+        // Total geral dos «Produtos vendidos» (pedidos ao balcão) por turno —
+        // mesma valorização do GET /turnos/:id/pedidos: preço actual do
+        // produto, com preço de pacote para bebidas por copo. Se as tabelas
+        // de pedidos ainda não existirem, devolve vazio (cartão mostra 0).
+        query(
+          `SELECT tp.turno_id,
+             COALESCE(SUM(
+               CASE
+                 WHEN p.venda_por_copo IS TRUE AND COALESCE(p.kg_por_copo,0) > 0 THEN
+                   CASE
+                     WHEN COALESCE(p.qtd_copos_pacote,0) >= 2 AND COALESCE(p.preco_copos_pacote,0) > 0 THEN
+                       FLOOR(FLOOR(tpl.quantidade)::int / p.qtd_copos_pacote) * p.preco_copos_pacote
+                       + (FLOOR(tpl.quantidade)::int % p.qtd_copos_pacote) * COALESCE(p.preco,0)
+                     ELSE FLOOR(tpl.quantidade) * COALESCE(p.preco,0)
+                   END
+                 ELSE tpl.quantidade * COALESCE(p.preco,0)
+               END
+             ), 0)::numeric AS total_kz,
+             COALESCE(SUM(tpl.quantidade), 0)::numeric AS total_itens
+           FROM turno_pedidos tp
+           JOIN turno_pedido_linhas tpl ON tpl.pedido_id = tp.id
+           JOIN produtos p ON p.id = tpl.produto_id
+           WHERE tp.turno_id = ANY($1::int[])
+           GROUP BY tp.turno_id`,
+          [ids]
+        ).catch(() => ({ rows: [] }))
       ]);
       const caixaByTurno = {};
       for (const row of caixaAll.rows) {
@@ -4073,17 +4099,27 @@ app.get('/api/dia', auth, async (req, res) => {
       for (const row of vendasAgg.rows) {
         vendasByTurno[row.turno_id] = parseFloat(row.total_vendas) || 0;
       }
+      const pedidosByTurno = {};
+      for (const row of pedidosAgg.rows) {
+        pedidosByTurno[row.turno_id] = {
+          total_kz: parseFloat(row.total_kz) || 0,
+          total_itens: parseFloat(row.total_itens) || 0
+        };
+      }
       const result = [];
       for (const turno of turnos.rows) {
         const c = caixaByTurno[turno.id] || { tpa: null, transferencia: null, dinheiro: null, saida: 0 };
         const totalGerado = sumCaixaGeradoRow(c);
         const totalFinal =
           totalGerado === null ? null : totalGerado - parseFloat(c.saida || 0);
+        const ped = pedidosByTurno[turno.id] || { total_kz: 0, total_itens: 0 };
         result.push({
           ...turno,
           stock: [],
           caixa: { ...c, total_gerado: totalGerado, total_final: totalFinal },
-          total_vendas: vendasByTurno[turno.id] || 0
+          total_vendas: vendasByTurno[turno.id] || 0,
+          pedidos_total_kz: ped.total_kz,
+          pedidos_total_itens: ped.total_itens
         });
       }
       return res.json(result);

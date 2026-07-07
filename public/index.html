@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-comissao-bloqueio-total-v2">
+<html lang="pt" data-stockos-ui="2026-07-07-esperado-com-total">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3061,10 +3061,11 @@ function renderCaixaEsperadoPedidos() {
   };
   mount.innerHTML = `
     <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Esperado dos pedidos ao balcão (${br.n} pedido${br.n === 1 ? '' : 's'})</div>
-    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">
       ${cell('Dinheiro', br.dinheiro, din, '#86efac')}
       ${cell('TPA', br.tpa, tpa, '#c4b5fd')}
       ${cell('Transf.', br.transferencia, trf, '#60a5fa')}
+      ${cell('Total', br.total, din + tpa + trf, '#4ade80')}
     </div>
     ${br.entregaFees > 0 ? `<div style="font-size:11px;color:#94a3b8;margin-top:6px">🛵 Inclui ${fmt(br.entregaFees)} em taxas de entrega.</div>` : ''}`;
 }

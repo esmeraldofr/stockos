@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-pedidos-turno-no-balcao">
+<html lang="pt" data-stockos-ui="2026-07-07-pos-mais-rapido">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5015,12 +5015,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   let pedidos = [];
   // Saídas de caixa do turno — usadas para saber quanto de comissão já foi
   // pago a cada promotor (descrição "Comissão — <nome>"), evitando pagar 2x.
+  // Em paralelo com os pedidos (são independentes — poupa uma viagem).
   let saidasTurno = [];
   try {
-    saidasTurno = await api('GET', `/turnos/${encodeURIComponent(turnoId)}/saidas`).catch(() => []);
-  } catch (_) { saidasTurno = []; }
-  try {
-    pedidos = await api('GET', `/turnos/${encodeURIComponent(turnoId)}/pedidos`);
+    const [sd, pd] = await Promise.all([
+      api('GET', `/turnos/${encodeURIComponent(turnoId)}/saidas`).catch(() => []),
+      api('GET', `/turnos/${encodeURIComponent(turnoId)}/pedidos`)
+    ]);
+    saidasTurno = Array.isArray(sd) ? sd : [];
+    pedidos = pd;
   } catch (e) {
     mount.innerHTML = `<span style="color:#ef4444">${escapeHtml(e.message)}</span>`;
     const rm = document.getElementById('pedidos-resumo-mount');
@@ -5879,13 +5882,59 @@ async function loadTurnoResumoTab(turnoId) {
   mount.innerHTML = resumoVendasHtml;
 }
 
-async function loadVendasMenu(turnoId, canEdit) {
+/** Cache local (stale-while-revalidate) para acelerar o POS: o catálogo de
+ *  produtos traz as imagens em base64 dentro do JSON (centenas de KB) e a
+ *  popularidade agrega todos os pedidos de sempre — nenhum dos dois muda a
+ *  cada minuto. 1º render usa o cache do dispositivo; a rede actualiza em
+ *  fundo e re-renderiza só se algo mudou. */
+function posCacheRead(key) {
   try {
+    const v = JSON.parse(localStorage.getItem(key) || 'null');
+    return v && Array.isArray(v.data) ? v.data : null;
+  } catch (_) {
+    return null;
+  }
+}
+function posCacheWrite(key, data) {
+  try { localStorage.setItem(key, JSON.stringify({ t: Date.now(), data })); } catch (_) {}
+}
+
+async function loadVendasMenu(turnoId, canEdit, opts) {
+  try {
+    const PRODS_KEY = 'stockos.cache.produtosPos';
+    const POP_KEY = 'stockos.cache.popularidade';
+    // Produtos: usa preload (refresh em fundo) → cache → rede.
+    let prodsPromise;
+    if (opts && Array.isArray(opts.produtosPreload)) {
+      prodsPromise = Promise.resolve(opts.produtosPreload);
+    } else {
+      const cachedProds = posCacheRead(PRODS_KEY);
+      const freshProds = api('GET', '/produtos?todos=0').then((data) => {
+        const mudou = !cachedProds || JSON.stringify(data) !== JSON.stringify(cachedProds);
+        posCacheWrite(PRODS_KEY, data);
+        // Cache desactualizado → re-render silencioso com os dados novos.
+        if (cachedProds && mudou && S.page === 'turno' && String(S.turnoData?.id) === String(turnoId)) {
+          loadVendasMenu(turnoId, canEdit, { produtosPreload: data }).catch(() => {});
+        }
+        return data;
+      });
+      prodsPromise = cachedProds ? Promise.resolve(cachedProds) : freshProds;
+      if (cachedProds) freshProds.catch(() => {});
+    }
+    // Popularidade: cache imediato; rede actualiza para a próxima abertura
+    // (só afecta a ordem dos tiles — não justifica esperar nem re-render).
+    const cachedPop = posCacheRead(POP_KEY);
+    const freshPop = api('GET', '/pedidos/popularidade')
+      .then((d) => { posCacheWrite(POP_KEY, d); return d; })
+      .catch(() => (cachedPop || []));
+    const popPromise = cachedPop ? Promise.resolve(cachedPop) : freshPop;
+    if (cachedPop) freshPop.catch(() => {});
+
     const [prods, vendas, todasReceitas, popularidade] = await Promise.all([
-      api('GET', '/produtos?todos=0'),
+      prodsPromise,
       api('GET', `/turnos/${turnoId}/vendas`),
       api('GET', '/receitas'),
-      api('GET', '/pedidos/popularidade').catch(() => [])
+      popPromise
     ]);
     lastVendasApiRows = Array.isArray(vendas) ? vendas : [];
     // Mapa produto_id → total pedido (todos os turnos), para ordenar os tiles.

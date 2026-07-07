@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-prox-enc-falta-sobra">
+<html lang="pt" data-stockos-ui="2026-07-07-vendido-balcao-falta-sobra">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3311,9 +3311,9 @@ async function loadTurno() {
           const absDiff = Math.abs(diff);
           const tol = (s.tipo_medicao === 'peso' || (balcao && balcao.isCopo)) ? 0.001 : 0.5;
           if (balcaoNativo > 0 && absDiff > tol) {
-            const cor = diff > 0 ? '#fb923c' : '#f87171';
-            const sinal = diff > 0 ? '+' : '−';
-            balcaoDelta = `<div style="font-size:10px;color:${cor};margin-top:2px;line-height:1.2">Δ ${sinal}${fmtNum(absDiff)}</div>`;
+            const isFalta = diff > 0; // saiu stock a mais do que o balcão registou
+            const cor = isFalta ? '#f87171' : '#fb923c';
+            balcaoDelta = `<div style="font-size:10px;color:${cor};margin-top:2px;line-height:1.2">${isFalta ? '⚠ falta' : '↑ sobra'} ${fmtNum(absDiff)}</div>`;
           }
         }
 
@@ -5525,18 +5525,18 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         if (balNativo > 0) {
           const diff = vend - balNativo;
           if (Math.abs(diff) > tol) {
-            const sinal = diff > 0 ? '+' : '−';
-            const cor = diff > 0 ? '#fb923c' : '#f87171';
+            const isFalta = diff > 0; // saiu stock a mais do que o balcão registou
+            const cor = isFalta ? '#f87171' : '#fb923c';
             items.push({
               cor,
               tag: '📊 Stock',
               produto: nome,
               campo: 'Vendido vs Balcão',
-              valor: `Δ ${sinal}${fmtNum(Math.abs(diff))}`,
+              valor: `${isFalta ? '⚠ falta' : '↑ sobra'} ${fmtNum(Math.abs(diff))}`,
               valorKz: Math.abs(valorKzPorDiff(s, diff)),
-              dica: diff > 0
-                ? `Stock indica ${fmtNum(Math.abs(diff))} a mais que o balcão (possível desperdício/oferta ou Deixado contado a menos).`
-                : `Balcão registou ${fmtNum(Math.abs(diff))} a mais do que o stock indica (provável erro de contagem em Encontrado/Deixado).`
+              dica: isFalta
+                ? `FALTA: saíram ${fmtNum(Math.abs(diff))} do stock sem registo no balcão (possível venda não registada, desperdício ou Deixado contado a menos).`
+                : `SOBRA: o balcão registou ${fmtNum(Math.abs(diff))} a mais do que o stock indica (provável erro de contagem em Encontrado/Deixado).`
             });
           }
         }

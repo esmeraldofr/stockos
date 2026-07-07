@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-proforma-un-cx-kg">
+<html lang="pt" data-stockos-ui="2026-07-07-proforma-modo-vazio">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9810,6 +9810,7 @@ function addProformaLinha() {
     '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;margin-bottom:6px">' +
       '<select class="pf-prod" style="min-width:0;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:13px"></select>' +
       '<select class="pf-modo" title="Como é comprado" style="padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:12px" onchange="proformaLinhaModoChange(this)">' +
+        '<option value="" selected disabled hidden>— Modo —</option>' +
         '<option value="un">Unidade</option>' +
         '<option value="cx">Caixa</option>' +
         '<option value="kg">Peso (kg)</option>' +
@@ -9866,8 +9867,9 @@ async function submitProforma() {
     const pid = r.querySelector('.pf-prod')?.value;
     const q = parseFloat(r.querySelector('.pf-qty')?.value);
     const pu = parseFloat(r.querySelector('.pf-preco')?.value);
-    const modo = r.querySelector('.pf-modo')?.value || 'un';
+    const modo = r.querySelector('.pf-modo')?.value || '';
     if (!pid || !(q > 0) || !(pu > 0)) return;
+    if (!modo) { erroLinha = 'Escolhe o modo (Unidade, Caixa ou Peso) em todas as linhas.'; return; }
     if (modo === 'cx') {
       const qc = parseFloat(r.querySelector('.pf-qtd-caixa')?.value);
       if (!(qc > 0)) { erroLinha = 'Nas linhas em caixa indica a quantidade por caixa.'; return; }

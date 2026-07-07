@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-sem-comissao-duplicada">
+<html lang="pt" data-stockos-ui="2026-07-07-prox-enc-falta-sobra">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3333,9 +3333,9 @@ async function loadTurno() {
             if (Math.abs(diff) <= tol) {
               proxHtml = `<span style="color:#86efac">✓ ${escapeHtml(txt)}</span>`;
             } else {
-              const cor = diff > 0 ? '#fb923c' : '#f87171';
-              const sinal = diff > 0 ? '+' : '−';
-              proxHtml = `<span style="color:${cor}">${escapeHtml(txt)}<div style="font-size:10px;line-height:1.2;margin-top:2px">Δ ${sinal}${fmtNum(Math.abs(diff))}</div></span>`;
+              const isFalta = diff < 0;
+              const cor = isFalta ? '#f87171' : '#fb923c';
+              proxHtml = `<span style="color:${cor}">${escapeHtml(txt)}<div style="font-size:10px;line-height:1.2;margin-top:2px">${isFalta ? '⚠ falta' : '↑ sobra'} ${fmtNum(Math.abs(diff))}</div></span>`;
             }
           }
         }
@@ -3365,9 +3365,9 @@ async function loadTurno() {
             if (Math.abs(diffCx) <= 0.5) {
               proxCxHtml = `<span style="color:#86efac">✓ ${escapeHtml(txtCx)}</span>`;
             } else {
-              const corCx = diffCx > 0 ? '#fb923c' : '#f87171';
-              const sinalCx = diffCx > 0 ? '+' : '−';
-              proxCxHtml = `<span style="color:${corCx}">${escapeHtml(txtCx)}<div style="font-size:10px;line-height:1.2;margin-top:2px">Δ ${sinalCx}${fmtNum(Math.abs(diffCx))}</div></span>`;
+              const isFaltaCx = diffCx < 0;
+              const corCx = isFaltaCx ? '#f87171' : '#fb923c';
+              proxCxHtml = `<span style="color:${corCx}">${escapeHtml(txtCx)}<div style="font-size:10px;line-height:1.2;margin-top:2px">${isFaltaCx ? '⚠ falta' : '↑ sobra'} ${fmtNum(Math.abs(diffCx))}</div></span>`;
             }
           }
         }
@@ -3439,12 +3439,12 @@ async function loadTurno() {
               if (Math.abs(diff) <= 0.5) {
                 return `<span style="color:#86efac" title="Bate certo com o Deix. caixa (${fmtNum(dNum)}).">✓ ${escapeHtml(txt)}</span>`;
               }
-              const cor = diff > 0 ? '#fb923c' : '#f87171';
-              const sinal = diff > 0 ? '+' : '−';
-              const dica = diff > 0
-                ? `Próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) A MAIS do que o Deix. caixa deste (${fmtNum(dNum)}). Entrou stock entre turnos?`
-                : `Próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) A MENOS do que o Deix. caixa deste (${fmtNum(dNum)}). Sumiu stock entre turnos — possível erro de contagem.`;
-              return `<span style="color:${cor};cursor:help" title="${escapeHtml(dica)}">${escapeHtml(txt)}<div style="font-size:10px;line-height:1.2;margin-top:2px">Δ ${sinal}${fmtNum(Math.abs(diff))}</div></span>`;
+              const isFalta = diff < 0;
+              const cor = isFalta ? '#f87171' : '#fb923c';
+              const dica = isFalta
+                ? `FALTA: o próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) a menos do que o Deix. caixa deste (${fmtNum(dNum)}). Sumiu stock entre turnos — possível erro de contagem.`
+                : `SOBRA: o próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) a mais do que o Deix. caixa deste (${fmtNum(dNum)}). Entrou stock entre turnos?`;
+              return `<span style="color:${cor};cursor:help" title="${escapeHtml(dica)}">${escapeHtml(txt)}<div style="font-size:10px;line-height:1.2;margin-top:2px">${isFalta ? '⚠ falta' : '↑ sobra'} ${fmtNum(Math.abs(diff))}</div></span>`;
             })()}</td>
           </tr>`;
       }).join('');
@@ -5549,18 +5549,18 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         const tol = isPeso ? tolKg : tolUn;
         const diff = nxV - dNum;
         if (Math.abs(diff) > tol) {
-          const sinal = diff > 0 ? '+' : '−';
-          const cor = diff > 0 ? '#fb923c' : '#f87171';
+          const isFalta = diff < 0;
+          const cor = isFalta ? '#f87171' : '#fb923c';
           items.push({
             cor,
             tag: '🔁 Próximo turno',
             produto: nome,
             campo: 'Deixado vs Próx. Enc.',
-            valor: `Δ ${sinal}${fmtNum(Math.abs(diff))}`,
+            valor: `${isFalta ? '⚠ falta' : '↑ sobra'} ${fmtNum(Math.abs(diff))}`,
             valorKz: Math.abs(valorKzPorDiff(s, diff)),
-            dica: diff > 0
-              ? `Próximo turno encontrou ${fmtNum(Math.abs(diff))} A MAIS — entrou stock entre turnos?`
-              : `Próximo turno encontrou ${fmtNum(Math.abs(diff))} A MENOS — sumiu stock entre turnos, possível erro de contagem.`
+            dica: isFalta
+              ? `FALTA: o próximo turno encontrou ${fmtNum(Math.abs(diff))} a menos do que ficou deixado — sumiu stock entre turnos, possível erro de contagem.`
+              : `SOBRA: o próximo turno encontrou ${fmtNum(Math.abs(diff))} a mais do que ficou deixado — entrou stock entre turnos?`
           });
         }
       }
@@ -5572,17 +5572,17 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         const nxVCx = parseFloat(nxCx);
         const diff = nxVCx - dCx;
         if (Math.abs(diff) > 0.5) {
-          const sinal = diff > 0 ? '+' : '−';
-          const cor = diff > 0 ? '#fb923c' : '#f87171';
+          const isFalta = diff < 0;
+          const cor = isFalta ? '#f87171' : '#fb923c';
           items.push({
             cor,
             tag: '🏬 Armazém',
             produto: nome,
             campo: 'Deix. caixa vs Próx. Enc. caixa',
-            valor: `Δ ${sinal}${fmtNum(Math.abs(diff))} caixa${Math.abs(diff) === 1 ? '' : 's'}`,
-            dica: diff > 0
-              ? `Próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) A MAIS — entrou stock entre turnos?`
-              : `Próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) A MENOS — sumiu entre turnos.`
+            valor: `${isFalta ? '⚠ falta' : '↑ sobra'} ${fmtNum(Math.abs(diff))} caixa${Math.abs(diff) === 1 ? '' : 's'}`,
+            dica: isFalta
+              ? `FALTA: o próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) a menos do que ficou deixado — sumiu entre turnos.`
+              : `SOBRA: o próximo turno encontrou ${fmtNum(Math.abs(diff))} caixa(s) a mais do que ficou deixado — entrou stock entre turnos?`
           });
         }
       }

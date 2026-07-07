@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-filtro-campos-validacao">
+<html lang="pt" data-stockos-ui="2026-07-07-aba-movimentos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3484,8 +3484,8 @@ async function loadTurno() {
     const compDeixOn = turnoFechado || deixadosFechados;
     const isAdminUserScope = S.user && (S.user.role === 'admin' || S.user.role === 'gestor');
     const allowedTabs = turnoFechado
-      ? ['pedidos','stock','validacao','caixas','caixa','escala','vendas','registos']
-      : ['pedidos','stock','validacao','caixas','caixa','escala'];
+      ? ['pedidos','stock','validacao','caixas','caixa','movimentos','escala','vendas','registos']
+      : ['pedidos','stock','validacao','caixas','caixa','movimentos','escala'];
     const activeTab = allowedTabs.includes(S.turnoTab) ? S.turnoTab : 'stock';
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
@@ -3496,6 +3496,7 @@ async function loadTurno() {
           <button type="button" class="${tabCls('caixas')}" data-turno-tab="caixas" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixas', ev.currentTarget); })">🏬 Armazém</button>
           <button type="button" class="${tabCls('validacao')}" data-turno-tab="validacao" onclick="runAction(event, async (ev) => { await switchTurnoTab('validacao', ev.currentTarget); })">🧪 Validação</button>
           <button type="button" class="${tabCls('caixa')}" data-turno-tab="caixa" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixa', ev.currentTarget); })">💰 Caixa</button>
+          <button type="button" class="${tabCls('movimentos')}" data-turno-tab="movimentos" onclick="runAction(event, async (ev) => { await switchTurnoTab('movimentos', ev.currentTarget); })">🔄 Movimentos</button>
           <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
           ${turnoFechado ? `<button type="button" class="${tabCls('vendas')}" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>` : ''}
           ${turnoFechado ? `<button type="button" class="${tabCls('registos')}" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>` : ''}
@@ -3523,11 +3524,19 @@ async function loadTurno() {
             </table>
           </div>
         </div>
-        <div class="card mt-16" id="registos-movimentos-card">
+      </div>
+
+      <div id="tab-movimentos" class="${panelCls('movimentos')}">
+        <div class="card" id="registos-movimentos-card">
           <div class="card-title">📦 Entradas de stock</div>
-          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 18px"><strong style="color:#cbd5e1">Quantidades</strong> que entram ou saem do stock (armazém ou compra). As <strong style="color:#cbd5e1">saídas de caixa</strong> (despesas e compras) estão agora na aba <strong style="color:#cbd5e1">💰 Caixa</strong>.</p>
+          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 18px"><strong style="color:#cbd5e1">Quantidades</strong> que entram ou saem do stock (armazém ou compra).</p>
           <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Stock — quantidades</div>
           <div id="entradas-section"><span style="color:#64748b">A carregar...</span></div>
+        </div>
+        <div class="card mt-16" id="caixa-movimentos-card">
+          <div class="card-title">💰 Caixa — movimentos</div>
+          <p style="font-size:12px;color:#64748b;margin:-2px 0 12px;line-height:1.45"><strong style="color:#4ade80">Entradas (+)</strong> e <strong style="color:#f87171">saídas (−)</strong> de dinheiro na caixa do turno: despesas, compras de stock, comissões pagas, fundo de caixa, devoluções, etc.</p>
+          <div id="caixa-movimentos-section"><span style="color:#64748b">A carregar...</span></div>
         </div>
       </div>
 
@@ -3622,11 +3631,6 @@ async function loadTurno() {
         <div class="card" id="pedidos-resumo-card">
           <div class="card-title">📊 Resumo dos pedidos</div>
           <div id="pedidos-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
-        </div>
-        <div class="card mt-16" id="caixa-movimentos-card">
-          <div class="card-title">💰 Caixa — movimentos</div>
-          <p style="font-size:12px;color:#64748b;margin:-2px 0 12px;line-height:1.45"><strong style="color:#4ade80">Entradas (+)</strong> e <strong style="color:#f87171">saídas (−)</strong> de dinheiro na caixa do turno: despesas, compras de stock, comissões pagas, fundo de caixa, devoluções, etc.</p>
-          <div id="caixa-movimentos-section"><span style="color:#64748b">A carregar...</span></div>
         </div>
         <div class="card mt-16">
           <div class="card-title">💰 Caixa</div>
@@ -7425,10 +7429,10 @@ async function switchTurnoTab(name, btn) {
   if (name === 'escala') {
     await loadEscalaTurno();
   }
-  if (name === 'stock' || name === 'caixa') {
-    // Stock (entradas-section) e Caixa (caixa-movimentos-section) partilham o loader;
-    // ambos os mounts existem no DOM, por isso correr em qualquer das abas
-    // mantém as duas secções actualizadas.
+  if (name === 'stock' || name === 'caixa' || name === 'movimentos') {
+    // Entradas de stock e Caixa — movimentos vivem agora na aba Movimentos,
+    // mas o loader partilhado continua a correr também ao entrar em Stock/
+    // Caixa (mantém dados frescos; os mounts existem sempre no DOM).
     const tid = S.turnoData?.id;
     const stock = S.turnoData?.stock || [];
     if (tid) await loadRegistosMovimentosSection(tid, stock, !!S.turnoCanEdit);

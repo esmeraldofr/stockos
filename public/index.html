@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-proforma-modo-vazio">
+<html lang="pt" data-stockos-ui="2026-07-07-proforma-lista-vazia">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9794,10 +9794,8 @@ function toggleProformaForm(show) {
   if (!w) return;
   const vis = typeof show === 'boolean' ? show : w.style.display === 'none';
   w.style.display = vis ? '' : 'none';
-  if (vis) {
-    const body = document.getElementById('proforma-linhas-body');
-    if (body && !body.children.length) addProformaLinha();
-  }
+  // A lista de produtos começa VAZIA — as linhas adicionam-se
+  // explicitamente com «+ Linha».
 }
 
 function addProformaLinha() {

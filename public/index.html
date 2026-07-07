@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-vendidos-cartao-dia">
+<html lang="pt" data-stockos-ui="2026-07-07-total-geral-alinhado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5118,6 +5118,11 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     }
     if (!porCat.size) return '';
     const num2 = (v) => (parseFloat(v) || 0).toLocaleString('pt-AO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // Larguras de coluna partilhadas por TODAS as tabelas (categorias e
+    // Total geral) — com table-layout:fixed as colunas alinham verticalmente
+    // entre tabelas diferentes.
+    const colgroupHtml = '<colgroup><col style="width:42%"><col style="width:22%"><col style="width:18%"><col style="width:18%"></colgroup>';
+    const tableStyle = 'width:100%;min-width:480px;table-layout:fixed;border-collapse:collapse;font-size:13px';
     const renderTabela = (byProd) => {
       const arr = [...byProd.values()].sort((a, b) => b.valor - a.valor);
       const totalQtd = arr.reduce((s, r) => s + r.qtd, 0);
@@ -5146,7 +5151,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       }).join('');
       return `
         <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-          <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <table style="${tableStyle}">
+            ${colgroupHtml}
             <thead>
               <tr>
                 <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Produto</th>
@@ -5190,17 +5196,25 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           ${renderTabela(porCat.get(c))}
         </div>`)
       .join('');
+    // Total geral no MESMO layout de colunas das tabelas de categoria —
+    // colgroup partilhado + table-layout:fixed garantem o alinhamento.
     const totalGeralHtml = `
-        <div style="margin-top:8px;padding:10px 12px;background:#1e293b;border:1px solid #334155;border-radius:8px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
-          <span style="color:#e2e8f0;font-weight:700;font-size:13px">Total geral</span>
-          <span style="color:#a5b4fc;font-variant-numeric:tabular-nums;font-size:13px">${num2(totalQtdGeral)} itens</span>
-          <span style="color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700;font-size:15px">${fmt(totalKzGeral)}</span>
-          <span style="color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700;font-size:13px">Comissão ${fmt(totalComGeral)}</span>
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:8px">
+          <table style="${tableStyle}">
+            ${colgroupHtml}
+            <tbody>
+              <tr style="border-top:2px solid #334155">
+                <td style="padding:8px;color:#e2e8f0;font-weight:700">Total geral</td>
+                <td style="padding:8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700"><span style="color:#64748b;font-size:11px">itens</span> ${num2(totalQtdGeral)}</td>
+                <td style="padding:8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalKzGeral)}</td>
+                <td style="padding:8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalComGeral)}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>`;
     return `
       <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
         <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 4px">Produtos vendidos</div>
-        ${totalGeralHtml}
         ${blocos}
         ${totalGeralHtml}
       </div>`;

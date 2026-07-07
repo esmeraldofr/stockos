@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-faltas-sobras-separadas">
+<html lang="pt" data-stockos-ui="2026-07-07-filtro-campos-validacao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5530,6 +5530,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             items.push({
               cor,
               tipo: isFalta ? 'falta' : 'sobra',
+              campoKey: 'vend-balcao',
               tag: '📊 Stock',
               produto: nome,
               campo: 'Vendido vs Balcão',
@@ -5555,6 +5556,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           items.push({
             cor,
             tipo: isFalta ? 'falta' : 'sobra',
+            campoKey: 'deix-prox',
             tag: '🔁 Próximo turno',
             produto: nome,
             campo: 'Deixado vs Próx. Enc.',
@@ -5579,6 +5581,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           items.push({
             cor,
             tipo: isFalta ? 'falta' : 'sobra',
+            campoKey: 'deixcx-prox',
             tag: '🏬 Armazém',
             produto: nome,
             campo: 'Deix. caixa vs Próx. Enc. caixa',
@@ -5598,6 +5601,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         items.push({
           cor: isFalta ? '#f87171' : '#fb923c',
           tipo: isFalta ? 'falta' : 'sobra',
+          campoKey: 'enc-ant',
           tag: '⬅ Turno anterior',
           produto: nome,
           campo: 'Encontrado vs Deixado anterior',
@@ -5615,6 +5619,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         items.push({
           cor: isFalta ? '#f87171' : '#fb923c',
           tipo: isFalta ? 'falta' : 'sobra',
+          campoKey: 'enccx-ant',
           tag: '⬅ Armazém anterior',
           produto: nome,
           campo: 'Enc. caixa vs Deix. caixa anterior',
@@ -5641,7 +5646,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const kz = parseFloat(it.valorKz) || 0;
       const kzTxt = kz > 0 ? `<span style="color:${it.cor};font-weight:700">${fmt(kz)}</span>` : '<span style="color:#475569">—</span>';
       return `
-      <tr title="${escapeHtml(it.dica)}">
+      <tr title="${escapeHtml(it.dica)}" data-dif-row="${it.campoKey}" data-dif-tipo="${it.tipo}" data-dif-kz="${kz}">
         <td style="padding:5px 8px;color:#64748b;font-size:11px;white-space:nowrap">${it.tag}</td>
         <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(it.produto)}</td>
         <td style="padding:5px 8px;color:#94a3b8;font-size:11px">${escapeHtml(it.campo)}</td>
@@ -5655,22 +5660,34 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const list = items.filter((it) => it.tipo === tipo);
       if (!list.length) return '';
       const totKz = list.reduce((s2, it) => s2 + (parseFloat(it.valorKz) || 0), 0);
-      const totRow = totKz > 0
-        ? `<tr style="border-top:1px solid #334155">
+      const totRow = `<tr style="border-top:1px solid #334155${totKz > 0 ? '' : ';display:none'}" data-dif-total="${tipo}">
             <td colspan="4" style="padding:6px 8px;color:#cbd5e1;font-weight:700;text-align:right">Total ${tipo === 'falta' ? 'faltas' : 'sobras'}</td>
-            <td style="padding:6px 8px;text-align:right;color:${corGrupo};font-weight:700;font-variant-numeric:tabular-nums">${fmt(totKz)}</td>
-          </tr>`
-        : '';
+            <td style="padding:6px 8px;text-align:right;color:${corGrupo};font-weight:700;font-variant-numeric:tabular-nums"><span data-dif-kz-val>${fmt(totKz)}</span></td>
+          </tr>`;
       return `
-        <tr><td colspan="5" style="padding:8px;background:#0f172a;color:${corGrupo};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em">${tituloGrupo} (${list.length})</td></tr>
+        <tr data-dif-grupo="${tipo}"><td colspan="5" style="padding:8px;background:#0f172a;color:${corGrupo};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em">${tituloGrupo} (<span data-dif-count>${list.length}</span>)</td></tr>
         ${list.map(renderLinha).join('')}
         ${totRow}`;
     };
     const linhasHtml = grupoHtml('falta', '⚠ Faltas', '#f87171') + grupoHtml('sobra', '↑ Sobras', '#fb923c');
-    const totalKzRow = '';
+    // Chips de filtro por campo (só os campos com divergências neste turno).
+    const CAMPO_DEFS = [
+      { key: 'vend-balcao', label: 'Vendido vs Balcão' },
+      { key: 'enc-ant', label: 'Enc. vs Deix. anterior' },
+      { key: 'deix-prox', label: 'Deixado vs Próx. Enc.' },
+      { key: 'enccx-ant', label: 'Enc. caixa vs anterior' },
+      { key: 'deixcx-prox', label: 'Deix. caixa vs Próx.' }
+    ];
+    const countByKey = {};
+    items.forEach((it) => { countByKey[it.campoKey] = (countByKey[it.campoKey] || 0) + 1; });
+    const chipsHtml = CAMPO_DEFS
+      .filter((c) => countByKey[c.key])
+      .map((c) => `<button type="button" data-dif-campo="${c.key}" onclick="difCampoFiltroToggle(this)" title="Mostrar/esconder ${escapeHtml(c.label)}">${escapeHtml(c.label)} (${countByKey[c.key]})</button>`)
+      .join('');
     return `
-      <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
+      <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px" id="dif-detectadas-wrap">
         ${titulo}
+        <div class="pedidos-balcao-filters" style="margin:0 0 8px">${chipsHtml}</div>
         <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
           <table style="width:100%;border-collapse:collapse;font-size:13px">
             <thead>
@@ -5682,10 +5699,11 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
                 <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em" title="Valor estimado em Kz da diferença (preço × diff). Caixas/fardos não têm preço unitário, ficam «—».">Valor (Kz)</th>
               </tr>
             </thead>
-            <tbody>${linhasHtml}${totalKzRow}</tbody>
+            <tbody>${linhasHtml}</tbody>
           </table>
         </div>
-        <div style="margin-top:6px;font-size:10px;color:#64748b;line-height:1.4">${items.length} divergência${items.length === 1 ? '' : 's'} — passa o rato em cada linha para ler a explicação.</div>
+        <div id="dif-detectadas-vazio" style="display:none;padding:8px 10px;background:#0b1322;border:1px dashed #334155;border-radius:6px;font-size:12px;color:#94a3b8">Nenhuma divergência nos campos seleccionados.</div>
+        <div style="margin-top:6px;font-size:10px;color:#64748b;line-height:1.4">${items.length} divergência${items.length === 1 ? '' : 's'} — toca nos filtros para escolher os campos; passa o rato em cada linha para ler a explicação.</div>
         ${notaDeix}
       </div>`;
   })();
@@ -5699,6 +5717,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         resumoProdutosHtml +
         resumoComissoesHtml +
         `<div class="pedidos-balcao-lista-turno"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
+    try { difCampoFiltroApply(); } catch (_) {}
   }
   pedidoBalcaoSyncDraftUI();
   pedidoBalcaoLogoRefreshUI();
@@ -6255,6 +6274,62 @@ const KG_FINO_BARRIL_NET = KG_FINO_BARRIL_CHEIO - KG_FINO_BARRIL_VAZIO; // 48,15
 function prodNomeNorm(n) {
   return String(n || '').trim().toLowerCase();
 }
+/** Filtro por campo do bloco «Validação — diferenças detectadas».
+ *  filtro[key] === false → campo escondido; ausente/true → visível.
+ *  Guardado por dispositivo em localStorage. */
+function difCampoFiltroGet() {
+  try {
+    const v = JSON.parse(localStorage.getItem('stockos.difCampoFiltro') || '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function difCampoFiltroToggle(btn) {
+  if (!btn) return;
+  const key = btn.getAttribute('data-dif-campo');
+  if (!key) return;
+  const f = difCampoFiltroGet();
+  f[key] = f[key] === false;
+  try { localStorage.setItem('stockos.difCampoFiltro', JSON.stringify(f)); } catch (_) {}
+  difCampoFiltroApply();
+}
+
+/** Aplica o filtro ao DOM: chips, linhas, contagens e totais por grupo. */
+function difCampoFiltroApply() {
+  const wrap = document.getElementById('dif-detectadas-wrap');
+  if (!wrap) return;
+  const f = difCampoFiltroGet();
+  wrap.querySelectorAll('button[data-dif-campo]').forEach((b) => {
+    b.classList.toggle('pedido-filter--on', f[b.getAttribute('data-dif-campo')] !== false);
+  });
+  wrap.querySelectorAll('tr[data-dif-row]').forEach((tr) => {
+    tr.style.display = f[tr.getAttribute('data-dif-row')] === false ? 'none' : '';
+  });
+  ['falta', 'sobra'].forEach((tipo) => {
+    const rows = [...wrap.querySelectorAll(`tr[data-dif-tipo="${tipo}"]`)].filter((tr) => tr.style.display !== 'none');
+    const head = wrap.querySelector(`tr[data-dif-grupo="${tipo}"]`);
+    const tot = wrap.querySelector(`tr[data-dif-total="${tipo}"]`);
+    const kz = rows.reduce((s, tr) => s + (parseFloat(tr.getAttribute('data-dif-kz')) || 0), 0);
+    if (head) {
+      head.style.display = rows.length ? '' : 'none';
+      const c = head.querySelector('[data-dif-count]');
+      if (c) c.textContent = rows.length;
+    }
+    if (tot) {
+      tot.style.display = rows.length && kz > 0 ? '' : 'none';
+      const v = tot.querySelector('[data-dif-kz-val]');
+      if (v) v.textContent = fmt(kz);
+    }
+  });
+  const vazio = wrap.querySelector('#dif-detectadas-vazio');
+  if (vazio) {
+    const any = [...wrap.querySelectorAll('tr[data-dif-row]')].some((tr) => tr.style.display !== 'none');
+    vazio.style.display = any ? 'none' : '';
+  }
+}
+
 /** Comparações de validação/irregularidades só são fiáveis depois dos
  *  registos estarem fechados: encontrados → comparações com o turno
  *  anterior; deixados → comparações com o próximo turno e vendido.

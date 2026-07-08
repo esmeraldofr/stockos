@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-proforma-1-linha">
+<html lang="pt" data-stockos-ui="2026-07-07-proforma-labels">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9807,21 +9807,29 @@ function addProformaLinha() {
   row.className = 'proforma-linha';
   row.style.cssText = 'border:1px solid #334155;border-radius:8px;padding:8px;margin-bottom:8px;background:#0b1322';
   row.innerHTML =
-    '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;margin-bottom:6px">' +
-      '<select class="pf-prod" style="min-width:0;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:13px"></select>' +
-      '<select class="pf-modo" title="Como é comprado" style="padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:12px" onchange="proformaLinhaModoChange(this)">' +
-        '<option value="" selected disabled hidden>— Modo —</option>' +
-        '<option value="un">Unidade</option>' +
-        '<option value="cx">Caixa</option>' +
-        '<option value="kg">Peso (kg)</option>' +
-      '</select>' +
-      '<button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'.proforma-linha\').remove();updateProformaTotal()">✕</button>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<span style="font-size:12px;color:#64748b">Linha</span>' +
+      '<button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'.proforma-linha\').remove();updateProformaTotal()">✕ Remover</button>' +
     '</div>' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">' +
-      '<input class="pf-qty" type="number" min="0.001" step="any" placeholder="Quantidade" oninput="updateProformaTotal()"/>' +
-      '<input class="pf-preco" type="number" min="0.01" step="any" placeholder="Preço unit. (Kz)" oninput="updateProformaTotal()"/>' +
-      '<input class="pf-qtd-caixa" type="number" min="0.001" step="any" placeholder="Qtd por caixa" style="display:none" oninput="updateProformaTotal()"/>' +
-    '</div>';
+    '<div style="display:grid;grid-template-columns:minmax(0,2fr) minmax(112px,1fr);gap:8px">' +
+      '<div class="field" style="margin:0"><label>Produto</label>' +
+        '<select class="pf-prod" style="width:100%;min-width:0;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:13px"></select></div>' +
+      '<div class="field" style="margin:0"><label>Modo de compra</label>' +
+        '<select class="pf-modo" title="Como é comprado" style="width:100%;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:13px" onchange="proformaLinhaModoChange(this)">' +
+          '<option value="" selected disabled hidden>— Modo —</option>' +
+          '<option value="un">Unidade</option>' +
+          '<option value="cx">Caixa</option>' +
+          '<option value="kg">Peso (kg)</option>' +
+        '</select></div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">' +
+      '<div class="field" style="margin:0"><label class="pf-qty-label">Quantidade</label>' +
+        '<input class="pf-qty" type="number" min="0.001" step="any" placeholder="0" oninput="updateProformaTotal()"/></div>' +
+      '<div class="field" style="margin:0"><label class="pf-preco-label">Preço unit. (Kz)</label>' +
+        '<input class="pf-preco" type="number" min="0.01" step="any" placeholder="0" oninput="updateProformaTotal()"/></div>' +
+    '</div>' +
+    '<div class="field pf-qtd-caixa-wrap" style="display:none;margin:8px 0 0"><label>Qtd por caixa</label>' +
+      '<input class="pf-qtd-caixa" type="number" min="0.001" step="any" placeholder="Ex: 24" oninput="updateProformaTotal()"/></div>';
   wrap.appendChild(row);
   const sel = row.querySelector('.pf-prod');
   renderArmazemProdutoOptions(sel, '', '', false);
@@ -9834,17 +9842,18 @@ function addProformaLinha() {
   });
 }
 
-/** Alterna a linha da proforma entre unidade, caixa e peso (kg). */
+/** Alterna a linha da proforma entre unidade, caixa e peso (kg) — os
+ *  LABELS visíveis mudam com o modo. */
 function proformaLinhaModoChange(sel) {
   const row = sel.closest('.proforma-linha');
   if (!row) return;
   const modo = sel.value;
-  const qty = row.querySelector('.pf-qty');
-  const preco = row.querySelector('.pf-preco');
-  const qtdCx = row.querySelector('.pf-qtd-caixa');
-  if (qty) qty.placeholder = modo === 'cx' ? 'Nº de caixas' : modo === 'kg' ? 'Peso (kg)' : 'Quantidade';
-  if (preco) preco.placeholder = modo === 'cx' ? 'Preço da caixa (Kz)' : modo === 'kg' ? 'Preço por kg (Kz)' : 'Preço unit. (Kz)';
-  if (qtdCx) qtdCx.style.display = modo === 'cx' ? '' : 'none';
+  const qtyLabel = row.querySelector('.pf-qty-label');
+  const precoLabel = row.querySelector('.pf-preco-label');
+  const qtdCxWrap = row.querySelector('.pf-qtd-caixa-wrap');
+  if (qtyLabel) qtyLabel.textContent = modo === 'cx' ? 'Nº de caixas' : modo === 'kg' ? 'Peso (kg)' : 'Quantidade';
+  if (precoLabel) precoLabel.textContent = modo === 'cx' ? 'Preço da caixa (Kz)' : modo === 'kg' ? 'Preço por kg (Kz)' : 'Preço unit. (Kz)';
+  if (qtdCxWrap) qtdCxWrap.style.display = modo === 'cx' ? '' : 'none';
   updateProformaTotal();
 }
 

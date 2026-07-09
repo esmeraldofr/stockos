@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-proforma-labels">
+<html lang="pt" data-stockos-ui="2026-07-07-compras-unificadas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9683,34 +9683,14 @@ async function drawArmazem() {
         <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, submitLibertacaoArmazem)">+ Registar libertação</button>
       </div>
       <div class="card">
-        <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-          <span>🧾 Faturas proforma</span>
-          <button type="button" class="btn btn-primary btn-sm" onclick="toggleProformaForm()">+ Nova proforma</button>
-        </div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Lista de produtos que devem ser comprados, com preços estimados. Fluxo: <strong>criar proforma → 💰 libertar o valor → 🛒 usar na fatura de compra</strong> (fica marcada como comprada).</p>
-        <div id="proforma-form-wrap" style="display:none;border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:12px;background:#0f172a">
-          <div id="proforma-form-msg"></div>
-          <div class="field"><label>Fornecedor (opcional)</label><input id="pf-fornecedor" type="text" placeholder="Ex.: Grossista X"/></div>
-          <div class="field"><label>Notas (opcional)</label><input id="pf-notas" type="text" placeholder="Opcional"/></div>
-          <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Produtos a comprar</div>
-          <div id="proforma-linhas-body"></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="addProformaLinha()">+ Linha</button>
-            <span style="margin-left:auto;font-size:13px;color:#94a3b8">Total: <strong id="pf-total" style="color:#4ade80">0 Kz</strong></span>
-          </div>
-          <div style="display:flex;gap:8px;margin-top:10px">
-            <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, submitProforma)">Guardar proforma</button>
-            <button type="button" class="btn btn-ghost btn-sm" onclick="toggleProformaForm(false)">Cancelar</button>
-          </div>
-        </div>
+        <div class="card-title">🛒 Compras — proforma e fatura</div>
+        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Um só formulário: preenche (ou 📷 importa) as linhas e escolhe o destino — <strong>🧾 Guardar como proforma</strong> (lista do que deve ser comprado; sem foto, não mexe no saldo nem no stock) ou <strong>✓ Registar compra</strong> (fatura real: foto obrigatória, consome o saldo do dia e o stock entra no armazém). Nas proformas em curso: <strong>💰 Libertar valor</strong> aprova o dinheiro e <strong>📄 Preencher compra</strong> traz as linhas de volta ao formulário.</p>
+        <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px">Proformas em curso</div>
         <div id="proformas-list"><div class="text-center" style="padding:12px;color:#64748b"><div class="spinner"></div></div></div>
-      </div>
-      <div class="card">
-        <div class="card-title">📄 Fatura de compra</div>
-        <p style="font-size:13px;color:#94a3b8;margin:0 0 10px">Regista compras ao armazém: uma fatura pode ter várias linhas. Para uma compra simples, use uma fatura com uma única linha. Anexa a <strong>foto da fatura</strong> (obrigatório). Se o total exceder o saldo do dia, deves justificar a origem do dinheiro (podes associar uma saída de caixa do mesmo dia).</p>
+        <div style="border-top:1px solid #334155;margin:14px 0"></div>
         <div style="margin-bottom:10px">
-          <button type="button" class="btn btn-primary btn-sm" onclick="abrirOcrFatura()">📷 Importar fatura</button>
-          <span style="font-size:11px;color:#64748b;margin-left:8px">Tira uma foto da fatura e o formulário é preenchido automaticamente.</span>
+          <button type="button" class="btn btn-primary btn-sm" onclick="abrirOcrFatura()">📷 Importar documento</button>
+          <span style="font-size:11px;color:#64748b;margin-left:8px">Foto de uma fatura OU de uma proforma do fornecedor — o formulário é preenchido automaticamente; depois escolhe o botão de destino.</span>
         </div>
         <div id="fatura-form-msg"></div>
         <div class="field"><label>Nº / referência</label><input id="fx-numero" type="text" placeholder="STK-20260405-001 (automático)"/>
@@ -9743,7 +9723,8 @@ async function drawArmazem() {
         <div id="fatura-linhas-body"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
           <button type="button" class="btn btn-ghost btn-sm" onclick="addFaturaLinha()">+ Linha</button>
-          <button type="button" id="fx-btn-submit" class="btn btn-success btn-sm" onclick="runAction(event, submitFaturaArmazem)">Registar fatura</button>
+          <button type="button" class="btn btn-ghost btn-sm" style="border:1px solid #334155" title="Guarda como proforma: sem foto, não consome saldo nem mexe no stock" onclick="runAction(event, guardarComoProforma)">🧾 Guardar como proforma</button>
+          <button type="button" id="fx-btn-submit" class="btn btn-success btn-sm" title="Regista a compra real: foto obrigatória, consome o saldo do dia e o stock entra no armazém" onclick="runAction(event, submitFaturaArmazem)">✓ Registar compra</button>
         </div>
       </div>
       <div class="card">
@@ -9789,123 +9770,60 @@ async function drawArmazem() {
 // ── Faturas proforma (lista de compras a libertar/comprar) ──
 window.__faturaProformaId = null;
 
-function toggleProformaForm(show) {
-  const w = document.getElementById('proforma-form-wrap');
-  if (!w) return;
-  const vis = typeof show === 'boolean' ? show : w.style.display === 'none';
-  w.style.display = vis ? '' : 'none';
-  if (vis) {
-    const body = document.getElementById('proforma-linhas-body');
-    if (body && !body.children.length) addProformaLinha();
-  }
-}
-
-function addProformaLinha() {
-  const wrap = document.getElementById('proforma-linhas-body');
-  if (!wrap) return;
-  const row = document.createElement('div');
-  row.className = 'proforma-linha';
-  row.style.cssText = 'border:1px solid #334155;border-radius:8px;padding:8px;margin-bottom:8px;background:#0b1322';
-  row.innerHTML =
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
-      '<span style="font-size:12px;color:#64748b">Linha</span>' +
-      '<button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'.proforma-linha\').remove();updateProformaTotal()">✕ Remover</button>' +
-    '</div>' +
-    '<div style="display:grid;grid-template-columns:minmax(0,2fr) minmax(112px,1fr);gap:8px">' +
-      '<div class="field" style="margin:0"><label>Produto</label>' +
-        '<select class="pf-prod" style="width:100%;min-width:0;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:13px"></select></div>' +
-      '<div class="field" style="margin:0"><label>Modo de compra</label>' +
-        '<select class="pf-modo" title="Como é comprado" style="width:100%;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#f1f5f9;font-size:13px" onchange="proformaLinhaModoChange(this)">' +
-          '<option value="" selected disabled hidden>— Modo —</option>' +
-          '<option value="un">Unidade</option>' +
-          '<option value="cx">Caixa</option>' +
-          '<option value="kg">Peso (kg)</option>' +
-        '</select></div>' +
-    '</div>' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">' +
-      '<div class="field" style="margin:0"><label class="pf-qty-label">Quantidade</label>' +
-        '<input class="pf-qty" type="number" min="0.001" step="any" placeholder="0" oninput="updateProformaTotal()"/></div>' +
-      '<div class="field" style="margin:0"><label class="pf-preco-label">Preço unit. (Kz)</label>' +
-        '<input class="pf-preco" type="number" min="0.01" step="any" placeholder="0" oninput="updateProformaTotal()"/></div>' +
-    '</div>' +
-    '<div class="field pf-qtd-caixa-wrap" style="display:none;margin:8px 0 0"><label>Qtd por caixa</label>' +
-      '<input class="pf-qtd-caixa" type="number" min="0.001" step="any" placeholder="Ex: 24" oninput="updateProformaTotal()"/></div>';
-  wrap.appendChild(row);
-  const sel = row.querySelector('.pf-prod');
-  renderArmazemProdutoOptions(sel, '', '', false);
-  // Produto medido a peso → modo kg automático (pode ser mudado à mão).
-  sel.addEventListener('change', () => {
-    const opt = sel.options[sel.selectedIndex];
-    const med = opt ? opt.getAttribute('data-medicao') : '';
-    const modo = row.querySelector('.pf-modo');
-    if (modo && med === 'peso') { modo.value = 'kg'; proformaLinhaModoChange(modo); }
-  });
-}
-
-/** Alterna a linha da proforma entre unidade, caixa e peso (kg) — os
- *  LABELS visíveis mudam com o modo. */
-function proformaLinhaModoChange(sel) {
-  const row = sel.closest('.proforma-linha');
-  if (!row) return;
-  const modo = sel.value;
-  const qtyLabel = row.querySelector('.pf-qty-label');
-  const precoLabel = row.querySelector('.pf-preco-label');
-  const qtdCxWrap = row.querySelector('.pf-qtd-caixa-wrap');
-  if (qtyLabel) qtyLabel.textContent = modo === 'cx' ? 'Nº de caixas' : modo === 'kg' ? 'Peso (kg)' : 'Quantidade';
-  if (precoLabel) precoLabel.textContent = modo === 'cx' ? 'Preço da caixa (Kz)' : modo === 'kg' ? 'Preço por kg (Kz)' : 'Preço unit. (Kz)';
-  if (qtdCxWrap) qtdCxWrap.style.display = modo === 'cx' ? '' : 'none';
-  updateProformaTotal();
-}
-
-function updateProformaTotal() {
-  // Em unidades: qtd × preço unit.; em caixas: nº caixas × preço da caixa —
-  // a mesma multiplicação (qtd/caixa só define as unidades totais).
-  let t = 0;
-  document.querySelectorAll('#proforma-linhas-body .proforma-linha').forEach((r) => {
-    t += (parseFloat(r.querySelector('.pf-qty')?.value) || 0) * (parseFloat(r.querySelector('.pf-preco')?.value) || 0);
-  });
-  const el = document.getElementById('pf-total');
-  if (el) el.textContent = fmt(t);
-}
-
-async function submitProforma() {
-  const msg = document.getElementById('proforma-form-msg');
+/** Guarda o conteúdo do formulário unificado de Compras como PROFORMA:
+ *  mesmas linhas (.fatura-linha), sem foto, sem tocar no saldo/stock. */
+async function guardarComoProforma() {
+  const msg = document.getElementById('fatura-form-msg');
   const linhas = [];
-  let erroLinha = '';
-  document.querySelectorAll('#proforma-linhas-body .proforma-linha').forEach((r) => {
-    const pid = r.querySelector('.pf-prod')?.value;
-    const q = parseFloat(r.querySelector('.pf-qty')?.value);
-    const pu = parseFloat(r.querySelector('.pf-preco')?.value);
-    const modo = r.querySelector('.pf-modo')?.value || '';
-    if (!pid || !(q > 0) || !(pu > 0)) return;
-    if (!modo) { erroLinha = 'Escolhe o modo (Unidade, Caixa ou Peso) em todas as linhas.'; return; }
-    if (modo === 'cx') {
-      const qc = parseFloat(r.querySelector('.pf-qtd-caixa')?.value);
-      if (!(qc > 0)) { erroLinha = 'Nas linhas em caixa indica a quantidade por caixa.'; return; }
-      linhas.push({ produto_id: pid, caixas: q, qtd_por_caixa: qc, preco_caixa: pu });
+  let erro = '';
+  document.querySelectorAll('#fatura-linhas-body .fatura-linha').forEach((line) => {
+    const sel = line.querySelector('.af-prod');
+    if (!sel || !sel.value) return;
+    if (sel.value === '__novo__') {
+      erro = 'Para guardar como proforma escolhe produtos existentes (linhas com «Novo produto» só na compra real).';
+      return;
+    }
+    const modoCaixa = !!line.querySelector('.af-modo-caixa')?.checked;
+    if (modoCaixa) {
+      const caixas = parseFloat(line.querySelector('.af-caixas')?.value) || 0;
+      const qtdPor = parseFloat(line.querySelector('.af-qtd-caixa')?.value) || 0;
+      const precoCaixa = parseFloat(line.querySelector('.af-preco-caixa')?.value) || 0;
+      if (!(caixas > 0) || !(qtdPor > 0) || !(precoCaixa > 0)) {
+        erro = 'Nas linhas em caixa indica nº de caixas, qtd por caixa e preço da caixa.';
+        return;
+      }
+      linhas.push({ produto_id: sel.value, caixas, qtd_por_caixa: qtdPor, preco_caixa: precoCaixa });
     } else {
-      // Unidade e peso partilham a mesma matemática: qtd × preço.
-      // Para produtos a peso, a quantidade é em kg e o preço é por kg.
-      linhas.push({ produto_id: pid, quantidade: q, preco_unitario: pu });
+      const q = parseFloat(line.querySelector('.af-qty')?.value);
+      const pu = parseFloat(line.querySelector('.af-preco')?.value);
+      if (!(q > 0) || !(pu > 0)) {
+        erro = 'Em cada linha com produto indica quantidade e preço unitário.';
+        return;
+      }
+      linhas.push({ produto_id: sel.value, quantidade: q, preco_unitario: pu });
     }
   });
-  if (erroLinha) {
-    if (msg) msg.innerHTML = `<div class="alert alert-error">${erroLinha}</div>`;
-    return;
-  }
+  if (erro) { if (msg) msg.innerHTML = `<div class="alert alert-error">${erro}</div>`; return; }
   if (!linhas.length) {
     if (msg) msg.innerHTML = '<div class="alert alert-error">Adiciona pelo menos uma linha com produto, quantidade e preço.</div>';
     return;
   }
+  // A proforma guarda o fornecedor como texto.
+  const selF = document.getElementById('fx-fornecedor-id');
+  let fornecedorTxt = '';
+  if (selF) {
+    if (selF.value === 'livre') fornecedorTxt = val('fx-fornecedor-livre');
+    else if (selF.value) {
+      const o = selF.options[selF.selectedIndex];
+      fornecedorTxt = o ? o.textContent.trim() : '';
+    }
+  }
   try {
-    await api('POST', '/armazem/proformas', { fornecedor: val('pf-fornecedor'), notas: val('pf-notas'), linhas });
-    if (msg) msg.innerHTML = '';
-    const body = document.getElementById('proforma-linhas-body');
-    if (body) body.innerHTML = '';
-    const f = document.getElementById('pf-fornecedor'); if (f) f.value = '';
-    const n = document.getElementById('pf-notas'); if (n) n.value = '';
-    updateProformaTotal();
-    toggleProformaForm(false);
+    const pf = await api('POST', '/armazem/proformas', { fornecedor: fornecedorTxt, notas: val('fx-notas'), linhas });
+    if (msg) msg.innerHTML = `<div class="alert alert-success">🧾 Proforma #${pf.id} guardada — está em «Proformas em curso»: liberta o valor quando aprovado.</div>`;
+    const body = document.getElementById('fatura-linhas-body');
+    if (body) { body.innerHTML = ''; addFaturaLinha(); }
+    window.__faturaProformaId = null;
     await loadArmazemProformas();
   } catch (e) {
     if (msg) msg.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
@@ -9919,7 +9837,7 @@ async function loadArmazemProformas() {
     const list = await api('GET', '/armazem/proformas');
     S.armazemProformas = Array.isArray(list) ? list : [];
     if (!S.armazemProformas.length) {
-      el.innerHTML = '<span style="color:#64748b;font-size:13px">Sem proformas. Cria a primeira com «+ Nova proforma».</span>';
+      el.innerHTML = '<span style="color:#64748b;font-size:13px">Sem proformas em curso — preenche o formulário abaixo e usa «🧾 Guardar como proforma».</span>';
       return;
     }
     el.innerHTML = S.armazemProformas.map((pf) => {
@@ -9939,7 +9857,7 @@ async function loadArmazemProformas() {
         acoes.push(`<button type="button" class="btn btn-primary btn-sm" title="Cria uma libertação no valor total desta proforma para o dia seleccionado" onclick="runAction(event, () => libertarProforma(${pf.id}))">💰 Libertar valor</button>`);
       }
       if (pf.estado !== 'comprada') {
-        acoes.push(`<button type="button" class="btn btn-ghost btn-sm" title="Pré-preenche a fatura de compra com as linhas desta proforma" onclick="runAction(event, () => usarProformaNaFatura(${pf.id}))">🛒 Usar na fatura</button>`);
+        acoes.push(`<button type="button" class="btn btn-ghost btn-sm" title="Traz as linhas desta proforma de volta ao formulário de Compras — regista a compra real a partir delas" onclick="runAction(event, () => usarProformaNaFatura(${pf.id}))">📄 Preencher compra</button>`);
       }
       if (pf.estado === 'pendente') {
         acoes.push(`<button type="button" class="btn btn-ghost btn-sm" style="color:#f87171" onclick="runAction(event, () => excluirProforma(${pf.id}))">🗑</button>`);

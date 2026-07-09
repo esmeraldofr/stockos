@@ -114,6 +114,15 @@ jobs:
           ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_descriptor JSONB;
           ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_foto_url TEXT NOT NULL DEFAULT '';
           ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50);
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS telefone TEXT NOT NULL DEFAULT '';
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS bi TEXT NOT NULL DEFAULT '';
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT '';
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS data_nascimento DATE;
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS data_admissao DATE;
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS salario_base NUMERIC(15,2);
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS iban TEXT NOT NULL DEFAULT '';
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS contacto_emergencia TEXT NOT NULL DEFAULT '';
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS notas_funcionario TEXT NOT NULL DEFAULT '';
           SQL
 
       - name: Re-conceder privilégios a stockos_app
@@ -153,6 +162,9 @@ jobs:
                 AND column_name='qtd_devolvida') AS linhas_qtd_devolvida,
             (SELECT COUNT(*) FROM information_schema.columns
               WHERE table_schema='public' AND table_name='produtos'
-                AND column_name='forca_pacote') AS produtos_forca_pacote;
+                AND column_name='forca_pacote') AS produtos_forca_pacote,
+            (SELECT COUNT(*) FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='utilizadores'
+                AND column_name IN ('telefone','bi','morada','data_nascimento','data_admissao','salario_base','iban','contacto_emergencia','notas_funcionario')) AS utilizadores_ficha_9;
           SQL
-          echo "Se alguma coluna acima mostrar 0, vê os ERRORs no step anterior."
+          echo "Se alguma coluna acima mostrar 0 (ou utilizadores_ficha_9 < 9), vê os ERRORs no step anterior."

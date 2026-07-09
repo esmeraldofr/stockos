@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-compras-unificadas">
+<html lang="pt" data-stockos-ui="2026-07-07-compras-un-cx-kg">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9910,16 +9910,17 @@ async function usarProformaNaFatura(id) {
       sel.value = String(l.produto_id);
     }
     const cx = parseFloat(l.caixas) || 0;
+    const modoSel = row.querySelector('.af-modo');
     if (cx > 0) {
-      // Linha em caixa: activa o modo caixa da fatura e preenche os campos.
-      const chk = row.querySelector('.af-modo-caixa');
-      if (chk) { chk.checked = true; toggleFaturaLinhaCaixa(chk); }
+      // Linha em caixa: activa o modo caixa e preenche os campos.
+      if (modoSel) { modoSel.value = 'cx'; faturaLinhaModoChange(modoSel); }
       const cs = row.querySelector('.af-caixas'); if (cs) cs.value = cx;
       const qc = row.querySelector('.af-qtd-caixa'); if (qc) qc.value = l.qtd_por_caixa;
       const pc = row.querySelector('.af-preco-caixa');
       if (pc) pc.value = Math.round(((parseFloat(l.valor_total) || 0) / cx) * 100) / 100;
       if (typeof syncFaturaLinhaPrecoUnit === 'function') syncFaturaLinhaPrecoUnit(row);
     } else {
+      if (modoSel) { modoSel.value = l.tipo_medicao === 'peso' ? 'kg' : 'un'; faturaLinhaModoChange(modoSel); }
       const q = row.querySelector('.af-qty'); if (q) q.value = l.quantidade;
       const p = row.querySelector('.af-preco'); if (p) p.value = l.preco_unitario;
     }
@@ -10596,6 +10597,25 @@ function toggleFaturaLinhaNovo(sel) {
   }
 }
 
+/** Selector Unidade/Caixa/Peso da linha de compra. A checkbox escondida
+ *  .af-modo-caixa continua a comandar a mecânica existente do modo caixa
+ *  (campos, sync do preço unitário, colectores). */
+function faturaLinhaModoChange(sel) {
+  const line = sel.closest('.fatura-linha');
+  if (!line) return;
+  const modo = sel.value;
+  const chk = line.querySelector('.af-modo-caixa');
+  if (chk && chk.checked !== (modo === 'cx')) {
+    chk.checked = modo === 'cx';
+    toggleFaturaLinhaCaixa(chk);
+  }
+  const qL = line.querySelector('.af-qty-label');
+  const pL = line.querySelector('.af-preco-label');
+  if (qL) qL.textContent = modo === 'kg' ? 'Peso (kg)' : 'Quantidade';
+  if (pL) pL.textContent = modo === 'kg' ? 'Preço por kg (Kz)' : modo === 'cx' ? 'Preço unit. (derivado da caixa)' : 'Preço unitário (Kz)';
+  updateFaturaExcessoUI();
+}
+
 function toggleFaturaLinhaCaixa(chk) {
   const line = chk.closest('.fatura-linha');
   if (!line) return;
@@ -10641,7 +10661,18 @@ function initFaturaLinha(line) {
   if (sel) {
     renderArmazemProdutoOptions(sel, '', '', true);
     bindArmazemProdutoFilterOnLine(sel, ind);
-    sel.addEventListener('change', () => { toggleFaturaLinhaNovo(sel); updateFaturaExcessoUI(); });
+    sel.addEventListener('change', () => {
+      toggleFaturaLinhaNovo(sel);
+      // Produto medido a peso → modo kg automático (se ainda não escolhido).
+      const opt = sel.options[sel.selectedIndex];
+      const med = opt ? opt.getAttribute('data-medicao') : '';
+      const modoSel = line.querySelector('.af-modo');
+      if (modoSel && med === 'peso' && (modoSel.value === '' || modoSel.value === 'un')) {
+        modoSel.value = 'kg';
+        faturaLinhaModoChange(modoSel);
+      }
+      updateFaturaExcessoUI();
+    });
     toggleFaturaLinhaNovo(sel);
   }
   bindFaturaLinhaCaixaInputs(line);
@@ -10675,14 +10706,18 @@ function addFaturaLinha() {
       '<div class="field"><label>Medição</label><select class="af-medicao"><option value="unidade">Unidade</option><option value="peso">Peso</option></select></div>' +
       '<div class="field"><label>Preço de venda (opcional)</label><input class="af-preco-venda" type="number" min="0" step="any" placeholder="0"/></div>' +
     '</div>' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
-      '<div class="field"><label>Quantidade</label><input class="af-qty" type="number" min="0.001" step="any" placeholder="Qtd"/></div>' +
-      '<div class="field"><label>Preço unitário (Kz)</label><input class="af-preco" type="number" min="0.01" step="any" placeholder="0"/></div>' +
+    '<div class="field"><label>Modo de compra</label>' +
+      '<select class="af-modo" title="Como é comprado" onchange="faturaLinhaModoChange(this)">' +
+        '<option value="" selected disabled hidden>— Modo —</option>' +
+        '<option value="un">Unidade</option>' +
+        '<option value="cx">Caixa</option>' +
+        '<option value="kg">Peso (kg)</option>' +
+      '</select>' +
+      '<input type="checkbox" class="af-modo-caixa" style="display:none" onchange="toggleFaturaLinhaCaixa(this)"/>' +
     '</div>' +
-    '<div class="field">' +
-      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer">' +
-        '<input type="checkbox" class="af-modo-caixa" style="width:16px;height:16px" onchange="toggleFaturaLinhaCaixa(this)"/> Compra em caixa' +
-      '</label>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+      '<div class="field"><label class="af-qty-label">Quantidade</label><input class="af-qty" type="number" min="0.001" step="any" placeholder="Qtd"/></div>' +
+      '<div class="field"><label class="af-preco-label">Preço unitário (Kz)</label><input class="af-preco" type="number" min="0.01" step="any" placeholder="0"/></div>' +
     '</div>' +
     '<div class="af-caixa-fields" style="display:none;grid-template-columns:1fr 1fr;gap:8px">' +
       '<div class="field" style="margin:0"><label>Nº de caixas</label><input class="af-caixas" type="number" min="1" step="any" placeholder="Ex: 10"/></div>' +

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-fornecedor-completo">
+<html lang="pt" data-stockos-ui="2026-07-07-ficha-funcionario">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -11851,8 +11851,26 @@ function showUserForm(u) {
           <option value="admin"    ${u?.role==='admin'?'selected':''}>Admin</option>
         </select>
       </div>
+      <div style="border-top:1px solid #334155;padding-top:12px;margin-top:12px">
+        <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 10px">📇 Ficha do funcionário</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field" style="margin:0"><label>Telefone</label><input id="u-telefone" type="tel" value="${escapeHtml(u?.telefone||'')}" placeholder="9XX XXX XXX"/></div>
+          <div class="field" style="margin:0"><label>Nº do BI</label><input id="u-bi" type="text" value="${escapeHtml(u?.bi||'')}" placeholder="Bilhete de identidade"/></div>
+        </div>
+        <div class="field" style="margin-top:12px"><label>Morada</label><input id="u-morada" type="text" value="${escapeHtml(u?.morada||'')}" placeholder="Rua, bairro, município"/></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field" style="margin:0"><label>Data de nascimento</label><input id="u-data-nascimento" type="date" value="${String(u?.data_nascimento||'').slice(0,10)}"/></div>
+          <div class="field" style="margin:0"><label>Data de admissão</label><input id="u-data-admissao" type="date" value="${String(u?.data_admissao||'').slice(0,10)}"/></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+          <div class="field" style="margin:0"><label>Salário base (Kz)</label><input id="u-salario" type="number" min="0" step="any" value="${u?.salario_base!=null?u.salario_base:''}" placeholder="0"/></div>
+          <div class="field" style="margin:0"><label>IBAN / conta</label><input id="u-iban" type="text" value="${escapeHtml(u?.iban||'')}" placeholder="AO06 ..."/></div>
+        </div>
+        <div class="field" style="margin-top:12px"><label>Contacto de emergência</label><input id="u-emergencia" type="text" value="${escapeHtml(u?.contacto_emergencia||'')}" placeholder="Nome e telefone"/></div>
+        <div class="field"><label>Notas (opcional)</label><input id="u-notas-func" type="text" value="${escapeHtml(u?.notas_funcionario||'')}" placeholder="Observações internas"/></div>
+      </div>
       ${isEdit?`
-      <div class="field"><label>Activo</label>
+      <div class="field" style="border-top:1px solid #334155;padding-top:12px;margin-top:12px"><label>Activo</label>
         <select id="u-ativo"><option value="true" ${u?.ativo?'selected':''}>Sim</option><option value="false" ${!u?.ativo?'selected':''}>Não</option></select>
       </div>
       <div class="field"><label>Nova Password (opcional)</label><input type="password" id="u-pass"/></div>
@@ -11893,18 +11911,33 @@ function showUserForm(u) {
   }
 }
 
+/** Campos da ficha do funcionário lidos do formulário. */
+function fichaFuncionarioBody() {
+  return {
+    telefone: val('u-telefone'),
+    bi: val('u-bi'),
+    morada: val('u-morada'),
+    data_nascimento: val('u-data-nascimento'),
+    data_admissao: val('u-data-admissao'),
+    salario_base: val('u-salario'),
+    iban: val('u-iban'),
+    contacto_emergencia: val('u-emergencia'),
+    notas_funcionario: val('u-notas-func')
+  };
+}
+
 async function createUser() {
   try {
-    await api('POST','/utilizadores',{nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role')});
+    const resp = await api('POST','/utilizadores',{nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role'),...fichaFuncionarioBody()});
     show('admin-form','');
-    suc('admin-msg','Utilizador criado! Password padrão: StockOS2025!');
+    suc('admin-msg','Utilizador criado! Password padrão: StockOS2025!' + (resp && resp.aviso ? ' ⚠ ' + resp.aviso : ''));
     await loadUtilizadores();
   } catch(e) { err('user-form-msg',e.message); }
 }
 
 async function saveUser(id) {
   try {
-    const body = {nome:val('u-nome'),username:val('u-username'),role:val('u-role'),ativo:val('u-ativo')==='true'};
+    const body = {nome:val('u-nome'),username:val('u-username'),role:val('u-role'),ativo:val('u-ativo')==='true',...fichaFuncionarioBody()};
     const p = val('u-pass');
     if (p) body.password = p;
     const promChk = document.getElementById('u-promotor');
@@ -11913,10 +11946,10 @@ async function saveUser(id) {
       body.comissao_modo = val('u-comissao-modo') || 'produto';
       body.comissao_pct_total = parseFloat(val('u-pct-total')) || 0;
     }
-    await api('PUT',`/utilizadores/${id}`,body);
+    const resp = await api('PUT',`/utilizadores/${id}`,body);
     show('admin-form','');
-    suc('admin-msg','Utilizador actualizado!');
-    setTimeout(()=>show('admin-msg',''),2000);
+    suc('admin-msg', resp && resp.aviso ? 'Utilizador actualizado. ⚠ ' + resp.aviso : 'Utilizador actualizado!');
+    setTimeout(()=>show('admin-msg',''),4000);
     await loadUtilizadores();
   } catch(e) { err('user-form-msg',e.message); }
 }

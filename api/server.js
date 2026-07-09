@@ -6719,7 +6719,16 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
 app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total FROM utilizadores ORDER BY nome");
+    await ensureUtilizadoresFicha();
+    const base = "id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total";
+    const ficha = ", COALESCE(telefone,'') AS telefone, COALESCE(bi,'') AS bi, COALESCE(morada,'') AS morada, data_nascimento::text AS data_nascimento, data_admissao::text AS data_admissao, salario_base, COALESCE(iban,'') AS iban, COALESCE(contacto_emergencia,'') AS contacto_emergencia, COALESCE(notas_funcionario,'') AS notas_funcionario";
+    let r;
+    try {
+      r = await query(`SELECT ${base}${ficha} FROM utilizadores ORDER BY nome`);
+    } catch (_) {
+      // BD sem as colunas da ficha (por migrar) — lista na mesma.
+      r = await query(`SELECT ${base} FROM utilizadores ORDER BY nome`);
+    }
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -6743,6 +6752,83 @@ app.get('/api/promotores', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── Ficha do funcionário: dados pessoais/contratuais em utilizadores ──
+let utilizadoresFichaReady = false;
+const UTILIZADORES_FICHA_COLS = ['telefone', 'bi', 'morada', 'data_nascimento', 'data_admissao', 'salario_base', 'iban', 'contacto_emergencia', 'notas_funcionario'];
+async function ensureUtilizadoresFicha() {
+  if (utilizadoresFichaReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='utilizadores_ficha_ddl_v1'`);
+    if (r.rows.length) { utilizadoresFichaReady = true; return; }
+  } catch (_) {}
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS telefone TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-telefone');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS bi TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-bi');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-morada');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS data_nascimento DATE`, [], 'utilizadores-data-nascimento');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS data_admissao DATE`, [], 'utilizadores-data-admissao');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS salario_base NUMERIC(15,2)`, [], 'utilizadores-salario-base');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS iban TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-iban');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS contacto_emergencia TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-contacto-emergencia');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS notas_funcionario TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-notas-funcionario');
+  // Só marca como feito se as colunas existirem mesmo (o ALTER pode falhar
+  // em silêncio quando o role da app não é owner da tabela).
+  try {
+    const chk = await query(
+      `SELECT COUNT(*)::int AS n FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='utilizadores' AND column_name = ANY($1::text[])`,
+      [UTILIZADORES_FICHA_COLS]
+    );
+    if ((chk.rows[0] && chk.rows[0].n) === UTILIZADORES_FICHA_COLS.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('utilizadores_ficha_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      utilizadoresFichaReady = true;
+    }
+  } catch (_) {}
+}
+
+/** Actualiza os campos da ficha (se as colunas existirem). Devolve aviso em
+ *  vez de rebentar quando a BD ainda não foi migrada. */
+async function updateFichaFuncionario(userId, body) {
+  const vals = {
+    telefone: body.telefone != null ? String(body.telefone).trim() : null,
+    bi: body.bi != null ? String(body.bi).trim() : null,
+    morada: body.morada != null ? String(body.morada).trim() : null,
+    data_nascimento: body.data_nascimento ? String(body.data_nascimento).slice(0, 10) : null,
+    data_admissao: body.data_admissao ? String(body.data_admissao).slice(0, 10) : null,
+    salario_base: body.salario_base != null && body.salario_base !== '' ? (parseFloat(body.salario_base) || 0) : null,
+    iban: body.iban != null ? String(body.iban).trim() : null,
+    contacto_emergencia: body.contacto_emergencia != null ? String(body.contacto_emergencia).trim() : null,
+    notas_funcionario: body.notas_funcionario != null ? String(body.notas_funcionario).trim() : null
+  };
+  const temAlgum = UTILIZADORES_FICHA_COLS.some((c) => body[c] !== undefined);
+  if (!temAlgum) return null;
+  await ensureUtilizadoresFicha();
+  try {
+    await query(
+      `UPDATE utilizadores SET
+         telefone = COALESCE($1, telefone),
+         bi = COALESCE($2, bi),
+         morada = COALESCE($3, morada),
+         data_nascimento = CASE WHEN $4::text IS NOT NULL THEN NULLIF($4,'')::date ELSE data_nascimento END,
+         data_admissao = CASE WHEN $5::text IS NOT NULL THEN NULLIF($5,'')::date ELSE data_admissao END,
+         salario_base = COALESCE($6, salario_base),
+         iban = COALESCE($7, iban),
+         contacto_emergencia = COALESCE($8, contacto_emergencia),
+         notas_funcionario = COALESCE($9, notas_funcionario)
+       WHERE id = $10`,
+      [vals.telefone, vals.bi, vals.morada,
+       body.data_nascimento !== undefined ? String(body.data_nascimento || '') : null,
+       body.data_admissao !== undefined ? String(body.data_admissao || '') : null,
+       vals.salario_base, vals.iban, vals.contacto_emergencia, vals.notas_funcionario, userId]
+    );
+    return null;
+  } catch (e) {
+    if (/column .* does not exist/i.test(e.message || '')) {
+      return 'A ficha do funcionário não foi gravada: colunas em falta na BD. Corre o workflow «Reparar schema develop» no GitHub Actions.';
+    }
+    throw e;
+  }
+}
+
 app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureUsernameColumn();
@@ -6761,7 +6847,8 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
       'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
       [String(email).trim(), nome, un, role || 'operador', hashPassword('StockOS2025!')]
     );
-    res.json(r.rows[0]);
+    const aviso = await updateFichaFuncionario(r.rows[0].id, req.body || {});
+    res.json(aviso ? { ...r.rows[0], aviso } : r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -6798,7 +6885,8 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
           'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,promotor=$4,comissao_modo=$5,comissao_pct_total=$6 WHERE id=$7 RETURNING id,email,nome,username,role,ativo,promotor,comissao_modo,comissao_pct_total',
           [nome, role, ativo, isPromotor, modo, pctTotal, req.params.id]
         );
-    res.json(r.rows[0]);
+    const aviso = await updateFichaFuncionario(req.params.id, req.body || {});
+    res.json(aviso ? { ...r.rows[0], aviso } : r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

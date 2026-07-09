@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-ficha-funcionario">
+<html lang="pt" data-stockos-ui="2026-07-07-ficha-financeiro-admin">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -11862,10 +11862,11 @@ function showUserForm(u) {
           <div class="field" style="margin:0"><label>Data de nascimento</label><input id="u-data-nascimento" type="date" value="${String(u?.data_nascimento||'').slice(0,10)}"/></div>
           <div class="field" style="margin:0"><label>Data de admissão</label><input id="u-data-admissao" type="date" value="${String(u?.data_admissao||'').slice(0,10)}"/></div>
         </div>
+        ${S.user?.role === 'admin' ? `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
-          <div class="field" style="margin:0"><label>Salário base (Kz)</label><input id="u-salario" type="number" min="0" step="any" value="${u?.salario_base!=null?u.salario_base:''}" placeholder="0"/></div>
-          <div class="field" style="margin:0"><label>IBAN / conta</label><input id="u-iban" type="text" value="${escapeHtml(u?.iban||'')}" placeholder="AO06 ..."/></div>
-        </div>
+          <div class="field" style="margin:0"><label>Salário base (Kz) <span style="font-weight:400;color:#64748b">🔒 só admins</span></label><input id="u-salario" type="number" min="0" step="any" value="${u?.salario_base!=null?u.salario_base:''}" placeholder="0"/></div>
+          <div class="field" style="margin:0"><label>IBAN / conta <span style="font-weight:400;color:#64748b">🔒 só admins</span></label><input id="u-iban" type="text" value="${escapeHtml(u?.iban||'')}" placeholder="AO06 ..."/></div>
+        </div>` : ''}
         <div class="field" style="margin-top:12px"><label>Contacto de emergência</label><input id="u-emergencia" type="text" value="${escapeHtml(u?.contacto_emergencia||'')}" placeholder="Nome e telefone"/></div>
         <div class="field"><label>Notas (opcional)</label><input id="u-notas-func" type="text" value="${escapeHtml(u?.notas_funcionario||'')}" placeholder="Observações internas"/></div>
       </div>
@@ -11911,19 +11912,22 @@ function showUserForm(u) {
   }
 }
 
-/** Campos da ficha do funcionário lidos do formulário. */
+/** Campos da ficha do funcionário lidos do formulário. Os campos
+ *  FINANCEIROS (salário, IBAN) só existem no DOM para admins — só entram
+ *  no payload quando presentes (o servidor também os restringe a admins). */
 function fichaFuncionarioBody() {
-  return {
+  const body = {
     telefone: val('u-telefone'),
     bi: val('u-bi'),
     morada: val('u-morada'),
     data_nascimento: val('u-data-nascimento'),
     data_admissao: val('u-data-admissao'),
-    salario_base: val('u-salario'),
-    iban: val('u-iban'),
     contacto_emergencia: val('u-emergencia'),
     notas_funcionario: val('u-notas-func')
   };
+  if (document.getElementById('u-salario')) body.salario_base = val('u-salario');
+  if (document.getElementById('u-iban')) body.iban = val('u-iban');
+  return body;
 }
 
 async function createUser() {

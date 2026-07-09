@@ -6721,7 +6721,10 @@ app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
     await ensureUsernameColumn();
     await ensureUtilizadoresFicha();
     const base = "id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total";
-    const ficha = ", COALESCE(telefone,'') AS telefone, COALESCE(bi,'') AS bi, COALESCE(morada,'') AS morada, data_nascimento::text AS data_nascimento, data_admissao::text AS data_admissao, salario_base, COALESCE(iban,'') AS iban, COALESCE(contacto_emergencia,'') AS contacto_emergencia, COALESCE(notas_funcionario,'') AS notas_funcionario";
+    // Dados financeiros (salário base, IBAN) só para administradores.
+    const isAdminReq = req.user && req.user.role === 'admin';
+    const fin = isAdminReq ? ", salario_base, COALESCE(iban,'') AS iban" : "";
+    const ficha = ", COALESCE(telefone,'') AS telefone, COALESCE(bi,'') AS bi, COALESCE(morada,'') AS morada, data_nascimento::text AS data_nascimento, data_admissao::text AS data_admissao" + fin + ", COALESCE(contacto_emergencia,'') AS contacto_emergencia, COALESCE(notas_funcionario,'') AS notas_funcionario";
     let r;
     try {
       r = await query(`SELECT ${base}${ficha} FROM utilizadores ORDER BY nome`);
@@ -6786,8 +6789,15 @@ async function ensureUtilizadoresFicha() {
 }
 
 /** Actualiza os campos da ficha (se as colunas existirem). Devolve aviso em
- *  vez de rebentar quando a BD ainda não foi migrada. */
-async function updateFichaFuncionario(userId, body) {
+ *  vez de rebentar quando a BD ainda não foi migrada.
+ *  Dados FINANCEIROS (salário base e IBAN) só podem ser alterados por
+ *  administradores — para outros roles são ignorados. */
+async function updateFichaFuncionario(userId, body, role) {
+  if (role !== 'admin') {
+    body = { ...body };
+    delete body.salario_base;
+    delete body.iban;
+  }
   const vals = {
     telefone: body.telefone != null ? String(body.telefone).trim() : null,
     bi: body.bi != null ? String(body.bi).trim() : null,
@@ -6847,7 +6857,7 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
       'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
       [String(email).trim(), nome, un, role || 'operador', hashPassword('StockOS2025!')]
     );
-    const aviso = await updateFichaFuncionario(r.rows[0].id, req.body || {});
+    const aviso = await updateFichaFuncionario(r.rows[0].id, req.body || {}, req.user && req.user.role);
     res.json(aviso ? { ...r.rows[0], aviso } : r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -6885,7 +6895,7 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
           'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,promotor=$4,comissao_modo=$5,comissao_pct_total=$6 WHERE id=$7 RETURNING id,email,nome,username,role,ativo,promotor,comissao_modo,comissao_pct_total',
           [nome, role, ativo, isPromotor, modo, pctTotal, req.params.id]
         );
-    const aviso = await updateFichaFuncionario(req.params.id, req.body || {});
+    const aviso = await updateFichaFuncionario(req.params.id, req.body || {}, req.user && req.user.role);
     res.json(aviso ? { ...r.rows[0], aviso } : r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

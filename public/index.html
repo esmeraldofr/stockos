@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-compras-un-cx-kg">
+<html lang="pt" data-stockos-ui="2026-07-07-fornecedor-completo">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -11005,10 +11005,19 @@ async function drawFornecedores() {
     <div id="content">
       <div id="fornec-msg"></div>
       <div class="card">
-        <div class="card-title">Novo fornecedor</div>
-        <div class="field"><label>Nome</label><input id="forn-nome" type="text" placeholder="Ex.: Distribuidora X"/></div>
-        <div class="field"><label>Notas (opcional)</label><input id="forn-notas" type="text" placeholder="NIF, contacto, condições…"/></div>
-        <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, submitNovoFornecedor)">Criar</button>
+        <div class="card-title" id="forn-form-title">Novo fornecedor</div>
+        <div class="field"><label>Nome <span style="font-weight:400;color:#64748b">(obrigatório)</span></label><input id="forn-nome" type="text" placeholder="Ex.: Distribuidora X"/></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field" style="margin:0"><label>NIF</label><input id="forn-nif" type="text" placeholder="Nº de contribuinte"/></div>
+          <div class="field" style="margin:0"><label>Telefone</label><input id="forn-telefone" type="tel" placeholder="9XX XXX XXX"/></div>
+        </div>
+        <div class="field" style="margin-top:12px"><label>Email</label><input id="forn-email" type="email" placeholder="geral@fornecedor.co.ao"/></div>
+        <div class="field"><label>Morada</label><input id="forn-morada" type="text" placeholder="Rua, bairro, município"/></div>
+        <div class="field"><label>Notas (opcional)</label><input id="forn-notas" type="text" placeholder="Condições de pagamento, prazos de entrega, pessoa de contacto…"/></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" id="forn-btn-submit" class="btn btn-success btn-sm" onclick="runAction(event, submitFornecedorForm)">Criar</button>
+          <button type="button" id="forn-btn-cancelar" class="btn btn-ghost btn-sm" style="display:none" onclick="cancelarEdicaoFornecedor()">Cancelar edição</button>
+        </div>
       </div>
       <div class="card">
         <div class="card-title">Lista</div>
@@ -11020,17 +11029,77 @@ async function drawFornecedores() {
   await refreshFornecedoresList();
 }
 
-async function submitNovoFornecedor() {
+window.__fornEditId = null;
+
+function limparFormFornecedor() {
+  ['forn-nome', 'forn-nif', 'forn-telefone', 'forn-email', 'forn-morada', 'forn-notas'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+}
+
+function cancelarEdicaoFornecedor() {
+  window.__fornEditId = null;
+  limparFormFornecedor();
+  const t = document.getElementById('forn-form-title');
+  if (t) t.textContent = 'Novo fornecedor';
+  const b = document.getElementById('forn-btn-submit');
+  if (b) b.textContent = 'Criar';
+  const c = document.getElementById('forn-btn-cancelar');
+  if (c) c.style.display = 'none';
+  show('fornec-msg', '');
+}
+
+function editarFornecedor(id) {
+  const f = (S.fornecedoresLista || []).find((x) => String(x.id) === String(id));
+  if (!f) return;
+  window.__fornEditId = f.id;
+  const set = (elId, v) => { const el = document.getElementById(elId); if (el) el.value = v || ''; };
+  set('forn-nome', f.nome);
+  set('forn-nif', f.nif);
+  set('forn-telefone', f.telefone);
+  set('forn-email', f.email);
+  set('forn-morada', f.morada);
+  set('forn-notas', f.notas);
+  const t = document.getElementById('forn-form-title');
+  if (t) t.textContent = `Editar fornecedor — ${f.nome}`;
+  const b = document.getElementById('forn-btn-submit');
+  if (b) b.textContent = 'Guardar alterações';
+  const c = document.getElementById('forn-btn-cancelar');
+  if (c) c.style.display = '';
+  document.getElementById('forn-form-title')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+async function submitFornecedorForm() {
   const nome = val('forn-nome');
   if (!nome) {
     show('fornec-msg', '<div class="alert alert-error">Indica o nome do fornecedor.</div>');
     return;
   }
+  const payload = {
+    nome,
+    nif: val('forn-nif'),
+    telefone: val('forn-telefone'),
+    email: val('forn-email'),
+    morada: val('forn-morada'),
+    notas: val('forn-notas')
+  };
   try {
-    await api('POST', '/fornecedores', { nome, notas: val('forn-notas') });
-    show('fornec-msg', '<div class="alert alert-success">Fornecedor criado.</div>');
-    document.getElementById('forn-nome').value = '';
-    document.getElementById('forn-notas').value = '';
+    if (window.__fornEditId) {
+      await api('PUT', '/fornecedores/' + window.__fornEditId, payload);
+      show('fornec-msg', '<div class="alert alert-success">Fornecedor actualizado.</div>');
+    } else {
+      await api('POST', '/fornecedores', payload);
+      show('fornec-msg', '<div class="alert alert-success">Fornecedor criado.</div>');
+    }
+    window.__fornEditId = null;
+    limparFormFornecedor();
+    const t = document.getElementById('forn-form-title');
+    if (t) t.textContent = 'Novo fornecedor';
+    const b = document.getElementById('forn-btn-submit');
+    if (b) b.textContent = 'Criar';
+    const c = document.getElementById('forn-btn-cancelar');
+    if (c) c.style.display = 'none';
     await refreshFornecedoresList();
   } catch (e) {
     show('fornec-msg', `<div class="alert alert-error">${e.message}</div>`);
@@ -11048,12 +11117,17 @@ async function refreshFornecedoresList() {
       return;
     }
     el.innerHTML = `<div class="table-wrap"><table>
-      <thead><tr><th>Nome</th><th>Notas</th><th>Estado</th><th style="text-align:right">Ações</th></tr></thead>
+      <thead><tr><th>Nome</th><th>Contactos</th><th>Notas</th><th>Estado</th><th style="text-align:right">Ações</th></tr></thead>
       <tbody>${rows.map((f) => `<tr>
-        <td>${escapeHtml(f.nome)}</td>
+        <td>${escapeHtml(f.nome)}${f.nif ? `<div style="color:#64748b;font-size:11px">NIF ${escapeHtml(f.nif)}</div>` : ''}</td>
+        <td style="color:#94a3b8;font-size:12px;line-height:1.5">${
+          [f.telefone && `📞 ${escapeHtml(f.telefone)}`, f.email && `✉️ ${escapeHtml(f.email)}`, f.morada && `📍 ${escapeHtml(f.morada)}`]
+            .filter(Boolean).join('<br>') || '—'
+        }</td>
         <td style="color:#94a3b8;font-size:12px">${f.notas ? escapeHtml(f.notas) : '—'}</td>
         <td>${f.ativo ? '<span style="color:#4ade80">Activo</span>' : '<span style="color:#64748b">Inactivo</span>'}</td>
         <td style="text-align:right;white-space:nowrap">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="editarFornecedor(${f.id})">✏️ Editar</button>
           <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => toggleFornecedorAtivo(${f.id}, ${f.ativo ? false : true}))">${f.ativo ? 'Desactivar' : 'Reactivar'}</button>
         </td>
       </tr>`).join('')}</tbody></table></div>`;

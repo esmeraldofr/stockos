@@ -114,6 +114,15 @@ jobs:
           ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_descriptor JSONB;
           ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS face_foto_url TEXT NOT NULL DEFAULT '';
           ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS username VARCHAR(50);
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS telefone TEXT NOT NULL DEFAULT '';
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS bi TEXT NOT NULL DEFAULT '';
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT '';
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS data_nascimento DATE;
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS data_admissao DATE;
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS salario_base NUMERIC(15,2);
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS iban TEXT NOT NULL DEFAULT '';
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS contacto_emergencia TEXT NOT NULL DEFAULT '';
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS notas_funcionario TEXT NOT NULL DEFAULT '';
           SQL
 
       - name: Re-conceder privilégios a stockos_app

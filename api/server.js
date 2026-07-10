@@ -6853,12 +6853,17 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
       [un]
     );
     if (dup.rows.length) return res.status(400).json({ erro: 'Nome de utilizador já em uso' });
+    // Password inicial opcional — vazio usa a padrão StockOS2025!.
+    const passRaw = String((req.body && req.body.password) || '').trim();
+    if (passRaw && passRaw.length < 6) {
+      return res.status(400).json({ erro: 'A password inicial deve ter pelo menos 6 caracteres.' });
+    }
     const r = await query(
       'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
-      [String(email).trim(), nome, un, role || 'operador', hashPassword('StockOS2025!')]
+      [String(email).trim(), nome, un, role || 'operador', hashPassword(passRaw || 'StockOS2025!')]
     );
     const aviso = await updateFichaFuncionario(r.rows[0].id, req.body || {}, req.user && req.user.role);
-    res.json(aviso ? { ...r.rows[0], aviso } : r.rows[0]);
+    res.json({ ...r.rows[0], password_padrao: !passRaw, ...(aviso ? { aviso } : {}) });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

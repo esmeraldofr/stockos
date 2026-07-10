@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-ficha-financeiro-admin">
+<html lang="pt" data-stockos-ui="2026-07-07-password-inicial">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -11842,7 +11842,8 @@ function showUserForm(u) {
       <div id="user-form-msg"></div>
       <div class="field"><label>Nome</label><input id="u-nome" value="${u?.nome||''}"/></div>
       <div class="field"><label>Nome de utilizador</label><input id="u-username" type="text" value="${u?.username||''}" placeholder="apenas letras minúsculas, números, . _ -" autocapitalize="off"/></div>
-      ${!isEdit?`<div class="field"><label>Email</label><input id="u-email" type="email" value=""/></div>`:''}
+      ${!isEdit?`<div class="field"><label>Email</label><input id="u-email" type="email" value=""/></div>
+      <div class="field"><label>Password inicial <span style="font-weight:400;color:#64748b">(opcional — vazio usa StockOS2025!)</span></label><input id="u-pass-inicial" type="password" placeholder="Mín. 6 caracteres"/></div>`:''}
       <div class="field"><label>Role</label>
         <select id="u-role">
           <option value="operador" ${u?.role==='operador'?'selected':''}>Operador</option>
@@ -11932,9 +11933,15 @@ function fichaFuncionarioBody() {
 
 async function createUser() {
   try {
-    const resp = await api('POST','/utilizadores',{nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role'),...fichaFuncionarioBody()});
+    const body = {nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role'),...fichaFuncionarioBody()};
+    const passInicial = val('u-pass-inicial');
+    if (passInicial) body.password = passInicial;
+    const resp = await api('POST','/utilizadores',body);
     show('admin-form','');
-    suc('admin-msg','Utilizador criado! Password padrão: StockOS2025!' + (resp && resp.aviso ? ' ⚠ ' + resp.aviso : ''));
+    const passTxt = resp && resp.password_padrao === false
+      ? 'Utilizador criado com a password definida.'
+      : 'Utilizador criado! Password padrão: StockOS2025!';
+    suc('admin-msg', passTxt + (resp && resp.aviso ? ' ⚠ ' + resp.aviso : ''));
     await loadUtilizadores();
   } catch(e) { err('user-form-msg',e.message); }
 }

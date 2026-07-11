@@ -6843,27 +6843,42 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureUsernameColumn();
     const { email, nome, role, username } = req.body;
-    const un = normalizeUsername(username);
-    if (!email || !String(email).trim()) return res.status(400).json({ erro: 'Email é obrigatório' });
-    if (!isValidUsername(un)) {
-      return res.status(400).json({ erro: 'Nome de utilizador: 3 a 50 caracteres (letras minúsculas, números, . _ -)' });
-    }
-    const dup = await query(
-      'SELECT id FROM utilizadores WHERE LOWER(username)=LOWER($1)',
-      [un]
-    );
-    if (dup.rows.length) return res.status(400).json({ erro: 'Nome de utilizador já em uso' });
-    // Password inicial opcional — vazio usa a padrão StockOS2025!.
+    if (!nome || !String(nome).trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
+    // Password inicial OBRIGATÓRIA — não existe password padrão.
     const passRaw = String((req.body && req.body.password) || '').trim();
-    if (passRaw && passRaw.length < 6) {
+    if (!passRaw) return res.status(400).json({ erro: 'Define a password inicial (não existe password padrão).' });
+    if (passRaw.length < 6) {
       return res.status(400).json({ erro: 'A password inicial deve ter pelo menos 6 caracteres.' });
+    }
+    // Nome de utilizador OPCIONAL — validado só quando indicado.
+    const un = normalizeUsername(username);
+    if (un) {
+      if (!isValidUsername(un)) {
+        return res.status(400).json({ erro: 'Nome de utilizador: 3 a 50 caracteres (letras minúsculas, números, . _ -)' });
+      }
+      const dup = await query('SELECT id FROM utilizadores WHERE LOWER(username)=LOWER($1)', [un]);
+      if (dup.rows.length) return res.status(400).json({ erro: 'Nome de utilizador já em uso' });
+    }
+    // Email OPCIONAL. A coluna é NOT NULL UNIQUE, por isso sem email
+    // guarda-se um placeholder único @stockos.local (escondido na UI).
+    let emailFinal = String(email || '').trim();
+    if (emailFinal) {
+      const dupE = await query('SELECT id FROM utilizadores WHERE LOWER(email)=LOWER($1)', [emailFinal]);
+      if (dupE.rows.length) return res.status(400).json({ erro: 'Email já em uso' });
+    } else {
+      emailFinal = `sem-email-${crypto.randomBytes(4).toString('hex')}@stockos.local`;
     }
     const r = await query(
       'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
-      [String(email).trim(), nome, un, role || 'operador', hashPassword(passRaw || 'StockOS2025!')]
+      [emailFinal, String(nome).trim(), un || null, role || 'operador', hashPassword(passRaw)]
     );
     const aviso = await updateFichaFuncionario(r.rows[0].id, req.body || {}, req.user && req.user.role);
-    res.json({ ...r.rows[0], password_padrao: !passRaw, ...(aviso ? { aviso } : {}) });
+    const semLogin = !un && emailFinal.endsWith('@stockos.local');
+    res.json({
+      ...r.rows[0],
+      ...(semLogin ? { aviso_login: 'Sem nome de utilizador nem email — este funcionário não consegue iniciar sessão até definires um deles.' } : {}),
+      ...(aviso ? { aviso } : {})
+    });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

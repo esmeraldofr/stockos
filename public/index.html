@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-sem-password-padrao">
+<html lang="pt" data-stockos-ui="2026-07-07-assiduidade-trabalhados">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9411,6 +9411,7 @@ async function loadAssiduidade() {
       const heCor = horasExtra > 0 ? '#a78bfa' : '#64748b';
       const faltasChips = chipsDetalhe(r.faltas_detalhe, { bg: 'rgba(248,113,113,0.1)', border: 'rgba(248,113,113,0.35)', fg: '#fca5a5' });
       const heChips = chipsDetalhe(r.horas_extra_detalhe, { bg: 'rgba(167,139,250,0.1)', border: 'rgba(167,139,250,0.35)', fg: '#c4b5fd' });
+      const trabChips = chipsDetalhe(r.trabalhados_detalhe, { bg: 'rgba(74,222,128,0.1)', border: 'rgba(74,222,128,0.35)', fg: '#86efac' });
       return `
         <tr>
           <td style="padding:8px 10px;color:#e2e8f0">
@@ -9418,7 +9419,10 @@ async function loadAssiduidade() {
             <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
           </td>
           <td style="padding:8px 10px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums">${esperados}</td>
-          <td style="padding:8px 10px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:600">${presencas}</td>
+          <td style="padding:8px 10px;text-align:right;vertical-align:top">
+            <div style="color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:600">${presencas}</div>
+            ${trabChips}
+          </td>
           <td style="padding:8px 10px;text-align:right;vertical-align:top">
             <div style="color:${faltasCor};font-variant-numeric:tabular-nums;font-weight:600">${faltas}</div>
             ${faltasChips}

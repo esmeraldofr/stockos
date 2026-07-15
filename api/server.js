@@ -7612,6 +7612,7 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
         faltas: falt,
         horas_extra: he,
         faltas_detalhe: Array.isArray(row.faltas_detalhe) ? row.faltas_detalhe : [],
+        trabalhados_detalhe: Array.isArray(row.trabalhados_detalhe) ? row.trabalhados_detalhe : [],
         horas_extra_detalhe: Array.isArray(row.horas_extra_detalhe) ? row.horas_extra_detalhe : [],
         // Aliases para compat com clientes antigos que tinham o JS em cache.
         dias_esperados: esp,

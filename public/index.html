@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-assiduidade-trabalhados">
+<html lang="pt" data-stockos-ui="2026-07-07-assiduidade-layout">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9393,7 +9393,7 @@ async function loadAssiduidade() {
       if (!arr.length) return '';
       const titulo = arr.map((it) => `${it.data || ''} · ${it.turno || ''}`).join('\n');
       const txt = arr.map((it) => `${dataCurta(it.data)}${turnoAbbr(it.turno)}${diaSemanaAbbr(it.data)}`).join(', ');
-      return `<div title="${escapeHtml(titulo)}" style="margin-top:4px;color:${cor.fg};font-size:11px;font-weight:600;line-height:1.35;text-align:right;font-variant-numeric:tabular-nums;word-break:break-word">${escapeHtml(txt)}</div>`;
+      return `<div title="${escapeHtml(titulo)}" style="margin-top:4px;color:${cor.fg};font-size:10px;font-weight:600;line-height:1.4;text-align:right;font-variant-numeric:tabular-nums;overflow-wrap:break-word">${escapeHtml(txt)}</div>`;
     }
     const trs = rows.map((r) => {
       const esperados = Number(r.turnos_esperados ?? r.dias_esperados) || 0;
@@ -9414,11 +9414,11 @@ async function loadAssiduidade() {
       const trabChips = chipsDetalhe(r.trabalhados_detalhe, { bg: 'rgba(74,222,128,0.1)', border: 'rgba(74,222,128,0.35)', fg: '#86efac' });
       return `
         <tr>
-          <td style="padding:8px 10px;color:#e2e8f0">
+          <td style="padding:8px 10px;color:#e2e8f0;vertical-align:top">
             <div style="font-weight:600">${escapeHtml(r.utilizador_nome || 'Sem nome')}</div>
             <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
           </td>
-          <td style="padding:8px 10px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums">${esperados}</td>
+          <td style="padding:8px 10px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;vertical-align:top">${esperados}</td>
           <td style="padding:8px 10px;text-align:right;vertical-align:top">
             <div style="color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:600">${presencas}</div>
             ${trabChips}
@@ -9431,7 +9431,7 @@ async function loadAssiduidade() {
             <div style="color:${heCor};font-variant-numeric:tabular-nums;font-weight:600">${horasExtra}</div>
             ${heChips}
           </td>
-          <td style="padding:8px 10px;text-align:right;color:${taxaCor};font-variant-numeric:tabular-nums;font-weight:700">${taxaTxt}</td>
+          <td style="padding:8px 10px;text-align:right;color:${taxaCor};font-variant-numeric:tabular-nums;font-weight:700;vertical-align:top">${taxaTxt}</td>
         </tr>`;
     }).join('');
     show('assiduidade-content', `
@@ -9445,15 +9445,18 @@ async function loadAssiduidade() {
       </div>
       <div class="card" style="padding:0;overflow:hidden">
         <div class="table-wrap">
-          <table style="width:100%;border-collapse:collapse">
+          <table style="width:100%;min-width:760px;table-layout:fixed;border-collapse:collapse">
+            <colgroup>
+              <col style="width:15%"><col style="width:8%"><col style="width:25%"><col style="width:25%"><col style="width:18%"><col style="width:9%">
+            </colgroup>
             <thead>
               <tr>
                 <th style="text-align:left;padding:8px 10px;color:#94a3b8;font-size:12px">Funcionário</th>
-                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Turnos esperados</th>
+                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Esper.</th>
                 <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Trabalhados</th>
                 <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Faltas</th>
                 <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Horas extra</th>
-                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Assiduidade</th>
+                <th style="text-align:right;padding:8px 10px;color:#94a3b8;font-size:12px">Assid.</th>
               </tr>
             </thead>
             <tbody>${trs}</tbody>

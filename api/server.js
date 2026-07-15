@@ -7575,6 +7575,12 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
              COALESCE((
                SELECT json_agg(json_build_object('data', to_char(x.d, 'YYYY-MM-DD'), 'turno', x.turno) ORDER BY x.d, x.turno)
                FROM (
+                 SELECT DISTINCT t.d, t.turno FROM trabalhados t WHERE t.utilizador_id = u.id::text
+               ) x
+             ), '[]'::json) AS trabalhados_detalhe,
+             COALESCE((
+               SELECT json_agg(json_build_object('data', to_char(x.d, 'YYYY-MM-DD'), 'turno', x.turno) ORDER BY x.d, x.turno)
+               FROM (
                  SELECT DISTINCT t.d, t.turno
                  FROM trabalhados t
                  WHERE t.utilizador_id = u.id::text

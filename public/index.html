@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-presenca-externos">
+<html lang="pt" data-stockos-ui="2026-07-07-pacotes-reais">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5258,13 +5258,23 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             unidade: isCopo ? 'copos' : 'un.',
             isCopo,
             pacoteN: n,
-            pacotePreco: pp
+            pacotePreco: pp,
+            pacotes: 0,
+            avulsos: 0
           });
         }
         const e = byProd.get(key);
         e.qtd += qtd;
         e.valor += subtotal;
         e.comissao += subtotal * pct / 100;
+        // Pacotes REAIS: o preço de pacote aplica-se por linha de pedido —
+        // acumular aqui (e não recalcular sobre o total agregado, que
+        // inflacionaria os pacotes e não bateria com o valor cobrado).
+        if (isCopo && n >= 2 && pp > 0) {
+          const c = Math.floor(qtd);
+          e.pacotes += Math.floor(c / n);
+          e.avulsos += c % n;
+        }
       }
     }
     if (!porCat.size) return '';
@@ -5281,15 +5291,12 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const totalCom = arr.reduce((s, r) => s + r.comissao, 0);
       const trs = arr.map((r) => {
         let unidadeStr = r.unidade;
-        if (r.isCopo && r.pacoteN >= 2 && r.pacotePreco > 0) {
-          const c = Math.floor(r.qtd);
-          const pacotes = Math.floor(c / r.pacoteN);
-          const avulsos = c % r.pacoteN;
-          if (pacotes > 0) {
-            const pT = `${pacotes} pacote${pacotes !== 1 ? 's' : ''}`;
-            const aT = avulsos > 0 ? ` + ${avulsos} copo${avulsos !== 1 ? 's' : ''}` : '';
-            unidadeStr = `copos (${pT}${aT})`;
-          }
+        if (r.isCopo && r.pacoteN >= 2 && r.pacotePreco > 0 && r.pacotes > 0) {
+          // Pacotes/avulsos REAIS acumulados pedido a pedido (é assim que o
+          // preço é aplicado) — não recalculados sobre o total agregado.
+          const pT = `${r.pacotes} pacote${r.pacotes !== 1 ? 's' : ''}`;
+          const aT = r.avulsos > 0 ? ` + ${r.avulsos} avulso${r.avulsos !== 1 ? 's' : ''}` : '';
+          unidadeStr = `copos (${pT}${aT})`;
         }
         const pctTxt = r.pct > 0 ? `<span style="color:#64748b;font-size:11px">(${r.pct.toFixed(1)}%)</span> ` : '';
         return `

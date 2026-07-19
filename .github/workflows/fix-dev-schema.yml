@@ -88,6 +88,7 @@ jobs:
           ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_copo BOOLEAN NOT NULL DEFAULT FALSE;
           ALTER TABLE produtos ADD COLUMN IF NOT EXISTS vendavel BOOLEAN NOT NULL DEFAULT FALSE;
           ALTER TABLE produtos ADD COLUMN IF NOT EXISTS peso_tara_kg NUMERIC(10,4);
+          ALTER TABLE turno_caixa ADD COLUMN IF NOT EXISTS tpa_foto_url TEXT NOT NULL DEFAULT '';
           ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS origem VARCHAR(10) NOT NULL DEFAULT 'armazem';
           ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS preco NUMERIC(15,2) NOT NULL DEFAULT 0;
           ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS tipo VARCHAR(10) NOT NULL DEFAULT 'entrada';
@@ -160,6 +161,9 @@ jobs:
             (SELECT COUNT(*) FROM information_schema.columns
               WHERE table_schema='public' AND table_name='turno_pedido_linhas'
                 AND column_name='qtd_devolvida') AS linhas_qtd_devolvida,
+            (SELECT COUNT(*) FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='turno_caixa'
+                AND column_name='tpa_foto_url') AS caixa_tpa_foto,
             (SELECT COUNT(*) FROM information_schema.columns
               WHERE table_schema='public' AND table_name='produtos'
                 AND column_name='forca_pacote') AS produtos_forca_pacote,

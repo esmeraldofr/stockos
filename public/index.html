@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-troca-barril-pos">
+<html lang="pt" data-stockos-ui="2026-07-07-tpa-foto">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3647,6 +3647,10 @@ async function loadTurno() {
             <div class="caixa-item">
               <label>TPA / Máquina <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
               <input type="number" min="0" step="any" id="c-tpa" value="${fmtCaixaAttr(caixa.tpa)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" onblur="caixaInputBlur(this)" ${canEdit?'':'disabled'}/>
+              <div style="margin-top:6px">
+                <input type="file" id="c-tpa-foto" accept="image/jpeg,image/png,image/webp" style="font-size:11px;max-width:100%" onchange="tpaFotoOnFile(this)" ${canEdit?'':'disabled'}/>
+                <div id="c-tpa-foto-status" style="font-size:11px;margin-top:3px;color:${caixa.tpa_foto_url ? '#86efac' : '#64748b'}">${caixa.tpa_foto_url ? '✓ Foto do fecho TPA anexada' : '📷 Foto do recibo de fecho do TPA — obrigatória para fechar o turno com valor no TPA.'}</div>
+              </div>
             </div>
             <div class="caixa-item">
               <label>Transferência <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
@@ -7666,6 +7670,25 @@ async function saveTurnoNotas(turnoId, notas) {
   } catch(e) { turnoMsgErr(e.message); }
 }
 
+/** Upload da foto do recibo de fecho do TPA (aba Caixa). */
+async function tpaFotoOnFile(inp) {
+  const turnoId = S.turnoData?.id;
+  const st = document.getElementById('c-tpa-foto-status');
+  if (!turnoId || !inp || !inp.files || !inp.files[0]) return;
+  try {
+    if (st) { st.style.color = '#94a3b8'; st.textContent = 'A enviar foto…'; }
+    const b64 = await fileToDataUrl(inp.files[0]);
+    const r = await api('POST', `/turnos/${turnoId}/caixa/tpa-foto`, { foto_base64: b64 });
+    if (S.turnoData) {
+      if (!S.turnoData.caixa) S.turnoData.caixa = {};
+      S.turnoData.caixa.tpa_foto_url = r.tpa_foto_url || '';
+    }
+    if (st) { st.style.color = '#86efac'; st.textContent = '✓ Foto do fecho TPA anexada'; }
+  } catch (e) {
+    if (st) { st.style.color = '#ef4444'; st.textContent = 'Falha ao enviar: ' + (e.message || e); }
+  }
+}
+
 async function fecharTurno(ev, id) {
   clearStockCaixaValidationHighlight();
   document.querySelectorAll('input[data-stock-req="1"][type="number"]').forEach((el) => {
@@ -7679,6 +7702,14 @@ async function fecharTurno(ev, id) {
       true
     );
     await focusTurnoFieldParaValidacao(missing[0]);
+    return;
+  }
+  // TPA com valor exige a foto do recibo de fecho do TPA (o servidor
+  // também valida ao fechar).
+  const tpaValFechar = parseFloat(document.getElementById('c-tpa')?.value) || 0;
+  if (tpaValFechar > 0 && !(S.turnoData?.caixa?.tpa_foto_url)) {
+    turnoMsgErr('Registaste valor no TPA — anexa a foto do recibo de fecho do TPA (por baixo do campo TPA) antes de fechar o turno.', true);
+    document.getElementById('c-tpa-foto')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     return;
   }
   if (!confirm('Fechar este turno? Não poderá ser editado depois.')) return;

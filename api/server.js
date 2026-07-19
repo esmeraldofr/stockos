@@ -7379,7 +7379,8 @@ app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
   const selectEquipa = async (id) => {
     const r = await query(
       `SELECT er.*,
-              u.nome AS utilizador_nome, u.role AS utilizador_role,
+              COALESCE(u.nome, CASE WHEN er.utilizador_id LIKE 'ext:%' THEN substring(er.utilizador_id from 5) END) AS utilizador_nome,
+              COALESCE(u.role, CASE WHEN er.utilizador_id LIKE 'ext:%' THEN 'externo' END) AS utilizador_role,
               uc.nome AS cobrindo_utilizador_nome
        FROM turno_equipa_real er
        LEFT JOIN utilizadores u ON er.utilizador_id::text = u.id::text

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-tpa-foto">
+<html lang="pt" data-stockos-ui="2026-07-07-presenca-externos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -8453,9 +8453,11 @@ async function loadEscalaTurno() {
           <select id="tp-user" class="entradas-select">
             <option value="">— Funcionário —</option>
             ${pessoas.map(p => `<option value="${p.id}">${p.nome} (${p.role})</option>`).join('')}
+            <option value="__ext__">➕ Outro (não está na lista)…</option>
           </select>
+          <input id="tp-user-livre" class="entradas-notas" type="text" placeholder="Nome de quem trabalhou" style="display:none"/>
           <select id="tp-cobrindo" class="entradas-select" style="display:none">
-            <option value="">— Está cobrindo quem? —</option>
+            <option value="">— Está cobrindo quem? (opcional) —</option>
             ${lista.filter(r => r.utilizador_id).map(r => `<option value="${r.utilizador_id}">${r.utilizador_nome || r.utilizador_id}</option>`).join('')}
           </select>
           <input id="tp-motivo-falta" class="entradas-notas" type="text" placeholder="Motivo da falta" style="display:none"/>
@@ -8484,10 +8486,16 @@ async function loadEscalaTurno() {
       const cobSel = document.getElementById('tp-cobrindo');
       const motEl = document.getElementById('tp-motivo-falta');
       const heEl = document.getElementById('tp-he');
+      const livreEl = document.getElementById('tp-user-livre');
       const toggleExtra = () => {
         if (!userSel || !cobSel || !heEl || !motEl) return;
         const uid = userSel.value;
-        const naoEscalado = !!uid && !escaladosIds.has(String(uid));
+        const isExt = uid === '__ext__';
+        if (livreEl) {
+          livreEl.style.display = isExt ? '' : 'none';
+          if (!isExt) livreEl.value = '';
+        }
+        const naoEscalado = isExt || (!!uid && !escaladosIds.has(String(uid)));
         cobSel.style.display = naoEscalado ? '' : 'none';
         motEl.style.display = naoEscalado ? '' : 'none';
         if (!naoEscalado) motEl.value = '';
@@ -8503,19 +8511,28 @@ async function loadEscalaTurno() {
 }
 
 async function addTurnoPresenca(turnoId) {
-  const utilizador_id = val('tp-user');
+  let utilizador_id = val('tp-user');
   const cobrindo_utilizador_id = val('tp-cobrindo');
   const hora_extra = !!document.getElementById('tp-he')?.checked;
   const motivo_falta = val('tp-motivo-falta');
   const notas = val('tp-notas');
   if (!utilizador_id) return err('turno-presenca-msg', 'Seleciona um funcionário');
+  // Trabalhador fora da lista de funcionários: regista pelo nome
+  // (utilizador_id sintético «ext:<nome>» — sem conta, só presença).
+  let ehExterno = false;
+  if (utilizador_id === '__ext__') {
+    const nomeLivre = val('tp-user-livre').trim();
+    if (!nomeLivre) return err('turno-presenca-msg', 'Indica o nome de quem trabalhou');
+    utilizador_id = 'ext:' + nomeLivre;
+    ehExterno = true;
+  }
   const turnoNome = S.turnoData?.nome;
   const d = new Date(S.date + 'T12:00:00Z');
   const day = d.getUTCDay();
   const diaSemana = day === 0 ? 6 : day - 1;
   const template = await api('GET', '/escala/template');
   const escaladosIds = new Set(template.filter(r => Number(r.dia_semana) === diaSemana && r.turno === turnoNome).map(r => String(r.utilizador_id || '')).filter(Boolean));
-  const naoEscalado = !escaladosIds.has(String(utilizador_id));
+  const naoEscalado = ehExterno || !escaladosIds.has(String(utilizador_id));
   // "Cobrindo quem" e "motivo da falta" passam a ser opcionais — antes
   // eram exigidos quando o funcionário não estava escalado.
   try {

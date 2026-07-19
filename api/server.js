@@ -4649,6 +4649,21 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
           'Regista pelo menos uma pessoa em «Quem realmente trabalhou» (separador Escala) antes de fechar o turno.'
       });
     }
+    // TPA > 0 exige a foto do recibo de fecho do TPA. (Verifica a coluna
+    // ANTES do SELECT — um SELECT falhado abortaria a transacção.)
+    if (await tpaFotoDisponivel()) {
+      const cx = await client.query(
+        `SELECT tpa, COALESCE(tpa_foto_url,'') AS tpa_foto_url FROM turno_caixa WHERE turno_id=$1`,
+        [turnoId]
+      );
+      const tpaV = cx.rows.length ? parseFloat(cx.rows[0].tpa) : NaN;
+      if (Number.isFinite(tpaV) && tpaV > 0 && !cx.rows[0].tpa_foto_url) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          erro: 'Registaste valor no TPA — anexa a foto do recibo de fecho do TPA (aba 💰 Caixa) antes de fechar o turno.'
+        });
+      }
+    }
     await client.query(
       `UPDATE turno_stock ts
        SET valor_vendas_reportado_kz = (${sqlFechoTurnoStockValorKz()})
@@ -4948,6 +4963,67 @@ app.put('/api/turnos/:id/notas', auth, async (req, res) => {
     if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Foto do recibo de fecho do TPA (obrigatória para fechar turno com TPA > 0) ──
+let turnoCaixaTpaFotoReady = false;
+async function ensureTurnoCaixaTpaFoto() {
+  if (turnoCaixaTpaFotoReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_caixa_tpa_foto_v1'`);
+    if (r.rows.length) { turnoCaixaTpaFotoReady = true; return; }
+  } catch (_) {}
+  await qry(`ALTER TABLE turno_caixa ADD COLUMN IF NOT EXISTS tpa_foto_url TEXT NOT NULL DEFAULT ''`, [], 'turno_caixa-tpa-foto');
+  try {
+    const chk = await query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='turno_caixa' AND column_name='tpa_foto_url'`
+    );
+    if (chk.rows.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('turno_caixa_tpa_foto_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      turnoCaixaTpaFotoReady = true;
+    }
+  } catch (_) {}
+}
+
+/** Verifica se a coluna existe mesmo (o ALTER falha em silêncio sem owner). */
+async function tpaFotoDisponivel() {
+  await ensureTurnoCaixaTpaFoto();
+  return turnoCaixaTpaFotoReady;
+}
+
+app.post('/api/turnos/:id/caixa/tpa-foto', auth, async (req, res) => {
+  try {
+    if (!(await tpaFotoDisponivel())) {
+      return res.status(400).json({ erro: 'A coluna turno_caixa.tpa_foto_url ainda não existe nesta BD. Corre o workflow «Reparar schema develop».' });
+    }
+    const remover = !!(req.body && req.body.remover);
+    let finalUrl = '';
+    if (!remover) {
+      const fotoRaw = String((req.body && req.body.foto_base64) || '').trim();
+      const parsed = parseDataUrlFoto(fotoRaw);
+      if (!parsed) return res.status(400).json({ erro: 'Envia uma imagem (JPEG, PNG ou WebP) em base64 (data URL).' });
+      const { url: sbUrl, key: sbKey } = getSupabaseEnv();
+      if (sbUrl && sbKey) {
+        const fileKey = `tpa-fecho/${req.params.id}-${crypto.randomBytes(6).toString('hex')}.${parsed.ext}`;
+        finalUrl = await uploadBorderoToSupabase(parsed.buffer, fileKey, parsed.contentType);
+      } else {
+        if (fotoRaw.length > 4 * 1024 * 1024) {
+          return res.status(400).json({ erro: 'Imagem demasiado grande. Define SUPABASE_SERVICE_ROLE_KEY no servidor para usar Storage.' });
+        }
+        finalUrl = fotoRaw;
+      }
+    }
+    const r = await query(
+      `INSERT INTO turno_caixa (turno_id, tpa_foto_url) VALUES ($1,$2)
+       ON CONFLICT (turno_id) DO UPDATE SET tpa_foto_url=$2
+       RETURNING tpa_foto_url`,
+      [req.params.id, finalUrl]
+    );
+    res.json({ tpa_foto_url: r.rows[0].tpa_foto_url || '' });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 app.put('/api/turnos/:id/caixa', auth, async (req, res) => {

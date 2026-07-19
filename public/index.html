@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-assiduidade-layout">
+<html lang="pt" data-stockos-ui="2026-07-07-troca-barril-pos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5051,6 +5051,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     })
     .join('');
   const tidJs = JSON.stringify(String(turnoId));
+  // Botão de troca de barril no POS: quando o barril de Fino acaba a meio
+  // da venda, regista a entrada do novo (+kg líquidos) sem sair do balcão.
+  const finoBarrilRowPos = (S.turnoData && Array.isArray(S.turnoData.stock))
+    ? S.turnoData.stock.find((s) => isFinoBarrilNome(s.produto_nome))
+    : null;
+  const finoBarrilPidPos = finoBarrilRowPos ? String(finoBarrilRowPos.produto_id).replace(/[^0-9a-zA-Z-]/g, '') : '';
+  const finoBarrilBtnPos = canEdit && finoBarrilPidPos
+    ? `<button type="button" style="margin-left:auto;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.5);color:#86efac" title="O barril acabou? Regista a troca: soma ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos à Entrada do Fino Barril (cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)" onclick="runAction(event, () => adicionarFinoBarrilNovo('${finoBarrilPidPos}'))">🛢️ Troca de barril</button>`
+    : '';
   const formHtml = canEdit
     ? `<div class="pedidos-balcao-pos" style="margin-bottom:14px">
       <div class="pedidos-balcao-tiles-wrap">
@@ -5065,6 +5074,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <button type="button" data-grupo="Avulso" onclick="pedidoBalcaoSetFilter(this)">Avulso</button>
           <button type="button" data-grupo="BebidaCopo" onclick="pedidoBalcaoSetFilter(this)">Bebida (copos)</button>
           <button type="button" data-grupo="BebidaUnidade" onclick="pedidoBalcaoSetFilter(this)">Bebida (unidade)</button>
+          ${finoBarrilBtnPos}
         </div>
         <div class="pedidos-balcao-tiles">${tilesHtml}</div>
         <div id="pedido-balcao-sem-resultados" style="display:none;color:#64748b;font-size:13px;padding:10px 2px">Nenhum produto corresponde à pesquisa.</div>

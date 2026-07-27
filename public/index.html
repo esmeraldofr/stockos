@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-pedidos-offline">
+<html lang="pt" data-stockos-ui="2026-07-07-pedidos-local-first">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4963,12 +4963,14 @@ function ehErroDeRede(e) {
   const m = String((e && e.message) || e || '');
   return (e && e.name === 'TypeError') || /failed to fetch|networkerror|load failed|timeout|network request failed/i.test(m);
 }
-/** POST do pedido com timeout — se a rede não responde em 15s, tratamos
- *  como offline (o client_ref garante que um sucesso escondido não duplica). */
+/** POST do pedido com timeout curto — se a rede não responde em 3s, o
+ *  pedido segue para a fila offline e o operador não fica à espera.
+ *  Seguro: o client_ref garante que um sucesso escondido não duplica
+ *  (a sincronização devolve o pedido já gravado). */
 function apiPedidoComTimeout(tid, payload, ms) {
   return Promise.race([
     api('POST', `/turnos/${tid}/pedidos`, payload),
-    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms || 15000))
+    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms || 3000))
   ]);
 }
 
@@ -4978,7 +4980,7 @@ function renderPedidosOfflineBanner() {
   const fila = pedidosOfflineLer();
   if (!fila.length) { el.innerHTML = ''; return; }
   el.innerHTML = `<div style="margin-bottom:10px;padding:8px 12px;background:rgba(251,146,60,0.12);border:1px solid rgba(251,146,60,0.5);border-radius:8px;font-size:12px;color:#fdba74;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-    <span>📡 <strong>${fila.length}</strong> pedido${fila.length === 1 ? '' : 's'} offline por sincronizar — o talão já foi impresso; o pedido entra no sistema quando a rede voltar.</span>
+    <span>⏳ <strong>${fila.length}</strong> pedido${fila.length === 1 ? '' : 's'} a sincronizar — talão já impresso; entra${fila.length === 1 ? '' : 'm'} no sistema automaticamente (segundos com rede boa; quando a rede voltar, se estiver em baixo).</span>
     <button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="runAction(event, sincronizarPedidosOffline)">↻ Sincronizar agora</button>
   </div>`;
 }
@@ -5024,11 +5026,10 @@ async function pedidoBalcaoConfirmarRegisto() {
   window.__pedidoBalcaoPendente = null;
   const { tid, linhas, cliente, tipoPag, comEntrega, valorEntrega, promotorId } = p;
 
-  // CRÍTICO: gravar PRIMEIRO. Antes imprimíamos antes do save para preservar o
-  // gesto do utilizador (Web Share API), mas isso fazia talões "fantasma" se o
-  // POST falhasse (gap no SERIAL → talão impresso sem pedido na BD).
-  // Agora: 1) save → 2) print só após sucesso, com o ID real do servidor.
-  // Rede lenta/caída → fila offline (client_ref evita duplicados).
+  // LOCAL-FIRST: o pedido entra SEMPRE primeiro na fila local — zero
+  // espera pela rede, mesmo quando ela está boa. O talão imprime na hora
+  // com a referência local e a sincronização corre em fundo (o client_ref
+  // único garante que o servidor nunca duplica).
   const clientRef = 'cr-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
   const payload = {
     cliente_nome: cliente,
@@ -5039,22 +5040,13 @@ async function pedidoBalcaoConfirmarRegisto() {
     linhas,
     client_ref: clientRef
   };
-  let pedidoSalvo;
-  try {
-    pedidoSalvo = await apiPedidoComTimeout(tid, payload, 15000);
-  } catch (e) {
-    if (!ehErroDeRede(e)) {
-      alert('Falha ao registar o pedido: ' + (e?.message || e) + '\n\nNão foi impresso talão. O rascunho ficou guardado — tenta de novo.');
-      return;
-    }
-    // OFFLINE: guarda na fila, imprime o talão com referência local e limpa
-    // o rascunho — o pedido entra no sistema quando a rede voltar.
-    const refLocal = 'OFF-' + clientRef.slice(-4).toUpperCase();
-    const fila = pedidosOfflineLer();
-    fila.push({ tid: String(tid), payload, ref: refLocal, quando: new Date().toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) });
-    pedidosOfflineGravar(fila);
-    pedidoSalvo = { id: refLocal, offline: true };
-  }
+  const refLocal = 'P-' + clientRef.slice(-4).toUpperCase();
+  const fila = pedidosOfflineLer();
+  fila.push({ tid: String(tid), payload, ref: refLocal, quando: new Date().toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) });
+  pedidosOfflineGravar(fila);
+  const pedidoSalvo = { id: refLocal, offline: true };
+  // Sincronização em fundo — não bloqueia o operador.
+  sincronizarPedidosOffline().catch(() => {});
 
   // Print só depois do save bem sucedido, usando o ID devolvido pelo servidor.
   if (pedidoBalcaoAutoPrintEnabled() && pedidoSalvo && pedidoSalvo.id) {
@@ -5091,14 +5083,11 @@ async function pedidoBalcaoConfirmarRegisto() {
   }
   window.__pedidoBalcaoDraft = {};
   window.__pedidoBalcaoDraftTurnoId = tid;
-  // Offline: o refresh do servidor falharia — o rascunho já foi limpo e o
-  // banner mostra a fila; sincroniza quando a rede voltar.
-  if (pedidoSalvo && pedidoSalvo.offline) {
-    renderPedidosOfflineBanner();
-    pedidoBalcaoSyncDraftUI();
-    return;
-  }
-  await loadVendasMenu(tid, !!S.turnoCanEdit);
+  // Local-first: o rascunho já foi limpo e o banner mostra a fila; o
+  // refresh dos dados do servidor acontece quando a sincronização em
+  // fundo esvaziar a fila (segundos, com rede boa).
+  renderPedidosOfflineBanner();
+  pedidoBalcaoSyncDraftUI();
 }
 
 async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {

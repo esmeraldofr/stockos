@@ -60,15 +60,24 @@ self.addEventListener('fetch', (e) => {
           }
           return resp;
         })
-        .catch(() =>
-          caches.match(req).then((hit) =>
-            hit ||
-            new Response(
-              JSON.stringify({ erro: 'Sem ligação e ainda sem dados guardados para este ecrã. Abre-o uma vez com rede.' }),
-              { status: 503, headers: { 'Content-Type': 'application/json' } }
-            )
-          )
-        )
+        .catch(async () => {
+          const hit = await caches.match(req);
+          if (hit) return hit;
+          // Migração multi-loja: os URLs antigos não tinham «loja=». Para a
+          // loja 1 (os dados originais), o cache antigo ainda serve como
+          // último recurso — evita «sem dados» logo após a actualização.
+          if (url.searchParams.get('loja') === '1') {
+            const antiga = new URL(url.href);
+            antiga.searchParams.delete('loja');
+            antiga.searchParams.delete('empresa');
+            const hitAntigo = await caches.match(new Request(antiga.href));
+            if (hitAntigo) return hitAntigo;
+          }
+          return new Response(
+            JSON.stringify({ erro: 'Sem ligação e ainda sem dados guardados para este ecrã. Abre-o uma vez com rede.' }),
+            { status: 503, headers: { 'Content-Type': 'application/json' } }
+          );
+        })
     );
     return;
   }

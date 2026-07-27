@@ -853,7 +853,12 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({
       token,
       lojas,
-      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username, empresa_id: empresaId, has_face: user.face_descriptor != null, face_foto_url: user.face_foto_url || '' }
+      user: {
+        id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username,
+        empresa_id: empresaId,
+        loja_id: user.loja_id != null ? (parseInt(user.loja_id, 10) || null) : null,
+        has_face: user.face_descriptor != null, face_foto_url: user.face_foto_url || ''
+      }
     });
   } catch (e) {
     console.error('[auth/login]', pgErrText(e));
@@ -1182,14 +1187,76 @@ async function auth(req, res, next) {
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ erro: 'Não autenticado' });
   try {
-    const r = await query(`SELECT ativo FROM utilizadores WHERE id=$1`, [payload.id]);
+    // Lê role/empresa/loja FRESCOS da BD — mudanças de perfil ou de loja
+    // fixa aplicam-se sem novo login. Fallback: BD antiga sem as colunas.
+    let r;
+    try {
+      r = await query(`SELECT ativo, role::text AS role, empresa_id, loja_id FROM utilizadores WHERE id=$1`, [payload.id]);
+    } catch (_) {
+      r = await query(`SELECT ativo FROM utilizadores WHERE id=$1`, [payload.id]);
+    }
     if (!r.rows.length || !r.rows[0].ativo) {
       return res.status(401).json({ erro: 'Conta inactiva' });
     }
+    const u = r.rows[0];
+    if (u.role) payload.role = u.role;
+    if (u.empresa_id != null) payload.empresa_id = parseInt(u.empresa_id, 10) || 1;
+    payload.loja_id = u.loja_id != null ? (parseInt(u.loja_id, 10) || null) : null;
   } catch (e) {
     console.warn('[auth] verificação ativo falhou:', e.message);
   }
-  req.user = payload; next();
+  req.user = payload;
+  await resolverContextoAcesso(req).catch(() => {});
+  next();
+}
+
+// ── Contexto de acesso por perfil ─────────────────────────────
+// admin           → todas as empresas e lojas (migra com ?empresa= / ?loja=)
+// gestor          → só a sua empresa; migra entre as lojas dela (?loja=)
+// operador/compras→ presos à sua loja fixa (utilizadores.loja_id)
+const __lojaEmpresaCache = { at: 0, map: null };
+async function mapaLojaEmpresa() {
+  if (__lojaEmpresaCache.map && Date.now() - __lojaEmpresaCache.at < 60000) return __lojaEmpresaCache.map;
+  try {
+    const r = await query(`SELECT id, empresa_id FROM lojas`);
+    const m = {};
+    r.rows.forEach((x) => { m[String(x.id)] = parseInt(x.empresa_id, 10) || 1; });
+    __lojaEmpresaCache.map = m;
+    __lojaEmpresaCache.at = Date.now();
+    return m;
+  } catch (_) { return __lojaEmpresaCache.map || null; }
+}
+
+async function resolverContextoAcesso(req) {
+  const role = String((req.user && req.user.role) || '');
+  const empresaPropria = parseInt(req.user && req.user.empresa_id, 10) || 1;
+  // Empresa efectiva: só o admin migra de empresa.
+  let empresa = empresaPropria;
+  if (role === 'admin') {
+    const qE = parseInt(req.query && req.query.empresa, 10);
+    if (Number.isFinite(qE) && qE > 0) empresa = qE;
+  }
+  req.empresaEfetiva = empresa;
+  // Loja pedida (query/header).
+  const qL = parseInt(req.query && req.query.loja, 10);
+  const hL = parseInt(req.headers && req.headers['x-loja'], 10);
+  const pedida = Number.isFinite(qL) && qL > 0 ? qL : (Number.isFinite(hL) && hL > 0 ? hL : null);
+  // Operador / operador de sistema: loja FIXA — o pedido não manda.
+  if (role === 'operador' || role === 'compras') {
+    req.lojaEfetiva = (req.user && req.user.loja_id) || pedida || 1;
+    return;
+  }
+  // Admin / gestor: a loja pedida tem de pertencer à empresa efectiva.
+  let loja = pedida;
+  const mapa = await mapaLojaEmpresa();
+  if (mapa && Object.keys(mapa).length) {
+    if (loja != null && mapa[String(loja)] != null && mapa[String(loja)] !== empresa) loja = null;
+    if (loja == null) {
+      const primeira = Object.keys(mapa).map(Number).sort((a, b) => a - b).find((k) => mapa[String(k)] === empresa);
+      loja = primeira || 1;
+    }
+  }
+  req.lojaEfetiva = loja || 1;
 }
 function requireRole(...roles) {
   return (req, res, next) => {
@@ -1209,7 +1276,7 @@ let empresasLojasReady = false;
 async function ensureEmpresasLojas() {
   if (empresasLojasReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v2'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v3'`);
     if (r.rows.length) { empresasLojasReady = true; return; }
   } catch (_) {}
   await qry(`CREATE TABLE IF NOT EXISTS empresas (
@@ -1238,6 +1305,9 @@ async function ensureEmpresasLojas() {
   await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS responsavel TEXT NOT NULL DEFAULT ''`, [], 'lojas-responsavel');
   await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'lojas-notas');
   await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'utilizadores-empresa');
+  // Loja fixa do funcionário (operador / operador de sistema). NULL para
+  // admin (todas as empresas) e gestor (todas as lojas da sua empresa).
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS loja_id INTEGER`, [], 'utilizadores-loja');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'turnos-loja');
   await qry(`ALTER TABLE presencas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'presencas-loja');
   await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'produtos-empresa');
@@ -1248,19 +1318,26 @@ async function ensureEmpresasLojas() {
       `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='turnos' AND column_name='loja_id'`
     );
     if (chk.rows.length) {
-      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v2','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v3','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
       empresasLojasReady = true;
     }
   } catch (_) {}
 }
 
-/** Loja activa do pedido: query ?loja=, header X-Loja ou 1 (principal). */
+/** Loja activa do pedido, já validada por perfil no auth() (loja fixa para
+ *  operador/compras; lojas da empresa para gestor; livre para admin). */
 function lojaDe(req) {
+  if (req.lojaEfetiva) return req.lojaEfetiva;
   const q = parseInt(req.query && req.query.loja, 10);
   if (Number.isFinite(q) && q > 0) return q;
   const h = parseInt(req.headers && req.headers['x-loja'], 10);
   if (Number.isFinite(h) && h > 0) return h;
   return 1;
+}
+/** Empresa efectiva do pedido (admin pode migrar; restantes ficam na sua). */
+function empresaDe(req) {
+  if (req.empresaEfetiva) return req.empresaEfetiva;
+  return parseInt(req.user && req.user.empresa_id, 10) || 1;
 }
 /** Início oficial do turno (minutos desde meia-noite), fuso Africa/Luanda. */
 const TURNO_INICIO_MINUTES = { manha: 7 * 60, tarde: 15 * 60, noite: 23 * 60 };
@@ -4478,7 +4555,7 @@ const LOJA_PERFIL_CAMPOS = ['morada', 'telefone', 'email', 'nif', 'responsavel',
 app.get('/api/lojas', auth, async (req, res) => {
   try {
     await ensureEmpresasLojas();
-    const empresaId = parseInt(req.user.empresa_id, 10) || 1;
+    const empresaId = empresaDe(req);
     const todos = req.query.todos === '1';
     const r = await query(
       `SELECT * FROM lojas WHERE empresa_id=$1 ${todos ? '' : 'AND ativo IS TRUE'} ORDER BY id`,
@@ -4491,7 +4568,7 @@ app.get('/api/lojas', auth, async (req, res) => {
 app.post('/api/lojas', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureEmpresasLojas();
-    const empresaId = parseInt(req.user.empresa_id, 10) || 1;
+    const empresaId = empresaDe(req);
     const b = req.body || {};
     const nome = String(b.nome || '').trim();
     if (!nome) return res.status(400).json({ erro: 'Indica o nome da loja / ponto de venda' });
@@ -4501,6 +4578,7 @@ app.post('/api/lojas', auth, requireRole('admin'), async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [empresaId, nome, ...perfil]
     );
+    __lojaEmpresaCache.at = 0; // nova loja → refresca o mapa loja→empresa
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -4508,7 +4586,7 @@ app.post('/api/lojas', auth, requireRole('admin'), async (req, res) => {
 app.put('/api/lojas/:id', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureEmpresasLojas();
-    const empresaId = parseInt(req.user.empresa_id, 10) || 1;
+    const empresaId = empresaDe(req);
     const b = req.body || {};
     const sets = [];
     const params = [];
@@ -4534,6 +4612,26 @@ app.put('/api/lojas/:id', auth, requireRole('admin'), async (req, res) => {
       params
     );
     if (!r.rows.length) return res.status(404).json({ erro: 'Loja não encontrada' });
+    __lojaEmpresaCache.at = 0;
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── EMPRESAS (só admin — pode migrar entre todas) ─────────────
+app.get('/api/empresas', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const r = await query(`SELECT id, nome, ativo, criado_em FROM empresas WHERE ativo IS TRUE ORDER BY id`);
+    res.json(r.rows.length ? r.rows : [{ id: 1, nome: 'Empresa 1', ativo: true }]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/empresas', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const nome = String((req.body && req.body.nome) || '').trim();
+    if (!nome) return res.status(400).json({ erro: 'Indica o nome da empresa' });
+    const r = await query(`INSERT INTO empresas (nome) VALUES ($1) RETURNING id, nome, ativo, criado_em`, [nome]);
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -7267,7 +7365,7 @@ app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
     // Dados financeiros (salário base, IBAN) só para administradores.
     const isAdminReq = req.user && req.user.role === 'admin';
     const fin = isAdminReq ? ", salario_base, COALESCE(iban,'') AS iban" : "";
-    const ficha = ", COALESCE(telefone,'') AS telefone, COALESCE(bi,'') AS bi, COALESCE(morada,'') AS morada, data_nascimento::text AS data_nascimento, data_admissao::text AS data_admissao" + fin + ", COALESCE(contacto_emergencia,'') AS contacto_emergencia, COALESCE(notas_funcionario,'') AS notas_funcionario";
+    const ficha = ", COALESCE(telefone,'') AS telefone, COALESCE(bi,'') AS bi, COALESCE(morada,'') AS morada, data_nascimento::text AS data_nascimento, data_admissao::text AS data_admissao" + fin + ", COALESCE(contacto_emergencia,'') AS contacto_emergencia, COALESCE(notas_funcionario,'') AS notas_funcionario, loja_id, empresa_id";
     let r;
     try {
       r = await query(`SELECT ${base}${ficha} FROM utilizadores ORDER BY nome`);
@@ -7415,6 +7513,12 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
       'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
       [emailFinal, String(nome).trim(), un || null, role || 'operador', hashPassword(passRaw)]
     );
+    // Empresa do criador (admin migrado cria na empresa efectiva) + loja
+    // fixa (obrigatória na prática para operador / operador de sistema).
+    try {
+      const lojaFixa = req.body.loja_id != null && String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null;
+      await query(`UPDATE utilizadores SET empresa_id=$1, loja_id=$2 WHERE id=$3`, [empresaDe(req), lojaFixa, r.rows[0].id]);
+    } catch (_) { /* BD antiga sem colunas */ }
     const aviso = await updateFichaFuncionario(r.rows[0].id, req.body || {}, req.user && req.user.role);
     const semLogin = !un && emailFinal.endsWith('@stockos.local');
     res.json({
@@ -7458,6 +7562,13 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
           'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,promotor=$4,comissao_modo=$5,comissao_pct_total=$6 WHERE id=$7 RETURNING id,email,nome,username,role,ativo,promotor,comissao_modo,comissao_pct_total',
           [nome, role, ativo, isPromotor, modo, pctTotal, req.params.id]
         );
+    // Loja fixa: '' → NULL (admin/gestor, sem loja fixa).
+    if (req.body.loja_id !== undefined) {
+      try {
+        const lojaFixa = String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null;
+        await query(`UPDATE utilizadores SET loja_id=$1 WHERE id=$2`, [lojaFixa, req.params.id]);
+      } catch (_) { /* BD antiga sem coluna */ }
+    }
     const aviso = await updateFichaFuncionario(req.params.id, req.body || {}, req.user && req.user.role);
     res.json(aviso ? { ...r.rows[0], aviso } : r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }

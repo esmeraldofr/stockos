@@ -61,11 +61,17 @@ self.addEventListener('fetch', (e) => {
           return resp;
         })
         .catch(async () => {
+          // Fallback progressivo: exacto → sem «empresa=» (admin que usou o
+          // selector de empresa não perde o cache da própria) → sem «loja=»
+          // (cache pré-multi-loja, só para a loja 1 — nunca mistura lojas).
           const hit = await caches.match(req);
           if (hit) return hit;
-          // Migração multi-loja: os URLs antigos não tinham «loja=». Para a
-          // loja 1 (os dados originais), o cache antigo ainda serve como
-          // último recurso — evita «sem dados» logo após a actualização.
+          if (url.searchParams.has('empresa')) {
+            const semEmpresa = new URL(url.href);
+            semEmpresa.searchParams.delete('empresa');
+            const h2 = await caches.match(new Request(semEmpresa.href));
+            if (h2) return h2;
+          }
           if (url.searchParams.get('loja') === '1') {
             const antiga = new URL(url.href);
             antiga.searchParams.delete('loja');

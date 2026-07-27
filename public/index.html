@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-multi-fotos">
+<html lang="pt" data-stockos-ui="2026-07-27-multi-loja-fase1">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -776,8 +776,34 @@ const S = {
   /** YYYY-MM do mês visível na página Calendário */
   calYM: null,
   /** Contador de avisos «em falta» pendentes, para o badge do menu. */
-  faltasPendentes: 0
+  faltasPendentes: 0,
+  /** Multi-ponto de venda: loja activa deste aparelho + lojas da empresa. */
+  lojaId: parseInt(_lsGet('stockos.lojaId'), 10) || 1,
+  lojas: (() => { try { const v = JSON.parse(_lsGet('stockos.lojas') || '[]'); return Array.isArray(v) && v.length ? v : [{ id: 1, nome: 'Loja principal' }]; } catch (_) { return [{ id: 1, nome: 'Loja principal' }]; } })()
 };
+
+/** Mudar de loja: refaz caches e volta à página Dia dessa loja. */
+async function mudarLoja(id) {
+  const v = parseInt(id, 10);
+  if (!Number.isFinite(v) || v <= 0 || v === lojaAtivaId()) return;
+  S.lojaId = v;
+  try { localStorage.setItem('stockos.lojaId', String(v)); } catch (_) {}
+  try { __aquecerCacheUltima = 0; } catch (_) {}
+  S.turnoId = null;
+  S.turnoData = null;
+  await navigate('dia');
+}
+
+/** Actualiza a lista de lojas em fundo (novas lojas aparecem sem re-login). */
+async function refrescarLojas() {
+  try {
+    const lojas = await api('GET', '/lojas');
+    if (Array.isArray(lojas) && lojas.length) {
+      S.lojas = lojas;
+      localStorage.setItem('stockos.lojas', JSON.stringify(lojas));
+    }
+  } catch (_) {}
+}
 
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
@@ -917,7 +943,22 @@ function sanitizeAuthLoginResponseErro(raw) {
   return raw;
 }
 
+/** Loja activa (multi-ponto de venda). Guardada por aparelho. */
+function lojaAtivaId() {
+  const v = parseInt(S.lojaId, 10);
+  return Number.isFinite(v) && v > 0 ? v : 1;
+}
+/** Acrescenta a loja activa ao caminho (uma vez) — o servidor filtra por
+ *  loja e o cache do Service Worker fica separado por loja. */
+function comLojaNoPath(path) {
+  const p = String(path || '');
+  if (p.startsWith('/auth/')) return p;
+  if (/[?&]loja=/.test(p)) return p;
+  return p + (p.includes('?') ? '&' : '?') + 'loja=' + lojaAtivaId();
+}
+
 async function api(method, path, body) {
+  path = comLojaNoPath(path);
   // Turnos abertos offline (id local «off-…») não existem no servidor:
   // os GET são sintetizados localmente + escritas pendentes da fila.
   if (method === 'GET' && typeof pathReferenciaTurnoLocal === 'function' && pathReferenciaTurnoLocal(path)) {
@@ -1449,6 +1490,13 @@ async function doLogin() {
     S.token = data.token; S.user = data.user;
     localStorage.setItem('token', S.token);
     localStorage.setItem('user', JSON.stringify(S.user));
+    // Lojas da empresa (multi-ponto de venda).
+    S.lojas = Array.isArray(data.lojas) && data.lojas.length ? data.lojas : [{ id: 1, nome: 'Loja principal' }];
+    localStorage.setItem('stockos.lojas', JSON.stringify(S.lojas));
+    if (!S.lojas.some((l) => String(l.id) === String(S.lojaId))) {
+      S.lojaId = S.lojas[0].id;
+      localStorage.setItem('stockos.lojaId', String(S.lojaId));
+    }
     // Não await: navigate → drawDia → loadDia espera dbReady no servidor (cold start longo);
     // se await, o botão «Entrar» fica em «A processar…» até a BD terminar o init.
     navigate('dia').catch((e) =>
@@ -1603,13 +1651,23 @@ function navBar() {
 }
 
 // ── PÁGINA DIA ────────────────────────────────────────────────
+function lojaSelectorHtml() {
+  const lojas = S.lojas || [];
+  if (lojas.length <= 1) return '';
+  return `<select onchange="runAction(event, () => mudarLoja(this.value))" style="background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:8px;font-size:12px;padding:6px 8px;max-width:160px">
+    ${lojas.map((l) => `<option value="${l.id}" ${String(l.id) === String(lojaAtivaId()) ? 'selected' : ''}>🏪 ${escapeHtml(l.nome)}</option>`).join('')}
+  </select>`;
+}
+
 async function drawDia() {
+  refrescarLojas();
   render(`
     <div id="header">
       <div>
         <div id="header-h1" style="font-size:18px;font-weight:700;color:#f1f5f9">StockOS</div>
-        <div class="header-sub">${S.user?.nome}${S.user?.username ? ` · @${S.user.username}` : ''}</div>
+        <div class="header-sub">${S.user?.nome}${S.user?.username ? ` · @${S.user.username}` : ''}${(S.lojas || []).length > 1 ? ` · ${escapeHtml((S.lojas.find((l) => String(l.id) === String(lojaAtivaId())) || {}).nome || '')}` : ''}</div>
       </div>
+      <div style="flex-shrink:0">${lojaSelectorHtml()}</div>
     </div>
     <div id="content">
       <div class="date-nav">
@@ -2762,7 +2820,7 @@ async function abrirTurno(nome) {
       const localId = 'off-' + r.ref;
       const locais = turnosLocaisLer();
       locais.push({
-        id: localId, data: S.date, nome,
+        id: localId, data: S.date, nome, loja: lojaAtivaId(),
         utilizador_id: S.user && S.user.id, utilizador_nome: S.user && S.user.nome,
         criado_em: new Date().toISOString()
       });
@@ -5293,6 +5351,9 @@ function renderOfflinePendentesBadge() {
  */
 async function apiEscrita(method, path, body, opts) {
   opts = opts || {};
+  // Loja fixada JÁ no caminho: se o registo ficar em fila e o utilizador
+  // mudar de loja antes de sincronizar, o registo vai para a loja certa.
+  path = comLojaNoPath(path);
   const ref = novoClientRef();
   const b = Object.assign({}, body || {}, { client_ref: ref });
   const item = {
@@ -5447,8 +5508,10 @@ function aplicarEscritasOffline(path, data) {
       const turnoIdQ = params.get('turno_id');
       const out = data.map((t) => aplicarEscritasAoTurno(t, fila));
       const nomesExistentes = new Set(out.map((t) => t.nome));
+      const lojaQ = params.get('loja');
       for (const tl of locais) {
         if (String(tl.data).slice(0, 10) !== dataDia) continue;
+        if (lojaQ && String(tl.loja || 1) !== String(lojaQ)) continue;
         if (turnoIdQ && String(tl.id) !== String(turnoIdQ)) continue;
         if (!turnoIdQ && nomesExistentes.has(tl.nome)) {
           // Já existe o turno real com este nome — turno local órfão (sem
@@ -5473,10 +5536,10 @@ function aplicarEscritasOffline(path, data) {
       const chaveQ = params.get('chave') || '';
       let out = data.slice();
       for (const it of fila) {
-        if (it.method === 'POST' && String(it.path) === '/fotos' && it.body && it.body.chave === chaveQ) {
+        if (it.method === 'POST' && String(it.path).split('?')[0] === '/fotos' && it.body && it.body.chave === chaveQ) {
           out = out.concat([{ id: 'off:' + it.ref, chave: chaveQ, foto: it.body.foto_base64, criado_em: it.criado_em, _offline: true }]);
-        } else if (it.method === 'DELETE' && /^\/fotos\/[^/]+$/.test(String(it.path))) {
-          const did = decodeURIComponent(String(it.path).split('/')[2]);
+        } else if (it.method === 'DELETE' && /^\/fotos\/[^/]+$/.test(String(it.path).split('?')[0])) {
+          const did = decodeURIComponent(String(it.path).split('?')[0].split('/')[2]);
           out = out.filter((r) => String(r.id) !== did);
         }
       }
@@ -5486,7 +5549,7 @@ function aplicarEscritasOffline(path, data) {
       // Faces registadas/removidas offline contam já para o reconhecimento.
       let out = data.slice();
       for (const it of fila) {
-        const mm = String(it.path || '').match(/^\/utilizadores\/([^/]+)\/face-descriptor$/);
+        const mm = String(it.path || '').split('?')[0].match(/^\/utilizadores\/([^/]+)\/face-descriptor$/);
         if (!mm) continue;
         const uid = decodeURIComponent(mm[1]);
         if (it.method === 'PUT' && it.body && Array.isArray(it.body.descriptor)) {
@@ -5516,7 +5579,7 @@ function aplicarEscritasAoTurno(t, fila) {
   if (!out.caixa) out.caixa = {};
   for (const it of itens) {
     const b = it.body || {};
-    const p = String(it.path || '');
+    const p = String(it.path || '').split('?')[0];
     if (it.method === 'PUT' && p.endsWith('/stock')) {
       const row = (out.stock || []).find((s) => String(s.produto_id) === String(b.produto_id));
       if (row) {
@@ -5579,7 +5642,7 @@ function overlayListaTurno(tid, tipoLista, rows, fila) {
   (window.__produtosCacheOffline || []).forEach((pr) => { prodMap[String(pr.id)] = pr; });
   for (const it of itens) {
     const b = it.body || {};
-    const p = String(it.path || '');
+    const p = String(it.path || '').split('?')[0];
     if (tipoLista === 'entradas' && it.method === 'POST' && p.endsWith('/entradas')) {
       out = out.concat([{
         id: 'off:' + it.ref,
@@ -5651,14 +5714,14 @@ function overlayIrregularidades(p, turnoIdQ, rows, fila) {
   for (const it of fila) {
     const b = it.body || {};
     if (turnoIdQ != null && String(b.turno_id ?? it.tid) !== String(turnoIdQ) && !(it.method === 'DELETE')) continue;
-    if (p === '/irregularidades/comentarios' && it.method === 'POST' && String(it.path) === '/irregularidades/comentario') {
+    if (p === '/irregularidades/comentarios' && it.method === 'POST' && String(it.path).split('?')[0] === '/irregularidades/comentario') {
       out = out.concat([{
         id: 'off:' + it.ref, turno_id: b.turno_id, categoria: b.categoria,
         comentario: b.comentario, criado_em: it.criado_em,
         utilizador_nome: (S.user && S.user.nome) || '', utilizador_id: (S.user && S.user.id) || null,
         _offline: true
       }]);
-    } else if (p === '/irregularidades/decisoes' && it.method === 'POST' && String(it.path) === '/irregularidades/decisao') {
+    } else if (p === '/irregularidades/decisoes' && it.method === 'POST' && String(it.path).split('?')[0] === '/irregularidades/decisao') {
       const row = {
         id: 'off:' + it.ref, turno_id: b.turno_id, categoria: b.categoria,
         aceite: !!b.aceite, justificacao: b.justificacao || '', criado_em: it.criado_em,
@@ -5682,7 +5745,7 @@ function overlayDepositos(dataQ, rows, fila) {
   let out = rows.slice();
   for (const it of fila) {
     const b = it.body || {};
-    const p = String(it.path || '');
+    const p = String(it.path || '').split('?')[0];
     if (it.method === 'POST' && p === '/depositos/lote') {
       const dExtra = String((it.extra && it.extra.data) || '').slice(0, 10);
       if (dataQ && dExtra && dataQ !== dExtra) continue;
@@ -5715,12 +5778,12 @@ function overlayDepositos(dataQ, rows, fila) {
         out = out.map((r) => Object.assign({}, r, { bordero_foto_url: b.foto_base64 || r.bordero_foto_url }));
       }
     } else if (it.method === 'DELETE' && p.startsWith('/depositos/bordero-dia')) {
-      const q2 = new URLSearchParams(p.split('?')[1] || '');
+      const q2 = new URLSearchParams(String(it.path).split('?')[1] || '');
       if (!dataQ || q2.get('data') === dataQ) {
         out = out.map((r) => Object.assign({}, r, { bordero_foto_url: '' }));
       }
     } else if (it.method === 'PATCH' && p.startsWith('/depositos/abrir')) {
-      const q2 = new URLSearchParams(p.split('?')[1] || '');
+      const q2 = new URLSearchParams(String(it.path).split('?')[1] || '');
       if (!dataQ || q2.get('data') === dataQ) {
         out = out.map((r) => Object.assign({}, r, { fechado: false }));
       }
@@ -12792,6 +12855,20 @@ async function drawConfiguracoes() {
       </div>
 
       <div class="card mb-12">
+        <div class="card-title">🏪 Lojas / Pontos de venda</div>
+        <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
+          Cada loja tem os seus próprios turnos, stock, caixa, pedidos e depósitos.
+          Com mais de uma loja, aparece um selector no topo da página Dia.
+        </p>
+        <div id="cfg-lojas-lista" style="display:flex;flex-direction:column;gap:8px"><span style="color:#64748b;font-size:12px">A carregar…</span></div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <input id="cfg-loja-nome" type="text" placeholder="Nome da nova loja…" maxlength="80" style="flex:1;font-size:13px;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0"/>
+          <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, configCriarLoja)">+ Criar</button>
+        </div>
+        <div id="cfg-lojas-msg" style="margin-top:8px;font-size:11px;color:#64748b"></div>
+      </div>
+
+      <div class="card mb-12">
         <div class="card-title">⛔ Turnos bloqueados</div>
         <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
           Bloqueia a abertura de <strong style="color:#cbd5e1">novos turnos</strong> nos períodos marcados
@@ -12826,6 +12903,62 @@ async function drawConfiguracoes() {
   // Refresca o preview do logo (mesma função usada antes no painel do balcão).
   pedidoBalcaoLogoRefreshUI();
   void configTurnosBloqueadosLoad();
+  void configLojasLoad();
+}
+
+// ── Configurações: lojas / pontos de venda ────────────────────
+async function configLojasLoad() {
+  const el = document.getElementById('cfg-lojas-lista');
+  if (!el) return;
+  try {
+    const lojas = await api('GET', '/lojas?todos=1');
+    S.lojas = (Array.isArray(lojas) ? lojas : []).filter((l) => l.ativo !== false);
+    try { localStorage.setItem('stockos.lojas', JSON.stringify(S.lojas)); } catch (_) {}
+    el.innerHTML = (Array.isArray(lojas) ? lojas : []).map((l) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:#0f172a;border:1px solid #334155">
+        <span style="flex:1;font-size:13px;color:${l.ativo === false ? '#64748b' : '#e2e8f0'}">🏪 ${escapeHtml(l.nome)}${String(l.id) === String(lojaAtivaId()) ? ' <span class="badge badge-green" style="font-size:10px">activa neste aparelho</span>' : ''}${l.ativo === false ? ' <span style="font-size:11px">(inactiva)</span>' : ''}</span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => configRenomearLoja(${l.id}, '${escapeHtml(l.nome).replace(/'/g, '&#39;')}'))">✏️</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => configToggleLoja(${l.id}, ${l.ativo === false}))">${l.ativo === false ? 'Reactivar' : 'Desactivar'}</button>
+      </div>`).join('') || '<span style="color:#64748b;font-size:12px">Sem lojas.</span>';
+  } catch (e) {
+    el.innerHTML = `<span style="color:#ef4444;font-size:12px">${escapeHtml(e.message)}</span>`;
+  }
+}
+async function configCriarLoja() {
+  const inp = document.getElementById('cfg-loja-nome');
+  const nome = String((inp && inp.value) || '').trim();
+  const msg = document.getElementById('cfg-lojas-msg');
+  if (!nome) { if (msg) msg.textContent = 'Indica o nome da loja.'; return; }
+  try {
+    const r = await apiEscrita('POST', '/lojas', { nome }, { desc: `Criar loja ${nome}` });
+    if (inp) inp.value = '';
+    if (msg) msg.textContent = r && r._offline ? 'Loja guardada neste aparelho — sincroniza quando a rede voltar.' : `Loja «${nome}» criada.`;
+    await configLojasLoad().catch(() => {});
+    refrescarLojas();
+  } catch (e) { if (msg) msg.textContent = 'Erro: ' + e.message; }
+}
+async function configRenomearLoja(id, nomeAtual) {
+  const novo = prompt('Novo nome da loja:', nomeAtual || '');
+  if (novo === null) return;
+  const nome = String(novo || '').trim();
+  if (!nome || nome === nomeAtual) return;
+  try {
+    await apiEscrita('PUT', `/lojas/${id}`, { nome }, { chave: `loja:${id}`, desc: 'Renomear loja' });
+    await configLojasLoad().catch(() => {});
+    refrescarLojas();
+  } catch (e) { alert(e.message); }
+}
+async function configToggleLoja(id, ativar) {
+  if (!ativar && String(id) === String(lojaAtivaId())) {
+    alert('Esta é a loja activa neste aparelho — muda de loja antes de a desactivar.');
+    return;
+  }
+  if (!confirm(ativar ? 'Reactivar esta loja?' : 'Desactivar esta loja? Deixa de aparecer no selector (os dados ficam guardados).')) return;
+  try {
+    await apiEscrita('PUT', `/lojas/${id}`, { ativo: !!ativar }, { chave: `lojaativo:${id}`, desc: 'Estado da loja' });
+    await configLojasLoad().catch(() => {});
+    refrescarLojas();
+  } catch (e) { alert(e.message); }
 }
 
 /** Carrega e desenha as checkboxes de turnos bloqueados (definição GLOBAL, servidor). */

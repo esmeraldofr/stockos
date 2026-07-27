@@ -130,6 +130,18 @@ jobs:
           CREATE TABLE IF NOT EXISTS ops_idempotencia (client_ref TEXT PRIMARY KEY, metodo TEXT, caminho TEXT, status INTEGER, resposta TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW());
           CREATE TABLE IF NOT EXISTS fotos_anexos (id SERIAL PRIMARY KEY, chave TEXT NOT NULL, foto TEXT NOT NULL, criado_por TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW());
           CREATE INDEX IF NOT EXISTS idx_fotos_anexos_chave ON fotos_anexos (chave);
+          CREATE TABLE IF NOT EXISTS empresas (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, ativo BOOLEAN NOT NULL DEFAULT TRUE, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW());
+          CREATE TABLE IF NOT EXISTS lojas (id SERIAL PRIMARY KEY, empresa_id INTEGER NOT NULL DEFAULT 1, nome TEXT NOT NULL, ativo BOOLEAN NOT NULL DEFAULT TRUE, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW());
+          INSERT INTO empresas (nome) SELECT 'Empresa 1' WHERE NOT EXISTS (SELECT 1 FROM empresas);
+          INSERT INTO lojas (empresa_id, nome) SELECT 1, 'Loja principal' WHERE NOT EXISTS (SELECT 1 FROM lojas);
+          ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1;
+          ALTER TABLE turnos ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1;
+          ALTER TABLE presencas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1;
+          ALTER TABLE produtos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1;
+          ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1;
+          ALTER TABLE turnos DROP CONSTRAINT IF EXISTS turnos_data_nome_key;
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_turnos_loja_data_nome ON turnos (loja_id, data, nome);
+          CREATE INDEX IF NOT EXISTS idx_turnos_loja_data ON turnos (loja_id, data);
           SQL
 
       - name: Re-conceder privilégios a stockos_app

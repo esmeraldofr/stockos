@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-offline-presenca">
+<html lang="pt" data-stockos-ui="2026-07-27-offline-banco">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2686,7 +2686,12 @@ async function submitDepositosDia() {
     }
     const payload = { itens, valor_saidas_total: saidasUnica, saidas_destino: destinoSaidas };
     if (borderoB64) payload.bordero_foto_base64 = borderoB64;
-    const rDep = await apiEscrita('POST', '/depositos/lote', payload, { desc: 'Depósitos do dia', timeoutMs: 10000 });
+    // extra: nomes dos turnos e o dia — o overlay offline mostra os
+    // depósitos em fila como registados na própria página.
+    const nomesTurnos = {};
+    (S.turnosDia || []).forEach((t) => { nomesTurnos[String(t.id)] = t.nome; });
+    const rDep = await apiEscrita('POST', '/depositos/lote', payload,
+      { desc: 'Depósitos do dia', timeoutMs: 10000, chave: `deplote:${S.date}`, extra: { data: S.date, turnos: nomesTurnos } });
     if (rDep && rDep._offline) alert('Depósitos guardados neste aparelho — entram no sistema quando a rede voltar.');
     await reloadDepositsView().catch(() => {});
   } catch (e) {
@@ -5141,6 +5146,7 @@ function aquecerCacheOffline() {
         '/armazem/proformas',
         `/armazem/saldo?data=${encodeURIComponent(hoje)}`,
         `/armazem/saidas-dia?data=${encodeURIComponent(hoje)}`,
+        `/depositos?data=${encodeURIComponent(hoje)}`,
         '/faltas?status=resolvidas',
         '/equipa'
       );
@@ -5439,6 +5445,9 @@ function aplicarEscritasOffline(path, data) {
     if (m && Array.isArray(data)) {
       return overlayListaTurno(decodeURIComponent(m[1]), m[2], data, fila);
     }
+    if (p === '/depositos' && Array.isArray(data)) {
+      return overlayDepositos(params.get('data') || '', data, fila);
+    }
     if ((p === '/irregularidades/comentarios' || p === '/irregularidades/decisoes') && Array.isArray(data)) {
       return overlayIrregularidades(p, params.get('turno_id'), data, fila);
     }
@@ -5610,6 +5619,59 @@ function overlayIrregularidades(p, turnoIdQ, rows, fila) {
       const qs2 = new URLSearchParams(String(it.path).split('?')[1] || '');
       if (turnoIdQ == null || String(qs2.get('turno_id')) === String(turnoIdQ)) {
         out = out.filter((r) => !(String(r.turno_id) === String(qs2.get('turno_id')) && String(r.categoria) === String(qs2.get('categoria'))));
+      }
+    }
+  }
+  return out;
+}
+
+/** Depósitos no banco: os registos em fila offline aparecem na página como
+ *  gravados (🔒 fechado), com foto do borderô e reaberturas incluídas. */
+function overlayDepositos(dataQ, rows, fila) {
+  let out = rows.slice();
+  for (const it of fila) {
+    const b = it.body || {};
+    const p = String(it.path || '');
+    if (it.method === 'POST' && p === '/depositos/lote') {
+      const dExtra = String((it.extra && it.extra.data) || '').slice(0, 10);
+      if (dataQ && dExtra && dataQ !== dExtra) continue;
+      const nomes = (it.extra && it.extra.turnos) || {};
+      (b.itens || []).forEach((x, i) => {
+        const row = {
+          id: 'off:' + it.ref + ':' + x.turno_id,
+          turno_id: x.turno_id,
+          data_deposito: x.data_deposito,
+          valor: parseFloat(x.valor_bruto) || 0,
+          valor_tpa: parseFloat(x.valor_tpa) || 0,
+          valor_transferencia: parseFloat(x.valor_transferencia) || 0,
+          valor_saidas: i === 0 ? (parseFloat(b.valor_saidas_total) || 0) : 0,
+          saidas_destino: i === 0 ? (b.saidas_destino || '') : '',
+          referencia: x.referencia || '',
+          notas: x.notas || '',
+          fechado: true,
+          criado_em: it.criado_em,
+          criado_por_nome: (S.user && S.user.nome) || '',
+          bordero_foto_url: b.bordero_foto_base64 || '',
+          turno_nome: nomes[String(x.turno_id)] || '',
+          turno_data: dExtra || dataQ,
+          _offline: true
+        };
+        const j = out.findIndex((r) => String(r.turno_id) === String(x.turno_id));
+        if (j >= 0) out[j] = Object.assign({}, out[j], row); else out.push(row);
+      });
+    } else if (it.method === 'POST' && p === '/depositos/bordero-dia') {
+      if (!dataQ || String(b.data || '').slice(0, 10) === dataQ) {
+        out = out.map((r) => Object.assign({}, r, { bordero_foto_url: b.foto_base64 || r.bordero_foto_url }));
+      }
+    } else if (it.method === 'DELETE' && p.startsWith('/depositos/bordero-dia')) {
+      const q2 = new URLSearchParams(p.split('?')[1] || '');
+      if (!dataQ || q2.get('data') === dataQ) {
+        out = out.map((r) => Object.assign({}, r, { bordero_foto_url: '' }));
+      }
+    } else if (it.method === 'PATCH' && p.startsWith('/depositos/abrir')) {
+      const q2 = new URLSearchParams(p.split('?')[1] || '');
+      if (!dataQ || q2.get('data') === dataQ) {
+        out = out.map((r) => Object.assign({}, r, { fechado: false }));
       }
     }
   }

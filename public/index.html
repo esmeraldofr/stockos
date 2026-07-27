@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-pedidos-valor-linha">
+<html lang="pt" data-stockos-ui="2026-07-07-fila-integrada">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4992,37 +4992,72 @@ function renderPedidosOfflineBanner() {
   </div>`;
 }
 
-/** Cartões dos pedidos ainda na fila local (⏳ por sincronizar) — mostram o
- *  conteúdo completo na lista «Pedidos do turno». */
-function pedidosOfflineListaHtml(turnoId) {
+/** Converte os pedidos da fila local em objectos com a MESMA forma dos
+ *  pedidos sincronizados (GET /turnos/:id/pedidos) — assim entram em
+ *  window.__stockosPedidosBalcao e reflectem em TODAS as abas (Produtos
+ *  vendidos, Comissões, Esperado da caixa, Validação, Irregularidades). */
+function pedidosOfflineComoPedidos(turnoId) {
   const fila = pedidosOfflineLer().filter((it) => String(it.tid) === String(turnoId));
-  if (!fila.length) return '';
+  if (!fila.length) return [];
   const catalog = window.__pedidoProdutosOpts || [];
   const map = {};
   catalog.forEach((o) => { map[String(o.id)] = o; });
+  const promList = window.__promotoresList || [];
+  const grupoParaCategoria = { Menu: 'menu', BebidaCopo: 'bebida', BebidaUnidade: 'bebida', Avulso: 'outros' };
   return fila.map((it) => {
     const pl = it.payload || {};
-    let total = 0;
+    let totalArt = 0;
+    let comPot = 0;
     const linhas = (pl.linhas || []).map((ln) => {
       const o = map[String(ln.produto_id)] || {};
       const { line } = pedidoBalcaoValorLinha(o, ln.quantidade);
-      total += line;
-      const isCopo = o.grupo === 'BebidaCopo' || (o.venda_por_copo === true && (parseFloat(o.kg_por_copo) || 0) > 0);
-      const unid = isCopo ? 'copo' : 'unidade';
-      return `<div style="display:flex;gap:8px;padding:3px 0;font-size:12px">
-        <div style="flex:1;min-width:0;color:#a5b4fc">${fmtNum(ln.quantidade)} ${unid}${(parseFloat(ln.quantidade) || 0) === 1 ? '' : 's'} · <span style="color:#cbd5e1">${escapeHtml(o.nome || 'Item')}</span></div>
-        <div style="color:#4ade80;font-variant-numeric:tabular-nums;white-space:nowrap">${fmt(line)}</div>
-      </div>`;
-    }).join('');
-    total += parseFloat(pl.valor_entrega) || 0;
-    return `<div style="padding:10px 0;border-bottom:1px solid #334155;border-left:3px solid rgba(251,146,60,0.6);padding-left:10px">
-      <div style="font-weight:600;color:#e2e8f0">Pedido ${escapeHtml(it.ref)} <span style="font-size:10px;background:rgba(251,146,60,0.15);color:#fdba74;padding:1px 6px;border-radius:6px;margin-left:4px">⏳ por sincronizar</span></div>
-      <div style="font-size:12px;color:#64748b">${escapeHtml(it.quando || '')} · ${pl.cliente_nome ? escapeHtml(pl.cliente_nome) : '—'}</div>
-      <div style="font-size:12px;color:#94a3b8;margin-top:2px">Pagamento: <strong style="color:#cbd5e1">${escapeHtml(pedidoTipoPagamentoLabel(pl.tipo_pagamento))}</strong>${pl.com_entrega ? ` · Entrega <strong style="color:#60a5fa">${fmt(parseFloat(pl.valor_entrega) || 0)}</strong>` : ''}</div>
-      <div style="font-size:13px;color:#94a3b8;margin-top:4px">Total <strong style="color:#4ade80">${fmt(total)}</strong></div>
-      ${linhas ? `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #334155">${linhas}</div>` : ''}
-    </div>`;
-  }).join('');
+      totalArt += line;
+      const pct = parseFloat(o.comissao_pct) || 0;
+      comPot += line * pct / 100;
+      return {
+        produto_id: ln.produto_id,
+        linha_id: null,
+        quantidade: parseFloat(ln.quantidade) || 0,
+        quantidade_devolvida: 0,
+        produto_nome: o.nome || 'Item',
+        preco: parseFloat(o.preco) || 0,
+        venda_por_copo: o.venda_por_copo === true,
+        kg_por_copo: parseFloat(o.kg_por_copo) || 0,
+        preco_copos_pacote: parseFloat(o.preco_copos_pacote) || 0,
+        qtd_copos_pacote: parseInt(o.qtd_copos_pacote, 10) || 0,
+        comissao_pct: pct,
+        produto_categoria: grupoParaCategoria[o.grupo] || 'outros'
+      };
+    });
+    const prom = pl.promotor_id ? promList.find((x) => String(x.id) === String(pl.promotor_id)) : null;
+    const modo = prom ? (prom.comissao_modo === 'total' ? 'total' : 'produto') : null;
+    const pctTotal = prom && modo === 'total' ? (parseFloat(prom.comissao_pct_total) || 0) : null;
+    const comValor = prom ? (modo === 'total' ? totalArt * (pctTotal || 0) / 100 : comPot) : 0;
+    const vEntr = parseFloat(pl.valor_entrega) || 0;
+    return {
+      id: it.ref,
+      _offline: true,
+      turno_id: turnoId,
+      cliente_nome: pl.cliente_nome || '',
+      tipo_pagamento: pl.tipo_pagamento || 'dinheiro',
+      com_entrega: !!pl.com_entrega,
+      valor_entrega: vEntr,
+      criado_em: it.criado_em || null,
+      promotor_id: pl.promotor_id || null,
+      promotor_nome: prom ? prom.nome : null,
+      promotor_modo: modo,
+      promotor_pct_total: pctTotal,
+      operador_id: null,
+      comissao_valor: Math.round(comValor * 100) / 100,
+      comissao_valor_potencial: Math.round(comPot * 100) / 100,
+      promotor_tem_escala: false,
+      promotor_clocked_in: false,
+      promotor_a_trabalhar: false,
+      linhas,
+      total_artigos_kz: totalArt,
+      total_kz: totalArt + vEntr
+    };
+  });
 }
 
 let __syncPedidosOfflineEmCurso = false;
@@ -5082,7 +5117,7 @@ async function pedidoBalcaoConfirmarRegisto() {
   };
   const refLocal = 'P-' + clientRef.slice(-4).toUpperCase();
   const fila = pedidosOfflineLer();
-  fila.push({ tid: String(tid), payload, ref: refLocal, quando: new Date().toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) });
+  fila.push({ tid: String(tid), payload, ref: refLocal, criado_em: new Date().toISOString(), quando: new Date().toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) });
   pedidosOfflineGravar(fila);
   const pedidoSalvo = { id: refLocal, offline: true };
   // Sincronização em fundo — não bloqueia o operador.
@@ -5123,11 +5158,16 @@ async function pedidoBalcaoConfirmarRegisto() {
   }
   window.__pedidoBalcaoDraft = {};
   window.__pedidoBalcaoDraftTurnoId = tid;
-  // Local-first: o rascunho já foi limpo e o banner mostra a fila; o
-  // refresh dos dados do servidor acontece quando a sincronização em
-  // fundo esvaziar a fila (segundos, com rede boa).
-  renderPedidosOfflineBanner();
-  pedidoBalcaoSyncDraftUI();
+  // Re-render imediato: o pedido local entra já em todas as abas (lista,
+  // Produtos vendidos, Comissões, Esperado, Validação). Funciona offline —
+  // o Service Worker serve os GETs do cache. Se mesmo assim falhar, o
+  // banner e o rascunho limpo garantem que nada se perde.
+  try {
+    await loadVendasMenu(tid, !!S.turnoCanEdit);
+  } catch (_) {
+    renderPedidosOfflineBanner();
+    pedidoBalcaoSyncDraftUI();
+  }
 }
 
 async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
@@ -5160,6 +5200,9 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     if (rm) rm.innerHTML = `<span style="color:#ef4444">${escapeHtml(e.message)}</span>`;
     return;
   }
+  // Pedidos da fila local entram como pedidos normais — reflectem em
+  // todas as abas até serem substituídos pelos oficiais na sincronização.
+  pedidos = pedidosOfflineComoPedidos(turnoId).concat(Array.isArray(pedidos) ? pedidos : []);
   window.__stockosPedidosBalcao = pedidos;
   // Pedidos mudaram → recalcular o painel "Esperado" na aba Caixa.
   setTimeout(() => { try { renderCaixaEsperadoPedidos(); renderIrregularidadesTurno(); } catch (_) {} }, 0);
@@ -5328,7 +5371,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
               } else {
                 valLinha = qtd * uLn;
               }
-              const btnDev = canEdit && liq > 0
+              const btnDev = canEdit && !p._offline && liq > 0
                 ? `<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;color:#f87171" title="Devolver 1 ${unidLabel} desta linha (estorno automático na caixa)" data-dev-turno="${escapeHtml(String(p.turno_id || (S.turnoData && S.turnoData.id) || ''))}" data-dev-pedido="${p.id}" data-dev-linha="${ln.linha_id}" onclick="runAction(event, () => devolverLinhaFromBtn(this))">↩ −1</button>`
                 : '';
               return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px">
@@ -5343,7 +5386,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
               : '';
             return `<div style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #334155">
       <div style="flex:1;min-width:220px">
-        <div style="font-weight:600;color:#e2e8f0">Pedido #${p.id}${badgeDev}</div>
+        <div style="font-weight:600;color:#e2e8f0">Pedido ${p._offline ? escapeHtml(String(p.id)) + ' <span style="font-size:10px;background:rgba(251,146,60,0.15);color:#fdba74;padding:1px 6px;border-radius:6px;margin-left:4px">⏳ por sincronizar</span>' : '#' + p.id}${badgeDev}</div>
         <div style="font-size:12px;color:#64748b">${escapeHtml(when)} · ${cli}</div>
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">Pagamento: <strong style="color:#cbd5e1">${tp}</strong></div>
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">Entrega: ${entregaTxt}</div>
@@ -5351,10 +5394,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         ${comissaoLinha}
         ${linhasHtml ? `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #334155">${linhasHtml}</div>` : ''}
       </div>
-      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+      ${p._offline ? '' : `<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
         <button type="button" class="btn btn-ghost btn-sm" onclick="pedidoBalcaoImprimirTalaoPorId(${p.id})" title="Imprimir talão na impressora térmica (Bluetooth)">🖨️ Talão</button>
         <button type="button" class="btn btn-ghost btn-sm" onclick="imprimirFaturaPedidoPorId(${p.id})">Fatura</button>
-      </div>
+      </div>`}
     </div>`;
           })
           .join('')
@@ -5941,7 +5984,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   })();
   // Aba "Pedidos ao balcão": lista Pedidos do turno por baixo do POS.
   mount.innerHTML = formHtml +
-    `<div class="pedidos-balcao-lista-turno" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length + pedidosOfflineLer().filter((it) => String(it.tid) === String(turnoId)).length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${pedidosOfflineListaHtml(turnoId)}${listHtml}</div></div>`;
+    `<div class="pedidos-balcao-lista-turno" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
   // Aba "Caixa": Produtos vendidos + Comissões.
   const resumoMount = document.getElementById('pedidos-resumo-mount');
   if (resumoMount) {

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-operador-sistema">
+<html lang="pt" data-stockos-ui="2026-07-27-acesso-por-perfil">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -779,11 +779,31 @@ const S = {
   faltasPendentes: 0,
   /** Multi-ponto de venda: loja activa deste aparelho + lojas da empresa. */
   lojaId: parseInt(_lsGet('stockos.lojaId'), 10) || 1,
-  lojas: (() => { try { const v = JSON.parse(_lsGet('stockos.lojas') || '[]'); return Array.isArray(v) && v.length ? v : [{ id: 1, nome: 'Loja 1' }]; } catch (_) { return [{ id: 1, nome: 'Loja 1' }]; } })()
+  lojas: (() => { try { const v = JSON.parse(_lsGet('stockos.lojas') || '[]'); return Array.isArray(v) && v.length ? v : [{ id: 1, nome: 'Loja 1' }]; } catch (_) { return [{ id: 1, nome: 'Loja 1' }]; } })(),
+  /** Só admin: empresa activa (migração entre empresas) + lista. */
+  empresaId: parseInt(_lsGet('stockos.empresaId'), 10) || null,
+  empresas: (() => { try { const v = JSON.parse(_lsGet('stockos.empresas') || '[]'); return Array.isArray(v) ? v : []; } catch (_) { return []; } })()
 };
 
-/** Mudar de loja: refaz caches e volta à página Dia dessa loja. */
+/** Perfis que migram: admin (empresas e lojas) e gestor (lojas da sua
+ *  empresa). Operador e operador de sistema ficam presos à sua loja. */
+function podeMudarLoja() {
+  return ['admin', 'gestor'].includes(S.user?.role);
+}
+function podeMudarEmpresa() {
+  return S.user?.role === 'admin';
+}
+/** Loja fixa do utilizador (operador/compras): força a loja activa. */
+function aplicarLojaFixa() {
+  if (!podeMudarLoja() && S.user && S.user.loja_id) {
+    S.lojaId = parseInt(S.user.loja_id, 10) || S.lojaId;
+    try { localStorage.setItem('stockos.lojaId', String(S.lojaId)); } catch (_) {}
+  }
+}
+
+/** Mudar de loja (admin/gestor): refaz caches e volta ao Dia dessa loja. */
 async function mudarLoja(id) {
+  if (!podeMudarLoja()) return;
   const v = parseInt(id, 10);
   if (!Number.isFinite(v) || v <= 0 || v === lojaAtivaId()) return;
   S.lojaId = v;
@@ -794,7 +814,34 @@ async function mudarLoja(id) {
   await navigate('dia');
 }
 
-/** Actualiza a lista de lojas em fundo (novas lojas aparecem sem re-login). */
+/** Mudar de empresa (só admin): carrega as lojas dessa empresa e entra na primeira. */
+async function mudarEmpresa(id) {
+  if (!podeMudarEmpresa()) return;
+  const v = parseInt(id, 10);
+  if (!Number.isFinite(v) || v <= 0 || v === empresaAtivaId()) return;
+  S.empresaId = v;
+  try { localStorage.setItem('stockos.empresaId', String(v)); } catch (_) {}
+  try {
+    const lojas = await api('GET', '/lojas');
+    S.lojas = Array.isArray(lojas) && lojas.length ? lojas : [];
+    localStorage.setItem('stockos.lojas', JSON.stringify(S.lojas));
+  } catch (_) { S.lojas = []; }
+  S.lojaId = S.lojas.length ? S.lojas[0].id : 1;
+  try { localStorage.setItem('stockos.lojaId', String(S.lojaId)); } catch (_) {}
+  try { __aquecerCacheUltima = 0; } catch (_) {}
+  S.turnoId = null;
+  S.turnoData = null;
+  await navigate('dia');
+}
+function empresaAtivaId() {
+  const v = parseInt(S.empresaId, 10);
+  if (Number.isFinite(v) && v > 0) return v;
+  return parseInt(S.user?.empresa_id, 10) || 1;
+}
+// Ao arrancar (sessão restaurada): operador/compras ficam na sua loja fixa.
+try { aplicarLojaFixa(); } catch (_) {}
+
+/** Actualiza lojas (e empresas, p/ admin) em fundo — sem re-login. */
 async function refrescarLojas() {
   try {
     const lojas = await api('GET', '/lojas');
@@ -803,6 +850,15 @@ async function refrescarLojas() {
       localStorage.setItem('stockos.lojas', JSON.stringify(lojas));
     }
   } catch (_) {}
+  if (podeMudarEmpresa()) {
+    try {
+      const emps = await api('GET', '/empresas');
+      if (Array.isArray(emps) && emps.length) {
+        S.empresas = emps;
+        localStorage.setItem('stockos.empresas', JSON.stringify(emps));
+      }
+    } catch (_) {}
+  }
 }
 
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
@@ -951,10 +1007,16 @@ function lojaAtivaId() {
 /** Acrescenta a loja activa ao caminho (uma vez) — o servidor filtra por
  *  loja e o cache do Service Worker fica separado por loja. */
 function comLojaNoPath(path) {
-  const p = String(path || '');
+  let p = String(path || '');
   if (p.startsWith('/auth/')) return p;
-  if (/[?&]loja=/.test(p)) return p;
-  return p + (p.includes('?') ? '&' : '?') + 'loja=' + lojaAtivaId();
+  if (!/[?&]loja=/.test(p)) {
+    p += (p.includes('?') ? '&' : '?') + 'loja=' + lojaAtivaId();
+  }
+  // Admin migrado para outra empresa: contexto vai em todos os pedidos.
+  if (typeof podeMudarEmpresa === 'function' && podeMudarEmpresa() && S.empresaId && !/[?&]empresa=/.test(p)) {
+    p += '&empresa=' + empresaAtivaId();
+  }
+  return p;
 }
 
 async function api(method, path, body) {
@@ -1500,7 +1562,12 @@ async function doLogin() {
     // Lojas da empresa (multi-ponto de venda).
     S.lojas = Array.isArray(data.lojas) && data.lojas.length ? data.lojas : [{ id: 1, nome: 'Loja 1' }];
     localStorage.setItem('stockos.lojas', JSON.stringify(S.lojas));
-    if (!S.lojas.some((l) => String(l.id) === String(S.lojaId))) {
+    // Contexto por perfil: operador/compras ficam presos à sua loja fixa;
+    // admin recomeça na própria empresa.
+    S.empresaId = null;
+    try { localStorage.removeItem('stockos.empresaId'); } catch (_) {}
+    aplicarLojaFixa();
+    if (!S.lojas.some((l) => String(l.id) === String(S.lojaId)) && !(S.user && S.user.loja_id)) {
       S.lojaId = S.lojas[0].id;
       localStorage.setItem('stockos.lojaId', String(S.lojaId));
     }
@@ -1659,11 +1726,23 @@ function navBar() {
 
 // ── PÁGINA DIA ────────────────────────────────────────────────
 function lojaSelectorHtml() {
+  // Operador / operador de sistema: loja fixa — sem selector.
+  if (!podeMudarLoja()) return '';
+  const partes = [];
+  const emps = S.empresas || [];
+  if (podeMudarEmpresa() && emps.length > 1) {
+    partes.push(`<select onchange="runAction(event, () => mudarEmpresa(this.value))" style="background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:8px;font-size:12px;padding:6px 8px;max-width:150px">
+      ${emps.map((e) => `<option value="${e.id}" ${String(e.id) === String(empresaAtivaId()) ? 'selected' : ''}>🏢 ${escapeHtml(e.nome)}</option>`).join('')}
+    </select>`);
+  }
   const lojas = S.lojas || [];
-  if (lojas.length <= 1) return '';
-  return `<select onchange="runAction(event, () => mudarLoja(this.value))" style="background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:8px;font-size:12px;padding:6px 8px;max-width:160px">
-    ${lojas.map((l) => `<option value="${l.id}" ${String(l.id) === String(lojaAtivaId()) ? 'selected' : ''}>🏪 ${escapeHtml(l.nome)}</option>`).join('')}
-  </select>`;
+  if (lojas.length > 1) {
+    partes.push(`<select onchange="runAction(event, () => mudarLoja(this.value))" style="background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:8px;font-size:12px;padding:6px 8px;max-width:150px">
+      ${lojas.map((l) => `<option value="${l.id}" ${String(l.id) === String(lojaAtivaId()) ? 'selected' : ''}>🏪 ${escapeHtml(l.nome)}</option>`).join('')}
+    </select>`);
+  }
+  if (!partes.length) return '';
+  return `<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">${partes.join('')}</div>`;
 }
 
 async function drawDia() {
@@ -13118,6 +13197,20 @@ async function loadUtilizadores() {
   } catch(e) { show('admin-users',`<div class="alert alert-error">${e.message}</div>`); }
 }
 
+/** Realça a obrigatoriedade da loja fixa conforme o role escolhido. */
+function userFormToggleLoja() {
+  const role = val('u-role');
+  const wrap = document.getElementById('u-loja-wrap');
+  if (!wrap) return;
+  const lbl = wrap.querySelector('label');
+  const fixa = ['operador', 'compras'].includes(role);
+  if (lbl) {
+    lbl.innerHTML = fixa
+      ? 'Loja fixa <span style="font-weight:400;color:#f87171">(obrigatória para este role)</span>'
+      : 'Loja fixa <span style="font-weight:400;color:#64748b">(operador / operador de sistema trabalham numa só loja)</span>';
+  }
+}
+
 function showUserForm(u) {
   const isEdit = !!u;
   show('admin-form', `
@@ -13130,12 +13223,20 @@ function showUserForm(u) {
       <div class="field"><label>Password inicial <span style="font-weight:400;color:#f87171">(obrigatória)</span></label><input id="u-pass-inicial" type="password" placeholder="Mín. 6 caracteres"/></div>
       <div style="font-size:11px;color:#64748b;margin:-6px 0 12px">Sem nome de utilizador nem email, o funcionário fica registado mas não consegue iniciar sessão.</div>`:''}
       <div class="field"><label>Role</label>
-        <select id="u-role">
+        <select id="u-role" onchange="userFormToggleLoja()">
           <option value="operador" ${u?.role==='operador'?'selected':''}>Operador</option>
           <option value="compras"  ${u?.role==='compras'?'selected':''}>Operador de sistema (dia, armazém, produtos)</option>
           <option value="gestor"   ${u?.role==='gestor'?'selected':''}>Gestor</option>
           <option value="admin"    ${u?.role==='admin'?'selected':''}>Admin</option>
         </select>
+      </div>
+      <div class="field" id="u-loja-wrap">
+        <label>Loja fixa <span style="font-weight:400;color:#64748b">(operador / operador de sistema trabalham numa só loja)</span></label>
+        <select id="u-loja">
+          <option value="">— Sem loja fixa —</option>
+          ${(S.lojas || []).map((l) => `<option value="${l.id}" ${String(u?.loja_id ?? '') === String(l.id) ? 'selected' : ''}>🏪 ${escapeHtml(l.nome)}</option>`).join('')}
+        </select>
+        <div style="font-size:11px;color:#64748b;margin-top:3px">Admin acede a todas as empresas e lojas; gestor a todas as lojas da empresa — para esses, deixa «Sem loja fixa».</div>
       </div>
       <div style="border-top:1px solid #334155;padding-top:12px;margin-top:12px">
         <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 10px">📇 Ficha do funcionário</div>
@@ -13229,7 +13330,11 @@ async function createUser() {
       err('user-form-msg', 'Define a password inicial (mínimo 6 caracteres) — não existe password padrão.');
       return;
     }
-    const body = {nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role'),password:passInicial,...fichaFuncionarioBody()};
+    const body = {nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role'),password:passInicial,loja_id:val('u-loja'),...fichaFuncionarioBody()};
+    if (['operador','compras'].includes(body.role) && !body.loja_id) {
+      err('user-form-msg', 'Operador e operador de sistema trabalham numa loja fixa — escolhe a loja.');
+      return;
+    }
     const resp = await apiEscrita('POST','/utilizadores',body, { desc: 'Novo utilizador' });
     show('admin-form','');
     const extras = [resp && resp.aviso_login, resp && resp.aviso].filter(Boolean).map((a) => ' ⚠ ' + a).join('');
@@ -13242,7 +13347,11 @@ async function createUser() {
 
 async function saveUser(id) {
   try {
-    const body = {nome:val('u-nome'),username:val('u-username'),role:val('u-role'),ativo:val('u-ativo')==='true',...fichaFuncionarioBody()};
+    const body = {nome:val('u-nome'),username:val('u-username'),role:val('u-role'),ativo:val('u-ativo')==='true',loja_id:val('u-loja'),...fichaFuncionarioBody()};
+    if (['operador','compras'].includes(body.role) && !body.loja_id) {
+      err('user-form-msg', 'Operador e operador de sistema trabalham numa loja fixa — escolhe a loja.');
+      return;
+    }
     const p = val('u-pass');
     if (p) body.password = p;
     const promChk = document.getElementById('u-promotor');

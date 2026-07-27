@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-pedidos-local-first">
+<html lang="pt" data-stockos-ui="2026-07-07-offline-pwa">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -662,6 +662,13 @@ input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-
 </nav>
 <div id="app"></div>
 <script>
+// Service Worker: app abre offline (shell em cache) e os GETs da API
+// devolvem o último valor conhecido quando não há rede.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('/sw.js').catch(function () {});
+  });
+}
 (function(){
   var h = location.hostname;
   var banner = document.getElementById('env-banner');

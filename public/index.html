@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-fila-visivel">
+<html lang="pt" data-stockos-ui="2026-07-07-pedidos-valor-linha">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5317,11 +5317,23 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
               const nomeLinha = escapeHtml(ln.produto_nome || 'Item');
               const devTxt = dev > 0 ? ` <span style="color:#f87171;font-size:11px">(↩ ${fmtNum(dev)} devolv.)</span>` : '';
               const corQtd = liq <= 0 ? '#64748b;text-decoration:line-through' : '#a5b4fc';
+              // Valor da linha (mesma regra da cobrança: pacote nos copos).
+              const uLn = parseFloat(ln.preco) || 0;
+              const nLn = parseInt(ln.qtd_copos_pacote, 10) || 0;
+              const ppLn = parseFloat(ln.preco_copos_pacote) || 0;
+              let valLinha;
+              if (isCopo) {
+                const c = Math.floor(qtd);
+                valLinha = (nLn >= 2 && ppLn > 0) ? Math.floor(c / nLn) * ppLn + (c % nLn) * uLn : c * uLn;
+              } else {
+                valLinha = qtd * uLn;
+              }
               const btnDev = canEdit && liq > 0
                 ? `<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;color:#f87171" title="Devolver 1 ${unidLabel} desta linha (estorno automático na caixa)" data-dev-turno="${escapeHtml(String(p.turno_id || (S.turnoData && S.turnoData.id) || ''))}" data-dev-pedido="${p.id}" data-dev-linha="${ln.linha_id}" onclick="runAction(event, () => devolverLinhaFromBtn(this))">↩ −1</button>`
                 : '';
               return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px">
-                <div style="flex:1;min-width:0;color:${corQtd};">${fmtNum(liq)}/${fmtNum(qtd)} ${unidLabel}${liq === 1 ? '' : 's'} · <span style="color:#cbd5e1">${nomeLinha}</span>${devTxt}</div>
+                <div style="flex:1;min-width:0;color:${corQtd};">${fmtNum(liq)}/${fmtNum(qtd)} ${unidLabel}${liq === 1 ? '' : 's'} · <span style="color:#cbd5e1">${nomeLinha}</span> <span style="color:#64748b;font-size:11px">(${fmt(uLn)}/${isCopo ? 'copo' : 'un.'})</span>${devTxt}</div>
+                <div style="color:#4ade80;font-variant-numeric:tabular-nums;white-space:nowrap">${fmt(valLinha)}</div>
                 ${btnDev}
               </div>`;
             }).join('');

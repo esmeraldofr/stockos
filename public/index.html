@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-acesso-por-perfil">
+<html lang="pt" data-stockos-ui="2026-07-27-gestao-empresas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -12941,6 +12941,26 @@ async function drawConfiguracoes() {
       </div>
 
       <div class="card mb-12">
+        <div class="card-title">🏢 Empresas</div>
+        <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
+          Cada empresa cliente do StockOS, com as suas lojas, funcionários e dados próprios.
+          Criar uma empresa cria também a sua primeira loja. Para trabalhar noutra empresa,
+          usa o selector 🏢 no topo da página Dia.
+        </p>
+        <div style="margin:-4px 0 10px;padding:8px 10px;background:rgba(251,146,60,0.08);border:1px solid rgba(251,146,60,0.35);border-radius:8px;font-size:11px;color:#fdba74">
+          ⚠ Fase 2 pendente: produtos, armazém e funcionários ainda são partilhados entre empresas.
+          Cria empresas para preparar, mas não entregues acesso a um cliente real antes do isolamento total.
+        </div>
+        <div id="cfg-empresas-lista" style="display:flex;flex-direction:column;gap:8px"><span style="color:#64748b;font-size:12px">A carregar…</span></div>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <input id="cfg-empresa-nome" type="text" placeholder="Nome da nova empresa…" maxlength="120" style="flex:2;min-width:150px;font-size:13px;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0"/>
+          <input id="cfg-empresa-loja" type="text" placeholder="Nome da 1.ª loja (opcional)" maxlength="80" style="flex:1;min-width:140px;font-size:13px;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0"/>
+          <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, configCriarEmpresa)">+ Criar</button>
+        </div>
+        <div id="cfg-empresas-msg" style="margin-top:8px;font-size:11px;color:#64748b"></div>
+      </div>
+
+      <div class="card mb-12">
         <div class="card-title">🏪 Lojas / Pontos de venda</div>
         <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
           Cada loja tem os seus próprios turnos, stock, caixa, pedidos e depósitos —
@@ -13002,6 +13022,56 @@ async function drawConfiguracoes() {
   pedidoBalcaoLogoRefreshUI();
   void configTurnosBloqueadosLoad();
   void configLojasLoad();
+  void configEmpresasLoad();
+}
+
+// ── Configurações: empresas (só admin) ────────────────────────
+async function configEmpresasLoad() {
+  const el = document.getElementById('cfg-empresas-lista');
+  if (!el) return;
+  try {
+    const emps = await api('GET', '/empresas');
+    S.empresas = Array.isArray(emps) ? emps : [];
+    try { localStorage.setItem('stockos.empresas', JSON.stringify(S.empresas)); } catch (_) {}
+    el.innerHTML = S.empresas.map((e) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:#0f172a;border:1px solid #334155">
+        <span style="flex:1;font-size:13px;font-weight:600;color:#e2e8f0">🏢 ${escapeHtml(e.nome)}${String(e.id) === String(empresaAtivaId()) ? ' <span class="badge badge-green" style="font-size:10px">activa neste aparelho</span>' : ''}</span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => configRenomearEmpresa(${e.id}, '${escapeHtml(e.nome).replace(/'/g, '&#39;')}'))">✏️</button>
+        ${String(e.id) !== String(empresaAtivaId()) ? `<button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => mudarEmpresa(${e.id}))">Entrar →</button>` : ''}
+      </div>`).join('') || '<span style="color:#64748b;font-size:12px">Sem empresas.</span>';
+  } catch (e) {
+    el.innerHTML = `<span style="color:#ef4444;font-size:12px">${escapeHtml(e.message)}</span>`;
+  }
+}
+async function configCriarEmpresa() {
+  const nome = val('cfg-empresa-nome');
+  const lojaNome = val('cfg-empresa-loja');
+  const msg = document.getElementById('cfg-empresas-msg');
+  if (!nome) { if (msg) msg.textContent = 'Indica o nome da empresa.'; return; }
+  try {
+    const r = await apiEscrita('POST', '/empresas', { nome, loja_nome: lojaNome }, { desc: `Criar empresa ${nome}` });
+    const iN = document.getElementById('cfg-empresa-nome');
+    const iL = document.getElementById('cfg-empresa-loja');
+    if (iN) iN.value = '';
+    if (iL) iL.value = '';
+    if (msg) {
+      msg.textContent = r && r._offline
+        ? 'Empresa guardada neste aparelho — sincroniza quando a rede voltar.'
+        : `Empresa «${nome}» criada${r && r.loja ? ` com a loja «${r.loja.nome}»` : ''}. Usa o selector 🏢 na página Dia (ou «Entrar →») para trabalhar nela.`;
+    }
+    await configEmpresasLoad().catch(() => {});
+    refrescarLojas();
+  } catch (e) { if (msg) msg.textContent = 'Erro: ' + e.message; }
+}
+async function configRenomearEmpresa(id, nomeAtual) {
+  const novo = prompt('Novo nome da empresa:', nomeAtual || '');
+  if (novo === null) return;
+  const nome = String(novo || '').trim();
+  if (!nome || nome === nomeAtual) return;
+  try {
+    await apiEscrita('PUT', `/empresas/${id}`, { nome }, { chave: `empresa:${id}`, desc: 'Renomear empresa' });
+    await configEmpresasLoad().catch(() => {});
+  } catch (e) { alert(e.message); }
 }
 
 // ── Configurações: lojas / pontos de venda ────────────────────

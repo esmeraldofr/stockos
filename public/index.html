@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-cache-aquecido">
+<html lang="pt" data-stockos-ui="2026-07-27-offline-total">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -918,6 +918,11 @@ function sanitizeAuthLoginResponseErro(raw) {
 }
 
 async function api(method, path, body) {
+  // Turnos abertos offline (id local «off-…») não existem no servidor:
+  // os GET são sintetizados localmente + escritas pendentes da fila.
+  if (method === 'GET' && typeof pathReferenciaTurnoLocal === 'function' && pathReferenciaTurnoLocal(path)) {
+    return aplicarEscritasOffline(path, await sintetizarGetTurnoLocal(path));
+  }
   const opts = {
     method,
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${S.token}` },
@@ -938,6 +943,12 @@ async function api(method, path, body) {
     const raw = data.erro || 'Erro';
     const out = path.includes('/auth/login') ? sanitizeAuthLoginResponseErro(raw) : raw;
     throw new Error(typeof out === 'string' ? out : 'Erro');
+  }
+  if (method === 'GET') {
+    try {
+      if (path.startsWith('/produtos') && Array.isArray(data)) window.__produtosCacheOffline = data;
+      if (typeof aplicarEscritasOffline === 'function') return aplicarEscritasOffline(path, data);
+    } catch (_) {}
   }
   return data;
 }
@@ -2719,7 +2730,21 @@ async function abrirTurno(nome) {
     return;
   }
   try {
-    await api('POST', '/turnos/abrir', { data: S.date, nome });
+    const r = await apiEscrita('POST', '/turnos/abrir', { data: S.date, nome },
+      { tipo: 'abrir', desc: `Abrir turno ${turnoLabel(nome)}` });
+    if (r && r._offline) {
+      // Sem rede: o turno nasce com um id local e funciona já — a
+      // sincronização troca-o pelo id real do servidor.
+      const localId = 'off-' + r.ref;
+      const locais = turnosLocaisLer();
+      locais.push({
+        id: localId, data: S.date, nome,
+        utilizador_id: S.user && S.user.id, utilizador_nome: S.user && S.user.nome,
+        criado_em: new Date().toISOString()
+      });
+      turnosLocaisGravar(locais);
+      alert(`Turno ${turnoLabel(nome)} aberto neste aparelho (sem rede). Podes registar tudo normalmente — sincroniza sozinho quando a rede voltar.`);
+    }
     await loadDia();
   } catch(e) { alert(e.message); }
 }
@@ -4966,6 +4991,7 @@ function pedidosOfflineLer() {
 function pedidosOfflineGravar(fila) {
   try { localStorage.setItem(PEDIDOS_OFFLINE_KEY, JSON.stringify(fila)); } catch (_) {}
   renderPedidosOfflineBanner();
+  try { renderOfflinePendentesBadge(); } catch (_) {}
 }
 function ehErroDeRede(e) {
   const m = String((e && e.message) || e || '');
@@ -5081,16 +5107,22 @@ function aquecerCacheOffline() {
       '/pedidos/popularidade',
       '/promotores',
       '/config/turnos-bloqueados',
-      '/escala/template'
+      '/escala/template',
+      '/faltas?status=pendentes',
+      `/escala/semana?data_inicio=${encodeURIComponent(hoje)}&data_fim=${encodeURIComponent(hoje)}`
     ];
-    if (tid) {
+    if (tid && !turnoIdEhLocal(tid)) {
       urls.push(
         `/dia?data=${encodeURIComponent(hoje)}&turno_id=${encodeURIComponent(tid)}`,
         `/turnos/${encodeURIComponent(tid)}/pedidos`,
         `/turnos/${encodeURIComponent(tid)}/saidas`,
         `/turnos/${encodeURIComponent(tid)}/vendas`,
         `/turnos/${encodeURIComponent(tid)}/entradas`,
-        `/turnos/${encodeURIComponent(tid)}/equipa-real`
+        `/turnos/${encodeURIComponent(tid)}/equipa-real`,
+        `/turnos/${encodeURIComponent(tid)}/faltas`,
+        `/turnos/${encodeURIComponent(tid)}/caixa-entradas`,
+        `/irregularidades/decisoes?turno_id=${encodeURIComponent(tid)}`,
+        `/irregularidades/comentarios?turno_id=${encodeURIComponent(tid)}`
       );
     }
     // Fire-and-forget espaçado — não compete com o que o utilizador está a fazer.
@@ -5105,18 +5137,25 @@ async function sincronizarPedidosOffline() {
   if (__syncPedidosOfflineEmCurso || !S.token) return;
   __syncPedidosOfflineEmCurso = true;
   try {
-    let fila = pedidosOfflineLer();
-    while (fila.length) {
-      const item = fila[0];
+    let guard = 0;
+    while (guard++ < 300) {
+      const fila = pedidosOfflineLer();
+      // Pedidos de turnos abertos offline (id local «off-…») esperam pela
+      // sincronização do «abrir» (que remapeia o tid para o id real).
+      const item = fila.find((x) => !turnoIdEhLocal(x.tid));
+      if (!item) break;
+      const remover = () => {
+        const f = pedidosOfflineLer();
+        const i = f.findIndex((x) => x.ref === item.ref && x.criado_em === item.criado_em);
+        if (i >= 0) { f.splice(i, 1); pedidosOfflineGravar(f); }
+      };
       try {
         await apiPedidoComTimeout(item.tid, item.payload, 20000);
-        fila = fila.slice(1);
-        pedidosOfflineGravar(fila);
+        remover();
       } catch (e) {
         if (ehErroDeRede(e)) break; // ainda offline — tenta mais tarde
         // Erro de validação (ex.: turno fechado): não vale a pena repetir.
-        fila = fila.slice(1);
-        pedidosOfflineGravar(fila);
+        remover();
         alert(`⚠ Um pedido offline (${item.ref}, de ${item.quando || '—'}) foi REJEITADO ao sincronizar: ${e.message}\n\nConfere na lista de pedidos do turno.`);
       }
     }
@@ -5129,10 +5168,516 @@ async function sincronizarPedidosOffline() {
     renderPedidosOfflineBanner();
   }
 }
-window.addEventListener('online', () => { sincronizarPedidosOffline().catch(() => {}); });
+window.addEventListener('online', () => {
+  sincronizarEscritasOffline().then(() => sincronizarPedidosOffline()).catch(() => {});
+});
 setInterval(() => {
-  if (pedidosOfflineLer().length && navigator.onLine !== false) sincronizarPedidosOffline().catch(() => {});
+  if (contarPendentesOffline() && navigator.onLine !== false) {
+    sincronizarEscritasOffline().then(() => sincronizarPedidosOffline()).catch(() => {});
+  }
 }, 45000);
+
+// ── FILA GENÉRICA DE ESCRITAS OFFLINE ─────────────────────────
+// Tudo o que se regista nas abas do turno (stock, caixa, entradas, saídas,
+// vendas, equipa, fechos…) e o abrir/fechar do próprio turno funciona sem
+// rede: a escrita entra numa fila local (localStorage) e sincroniza em
+// fundo pela ordem original. O client_ref torna cada repetição segura — o
+// servidor guarda a resposta e nunca duplica (tabela ops_idempotencia).
+// Turnos abertos offline recebem um id local «off-cr-…»; ao sincronizar, o
+// servidor devolve o id real e a fila inteira é remapeada.
+const ESCRITAS_OFFLINE_KEY = 'stockos.escritasOffline';
+const TURNOS_LOCAIS_KEY = 'stockos.turnosLocais';
+
+function escritasOfflineLer() {
+  try {
+    const v = JSON.parse(localStorage.getItem(ESCRITAS_OFFLINE_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (_) { return []; }
+}
+function escritasOfflineGravar(fila) {
+  let ok = true;
+  try { localStorage.setItem(ESCRITAS_OFFLINE_KEY, JSON.stringify(fila)); } catch (_) { ok = false; }
+  renderOfflinePendentesBadge();
+  return ok;
+}
+function turnosLocaisLer() {
+  try {
+    const v = JSON.parse(localStorage.getItem(TURNOS_LOCAIS_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (_) { return []; }
+}
+function turnosLocaisGravar(lista) {
+  try { localStorage.setItem(TURNOS_LOCAIS_KEY, JSON.stringify(lista)); } catch (_) {}
+}
+function turnoIdEhLocal(id) { return /^off-cr-/.test(String(id || '')); }
+function pathReferenciaTurnoLocal(path) { return /off-cr-/.test(String(path || '')); }
+function novoClientRef() {
+  return 'cr-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+function contarPendentesOffline() {
+  return escritasOfflineLer().length + pedidosOfflineLer().length;
+}
+
+/** Pastilha fixa com o nº de registos por sincronizar (todas as páginas). */
+function renderOfflinePendentesBadge() {
+  try {
+    const n = contarPendentesOffline();
+    let el = document.getElementById('offline-pendentes-badge');
+    if (!n) { if (el) el.remove(); return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'offline-pendentes-badge';
+      el.style.cssText = 'position:fixed;right:10px;bottom:78px;z-index:1300;background:rgba(124,45,18,0.95);border:1px solid rgba(251,146,60,0.6);color:#fdba74;font-size:11px;padding:6px 10px;border-radius:999px;box-shadow:0 4px 12px rgba(0,0,0,0.4);cursor:pointer;display:flex;align-items:center;gap:6px';
+      el.title = 'Registos guardados neste aparelho, a caminho do servidor. Toca para sincronizar já.';
+      el.onclick = () => { sincronizarEscritasOffline().then(() => sincronizarPedidosOffline()).catch(() => {}); };
+      document.body.appendChild(el);
+    }
+    el.innerHTML = `⏳ <strong>${n}</strong> registo${n === 1 ? '' : 's'} por sincronizar`;
+  } catch (_) {}
+}
+
+/**
+ * Escrita resiliente: tenta a rede com timeout curto; se falhar (ou já
+ * houver fila deste turno — mantém a ordem), guarda na fila offline e
+ * devolve { _offline: true }. Nunca duplica: cada escrita leva client_ref.
+ *  opts: { tid, desc, tipo ('abrir'|'fechar'), chave (dedupe última-ganha),
+ *          extra (dados só para o overlay), timeoutMs, forcarFila }
+ */
+async function apiEscrita(method, path, body, opts) {
+  opts = opts || {};
+  const ref = novoClientRef();
+  const b = Object.assign({}, body || {}, { client_ref: ref });
+  const item = {
+    ref, method, path, body: b,
+    desc: opts.desc || `${method} ${path}`,
+    tid: opts.tid != null ? String(opts.tid) : null,
+    tipo: opts.tipo || null,
+    chave: opts.chave || null,
+    extra: opts.extra || null,
+    localId: opts.localId || null,
+    criado_em: new Date().toISOString(),
+    quando: new Date().toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' })
+  };
+  const filaTemDoTurno = item.tid ? escritasOfflineLer().some((x) => String(x.tid) === item.tid) : false;
+  const forcarFila =
+    opts.forcarFila === true ||
+    navigator.onLine === false ||
+    (item.tid && turnoIdEhLocal(item.tid)) ||
+    filaTemDoTurno;
+  if (!forcarFila) {
+    try {
+      return await Promise.race([
+        api(method, path, b),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), opts.timeoutMs || 3500))
+      ]);
+    } catch (e) {
+      if (!ehErroDeRede(e)) throw e;
+      // Rede em baixo/lenta → segue para a fila offline.
+    }
+  }
+  // Abrir turno offline: nasce já com o id local para as escritas seguintes.
+  if (item.tipo === 'abrir') {
+    item.localId = 'off-' + ref;
+    item.tid = item.localId;
+  }
+  let fila = escritasOfflineLer();
+  if (item.chave) fila = fila.filter((x) => x.chave !== item.chave);
+  fila.push(item);
+  if (!escritasOfflineGravar(fila)) {
+    throw new Error('Sem rede e sem espaço local — não foi possível guardar o registo offline.');
+  }
+  if (navigator.onLine !== false) sincronizarEscritasOffline().catch(() => {});
+  return { _offline: true, ref, criado_em: item.criado_em };
+}
+
+function apiEscritaComTimeout(item, ms) {
+  return Promise.race([
+    api(item.method, item.path, item.body),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms || 25000))
+  ]);
+}
+
+/** Depois do «abrir» sincronizar: troca o id local pelo id real em toda a
+ *  fila (paths, tids, bodies), nos pedidos offline e no estado da página. */
+function remapTurnoLocal(localId, realId) {
+  const lid = String(localId);
+  const rid = String(realId);
+  const subst = (s) => String(s).split(lid).join(rid);
+  escritasOfflineGravar(escritasOfflineLer().map((x) => {
+    const y = Object.assign({}, x);
+    y.path = subst(y.path);
+    if (y.tid === lid) y.tid = rid;
+    if (y.chave) y.chave = subst(y.chave);
+    if (y.body) { try { y.body = JSON.parse(subst(JSON.stringify(y.body))); } catch (_) {} }
+    return y;
+  }));
+  pedidosOfflineGravar(pedidosOfflineLer().map((x) =>
+    String(x.tid) === lid ? Object.assign({}, x, { tid: rid }) : x
+  ));
+  turnosLocaisGravar(turnosLocaisLer().filter((t) => String(t.id) !== lid));
+  if (String(S.turnoId) === lid) {
+    S.turnoId = rid;
+    if (S.turnoData && String(S.turnoData.id) === lid) S.turnoData.id = realId;
+  }
+}
+
+/** Abrir falhou definitivamente → descarta o turno local e tudo o que lhe
+ *  estava pendurado (escritas e pedidos em fila). */
+function limparTurnoLocal(localId) {
+  const lid = String(localId);
+  escritasOfflineGravar(escritasOfflineLer().filter((x) => String(x.tid) !== lid && x.localId !== lid));
+  pedidosOfflineGravar(pedidosOfflineLer().filter((x) => String(x.tid) !== lid));
+  turnosLocaisGravar(turnosLocaisLer().filter((t) => String(t.id) !== lid));
+}
+
+let __syncEscritasEmCurso = false;
+async function sincronizarEscritasOffline() {
+  if (__syncEscritasEmCurso || !S.token) return;
+  __syncEscritasEmCurso = true;
+  let precisaRefrescar = false;
+  try {
+    let guard = 0;
+    while (guard++ < 500) {
+      const fila = escritasOfflineLer();
+      if (!fila.length) break;
+      const item = fila[0];
+      const removeDaFila = () => {
+        escritasOfflineGravar(escritasOfflineLer().filter((x) => x.ref !== item.ref));
+      };
+      try {
+        if (item.tipo === 'abrir') {
+          const turno = await apiEscritaComTimeout(item, 25000);
+          removeDaFila();
+          if (turno && turno.id != null && item.localId) {
+            const viaLocal = String(S.turnoId) === String(item.localId) || S.page === 'dia';
+            remapTurnoLocal(item.localId, turno.id);
+            precisaRefrescar = precisaRefrescar || viaLocal;
+          }
+          continue;
+        }
+        // Escritas de um turno ainda local esperam pelo «abrir» respectivo.
+        if (item.tid && turnoIdEhLocal(item.tid)) break;
+        if (item.tipo === 'fechar') {
+          // Pedidos deste turno têm de entrar antes do fecho (vendas/caixa).
+          try { await sincronizarPedidosOffline(); } catch (_) {}
+          if (pedidosOfflineLer().some((x) => String(x.tid) === String(item.tid))) break;
+        }
+        await apiEscritaComTimeout(item, 25000);
+        removeDaFila();
+      } catch (e) {
+        if (ehErroDeRede(e)) break; // sem rede — tenta mais tarde
+        removeDaFila();
+        if (item.tipo === 'abrir' && item.localId) limparTurnoLocal(item.localId);
+        alert(`⚠ Um registo offline (${item.desc}, de ${item.quando || '—'}) foi REJEITADO ao sincronizar: ${e.message}`);
+      }
+    }
+  } finally {
+    __syncEscritasEmCurso = false;
+    renderOfflinePendentesBadge();
+  }
+  if (precisaRefrescar) {
+    try {
+      if (S.page === 'turno') await loadTurno();
+      else if (S.page === 'dia') await loadDia();
+    } catch (_) {}
+  }
+}
+
+// ── OVERLAY: escritas pendentes reflectidas em TODOS os ecrãs ──
+/** Aplica a fila offline por cima das respostas GET — os valores por
+ *  sincronizar aparecem em todas as abas como se já estivessem gravados. */
+function aplicarEscritasOffline(path, data) {
+  try {
+    const fila = escritasOfflineLer();
+    const locais = turnosLocaisLer();
+    if (!fila.length && !locais.length) return data;
+    const [p, qs] = String(path).split('?');
+    const params = new URLSearchParams(qs || '');
+    if (p === '/dia' && Array.isArray(data)) {
+      const dataDia = String(params.get('data') || '').slice(0, 10);
+      const resumo = params.get('resumo');
+      const turnoIdQ = params.get('turno_id');
+      const out = data.map((t) => aplicarEscritasAoTurno(t, fila));
+      const nomesExistentes = new Set(out.map((t) => t.nome));
+      for (const tl of locais) {
+        if (String(tl.data).slice(0, 10) !== dataDia) continue;
+        if (turnoIdQ && String(tl.id) !== String(turnoIdQ)) continue;
+        if (!turnoIdQ && nomesExistentes.has(tl.nome)) {
+          // Já existe o turno real com este nome — turno local órfão (sem
+          // fila pendente) pode ser descartado.
+          if (!fila.some((x) => String(x.tid) === String(tl.id))) {
+            turnosLocaisGravar(turnosLocaisLer().filter((t) => String(t.id) !== String(tl.id)));
+          }
+          continue;
+        }
+        out.push(aplicarEscritasAoTurno(turnoLocalBase(tl, !resumo), fila));
+      }
+      return out;
+    }
+    const m = p.match(/^\/turnos\/([^/]+)\/(entradas|saidas|vendas|equipa-real|faltas|pedidos)$/);
+    if (m && Array.isArray(data)) {
+      return overlayListaTurno(decodeURIComponent(m[1]), m[2], data, fila);
+    }
+    if ((p === '/irregularidades/comentarios' || p === '/irregularidades/decisoes') && Array.isArray(data)) {
+      return overlayIrregularidades(p, params.get('turno_id'), data, fila);
+    }
+    return data;
+  } catch (_) { return data; }
+}
+
+function aplicarEscritasAoTurno(t, fila) {
+  if (!t || t.id == null) return t;
+  const tid = String(t.id);
+  const itens = fila.filter((it) => String(it.tid) === tid);
+  if (!itens.length) return t;
+  let out;
+  try { out = JSON.parse(JSON.stringify(t)); } catch (_) { return t; }
+  if (!out.caixa) out.caixa = {};
+  for (const it of itens) {
+    const b = it.body || {};
+    const p = String(it.path || '');
+    if (it.method === 'PUT' && p.endsWith('/stock')) {
+      const row = (out.stock || []).find((s) => String(s.produto_id) === String(b.produto_id));
+      if (row) {
+        row.encontrado = b.encontrado;
+        row.deixado = b.deixado;
+        row.fechados = b.fechados;
+        row.encontrado_caixa = b.encontrado_caixa;
+        row.deixado_caixa = b.deixado_caixa;
+        row._offline = true;
+      }
+    } else if (it.method === 'PUT' && p.endsWith('/caixa')) {
+      out.caixa.tpa = b.tpa;
+      out.caixa.transferencia = b.transferencia;
+      out.caixa.dinheiro = b.dinheiro;
+      out.caixa._offline = true;
+    } else if (it.method === 'PUT' && p.endsWith('/notas')) {
+      out.notas = b.notas || '';
+    } else if (p.endsWith('/caixa/tpa-foto')) {
+      out.caixa.tpa_foto_url = b.foto_base64 || 'offline-pendente';
+    } else if (p.endsWith('/encontrados/fechar')) { out.encontrados_fechados_em = it.criado_em; }
+    else if (p.endsWith('/encontrados/reabrir')) { out.encontrados_fechados_em = null; }
+    else if (p.endsWith('/deixados/fechar')) { out.deixados_fechados_em = it.criado_em; }
+    else if (p.endsWith('/deixados/reabrir')) { out.deixados_fechados_em = null; }
+    else if (it.tipo === 'fechar' && p.endsWith('/fechar')) {
+      out.estado = 'fechado';
+      out.fechado_em = it.criado_em;
+      out._offline_fechado = true;
+    } else if (it.method === 'POST' && p.endsWith('/reabrir') && !p.includes('/encontrados/') && !p.includes('/deixados/')) {
+      out.estado = 'aberto';
+      out.fechado_em = null;
+    } else if (it.method === 'POST' && p.endsWith('/entradas')) {
+      const row = (out.stock || []).find((s) => String(s.produto_id) === String(b.produto_id));
+      if (row) {
+        const sinal = b.tipo === 'tirar' ? -1 : 1;
+        row.entrada = (parseFloat(row.entrada) || 0) + sinal * (parseFloat(b.quantidade) || 0);
+      }
+      if (b.origem === 'compra' && b.tipo !== 'tirar') {
+        out.caixa.saida = (parseFloat(out.caixa.saida) || 0) + (parseFloat(b.preco) || 0);
+      }
+    } else if (it.method === 'POST' && p.endsWith('/saidas')) {
+      if (!String(b.notas || '').startsWith('ENTRADA::')) {
+        out.caixa.saida = (parseFloat(out.caixa.saida) || 0) + (parseFloat(b.valor) || 0);
+      }
+    }
+  }
+  const partes = [out.caixa.tpa, out.caixa.transferencia, out.caixa.dinheiro].map((v) => parseFloat(v));
+  if (partes.every((v) => Number.isFinite(v))) {
+    const tg = partes[0] + partes[1] + partes[2];
+    out.caixa.total_gerado = tg;
+    out.caixa.total_final = tg - (parseFloat(out.caixa.saida) || 0);
+  }
+  return out;
+}
+
+function overlayListaTurno(tid, tipoLista, rows, fila) {
+  const itens = fila.filter((it) => String(it.tid) === String(tid));
+  if (!itens.length) return rows;
+  let out = rows.slice();
+  const prodMap = {};
+  (window.__produtosCacheOffline || []).forEach((pr) => { prodMap[String(pr.id)] = pr; });
+  for (const it of itens) {
+    const b = it.body || {};
+    const p = String(it.path || '');
+    if (tipoLista === 'entradas' && it.method === 'POST' && p.endsWith('/entradas')) {
+      out = out.concat([{
+        id: 'off:' + it.ref,
+        turno_id: tid,
+        produto_id: b.produto_id,
+        produto_nome: (prodMap[String(b.produto_id)] || {}).nome || (it.extra && it.extra.produto_nome) || 'Produto',
+        tipo: b.tipo === 'tirar' ? 'tirar' : 'entrada',
+        origem: b.origem === 'compra' ? 'compra' : 'armazem',
+        preco: b.preco || 0,
+        quantidade: b.quantidade,
+        notas: b.notas || '',
+        criado_em: it.criado_em,
+        _offline: true
+      }]);
+    } else if (tipoLista === 'saidas' && it.method === 'POST' && p.endsWith('/saidas')) {
+      out = [{
+        id: 'off:' + it.ref, turno_id: tid, descricao: b.descricao || '',
+        valor: b.valor || 0, notas: b.notas || '', criado_em: it.criado_em, _offline: true
+      }].concat(out);
+    } else if (tipoLista === 'vendas' && it.method === 'POST' && p.endsWith('/vendas')) {
+      const i = out.findIndex((r) => String(r.produto_id) === String(b.produto_id));
+      if (i >= 0) out[i] = Object.assign({}, out[i], { quantidade: b.quantidade, _offline: true });
+      else out.push({ turno_id: tid, produto_id: b.produto_id, quantidade: b.quantidade, _offline: true });
+    } else if (tipoLista === 'equipa-real') {
+      if (it.method === 'POST' && p.endsWith('/equipa-real')) {
+        const uid = String(b.utilizador_id || '');
+        const nome = (it.extra && it.extra.nome) || (uid.startsWith('ext:') ? uid.slice(4) : uid);
+        const row = {
+          id: 'off:' + it.ref, turno_id: tid, utilizador_id: uid,
+          cobrindo_utilizador_id: b.cobrindo_utilizador_id || null,
+          hora_extra: !!b.hora_extra, motivo_falta: b.motivo_falta || '',
+          notas: b.notas || '', criado_em: it.criado_em,
+          utilizador_nome: nome,
+          utilizador_role: uid.startsWith('ext:') ? 'externo' : ((it.extra && it.extra.role) || null),
+          cobrindo_utilizador_nome: (it.extra && it.extra.cobrindo_nome) || null,
+          _offline: true
+        };
+        const i = out.findIndex((r) => String(r.utilizador_id) === uid);
+        if (i >= 0) out[i] = row; else out.push(row);
+      } else if (it.method === 'DELETE' && p.includes('/equipa-real/')) {
+        const uid = decodeURIComponent(p.split('/equipa-real/')[1] || '');
+        out = out.filter((r) => String(r.utilizador_id) !== uid);
+      }
+    } else if (tipoLista === 'faltas' && it.method === 'POST' && p.endsWith('/faltas')) {
+      out = out.concat([{
+        id: 'off:' + it.ref, turno_id: tid, utilizador_id: b.utilizador_id,
+        motivo_falta: b.motivo_falta || '', criado_em: it.criado_em, _offline: true
+      }]);
+    } else if (tipoLista === 'pedidos' && it.method === 'POST' && /\/devolver$/.test(p)) {
+      const mm = p.match(/\/pedidos\/([^/]+)\/devolver$/);
+      if (mm) {
+        out = out.map((ped) => {
+          if (String(ped.id) !== String(mm[1])) return ped;
+          let cl;
+          try { cl = JSON.parse(JSON.stringify(ped)); } catch (_) { return ped; }
+          const ln = (cl.linhas || []).find((l) => String(l.linha_id) === String(b.linha_id));
+          if (ln) ln.quantidade_devolvida = (parseFloat(ln.quantidade_devolvida) || 0) + 1;
+          cl._offline_devolucao = true;
+          return cl;
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function overlayIrregularidades(p, turnoIdQ, rows, fila) {
+  let out = rows.slice();
+  for (const it of fila) {
+    const b = it.body || {};
+    if (turnoIdQ != null && String(b.turno_id ?? it.tid) !== String(turnoIdQ) && !(it.method === 'DELETE')) continue;
+    if (p === '/irregularidades/comentarios' && it.method === 'POST' && String(it.path) === '/irregularidades/comentario') {
+      out = out.concat([{
+        id: 'off:' + it.ref, turno_id: b.turno_id, categoria: b.categoria,
+        comentario: b.comentario, criado_em: it.criado_em,
+        utilizador_nome: (S.user && S.user.nome) || '', utilizador_id: (S.user && S.user.id) || null,
+        _offline: true
+      }]);
+    } else if (p === '/irregularidades/decisoes' && it.method === 'POST' && String(it.path) === '/irregularidades/decisao') {
+      const row = {
+        id: 'off:' + it.ref, turno_id: b.turno_id, categoria: b.categoria,
+        aceite: !!b.aceite, justificacao: b.justificacao || '', criado_em: it.criado_em,
+        decidido_por_nome: (S.user && S.user.nome) || '', _offline: true
+      };
+      const i = out.findIndex((r) => String(r.categoria) === String(b.categoria) && String(r.turno_id) === String(b.turno_id));
+      if (i >= 0) out[i] = row; else out.push(row);
+    } else if (p === '/irregularidades/decisoes' && it.method === 'DELETE' && String(it.path).startsWith('/irregularidades/decisao?')) {
+      const qs2 = new URLSearchParams(String(it.path).split('?')[1] || '');
+      if (turnoIdQ == null || String(qs2.get('turno_id')) === String(turnoIdQ)) {
+        out = out.filter((r) => !(String(r.turno_id) === String(qs2.get('turno_id')) && String(r.categoria) === String(qs2.get('categoria'))));
+      }
+    }
+  }
+  return out;
+}
+
+/** Turno aberto offline: estrutura base equivalente à resposta do /dia. */
+function turnoLocalBase(tl, comStock) {
+  let totalPed = 0;
+  try {
+    totalPed = pedidosOfflineComoPedidos(tl.id).reduce((s, x) => s + (parseFloat(x.total_kz) || 0), 0);
+  } catch (_) {}
+  return {
+    id: tl.id, nome: tl.nome, data: tl.data, estado: 'aberto',
+    utilizador_id: tl.utilizador_id || (S.user && S.user.id) || null,
+    utilizador_nome: tl.utilizador_nome || (S.user && S.user.nome) || '',
+    criado_em: tl.criado_em, aberto_em: tl.criado_em, fechado_em: null, notas: '',
+    encontrados_fechados_em: null, deixados_fechados_em: null,
+    stock: comStock ? sintetizarStockTurnoLocal(tl.id) : [],
+    caixa: {
+      turno_id: tl.id, tpa: null, transferencia: null, dinheiro: null, saida: 0,
+      total_gerado: null, total_final: null, tpa_foto_url: ''
+    },
+    total_vendas: 0,
+    pedidos_total_kz: totalPed,
+    pedidos_total_itens: 0,
+    _offline_local: true
+  };
+}
+
+/** Folha de stock de um turno local, a partir do catálogo de produtos em
+ *  cache (mesmo filtro do servidor: activos, em_stock_turno, 3 categorias). */
+function sintetizarStockTurnoLocal(tid) {
+  const prods = window.__produtosCacheOffline || [];
+  return prods
+    .filter((pr) => pr && pr.em_stock_turno === true && ['menu', 'ingredientes', 'bebida'].includes(pr.categoria) && pr.ativo !== false)
+    .sort((a, b) => (parseFloat(a.ordem) || 0) - (parseFloat(b.ordem) || 0))
+    .map((pr) => ({
+      turno_id: tid, produto_id: pr.id, produto_nome: pr.nome, categoria: pr.categoria,
+      ordem: pr.ordem, tipo_medicao: pr.tipo_medicao || 'unidade',
+      peso_tara_kg: parseFloat(pr.peso_tara_kg) || 0,
+      preco: parseFloat(pr.preco) || 0,
+      encontrado: null, deixado: null, fechados: 0, entrada: 0,
+      encontrado_caixa: null, deixado_caixa: null,
+      prev_deixado: null, prev_deixado_caixa: null,
+      valor_vendas_reportado_kz: null
+    }));
+}
+
+/** GET de um turno local (off-cr-…): nada existe no servidor — sintetiza a
+ *  resposta base; o aplicarEscritasOffline põe por cima a fila pendente. */
+async function sintetizarGetTurnoLocal(path) {
+  const p = String(path).split('?')[0];
+  if (p === '/dia' && !window.__produtosCacheOffline) {
+    // A folha de stock local precisa do catálogo (rede ou cache do SW).
+    try { await api('GET', '/produtos?todos=0'); } catch (_) {}
+  }
+  return [];
+}
+
+// Ao arrancar: mostra a pastilha e tenta despachar o que ficou pendente.
+setTimeout(() => {
+  renderOfflinePendentesBadge();
+  if (contarPendentesOffline() && navigator.onLine !== false) {
+    sincronizarEscritasOffline().then(() => sincronizarPedidosOffline()).catch(() => {});
+  }
+}, 2500);
+
+/** Reduz a foto (lado maior ~1280 px, JPEG) — cabe na fila offline e envia
+ *  mais depressa em rede fraca. */
+function comprimirFotoDataUrl(dataUrl, maxLado, qualidade) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const esc = Math.min(1, (maxLado || 1280) / Math.max(img.width || 1, img.height || 1));
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round((img.width || 1) * esc));
+          c.height = Math.max(1, Math.round((img.height || 1) * esc));
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          resolve(c.toDataURL('image/jpeg', qualidade || 0.72));
+        } catch (_) { resolve(dataUrl); }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    } catch (_) { resolve(dataUrl); }
+  });
+}
 
 async function pedidoBalcaoConfirmarRegisto() {
   const p = window.__pedidoBalcaoPendente;
@@ -6502,7 +7047,8 @@ async function deltaVenda(turnoId, prodId, delta) {
   if (el) el.textContent = vendasBuf[prodId];
   refreshVendasTotal();
   try {
-    await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: vendasBuf[prodId] });
+    await apiEscrita('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: vendasBuf[prodId] },
+      { tid: turnoId, chave: `vendas:${turnoId}:${prodId}`, desc: 'Venda registada' });
     const cfg = bebidaCopoCfg[prodId];
     if (cfg && cfg.kgPorCopo > 0) {
       if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
@@ -6530,7 +7076,8 @@ async function vendaQtyInputBlur(inp) {
   vendasBuf[prodId] = novaQty;
   refreshVendasTotal();
   try {
-    await api('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: novaQty });
+    await apiEscrita('POST', `/turnos/${turnoId}/vendas`, { produto_id: prodId, quantidade: novaQty },
+      { tid: turnoId, chave: `vendas:${turnoId}:${prodId}`, desc: 'Venda registada' });
     const cfg = bebidaCopoCfg[prodId];
     if (cfg && cfg.kgPorCopo > 0) {
       if (!stockBuf[prodId]) stockBuf[prodId] = { encontrado:0, entrada:0, deixado:0, fechados:0 };
@@ -7254,7 +7801,11 @@ async function adicionarComentarioIrregularidade(turnoId, categoria, inputId) {
   const texto = String(el?.value || '').trim();
   if (!texto) return;
   try {
-    const row = await api('POST', '/irregularidades/comentario', { turno_id: turnoId, categoria, comentario: texto });
+    const r = await apiEscrita('POST', '/irregularidades/comentario', { turno_id: turnoId, categoria, comentario: texto },
+      { tid: turnoId, desc: 'Comentário de irregularidade' });
+    const row = r && r._offline
+      ? { id: 'off:' + r.ref, turno_id: turnoId, categoria, comentario: texto, criado_em: r.criado_em, utilizador_nome: (S.user && S.user.nome) || '', utilizador_id: (S.user && S.user.id) || null, _offline: true }
+      : r;
     if (el) el.value = '';
     if (S.page === 'irregularidades') {
       if (S.irregCache) {
@@ -7283,12 +7834,19 @@ async function adicionarComentarioIrregularidade(turnoId, categoria, inputId) {
 async function apagarComentarioIrregularidade(comId, turnoId) {
   if (!confirm('Apagar este comentário?')) return;
   try {
-    await api('DELETE', `/irregularidades/comentario?id=${encodeURIComponent(comId)}`);
+    if (String(comId).startsWith('off:')) {
+      // Ainda na fila offline — basta retirá-lo da fila.
+      const refCom = String(comId).slice(4);
+      escritasOfflineGravar(escritasOfflineLer().filter((x) => x.ref !== refCom));
+    } else {
+      await apiEscrita('DELETE', `/irregularidades/comentario?id=${encodeURIComponent(comId)}`, {},
+        { tid: turnoId, desc: 'Apagar comentário' });
+    }
     const idNum = Number(comId);
     const removerDe = (mapPorCat) => {
       if (!mapPorCat) return;
       for (const cat of Object.keys(mapPorCat)) {
-        mapPorCat[cat] = (mapPorCat[cat] || []).filter((c) => Number(c.id) !== idNum);
+        mapPorCat[cat] = (mapPorCat[cat] || []).filter((c) => String(c.id) !== String(comId) && Number(c.id) !== idNum);
       }
     };
     if (S.page === 'irregularidades') {
@@ -7313,7 +7871,11 @@ async function decidirIrregularidade(turnoId, categoria, aceite) {
   const label = aceite ? 'Aceitar' : 'Rejeitar';
   if (!confirm(`${label} esta irregularidade?`)) return;
   try {
-    const row = await api('POST', '/irregularidades/decisao', { turno_id: turnoId, categoria, aceite, justificacao: '' });
+    const r = await apiEscrita('POST', '/irregularidades/decisao', { turno_id: turnoId, categoria, aceite, justificacao: '' },
+      { tid: turnoId, chave: `irrdec:${turnoId}:${categoria}`, desc: 'Decisão de irregularidade' });
+    const row = r && r._offline
+      ? { id: 'off:' + r.ref, turno_id: turnoId, categoria, aceite: !!aceite, justificacao: '', criado_em: r.criado_em, decidido_por_nome: (S.user && S.user.nome) || '', _offline: true }
+      : r;
     if (S.page === 'irregularidades') {
       if (S.irregCache) {
         const map = S.irregCache.decisoesPorTurno;
@@ -7339,7 +7901,15 @@ async function decidirIrregularidade(turnoId, categoria, aceite) {
 async function reabrirIrregularidade(turnoId, categoria) {
   if (!confirm('Reabrir esta irregularidade?')) return;
   try {
-    await api('DELETE', `/irregularidades/decisao?turno_id=${turnoId}&categoria=${encodeURIComponent(categoria)}`);
+    // Decisão ainda na fila offline → basta retirá-la da fila.
+    const filaDec = escritasOfflineLer();
+    const chaveDec = `irrdec:${turnoId}:${categoria}`;
+    if (filaDec.some((x) => x.chave === chaveDec)) {
+      escritasOfflineGravar(filaDec.filter((x) => x.chave !== chaveDec));
+    } else {
+      await apiEscrita('DELETE', `/irregularidades/decisao?turno_id=${turnoId}&categoria=${encodeURIComponent(categoria)}`, {},
+        { tid: turnoId, desc: 'Reabrir irregularidade' });
+    }
     if (S.page === 'irregularidades') {
       if (S.irregCache?.decisoesPorTurno?.[turnoId]) {
         delete S.irregCache.decisoesPorTurno[turnoId][categoria];
@@ -7691,7 +8261,8 @@ async function fecharDeixados(turnoId) {
   if (!confirm('Fechar o registo dos deixados? Os campos Deixado e Deix. caixa ficam bloqueados a partir daqui.')) return;
   try {
     turnoMsgPending('A fechar registo…');
-    await api('POST', `/turnos/${turnoId}/deixados/fechar`, {});
+    await apiEscrita('POST', `/turnos/${turnoId}/deixados/fechar`, {},
+      { tid: turnoId, desc: 'Fechar registo dos deixados' });
     turnoMsgOk('Registo fechado');
     if (typeof loadTurnoPage === 'function') await loadTurnoPage();
     else if (typeof drawTurno === 'function') await drawTurno();
@@ -7703,7 +8274,8 @@ async function reabrirDeixados(turnoId) {
   if (!confirm('Reabrir o registo dos deixados? Os campos voltam a ficar editáveis.')) return;
   try {
     turnoMsgPending('A reabrir registo…');
-    await api('POST', `/turnos/${turnoId}/deixados/reabrir`, {});
+    await apiEscrita('POST', `/turnos/${turnoId}/deixados/reabrir`, {},
+      { tid: turnoId, desc: 'Reabrir registo dos deixados' });
     turnoMsgOk('Registo reaberto');
     if (typeof loadTurnoPage === 'function') await loadTurnoPage();
     else if (typeof drawTurno === 'function') await drawTurno();
@@ -7715,7 +8287,8 @@ async function fecharEncontrados(turnoId) {
   if (!confirm('Fechar o registo inicial de encontrados? Os campos Encontrado e Enc. caixa ficam bloqueados a partir daqui.')) return;
   try {
     turnoMsgPending('A fechar registo…');
-    await api('POST', `/turnos/${turnoId}/encontrados/fechar`, {});
+    await apiEscrita('POST', `/turnos/${turnoId}/encontrados/fechar`, {},
+      { tid: turnoId, desc: 'Fechar registo inicial de encontrados' });
     turnoMsgOk('Registo fechado');
     if (typeof loadTurnoPage === 'function') await loadTurnoPage();
     else if (typeof drawTurno === 'function') await drawTurno();
@@ -7727,7 +8300,8 @@ async function reabrirEncontrados(turnoId) {
   if (!confirm('Reabrir o registo de encontrados? Os campos voltam a ficar editáveis.')) return;
   try {
     turnoMsgPending('A reabrir registo…');
-    await api('POST', `/turnos/${turnoId}/encontrados/reabrir`, {});
+    await apiEscrita('POST', `/turnos/${turnoId}/encontrados/reabrir`, {},
+      { tid: turnoId, desc: 'Reabrir registo de encontrados' });
     turnoMsgOk('Registo reaberto');
     if (typeof loadTurnoPage === 'function') await loadTurnoPage();
     else if (typeof drawTurno === 'function') await drawTurno();
@@ -7749,18 +8323,18 @@ async function guardarStock(turnoId) {
   try {
     if (String(turnoId) !== String(S.turnoData?.id)) return;
     turnoMsgPending('A guardar…');
-    const proms = Object.entries(stockBuf).map(([pid, v]) =>
-      api('PUT', `/turnos/${turnoId}/stock`, {
+    const resultados = await Promise.all(Object.entries(stockBuf).map(([pid, v]) =>
+      apiEscrita('PUT', `/turnos/${turnoId}/stock`, {
         produto_id: pid,
         encontrado: v.encontrado,
         deixado: v.deixado,
         fechados: v.fechados,
         encontrado_caixa: v.encontrado_caixa,
         deixado_caixa: v.deixado_caixa
-      })
-    );
-    await Promise.all(proms);
-    turnoMsgOk('Guardado');
+      }, { tid: turnoId, chave: `stock:${turnoId}:${pid}`, desc: 'Stock do turno' })
+    ));
+    const emFila = resultados.some((r) => r && r._offline);
+    turnoMsgOk(emFila ? 'Guardado neste aparelho (sincroniza sozinho)' : 'Guardado');
     setTimeout(() => turnoMsgIdle(), 1600);
   } catch(e) { turnoMsgErr(e.message); }
 }
@@ -7883,20 +8457,21 @@ async function guardarCaixa(turnoId) {
     const tpa = parseCaixaInputRaw('c-tpa');
     const tr = parseCaixaInputRaw('c-transf');
     const d = parseCaixaInputRaw('c-din');
-    await api('PUT', `/turnos/${turnoId}/caixa`, {
+    const r = await apiEscrita('PUT', `/turnos/${turnoId}/caixa`, {
       tpa: tpa === null ? null : tpa,
       transferencia: tr === null ? null : tr,
       dinheiro: d === null ? null : d
-    });
-    turnoMsgOk('Guardado');
+    }, { tid: turnoId, chave: `caixa:${turnoId}`, desc: 'Caixa do turno' });
+    turnoMsgOk(r && r._offline ? 'Guardado neste aparelho (sincroniza sozinho)' : 'Guardado');
     setTimeout(() => turnoMsgIdle(), 1600);
   } catch(e) { turnoMsgErr(e.message); }
 }
 
 async function saveTurnoNotas(turnoId, notas) {
   try {
-    await api('PUT', `/turnos/${turnoId}/notas`, { notas });
-    turnoMsgOk('Observações guardadas');
+    const r = await apiEscrita('PUT', `/turnos/${turnoId}/notas`, { notas },
+      { tid: turnoId, chave: `notas:${turnoId}`, desc: 'Observações do turno' });
+    turnoMsgOk(r && r._offline ? 'Observações guardadas neste aparelho' : 'Observações guardadas');
     setTimeout(() => turnoMsgIdle(), 2000);
   } catch(e) { turnoMsgErr(e.message); }
 }
@@ -7908,13 +8483,21 @@ async function tpaFotoOnFile(inp) {
   if (!turnoId || !inp || !inp.files || !inp.files[0]) return;
   try {
     if (st) { st.style.color = '#94a3b8'; st.textContent = 'A enviar foto…'; }
-    const b64 = await fileToDataUrl(inp.files[0]);
-    const r = await api('POST', `/turnos/${turnoId}/caixa/tpa-foto`, { foto_base64: b64 });
+    const b64Raw = await fileToDataUrl(inp.files[0]);
+    // Reduz a foto: envia mais depressa e cabe na fila offline.
+    const b64 = await comprimirFotoDataUrl(b64Raw, 1280, 0.72);
+    const r = await apiEscrita('POST', `/turnos/${turnoId}/caixa/tpa-foto`, { foto_base64: b64 },
+      { tid: turnoId, chave: `tpafoto:${turnoId}`, desc: 'Foto do fecho TPA', timeoutMs: 12000 });
     if (S.turnoData) {
       if (!S.turnoData.caixa) S.turnoData.caixa = {};
-      S.turnoData.caixa.tpa_foto_url = r.tpa_foto_url || '';
+      S.turnoData.caixa.tpa_foto_url = (r && r.tpa_foto_url) || b64;
     }
-    if (st) { st.style.color = '#86efac'; st.textContent = '✓ Foto do fecho TPA anexada'; }
+    if (st) {
+      st.style.color = '#86efac';
+      st.textContent = r && r._offline
+        ? '✓ Foto guardada neste aparelho (sincroniza sozinha)'
+        : '✓ Foto do fecho TPA anexada';
+    }
   } catch (e) {
     if (st) { st.style.color = '#ef4444'; st.textContent = 'Falha ao enviar: ' + (e.message || e); }
   }
@@ -7935,29 +8518,50 @@ async function fecharTurno(ev, id) {
     await focusTurnoFieldParaValidacao(missing[0]);
     return;
   }
-  // Não fechar com pedidos offline por sincronizar deste turno — senão
-  // as vendas/caixa fechavam sem esses pedidos.
+  // Pedidos offline por sincronizar deste turno: o fecho pode avançar —
+  // entra na fila DEPOIS dos pedidos (a sincronização respeita a ordem:
+  // primeiro os pedidos, só depois o fecho).
   const filaOffTurno = pedidosOfflineLer().filter((it) => String(it.tid) === String(id));
-  if (filaOffTurno.length) {
-    turnoMsgErr(`Há ${filaOffTurno.length} pedido${filaOffTurno.length === 1 ? '' : 's'} offline por sincronizar neste turno. Liga a rede e toca em «↻ Sincronizar agora» (aba Pedidos ao balcão) antes de fechar.`, true);
-    sincronizarPedidosOffline().catch(() => {});
-    return;
-  }
   // TPA com valor exige a foto do recibo de fecho do TPA (o servidor
-  // também valida ao fechar).
+  // também valida ao fechar). Foto na fila offline conta como anexada.
   const tpaValFechar = parseFloat(document.getElementById('c-tpa')?.value) || 0;
-  if (tpaValFechar > 0 && !(S.turnoData?.caixa?.tpa_foto_url)) {
+  const tpaFotoNaFila = escritasOfflineLer().some((x) => x.chave === `tpafoto:${id}`);
+  if (tpaValFechar > 0 && !(S.turnoData?.caixa?.tpa_foto_url) && !tpaFotoNaFila) {
     turnoMsgErr('Registaste valor no TPA — anexa a foto do recibo de fecho do TPA (por baixo do campo TPA) antes de fechar o turno.', true);
     document.getElementById('c-tpa-foto')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     return;
   }
+  // Equipa real: o servidor exige pelo menos uma pessoa ao fechar — valida
+  // já aqui (com cache + fila offline) para o fecho não ser rejeitado na
+  // sincronização.
+  try {
+    const eqReal = await api('GET', `/turnos/${encodeURIComponent(id)}/equipa-real`);
+    if (Array.isArray(eqReal) && eqReal.length === 0) {
+      turnoMsgErr('Regista pelo menos uma pessoa em «Quem realmente trabalhou» (separador Escala) antes de fechar o turno.', true);
+      const btnEscala = document.querySelector('.turno-tab[data-turno-tab="escala"]');
+      if (btnEscala) await switchTurnoTab('escala', btnEscala);
+      return;
+    }
+  } catch (_) { /* sem rede e sem cache — o servidor valida ao sincronizar */ }
   if (!confirm('Fechar este turno? Não poderá ser editado depois.')) return;
   await runAction(ev, async () => {
     try {
       await guardarStock(id);
       await guardarCaixa(id);
-      await api('POST', `/turnos/${id}/fechar`);
+      const rF = await apiEscrita('POST', `/turnos/${id}/fechar`, {}, {
+        tid: id,
+        tipo: 'fechar',
+        desc: 'Fechar turno',
+        // Com pedidos deste turno ainda em fila, o fecho vai directo para a
+        // fila — garante a ordem pedidos → fecho.
+        forcarFila: filaOffTurno.length > 0
+      });
       clearStockCaixaValidationHighlight();
+      if (rF && rF._offline) {
+        turnoMsgOk('Turno fechado neste aparelho — sincroniza sozinho quando a rede voltar.');
+        setTimeout(() => turnoMsgIdle(), 3200);
+        sincronizarEscritasOffline().catch(() => {});
+      }
       await loadTurno();
     } catch (e) {
       turnoMsgErr(e.message, true);
@@ -7980,7 +8584,15 @@ async function reabrirTurno(ev, id) {
   if (!confirm('Reabrir este turno? Voltará a poder editar stock, caixa e registos. Usar só para corrigir erros.')) return;
   await runAction(ev, async () => {
     try {
-      await api('POST', `/turnos/${id}/reabrir`);
+      // Fecho ainda na fila offline → basta retirá-lo (o turno nunca chegou
+      // a fechar no servidor).
+      const filaR = escritasOfflineLer();
+      const fechoPendente = filaR.find((x) => x.tipo === 'fechar' && String(x.tid) === String(id));
+      if (fechoPendente) {
+        escritasOfflineGravar(filaR.filter((x) => x.ref !== fechoPendente.ref));
+      } else {
+        await apiEscrita('POST', `/turnos/${id}/reabrir`, {}, { tid: id, desc: 'Reabrir turno' });
+      }
       turnoMsgOk('Turno reaberto.');
       setTimeout(() => turnoMsgIdle(), 2200);
       await loadTurno();
@@ -8139,11 +8751,20 @@ async function submitEntrada(turnoId) {
   if (!pidRaw || !pid)  { if (msg) { msg.className='alert alert-error'; msg.textContent='Selecciona um produto.'; } return; }
   if (!qty || qty <= 0) { if (msg) { msg.className='alert alert-error'; msg.textContent='Quantidade inválida.'; } return; }
   try {
-    await api('POST', `/turnos/${turnoId}/entradas`, { produto_id: pidRaw, tipo, origem, preco, quantidade: qty, notas });
+    const selEl = document.getElementById('e-produto');
+    const nomeProd = selEl && selEl.selectedOptions && selEl.selectedOptions[0] ? selEl.selectedOptions[0].textContent : '';
+    await apiEscrita('POST', `/turnos/${turnoId}/entradas`, { produto_id: pidRaw, tipo, origem, preco, quantidade: qty, notas },
+      { tid: turnoId, desc: 'Entrada/saída de stock', extra: { produto_nome: nomeProd } });
     document.getElementById('e-produto').value = '';
     document.getElementById('e-qty').value = '';
     document.getElementById('e-notas').value = '';
     document.getElementById('e-preco').value = '';
+  } catch(e) {
+    if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
+    return;
+  }
+  // Refrescar é «melhor esforço» — offline, o GET vem do cache + fila.
+  try {
     const novaEntrada = await api('GET', `/turnos/${turnoId}/entradas`);
     const soma = novaEntrada.filter((e) => prodIdKey(e.produto_id) === pid)
                             .reduce((s, e) => s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1), 0);
@@ -8154,9 +8775,7 @@ async function submitEntrada(turnoId) {
     updateStock(pidRaw, 'entrada', soma);
     const stocks = S.turnoData?.stock || [];
     await loadRegistosMovimentosSection(turnoId, stocks, true);
-  } catch(e) {
-    if (msg) { msg.className='alert alert-error'; msg.textContent=e.message; }
-  }
+  } catch (_) { /* sem cache deste GET — o registo ficou na fila na mesma */ }
 }
 
 /** Adiciona 1 barril novo de Fino (peso líquido = cheio − tara) à coluna Entrada. */
@@ -8175,7 +8794,7 @@ async function adicionarFinoBarrilNovo(produtoId) {
       )} kg)`
   );
   if (!ok) return;
-  await api('POST', `/turnos/${turnoId}/entradas`, {
+  await apiEscrita('POST', `/turnos/${turnoId}/entradas`, {
     produto_id: produtoId,
     tipo: 'entrada',
     origem: 'armazem',
@@ -8184,24 +8803,26 @@ async function adicionarFinoBarrilNovo(produtoId) {
     notas: `Barril novo (${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(
       KG_FINO_BARRIL_VAZIO
     )} kg)`
-  });
-  const pid = prodIdKey(produtoId);
-  const entradasRows = await api('GET', `/turnos/${turnoId}/entradas`);
-  const soma = entradasRows
-    .filter((e) => prodIdKey(e.produto_id) === pid)
-    .reduce(
-      (s, e) =>
-        s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1),
-      0
-    );
-  const cell = document.getElementById(`entrada-${pid}`);
-  if (cell) cell.textContent = fmtQtyInput(soma);
-  if (!stockBuf[pid])
-    stockBuf[pid] = { encontrado: null, entrada: 0, deixado: null, fechados: 0 };
-  stockBuf[pid].entrada = soma;
-  updateStock(produtoId, 'entrada', soma);
-  const stocks = S.turnoData?.stock || [];
-  await loadRegistosMovimentosSection(turnoId, stocks, true);
+  }, { tid: turnoId, desc: 'Barril novo de Fino', extra: { produto_nome: 'Fino' } });
+  try {
+    const pid = prodIdKey(produtoId);
+    const entradasRows = await api('GET', `/turnos/${turnoId}/entradas`);
+    const soma = entradasRows
+      .filter((e) => prodIdKey(e.produto_id) === pid)
+      .reduce(
+        (s, e) =>
+          s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1),
+        0
+      );
+    const cell = document.getElementById(`entrada-${pid}`);
+    if (cell) cell.textContent = fmtQtyInput(soma);
+    if (!stockBuf[pid])
+      stockBuf[pid] = { encontrado: null, entrada: 0, deixado: null, fechados: 0 };
+    stockBuf[pid].entrada = soma;
+    updateStock(produtoId, 'entrada', soma);
+    const stocks = S.turnoData?.stock || [];
+    await loadRegistosMovimentosSection(turnoId, stocks, true);
+  } catch (_) { /* offline sem cache — o barril ficou na fila na mesma */ }
 }
 
 /** Secção unificada de movimentos de caixa: entradas (+, verde) e saídas
@@ -8330,7 +8951,8 @@ async function submitMovimentoCaixa(turnoId) {
     // Entradas e saídas vão ambas para turno_saidas; a entrada leva o
     // marcador nas notas e é tratada como dinheiro que entrou.
     const notasFinal = tipo === 'entrada' ? (ENTRADA_MARK + notas) : notas;
-    await api('POST', `/turnos/${turnoId}/saidas`, { descricao: desc, valor, notas: notasFinal });
+    await apiEscrita('POST', `/turnos/${turnoId}/saidas`, { descricao: desc, valor, notas: notasFinal },
+      { tid: turnoId, desc: tipo === 'entrada' ? 'Entrada de caixa' : 'Saída de caixa' });
     ['mc-desc', 'mc-valor', 'mc-notas'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
     await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], true);
   } catch (e) {
@@ -8392,23 +9014,6 @@ async function loadTurnoAreasEscalados() {
         return `<span class="turno-area-person"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${escapeHtml(nome)}</span>`;
       }).join('');
     });
-    bebidaCopoProdIds.forEach((pid) => {
-      const copos = vendasBuf[pid] || 0;
-      if (copos <= 0) return;
-      const cfg = bebidaCopoCfg[pid];
-      if (!cfg) return;
-      const val = precoVendaCopos(copos, cfg.preco, cfg.qtdPacote, cfg.precoPacote);
-      totalVendasVal += val;
-      const si = stocks.find((s) => String(s.produto_id) === String(pid));
-      vendasLines.push({
-        nome: si?.produto_nome || `Produto ${pid}`,
-        qty: copos,
-        preco: cfg.preco,
-        total: val,
-        copo: true
-      });
-    });
-
     const semAreaCount = (porArea[0] || []).length;
     if (semAreaCount > 0 && origEl) {
       const nomes = porArea[0]
@@ -8416,90 +9021,9 @@ async function loadTurnoAreasEscalados() {
         .join(', ');
       origEl.textContent = `${origem ? origem + ' · ' : ''}Sem área: ${nomes}`;
     }
-
-    // 6. Compras registadas mas caixa não preenchida
-    if (totalCompras > 0 && totalGerado === 0) {
-      irr.push({ level:'warn', msg:`Compras de stock registadas (${fmt(totalCompras)}) mas caixa com valor zero` });
-    }
-
-    // 7. Possível desconto: valor do stock consumido > vendas registadas
-    if (totalValStock > 0 && totalVendasVal > 0 && totalValStock > totalVendasVal) {
-      const desconto = totalValStock - totalVendasVal;
-      const pct = desconto / totalValStock * 100;
-      irr.push({ level:'warn', msg:`Possível desconto aplicado: stock consumido (${fmt(totalValStock)}) superior às vendas registadas (${fmt(totalVendasVal)}) — diferença de ${fmt(desconto)} (${pct.toFixed(1)}%)` });
-    }
-
-    // — Helpers de render —
-    const icon  = { error:'🔴', warn:'🟡', info:'🔵' };
-    const color = { error:'#f87171', warn:'#fbbf24', info:'#60a5fa' };
-
-    const chip = (label, value, valueColor, bold) => `
-      <div style="background:#1e293b;border-radius:8px;padding:10px 12px">
-        <div style="color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">${label}</div>
-        <div style="font-weight:${bold?'700':'600'};font-size:${bold?'1.05rem':'0.95rem'};color:${valueColor||'#e2e8f0'}">${value}</div>
-      </div>`;
-
-    const financCard = `
-      <div class="card">
-        <div class="card-title">💰 Resumo Financeiro</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-          ${chip('TPA / Máquina', fmt(tpa))}
-          ${chip('Transferência', fmt(transf))}
-          ${chip('Dinheiro', fmt(din))}
-          ${chip('Total Gerado', fmt(totalGerado), '#4ade80', true)}
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
-          ${chip('Compras', fmt(totalCompras), '#fb923c')}
-          ${chip('Despesas', fmt(totalDespesas), '#f87171')}
-          ${chip('Total Saídas', fmt(totalSaidas), '#f87171', true)}
-        </div>
-        <div style="padding:12px 14px;background:#0f172a;border-radius:8px;display:flex;justify-content:space-between;align-items:center;border:1px solid #334155">
-          <span style="color:#94a3b8;font-weight:600;text-transform:uppercase;font-size:12px;letter-spacing:.05em">Total Final</span>
-          <span style="font-size:1.25rem;font-weight:700;color:${totalFinal >= 0 ? '#4ade80' : '#f87171'}">${fmt(totalFinal)}</span>
-        </div>
-      </div>`;
-
-    const stockCard = `
-      <div class="card mt-16">
-        <div class="card-title">📦 Resumo de Stock</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          ${chip('Total Vendido (und.)', fmtNum(totalVend))}
-          ${chip('Valor de Stock', fmt(totalValStock), '#4ade80', true)}
-        </div>
-      </div>`;
-
-    const vendasCard = vendasLines.length > 0 ? `
-      <div class="card mt-16">
-        <div class="card-title">🍽️ Resumo de Vendas</div>
-        ${vendasLines.map(v => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1e293b">
-            <span style="font-size:13px;color:#cbd5e1">${v.nome}</span>
-            <span style="display:flex;gap:14px;align-items:center">
-              <span style="color:#64748b;font-size:12px">${v.copo ? v.qty + ' copos' : v.qty + ' × ' + fmt(v.preco)}</span>
-              <span style="font-weight:600;color:#e2e8f0;min-width:72px;text-align:right">${fmt(v.total)}</span>
-            </span>
-          </div>`).join('')}
-        <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:2px solid #334155">
-          <span style="font-weight:600;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.05em">Total Vendas</span>
-          <span style="font-weight:700;color:#4ade80">${fmt(totalVendasVal)}</span>
-        </div>
-      </div>` : '';
-
-    const irrCard = `
-      <div class="card mt-16">
-        <div class="card-title">⚠️ Irregularidades</div>
-        ${irr.length === 0
-          ? '<div style="color:#4ade80;font-size:14px;padding:6px 0">✓ Nenhuma irregularidade detectada</div>'
-          : irr.map(i => `
-              <div style="display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid #1e293b">
-                <span style="flex-shrink:0;font-size:14px">${icon[i.level]}</span>
-                <span style="color:${color[i.level]};font-size:13px;line-height:1.45">${i.msg}</span>
-              </div>`).join('')}
-      </div>`;
-
-    el.innerHTML = financCard + stockCard + vendasCard + irrCard;
   } catch(e) {
-    el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+    const origEl = document.getElementById('turno-areas-origem');
+    if (origEl) origEl.textContent = e.message || 'Erro ao carregar áreas';
   }
 }
 
@@ -8769,13 +9293,21 @@ async function addTurnoPresenca(turnoId) {
   const d = new Date(S.date + 'T12:00:00Z');
   const day = d.getUTCDay();
   const diaSemana = day === 0 ? 6 : day - 1;
-  const template = await api('GET', '/escala/template');
+  const template = await api('GET', '/escala/template').catch(() => []);
   const escaladosIds = new Set(template.filter(r => Number(r.dia_semana) === diaSemana && r.turno === turnoNome).map(r => String(r.utilizador_id || '')).filter(Boolean));
   const naoEscalado = ehExterno || !escaladosIds.has(String(utilizador_id));
   // "Cobrindo quem" e "motivo da falta" passam a ser opcionais — antes
   // eram exigidos quando o funcionário não estava escalado.
   try {
-    await api('POST', `/turnos/${turnoId}/equipa-real`, { utilizador_id, cobrindo_utilizador_id: naoEscalado ? (cobrindo_utilizador_id || null) : null, hora_extra, motivo_falta: naoEscalado ? motivo_falta.trim() : '', notas });
+    const selU = document.getElementById('tp-user');
+    const nomeSel = ehExterno
+      ? utilizador_id.slice(4)
+      : (selU && selU.selectedOptions && selU.selectedOptions[0] ? selU.selectedOptions[0].textContent.trim() : '');
+    const selC = document.getElementById('tp-cobrindo');
+    const nomeCob = selC && selC.selectedOptions && selC.selectedOptions[0] && selC.value ? selC.selectedOptions[0].textContent.trim() : null;
+    await apiEscrita('POST', `/turnos/${turnoId}/equipa-real`,
+      { utilizador_id, cobrindo_utilizador_id: naoEscalado ? (cobrindo_utilizador_id || null) : null, hora_extra, motivo_falta: naoEscalado ? motivo_falta.trim() : '', notas },
+      { tid: turnoId, chave: `eqreal:${turnoId}:${utilizador_id}`, desc: 'Quem realmente trabalhou', extra: { nome: nomeSel, cobrindo_nome: nomeCob } });
     show('turno-presenca-msg', '');
     if (document.getElementById('tp-notas')) document.getElementById('tp-notas').value = '';
     await loadEscalaTurno();
@@ -8784,7 +9316,16 @@ async function addTurnoPresenca(turnoId) {
 
 async function removeTurnoPresenca(turnoId, utilizadorIdEncoded) {
   try {
-    await api('DELETE', `/turnos/${turnoId}/equipa-real/${utilizadorIdEncoded}`);
+    // Se este registo ainda está na fila offline, basta retirá-lo da fila.
+    const uid = decodeURIComponent(utilizadorIdEncoded);
+    const fila = escritasOfflineLer();
+    const pendente = fila.some((x) => x.chave === `eqreal:${turnoId}:${uid}`);
+    if (pendente) {
+      escritasOfflineGravar(fila.filter((x) => x.chave !== `eqreal:${turnoId}:${uid}`));
+    } else {
+      await apiEscrita('DELETE', `/turnos/${turnoId}/equipa-real/${utilizadorIdEncoded}`, {},
+        { tid: turnoId, desc: 'Remover de quem trabalhou' });
+    }
     await loadEscalaTurno();
   } catch (e) { alert(e.message); }
 }
@@ -8794,10 +9335,10 @@ async function registarMotivoFalta(ev, turnoId, utilizadorIdEncoded, nome) {
   if (!motivo || !motivo.trim()) return;
   await runAction(ev, async () => {
     try {
-      await api('POST', `/turnos/${turnoId}/faltas`, {
+      await apiEscrita('POST', `/turnos/${turnoId}/faltas`, {
         utilizador_id: decodeURIComponent(utilizadorIdEncoded),
         motivo_falta: motivo.trim()
-      });
+      }, { tid: turnoId, desc: `Falta — ${nome}` });
       await loadEscalaTurno();
     } catch (e) { alert(e.message); }
   });
@@ -8812,12 +9353,13 @@ async function justificarPresenca(turnoId, utilizadorIdEncoded, tipo, nome) {
   const t = String(texto || '').trim();
   if (!t) return;
   try {
-    await api('POST', '/presencas/justificacao', {
+    const rJ = await apiEscrita('POST', '/presencas/justificacao', {
       turno_id: turnoId,
       utilizador_id: decodeURIComponent(utilizadorIdEncoded),
       tipo,
       justificacao: t
-    });
+    }, { tid: turnoId, desc: `Justificação — ${nome}` });
+    if (rJ && rJ._offline) alert('Justificação guardada neste aparelho — entra no sistema quando a rede voltar.');
     await loadEscalaTurno();
   } catch (e) { alert(e.message); }
 }
@@ -8833,7 +9375,8 @@ async function decidirJustifPresenca(id, aceite) {
     observacao = String(obs || '').trim();
   }
   try {
-    await api('POST', '/presencas/justificacao/decisao', { id, aceite, observacao });
+    await apiEscrita('POST', '/presencas/justificacao/decisao', { id, aceite, observacao },
+      { desc: 'Decisão de justificação' });
     await loadEscalaTurno();
   } catch (e) { alert(e.message); }
 }
@@ -8869,8 +9412,11 @@ async function devolverLinhaPedido(turnoId, pedidoId, linhaId) {
   if (!confirm('Devolver 1 unidade desta linha?\n\n• Stock volta\n• Valor sai da caixa (saída automática)\n• Comissão ajusta')) return;
   try {
     turnoMsgPending('A processar devolução…');
-    const resp = await api('POST', `/turnos/${turnoId}/pedidos/${pedidoId}/devolver`, { linha_id: linhaId });
-    turnoMsgOk(`Devolvido · estorno ${fmt(resp.valor_devolvido || 0)}`);
+    const resp = await apiEscrita('POST', `/turnos/${turnoId}/pedidos/${pedidoId}/devolver`, { linha_id: linhaId },
+      { tid: turnoId, desc: 'Devolução de linha de pedido' });
+    turnoMsgOk(resp && resp._offline
+      ? 'Devolução guardada neste aparelho (sincroniza sozinha)'
+      : `Devolvido · estorno ${fmt(resp.valor_devolvido || 0)}`);
     // Recarrega tudo (pedidos, comissões, caixa).
     try { await loadVendasMenu(turnoId, !!S.turnoCanEdit); } catch (_) {}
     try { await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], !!S.turnoCanEdit); } catch (_) {}
@@ -8887,11 +9433,11 @@ async function pagarComissaoPromotor(turnoId, nome, valor) {
   if (!confirm(txt)) return;
   try {
     turnoMsgPending('A registar saída…');
-    await api('POST', `/turnos/${turnoId}/saidas`, {
+    await apiEscrita('POST', `/turnos/${turnoId}/saidas`, {
       descricao: `Comissão — ${nome}`,
       valor: v,
       notas: 'Pagamento de comissão (gerado a partir do relatório do turno).'
-    });
+    }, { tid: turnoId, desc: `Pagamento de comissão — ${nome}` });
     turnoMsgOk('Saída registada');
     // Recarrega o resumo dos pedidos (para o relatório de comissões reflectir)
     // e a secção de saídas/entradas.

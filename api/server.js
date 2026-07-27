@@ -1070,6 +1070,83 @@ app.use((req, res, next) => {
   });
 });
 
+// ── IDEMPOTÊNCIA DAS ESCRITAS OFFLINE ─────────────────────────
+// A fila offline do frontend repete escritas (POST/PUT/DELETE) até obter
+// resposta. Com rede fraca, um pedido pode ter chegado sem o cliente saber
+// (timeout) — na repetição, o client_ref permite devolver a resposta já
+// gravada em vez de duplicar o registo.
+let opsIdemReady = false;
+async function ensureOpsIdempotencia() {
+  if (opsIdemReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='ops_idempotencia_v1'`);
+    if (r.rows.length) { opsIdemReady = true; return; }
+  } catch (_) {}
+  await qry(
+    `CREATE TABLE IF NOT EXISTS ops_idempotencia (
+      client_ref TEXT PRIMARY KEY,
+      metodo TEXT,
+      caminho TEXT,
+      status INTEGER,
+      resposta TEXT,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    [],
+    'ops-idempotencia'
+  );
+  try {
+    const chk = await query(
+      `SELECT 1 FROM information_schema.tables
+       WHERE table_schema='public' AND table_name='ops_idempotencia'`
+    );
+    if (chk.rows.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('ops_idempotencia_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      await query(`DELETE FROM ops_idempotencia WHERE criado_em < NOW() - INTERVAL '60 days'`).catch(() => {});
+      opsIdemReady = true;
+    }
+  } catch (_) {}
+}
+
+app.use(function idempotenciaMiddleware(req, res, next) {
+  const m = String(req.method || '').toUpperCase();
+  if (m !== 'POST' && m !== 'PUT' && m !== 'DELETE') return next();
+  let p = req.path || '';
+  if (!p && req.url) p = String(req.url).split('?')[0] || '';
+  if (!p.startsWith('/api/')) return next();
+  const clientRef = String((req.body && req.body.client_ref) || '').trim().slice(0, 64);
+  if (!clientRef) return next();
+  (async () => {
+    try { await ensureOpsIdempotencia(); } catch (_) {}
+    if (opsIdemReady) {
+      try {
+        const dup = await query(`SELECT status, resposta FROM ops_idempotencia WHERE client_ref=$1`, [clientRef]);
+        if (dup.rows.length) {
+          const st = parseInt(dup.rows[0].status, 10) || 200;
+          let body = {};
+          try { body = JSON.parse(dup.rows[0].resposta || '{}'); } catch (_) {}
+          if (body && typeof body === 'object' && !Array.isArray(body)) body.duplicado = true;
+          return res.status(st).json(body);
+        }
+      } catch (_) {}
+      const origJson = res.json.bind(res);
+      res.json = (body) => {
+        try {
+          const st = res.statusCode || 200;
+          if (st >= 200 && st < 300) {
+            query(
+              `INSERT INTO ops_idempotencia (client_ref, metodo, caminho, status, resposta)
+               VALUES ($1,$2,$3,$4,$5) ON CONFLICT (client_ref) DO NOTHING`,
+              [clientRef, m, p, st, JSON.stringify(body == null ? {} : body).slice(0, 200000)]
+            ).catch(() => {});
+          }
+        } catch (_) {}
+        return origJson(body);
+      };
+    }
+    next();
+  })().catch(() => { try { next(); } catch (_) {} });
+});
+
 // ── HELPERS AUTH ──────────────────────────────────────────────
 function base64url(str) {
   return Buffer.from(str).toString('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
@@ -4595,7 +4672,17 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
     }
 
     const exists = await client.query('SELECT id FROM turnos WHERE data=$1 AND nome=$2', [data, nome]);
-    if (exists.rows.length) throw new Error(`Turno ${nome} já existe para ${data}`);
+    if (exists.rows.length) {
+      // Sincronização offline (client_ref): outro dispositivo pode já ter
+      // aberto o mesmo turno — devolve o existente em vez de falhar, para
+      // as escritas em fila se aplicarem a esse turno.
+      if (String((req.body && req.body.client_ref) || '').trim()) {
+        const ex = await client.query('SELECT * FROM turnos WHERE id=$1', [exists.rows[0].id]);
+        await client.query('COMMIT');
+        return res.json({ ...ex.rows[0], ja_existia: true });
+      }
+      throw new Error(`Turno ${nome} já existe para ${data}`);
+    }
 
     const turno = await client.query(
       'INSERT INTO turnos (data, nome, utilizador_id) VALUES ($1,$2,$3) RETURNING *',
@@ -4635,6 +4722,12 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
     );
     if (!r.rows.length) {
       await client.query('ROLLBACK');
+      // Sincronização offline (client_ref): se o turno já está fechado
+      // (fechado por outro dispositivo/tentativa), trata como sucesso.
+      if (String((req.body && req.body.client_ref) || '').trim()) {
+        const ja = await query(`SELECT * FROM turnos WHERE id=$1 AND estado='fechado'`, [req.params.id]).catch(() => ({ rows: [] }));
+        if (ja.rows.length) return res.json({ ...ja.rows[0], ja_fechado: true });
+      }
       return res.status(400).json({ erro: 'Turno não encontrado ou já fechado' });
     }
     const turnoId = parseInt(req.params.id, 10);

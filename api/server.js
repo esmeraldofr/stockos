@@ -6402,11 +6402,44 @@ function fmtNumPlain(n) {
   return v.toLocaleString('pt-AO', { maximumFractionDigits: 3 });
 }
 
+/** Idempotência dos pedidos (fila offline): client_ref único por pedido —
+ *  reenviar o mesmo pedido devolve o já gravado em vez de duplicar. */
+let turnoPedidosClientRefReady = false;
+async function ensureTurnoPedidosClientRef() {
+  if (turnoPedidosClientRefReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_pedidos_client_ref_v1'`);
+    if (r.rows.length) { turnoPedidosClientRefReady = true; return; }
+  } catch (_) {}
+  await qry(`ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS client_ref TEXT`, [], 'turno_pedidos-client-ref');
+  await qry(`CREATE UNIQUE INDEX IF NOT EXISTS idx_turno_pedidos_client_ref ON turno_pedidos(client_ref) WHERE client_ref IS NOT NULL AND client_ref <> ''`, [], 'idx-turno-pedidos-client-ref');
+  try {
+    const chk = await query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='turno_pedidos' AND column_name='client_ref'`
+    );
+    if (chk.rows.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('turno_pedidos_client_ref_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      turnoPedidosClientRefReady = true;
+    }
+  } catch (_) {}
+}
+
 app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
   const client = await pool.connect();
   try {
     await ensureTurnoPedidos();
     await ensureTurnoPedidosEntrega();
+    await ensureTurnoPedidosClientRef();
+    const clientRef = String((req.body && req.body.client_ref) || '').trim().slice(0, 64);
+    // Já processado (retry da fila offline)? Devolve o existente.
+    if (clientRef && turnoPedidosClientRefReady) {
+      const dup = await query(`SELECT id, criado_em FROM turno_pedidos WHERE client_ref=$1 LIMIT 1`, [clientRef]);
+      if (dup.rows.length) {
+        // O finally liberta a ligação — aqui só devolvemos o existente.
+        return res.json({ ...dup.rows[0], duplicado: true });
+      }
+    }
     await client.query('BEGIN');
     const turnoId = parseInt(req.params.id, 10);
     const { cliente_nome, linhas, tipo_pagamento, com_entrega, promotor_id, valor_entrega } = req.body;
@@ -6513,23 +6546,35 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
       }
     }
 
-    const pedidoIns = await client.query(
-      `INSERT INTO turno_pedidos (turno_id, cliente_nome, tipo_pagamento, com_entrega, valor_entrega, promotor_id, promotor_modo, promotor_pct_total, comissao_valor, comissao_valor_potencial, operador_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id, criado_em`,
-      [
-        turnoId,
-        String(cliente_nome || '').trim().slice(0, 200),
-        tpag,
-        comEntrega,
-        Math.round(vEntrega * 100) / 100,
-        promotor ? promotor.id : null,
-        promotorModo,
-        promotorPct,
-        Math.round(comissaoValor * 100) / 100,
-        Math.round(comissaoPotencial * 100) / 100,
-        req.user && req.user.id ? req.user.id : null
-      ]
-    );
+    let pedidoIns;
+    try {
+      pedidoIns = await client.query(
+        `INSERT INTO turno_pedidos (turno_id, cliente_nome, tipo_pagamento, com_entrega, valor_entrega, promotor_id, promotor_modo, promotor_pct_total, comissao_valor, comissao_valor_potencial, operador_id${turnoPedidosClientRefReady && clientRef ? ', client_ref' : ''})
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11${turnoPedidosClientRefReady && clientRef ? ',$12' : ''}) RETURNING id, criado_em`,
+        [
+          turnoId,
+          String(cliente_nome || '').trim().slice(0, 200),
+          tpag,
+          comEntrega,
+          Math.round(vEntrega * 100) / 100,
+          promotor ? promotor.id : null,
+          promotorModo,
+          promotorPct,
+          Math.round(comissaoValor * 100) / 100,
+          Math.round(comissaoPotencial * 100) / 100,
+          req.user && req.user.id ? req.user.id : null,
+          ...(turnoPedidosClientRefReady && clientRef ? [clientRef] : [])
+        ]
+      );
+    } catch (eIns) {
+      // Corrida entre retries: outro pedido com o mesmo client_ref ganhou.
+      if (clientRef && /idx_turno_pedidos_client_ref|client_ref/.test(eIns.message || '')) {
+        await client.query('ROLLBACK');
+        const dup2 = await query(`SELECT id, criado_em FROM turno_pedidos WHERE client_ref=$1 LIMIT 1`, [clientRef]);
+        if (dup2.rows.length) return res.json({ ...dup2.rows[0], duplicado: true });
+      }
+      throw eIns;
+    }
     const pedidoId = pedidoIns.rows[0].id;
     for (const line of normalized) {
       await client.query(

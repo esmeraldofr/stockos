@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-pacotes-reais">
+<html lang="pt" data-stockos-ui="2026-07-07-pedidos-offline">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3619,6 +3619,7 @@ async function loadTurno() {
         <div class="card" id="pedidos-balcao-card" style="margin-bottom:12px">
           <div class="card-title">Pedidos ao balcão</div>
           <p style="font-size:12px;color:#64748b;margin:-4px 0 10px;line-height:1.45">Um pedido por cliente ou mesa. Cada pedido tem a sua fatura; as quantidades somam nas vendas do turno.</p>
+          <div id="pedidos-offline-banner"></div>
           <div id="pedidos-balcao-mount"><span style="color:#64748b">A carregar…</span></div>
         </div>
       </div>
@@ -4940,6 +4941,82 @@ function closePedidoPreviewModal() {
 }
 
 /** 2ª fase do registo: chamado pelo botão «Confirmar» do preview. */
+// ── Fila OFFLINE de pedidos ao balcão ─────────────────────────
+// Rede lenta/caída: o pedido fica numa fila local (com client_ref único —
+// o servidor ignora duplicados), o talão imprime na hora e a fila
+// sincroniza sozinha quando a rede volta. IDs: o nº definitivo do pedido
+// só é atribuído pelo servidor ao sincronizar; o talão offline leva a
+// referência local (ex.: OFF-K7Q2).
+const PEDIDOS_OFFLINE_KEY = 'stockos.pedidosOffline';
+
+function pedidosOfflineLer() {
+  try {
+    const v = JSON.parse(localStorage.getItem(PEDIDOS_OFFLINE_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (_) { return []; }
+}
+function pedidosOfflineGravar(fila) {
+  try { localStorage.setItem(PEDIDOS_OFFLINE_KEY, JSON.stringify(fila)); } catch (_) {}
+  renderPedidosOfflineBanner();
+}
+function ehErroDeRede(e) {
+  const m = String((e && e.message) || e || '');
+  return (e && e.name === 'TypeError') || /failed to fetch|networkerror|load failed|timeout|network request failed/i.test(m);
+}
+/** POST do pedido com timeout — se a rede não responde em 15s, tratamos
+ *  como offline (o client_ref garante que um sucesso escondido não duplica). */
+function apiPedidoComTimeout(tid, payload, ms) {
+  return Promise.race([
+    api('POST', `/turnos/${tid}/pedidos`, payload),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms || 15000))
+  ]);
+}
+
+function renderPedidosOfflineBanner() {
+  const el = document.getElementById('pedidos-offline-banner');
+  if (!el) return;
+  const fila = pedidosOfflineLer();
+  if (!fila.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div style="margin-bottom:10px;padding:8px 12px;background:rgba(251,146,60,0.12);border:1px solid rgba(251,146,60,0.5);border-radius:8px;font-size:12px;color:#fdba74;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span>📡 <strong>${fila.length}</strong> pedido${fila.length === 1 ? '' : 's'} offline por sincronizar — o talão já foi impresso; o pedido entra no sistema quando a rede voltar.</span>
+    <button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="runAction(event, sincronizarPedidosOffline)">↻ Sincronizar agora</button>
+  </div>`;
+}
+
+let __syncPedidosOfflineEmCurso = false;
+async function sincronizarPedidosOffline() {
+  if (__syncPedidosOfflineEmCurso || !S.token) return;
+  __syncPedidosOfflineEmCurso = true;
+  try {
+    let fila = pedidosOfflineLer();
+    while (fila.length) {
+      const item = fila[0];
+      try {
+        await apiPedidoComTimeout(item.tid, item.payload, 20000);
+        fila = fila.slice(1);
+        pedidosOfflineGravar(fila);
+      } catch (e) {
+        if (ehErroDeRede(e)) break; // ainda offline — tenta mais tarde
+        // Erro de validação (ex.: turno fechado): não vale a pena repetir.
+        fila = fila.slice(1);
+        pedidosOfflineGravar(fila);
+        alert(`⚠ Um pedido offline (${item.ref}, de ${item.quando || '—'}) foi REJEITADO ao sincronizar: ${e.message}\n\nConfere na lista de pedidos do turno.`);
+      }
+    }
+    if (!pedidosOfflineLer().length && S.page === 'turno' && S.turnoData?.id) {
+      // Fila vazia → refrescar o POS/resumos com os pedidos reais.
+      loadVendasMenu(S.turnoData.id, !!S.turnoCanEdit).catch(() => {});
+    }
+  } finally {
+    __syncPedidosOfflineEmCurso = false;
+    renderPedidosOfflineBanner();
+  }
+}
+window.addEventListener('online', () => { sincronizarPedidosOffline().catch(() => {}); });
+setInterval(() => {
+  if (pedidosOfflineLer().length && navigator.onLine !== false) sincronizarPedidosOffline().catch(() => {});
+}, 45000);
+
 async function pedidoBalcaoConfirmarRegisto() {
   const p = window.__pedidoBalcaoPendente;
   closePedidoPreviewModal();
@@ -4951,19 +5028,32 @@ async function pedidoBalcaoConfirmarRegisto() {
   // gesto do utilizador (Web Share API), mas isso fazia talões "fantasma" se o
   // POST falhasse (gap no SERIAL → talão impresso sem pedido na BD).
   // Agora: 1) save → 2) print só após sucesso, com o ID real do servidor.
+  // Rede lenta/caída → fila offline (client_ref evita duplicados).
+  const clientRef = 'cr-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const payload = {
+    cliente_nome: cliente,
+    tipo_pagamento: tipoPag,
+    com_entrega: comEntrega,
+    valor_entrega: valorEntrega,
+    promotor_id: promotorId || null,
+    linhas,
+    client_ref: clientRef
+  };
   let pedidoSalvo;
   try {
-    pedidoSalvo = await api('POST', `/turnos/${tid}/pedidos`, {
-      cliente_nome: cliente,
-      tipo_pagamento: tipoPag,
-      com_entrega: comEntrega,
-      valor_entrega: valorEntrega,
-      promotor_id: promotorId || null,
-      linhas
-    });
+    pedidoSalvo = await apiPedidoComTimeout(tid, payload, 15000);
   } catch (e) {
-    alert('Falha ao registar o pedido: ' + (e?.message || e) + '\n\nNão foi impresso talão. O rascunho ficou guardado — tenta de novo.');
-    return;
+    if (!ehErroDeRede(e)) {
+      alert('Falha ao registar o pedido: ' + (e?.message || e) + '\n\nNão foi impresso talão. O rascunho ficou guardado — tenta de novo.');
+      return;
+    }
+    // OFFLINE: guarda na fila, imprime o talão com referência local e limpa
+    // o rascunho — o pedido entra no sistema quando a rede voltar.
+    const refLocal = 'OFF-' + clientRef.slice(-4).toUpperCase();
+    const fila = pedidosOfflineLer();
+    fila.push({ tid: String(tid), payload, ref: refLocal, quando: new Date().toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) });
+    pedidosOfflineGravar(fila);
+    pedidoSalvo = { id: refLocal, offline: true };
   }
 
   // Print só depois do save bem sucedido, usando o ID devolvido pelo servidor.
@@ -5001,6 +5091,13 @@ async function pedidoBalcaoConfirmarRegisto() {
   }
   window.__pedidoBalcaoDraft = {};
   window.__pedidoBalcaoDraftTurnoId = tid;
+  // Offline: o refresh do servidor falharia — o rascunho já foi limpo e o
+  // banner mostra a fila; sincroniza quando a rede voltar.
+  if (pedidoSalvo && pedidoSalvo.offline) {
+    renderPedidosOfflineBanner();
+    pedidoBalcaoSyncDraftUI();
+    return;
+  }
   await loadVendasMenu(tid, !!S.turnoCanEdit);
 }
 
@@ -5820,6 +5917,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   }
   pedidoBalcaoSyncDraftUI();
   pedidoBalcaoLogoRefreshUI();
+  renderPedidosOfflineBanner();
+  if (pedidosOfflineLer().length) sincronizarPedidosOffline().catch(() => {});
   if (canEdit) { pedidoBalcaoLoadPromotores().catch(() => {}); }
 }
 
@@ -7709,6 +7808,14 @@ async function fecharTurno(ev, id) {
       true
     );
     await focusTurnoFieldParaValidacao(missing[0]);
+    return;
+  }
+  // Não fechar com pedidos offline por sincronizar deste turno — senão
+  // as vendas/caixa fechavam sem esses pedidos.
+  const filaOffTurno = pedidosOfflineLer().filter((it) => String(it.tid) === String(id));
+  if (filaOffTurno.length) {
+    turnoMsgErr(`Há ${filaOffTurno.length} pedido${filaOffTurno.length === 1 ? '' : 's'} offline por sincronizar neste turno. Liga a rede e toca em «↻ Sincronizar agora» (aba Pedidos ao balcão) antes de fechar.`, true);
+    sincronizarPedidosOffline().catch(() => {});
     return;
   }
   // TPA com valor exige a foto do recibo de fecho do TPA (o servidor

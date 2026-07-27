@@ -3714,7 +3714,22 @@ app.get('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), a
        ORDER BY data_emissao DESC, criado_em DESC
        LIMIT ${limit}`;
     const r = await query(sql, params);
-    res.json(r.rows);
+    let rows = r.rows;
+    // Nº de fotos adicionais por fatura (multi-foto) — melhor esforço.
+    try {
+      if (rows.length) {
+        await ensureFotosAnexos();
+        const chaves = rows.map((x) => 'fatura:' + x.id);
+        const c = await query(
+          `SELECT chave, COUNT(*)::int AS n FROM fotos_anexos WHERE chave = ANY($1) GROUP BY chave`,
+          [chaves]
+        );
+        const porChave = {};
+        c.rows.forEach((x) => { porChave[x.chave] = x.n; });
+        rows = rows.map((x) => ({ ...x, fotos_extra: porChave['fatura:' + x.id] || 0 }));
+      }
+    } catch (_) {}
+    res.json(rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -4262,7 +4277,125 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
      WHERE c.fatura_id=$1 ORDER BY c.id`,
     [fid]
   );
+  // Fotos adicionais da fatura (multi-foto) — fora da transacção; falhar
+  // aqui não perde a fatura.
+  try {
+    const extras = Array.isArray(req.body?.fotos_extra_base64) ? req.body.fotos_extra_base64 : [];
+    if (extras.length) {
+      await ensureFotosAnexos();
+      for (const f of extras.slice(0, 12)) {
+        if (typeof f === 'string' && f.startsWith('data:image')) {
+          await query(
+            `INSERT INTO fotos_anexos (chave, foto, criado_por) VALUES ($1,$2,$3)`,
+            ['fatura:' + fid, f, String(req.user.id || '')]
+          ).catch(() => {});
+        }
+      }
+    }
+  } catch (_) {}
   res.json({ ...fat.rows[0], linhas: linhasOut.rows });
+});
+
+// ── FOTOS ANEXAS (multi-foto por contexto) ────────────────────
+// Vários recibos/páginas por registo: chave identifica o contexto —
+// 'tpa:<turno_id>', 'bordero:<data>', 'fatura:<id>'. A primeira foto de
+// cada contexto continua também no campo antigo (validações e miniaturas
+// existentes não mudam); estas são as adicionais.
+let fotosAnexosReady = false;
+async function ensureFotosAnexos() {
+  if (fotosAnexosReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='fotos_anexos_v1'`);
+    if (r.rows.length) { fotosAnexosReady = true; return; }
+  } catch (_) {}
+  await qry(
+    `CREATE TABLE IF NOT EXISTS fotos_anexos (
+      id SERIAL PRIMARY KEY,
+      chave TEXT NOT NULL,
+      foto TEXT NOT NULL,
+      criado_por TEXT,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    [],
+    'fotos-anexos'
+  );
+  await qry(`CREATE INDEX IF NOT EXISTS idx_fotos_anexos_chave ON fotos_anexos (chave)`, [], 'idx-fotos-anexos');
+  try {
+    const chk = await query(
+      `SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='fotos_anexos'`
+    );
+    if (chk.rows.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('fotos_anexos_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      fotosAnexosReady = true;
+    }
+  } catch (_) {}
+}
+
+function fotosAnexosChaveValida(chave) {
+  return /^(tpa:\d+|bordero:\d{4}-\d{2}-\d{2}|fatura:\d+)$/.test(String(chave || ''));
+}
+
+app.get('/api/fotos', auth, async (req, res) => {
+  try {
+    const chave = String(req.query.chave || '').trim();
+    if (!fotosAnexosChaveValida(chave)) return res.status(400).json({ erro: 'Chave inválida' });
+    await ensureFotosAnexos();
+    const r = await query(
+      `SELECT id, chave, foto, criado_por, criado_em FROM fotos_anexos WHERE chave=$1 ORDER BY criado_em, id`,
+      [chave]
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/fotos', auth, async (req, res) => {
+  try {
+    const { chave, foto_base64 } = req.body || {};
+    if (!fotosAnexosChaveValida(chave)) return res.status(400).json({ erro: 'Chave inválida' });
+    if (typeof foto_base64 !== 'string' || !foto_base64.startsWith('data:image')) {
+      return res.status(400).json({ erro: 'Envia a foto (data URL de imagem)' });
+    }
+    await ensureFotosAnexos();
+    const r = await query(
+      `INSERT INTO fotos_anexos (chave, foto, criado_por) VALUES ($1,$2,$3) RETURNING id, criado_em`,
+      [chave, foto_base64, String(req.user.id || '')]
+    );
+    // Rede de segurança: se o campo antigo do contexto está vazio, esta
+    // foto passa a ser também a principal (validações continuam a bater).
+    try {
+      const mTpa = chave.match(/^tpa:(\d+)$/);
+      if (mTpa) {
+        await query(
+          `UPDATE turno_caixa SET tpa_foto_url=$1 WHERE turno_id=$2 AND COALESCE(tpa_foto_url,'')=''`,
+          [foto_base64, parseInt(mTpa[1], 10)]
+        ).catch(() => {});
+      }
+      const mBor = chave.match(/^bordero:(\d{4}-\d{2}-\d{2})$/);
+      if (mBor) {
+        await query(
+          `UPDATE depositos_banco SET bordero_foto_url=$1
+           WHERE COALESCE(bordero_foto_url,'')='' AND turno_id IN (SELECT id FROM turnos WHERE data=$2)`,
+          [foto_base64, mBor[1]]
+        ).catch(() => {});
+      }
+      const mFat = chave.match(/^fatura:(\d+)$/);
+      if (mFat) {
+        await query(
+          `UPDATE armazem_faturas SET foto_fatura_url=$1 WHERE id=$2 AND COALESCE(foto_fatura_url,'')=''`,
+          [foto_base64, parseInt(mFat[1], 10)]
+        ).catch(() => {});
+      }
+    } catch (_) {}
+    res.json({ ok: true, id: r.rows[0].id, criado_em: r.rows[0].criado_em });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/fotos/:id', auth, async (req, res) => {
+  try {
+    await ensureFotosAnexos();
+    await query(`DELETE FROM fotos_anexos WHERE id=$1`, [parseInt(req.params.id, 10) || 0]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // ── TURNOS ────────────────────────────────────────────────────

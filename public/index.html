@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-offline-fotos">
+<html lang="pt" data-stockos-ui="2026-07-27-multi-fotos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1822,7 +1822,7 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
           <input id="dep-data-dia" type="date" value="${dataDepComum.replace(/"/g, '&quot;')}" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''}/>
         </div>
         <div class="field">
-          <label>Foto do borderô (opcional) — uma para todo o registo</label>
+          <label>Fotos do borderô (opcional) — podes anexar várias</label>
           ${borderoDiaUrl ? `
             <div style="margin-bottom:8px">
               <a href="${attrUrl(borderoDiaUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block">
@@ -1833,8 +1833,9 @@ function renderDepositosSection(turnos, depositos, depositosErro) {
               </div>
             </div>
           ` : ''}
-          <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" id="dep-bordero-dia" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''} ${(depositos || []).length > 0 ? 'onchange="uploadBorderoDia(this)"' : ''}/>
-          <div style="font-size:11px;color:#64748b;margin-top:4px">Uma imagem por operação; substitui a anterior ao escolher outro ficheiro (ou ao registar de novo com nova foto). JPEG, PNG ou WebP.</div>
+          <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple id="dep-bordero-dia" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''} ${(depositos || []).length > 0 ? 'onchange="uploadBorderoDia(this)"' : ''}/>
+          <div style="font-size:11px;color:#64748b;margin-top:4px">A primeira imagem é a principal (substituída ao escolher outra); as restantes ficam como fotos adicionais. JPEG, PNG ou WebP.</div>
+          <div class="fotos-anexos" data-chave="bordero:${S.date}" data-canedit="${(!temTurnoFechado || bloqueado) ? '0' : '1'}"></div>
         </div>
         <button type="button" class="btn btn-success" onclick="runAction(event, submitDepositosDia)" ${(!temTurnoFechado || bloqueado) ? 'disabled' : ''}>${bloqueado ? '🔒 Fechado' : 'Registar depósito'}</button>
           `;
@@ -1857,6 +1858,7 @@ async function loadDepositos() {
       updateDepPreviewTotal();
       updateDepSaidasDestinoRequired();
       (turnos || []).forEach(t => { if (t.estado === 'fechado') validateDepCaixa(t.id); });
+      fotosAnexosInit();
     });
   } catch (e) {
     show('depositos-content', `<div class="alert alert-error">${e.message}</div>`);
@@ -2681,8 +2683,13 @@ async function submitDepositosDia() {
     }));
     const borderoInp = document.getElementById('dep-bordero-dia');
     let borderoB64 = '';
+    const borderoExtras = [];
     if (borderoInp && borderoInp.files && borderoInp.files[0]) {
-      borderoB64 = await comprimirFotoDataUrl(await fileToDataUrl(borderoInp.files[0]), 1600, 0.8);
+      const bFiles = Array.from(borderoInp.files);
+      borderoB64 = await comprimirFotoDataUrl(await fileToDataUrl(bFiles[0]), 1600, 0.8);
+      for (const f of bFiles.slice(1, 12)) {
+        borderoExtras.push(await comprimirFotoDataUrl(await fileToDataUrl(f), 1600, 0.8));
+      }
     }
     const payload = { itens, valor_saidas_total: saidasUnica, saidas_destino: destinoSaidas };
     if (borderoB64) payload.bordero_foto_base64 = borderoB64;
@@ -2692,6 +2699,10 @@ async function submitDepositosDia() {
     (S.turnosDia || []).forEach((t) => { nomesTurnos[String(t.id)] = t.nome; });
     const rDep = await apiEscrita('POST', '/depositos/lote', payload,
       { desc: 'Depósitos do dia', timeoutMs: 10000, chave: `deplote:${S.date}`, extra: { data: S.date, turnos: nomesTurnos } });
+    // Fotos adicionais do borderô — entram na fila depois do lote (FIFO).
+    for (const bx of borderoExtras) {
+      await apiEscrita('POST', '/fotos', { chave: `bordero:${S.date}`, foto_base64: bx }, { desc: 'Foto adicional do borderô', timeoutMs: 10000 });
+    }
     if (rDep && rDep._offline) alert('Depósitos guardados neste aparelho — entram no sistema quando a rede voltar.');
     await reloadDepositsView().catch(() => {});
   } catch (e) {
@@ -2703,8 +2714,14 @@ async function uploadBorderoDia(inputEl) {
   if (!inputEl || !inputEl.files || !inputEl.files[0]) return;
   inputEl.disabled = true;
   try {
-    const b64 = await comprimirFotoDataUrl(await fileToDataUrl(inputEl.files[0]), 1600, 0.8);
+    const files = Array.from(inputEl.files);
+    const b64 = await comprimirFotoDataUrl(await fileToDataUrl(files[0]), 1600, 0.8);
     await apiEscrita('POST', '/depositos/bordero-dia', { data: S.date, foto_base64: b64 }, { desc: 'Foto do borderô', timeoutMs: 10000 });
+    // Restantes imagens → fotos adicionais do borderô.
+    for (const f of files.slice(1, 12)) {
+      const bx = await comprimirFotoDataUrl(await fileToDataUrl(f), 1600, 0.8);
+      await apiEscrita('POST', '/fotos', { chave: `bordero:${S.date}`, foto_base64: bx }, { desc: 'Foto adicional do borderô', timeoutMs: 10000 });
+    }
     inputEl.value = '';
     await reloadDepositsView().catch(() => {});
   } catch (e) {
@@ -3689,8 +3706,9 @@ async function loadTurno() {
               <label>TPA / Máquina <span style="font-weight:400;color:#64748b">(obrigatório)</span></label>
               <input type="number" min="0" step="any" id="c-tpa" value="${fmtCaixaAttr(caixa.tpa)}" data-caixa-req="1" title="Obrigatório" oninput="this.classList.remove('stock-caixa-required-missing');calcCaixa()" onblur="caixaInputBlur(this)" ${canEdit?'':'disabled'}/>
               <div style="margin-top:6px">
-                <input type="file" id="c-tpa-foto" accept="image/jpeg,image/png,image/webp" style="font-size:11px;max-width:100%" onchange="tpaFotoOnFile(this)" ${canEdit?'':'disabled'}/>
-                <div id="c-tpa-foto-status" style="font-size:11px;margin-top:3px;color:${caixa.tpa_foto_url ? '#86efac' : '#64748b'}">${caixa.tpa_foto_url ? '✓ Foto do fecho TPA anexada' : '📷 Foto do recibo de fecho do TPA — obrigatória para fechar o turno com valor no TPA.'}</div>
+                <input type="file" id="c-tpa-foto" accept="image/jpeg,image/png,image/webp" multiple style="font-size:11px;max-width:100%" onchange="tpaFotoOnFile(this)" ${canEdit?'':'disabled'}/>
+                <div id="c-tpa-foto-status" style="font-size:11px;margin-top:3px;color:${caixa.tpa_foto_url ? '#86efac' : '#64748b'}">${caixa.tpa_foto_url ? '✓ Foto do fecho TPA anexada' : '📷 Foto do recibo de fecho do TPA — obrigatória para fechar o turno com valor no TPA. Podes anexar várias.'}</div>
+                <div class="fotos-anexos" data-chave="tpa:${turno.id}" data-canedit="${canEdit ? '1' : '0'}"></div>
               </div>
             </div>
             <div class="caixa-item">
@@ -3749,6 +3767,7 @@ async function loadTurno() {
         /* resolve IDs Fino 400/1000 sem catálogo */
       }
     }
+    fotosAnexosInit();
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
     if (finoBarrilAjustadoRecipiente && turno.id) {
       try {
@@ -5130,9 +5149,11 @@ function aquecerCacheOffline() {
         `/turnos/${encodeURIComponent(tid)}/faltas`,
         `/turnos/${encodeURIComponent(tid)}/caixa-entradas`,
         `/irregularidades/decisoes?turno_id=${encodeURIComponent(tid)}`,
-        `/irregularidades/comentarios?turno_id=${encodeURIComponent(tid)}`
+        `/irregularidades/comentarios?turno_id=${encodeURIComponent(tid)}`,
+        `/fotos?chave=${encodeURIComponent('tpa:' + tid)}`
       );
     }
+    urls.push(`/fotos?chave=${encodeURIComponent('bordero:' + hoje)}`);
     // Páginas de gestão (armazém, fornecedores, produtos, equipa): também
     // ficam consultáveis offline para quem as usa.
     if (['admin', 'gestor', 'compras'].includes(S.user?.role)) {
@@ -5448,6 +5469,19 @@ function aplicarEscritasOffline(path, data) {
     if (p === '/depositos' && Array.isArray(data)) {
       return overlayDepositos(params.get('data') || '', data, fila);
     }
+    if (p === '/fotos' && Array.isArray(data)) {
+      const chaveQ = params.get('chave') || '';
+      let out = data.slice();
+      for (const it of fila) {
+        if (it.method === 'POST' && String(it.path) === '/fotos' && it.body && it.body.chave === chaveQ) {
+          out = out.concat([{ id: 'off:' + it.ref, chave: chaveQ, foto: it.body.foto_base64, criado_em: it.criado_em, _offline: true }]);
+        } else if (it.method === 'DELETE' && /^\/fotos\/[^/]+$/.test(String(it.path))) {
+          const did = decodeURIComponent(String(it.path).split('/')[2]);
+          out = out.filter((r) => String(r.id) !== did);
+        }
+      }
+      return out;
+    }
     if (p === '/face-descriptors' && Array.isArray(data)) {
       // Faces registadas/removidas offline contam já para o reconhecimento.
       let out = data.slice();
@@ -5756,6 +5790,84 @@ setTimeout(() => {
     sincronizarEscritasOffline().then(() => sincronizarPedidosOffline()).catch(() => {});
   }
 }, 2500);
+
+// ── FOTOS ANEXAS (várias fotos por registo) ───────────────────
+// Galeria reutilizável: TPA (tpa:<turno>), borderô (bordero:<data>) e
+// fatura (fatura:<id>) aceitam várias fotos. Tudo pela fila offline.
+function fotosAnexosInit() {
+  document.querySelectorAll('.fotos-anexos[data-chave]:not([data-init])').forEach((el) => {
+    el.setAttribute('data-init', '1');
+    fotosAnexosRender(el).catch(() => {});
+  });
+}
+function fotosAnexosRefresh(chave) {
+  document.querySelectorAll(`.fotos-anexos[data-chave="${chave}"]`).forEach((el) => {
+    fotosAnexosRender(el).catch(() => {});
+  });
+}
+async function fotosAnexosRender(el) {
+  const chave = el.getAttribute('data-chave');
+  const canEdit = el.getAttribute('data-canedit') === '1';
+  let fotos = [];
+  try {
+    fotos = await api('GET', `/fotos?chave=${encodeURIComponent(chave)}`);
+  } catch (_) {
+    // Sem rede e sem cache deste GET: mostra pelo menos as fotos em fila.
+    try { fotos = aplicarEscritasOffline(`/fotos?chave=${encodeURIComponent(chave)}`, []); } catch (_2) { fotos = []; }
+  }
+  const thumbs = (Array.isArray(fotos) ? fotos : []).map((f) => `
+    <span style="position:relative;display:inline-block">
+      <a href="${attrUrl(f.foto)}" target="_blank" rel="noopener noreferrer"><img src="${attrUrl(f.foto)}" alt="" style="height:56px;width:56px;object-fit:cover;border-radius:8px;border:1px solid #334155;vertical-align:top${f._offline ? ';opacity:.85' : ''}"/></a>
+      ${f._offline ? '<span title="Por sincronizar" style="position:absolute;left:2px;bottom:2px;font-size:10px">⏳</span>' : ''}
+      ${canEdit ? `<button type="button" title="Remover esta foto" onclick="fotosAnexosApagar('${chave}', '${String(f.id)}')" style="position:absolute;top:-6px;right:-6px;background:#7f1d1d;color:#fecaca;border:1px solid #ef4444;border-radius:50%;width:18px;height:18px;font-size:10px;line-height:1;cursor:pointer;padding:0">✕</button>` : ''}
+    </span>`).join('');
+  el.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      ${thumbs}
+      ${canEdit ? `<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#94a3b8;border:1px dashed #475569;border-radius:8px;padding:6px 10px;cursor:pointer">📷 + foto
+        <input type="file" accept="image/jpeg,image/png,image/webp" multiple style="display:none" onchange="fotosAnexosAdicionar(this, '${chave}')"/>
+      </label>` : (thumbs ? '' : '<span style="font-size:11px;color:#475569">Sem fotos adicionais.</span>')}
+    </div>`;
+}
+async function fotosAnexosAdicionar(inp, chave) {
+  const files = Array.from((inp && inp.files) || []);
+  if (!files.length) return;
+  try {
+    for (const f of files.slice(0, 12)) {
+      const b64 = await comprimirFotoDataUrl(await fileToDataUrl(f), 1600, 0.8);
+      await apiEscrita('POST', '/fotos', { chave, foto_base64: b64 },
+        { desc: 'Foto adicional', timeoutMs: 10000, tid: (chave.match(/^tpa:(.+)$/) || [])[1] || null });
+    }
+    if (inp) inp.value = '';
+  } catch (e) { alert(e.message || String(e)); }
+  fotosAnexosRefresh(chave);
+}
+async function fotosAnexosApagar(chave, id) {
+  if (!confirm('Remover esta foto?')) return;
+  try {
+    if (String(id).startsWith('off:')) {
+      // Ainda na fila offline — basta retirá-la da fila.
+      const refF = String(id).slice(4);
+      escritasOfflineGravar(escritasOfflineLer().filter((x) => x.ref !== refF));
+    } else {
+      await apiEscrita('DELETE', `/fotos/${encodeURIComponent(id)}`, {}, { desc: 'Remover foto adicional' });
+    }
+  } catch (e) { alert(e.message || String(e)); }
+  fotosAnexosRefresh(chave);
+}
+/** Abre todas as fotos de um contexto (ex.: fatura) numa página própria. */
+async function verFotosAnexos(chave, legacyUrl) {
+  let fotos = [];
+  try { fotos = await api('GET', `/fotos?chave=${encodeURIComponent(chave)}`); } catch (_) {}
+  const urls = [];
+  if (legacyUrl) urls.push(legacyUrl);
+  (Array.isArray(fotos) ? fotos : []).forEach((f) => { if (f.foto) urls.push(f.foto); });
+  if (!urls.length) { alert('Sem fotos.'); return; }
+  const w = window.open('', '_blank');
+  if (!w) return;
+  w.document.write(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fotos</title><body style="margin:0;background:#000;padding:12px;text-align:center">${urls.map((u) => `<img src="${u}" style="max-width:100%;margin:8px 0;border-radius:8px;display:block"/>`).join('')}</body>`);
+  w.document.close();
+}
 
 /** Reduz a foto (lado maior ~1280 px, JPEG) — cabe na fila offline e envia
  *  mais depressa em rede fraca. */
@@ -8583,7 +8695,8 @@ async function tpaFotoOnFile(inp) {
   if (!turnoId || !inp || !inp.files || !inp.files[0]) return;
   try {
     if (st) { st.style.color = '#94a3b8'; st.textContent = 'A enviar foto…'; }
-    const b64Raw = await fileToDataUrl(inp.files[0]);
+    const files = Array.from(inp.files);
+    const b64Raw = await fileToDataUrl(files[0]);
     // Reduz a foto: envia mais depressa e cabe na fila offline.
     const b64 = await comprimirFotoDataUrl(b64Raw, 1280, 0.72);
     const r = await apiEscrita('POST', `/turnos/${turnoId}/caixa/tpa-foto`, { foto_base64: b64 },
@@ -8592,12 +8705,21 @@ async function tpaFotoOnFile(inp) {
       if (!S.turnoData.caixa) S.turnoData.caixa = {};
       S.turnoData.caixa.tpa_foto_url = (r && r.tpa_foto_url) || b64;
     }
+    // Fotos adicionais (recibo em várias partes) → galeria multi-foto.
+    for (const f of files.slice(1, 12)) {
+      const bx = await comprimirFotoDataUrl(await fileToDataUrl(f), 1280, 0.72);
+      await apiEscrita('POST', '/fotos', { chave: `tpa:${turnoId}`, foto_base64: bx },
+        { tid: turnoId, desc: 'Foto adicional do TPA', timeoutMs: 10000 });
+    }
+    if (files.length > 1) fotosAnexosRefresh(`tpa:${turnoId}`);
     if (st) {
       st.style.color = '#86efac';
+      const n = files.length;
       st.textContent = r && r._offline
-        ? '✓ Foto guardada neste aparelho (sincroniza sozinha)'
-        : '✓ Foto do fecho TPA anexada';
+        ? `✓ ${n > 1 ? n + ' fotos guardadas' : 'Foto guardada'} neste aparelho (sincroniza sozinha)`
+        : `✓ ${n > 1 ? n + ' fotos do fecho TPA anexadas' : 'Foto do fecho TPA anexada'}`;
     }
+    inp.value = '';
   } catch (e) {
     if (st) { st.style.color = '#ef4444'; st.textContent = 'Falha ao enviar: ' + (e.message || e); }
   }
@@ -10661,7 +10783,7 @@ async function drawArmazem() {
         <div class="field"><label>Notas (opcional)</label><input id="fx-notas" type="text" placeholder="Opcional"/></div>
         <div class="field">
           <label>Foto da fatura</label>
-          <input type="file" id="fx-foto-fatura" accept="image/jpeg,image/png,image/webp"/>
+          <input type="file" id="fx-foto-fatura" accept="image/jpeg,image/png,image/webp" multiple/>
           <div style="font-size:11px;color:#64748b;margin-top:4px">JPEG, PNG ou WebP. Obrigatório para registar.</div>
         </div>
         <div id="fx-excesso-wrap" style="display:none;border:1px solid #d97706;border-radius:10px;padding:12px;margin-bottom:10px;background:#1c1917">
@@ -11233,9 +11355,11 @@ async function loadArmazemData() {
             : '—';
           const quando = f.criado_em ? dateTimeLabel(f.criado_em) : dateLabel(f.data_emissao);
           const fotoUrl = (f.foto_fatura_url || '').trim();
-          const fotoCell = fotoUrl
+          const nExtra = parseInt(f.fotos_extra, 10) || 0;
+          const fotoCell = (fotoUrl
             ? `<a href="${attrUrl(fotoUrl)}" target="_blank" rel="noopener noreferrer" title="Ver foto"><img src="${attrUrl(fotoUrl)}" alt="" style="max-height:44px;max-width:72px;object-fit:cover;border-radius:6px;border:1px solid #334155;vertical-align:middle"/></a>`
-            : '<span style="color:#64748b;font-size:12px">—</span>';
+            : '<span style="color:#64748b;font-size:12px">—</span>')
+            + (nExtra > 0 ? ` <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:11px" title="Ver as fotos adicionais desta fatura" onclick="verFotosAnexos('fatura:${f.id}')">+${nExtra} 📷</button>` : '');
           return `<tr>
           <td style="font-size:12px;color:#94a3b8">${quando}</td>
           <td style="font-weight:600">${f.numero_fatura || '—'}</td>
@@ -11732,10 +11856,15 @@ async function submitFaturaArmazem() {
   try {
     const fotoInp = document.getElementById('fx-foto-fatura');
     if (!fotoInp || !fotoInp.files || !fotoInp.files[0]) {
-      if (msg) msg.innerHTML = '<div class="alert alert-error">Anexa a foto da fatura (JPEG, PNG ou WebP).</div>';
+      if (msg) msg.innerHTML = '<div class="alert alert-error">Anexa a foto da fatura (JPEG, PNG ou WebP) — podes escolher várias.</div>';
       return;
     }
-    const fotoB64 = await comprimirFotoDataUrl(await fileToDataUrl(fotoInp.files[0]), 1600, 0.8);
+    const fxFiles = Array.from(fotoInp.files);
+    const fotoB64 = await comprimirFotoDataUrl(await fileToDataUrl(fxFiles[0]), 1600, 0.8);
+    const fotosExtra = [];
+    for (const f of fxFiles.slice(1, 12)) {
+      fotosExtra.push(await comprimirFotoDataUrl(await fileToDataUrl(f), 1600, 0.8));
+    }
     const totalEst = computeFaturaTotalEstimado();
     const saldo = S.armazemSaldoDia != null ? S.armazemSaldoDia : 0;
     const selF = document.getElementById('fx-fornecedor-id');
@@ -11771,6 +11900,7 @@ async function submitFaturaArmazem() {
       if (ts) payload.turno_saida_id = parseInt(ts, 10);
     }
     if (window.__faturaProformaId) payload.proforma_id = window.__faturaProformaId;
+    if (fotosExtra.length) payload.fotos_extra_base64 = fotosExtra;
     const rFat = await apiEscrita('POST', '/armazem/faturas', payload, { desc: 'Fatura de compra', timeoutMs: 10000 });
     if (window.__faturaProformaId) {
       window.__faturaProformaId = null;

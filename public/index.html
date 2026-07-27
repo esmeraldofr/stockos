@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-gestao-empresas">
+<html lang="pt" data-stockos-ui="2026-07-27-cache-estavel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -819,8 +819,14 @@ async function mudarEmpresa(id) {
   if (!podeMudarEmpresa()) return;
   const v = parseInt(id, 10);
   if (!Number.isFinite(v) || v <= 0 || v === empresaAtivaId()) return;
-  S.empresaId = v;
-  try { localStorage.setItem('stockos.empresaId', String(v)); } catch (_) {}
+  // Voltar à própria empresa → limpa a migração (URLs voltam ao normal).
+  if (v === (parseInt(S.user?.empresa_id, 10) || 1)) {
+    S.empresaId = null;
+    try { localStorage.removeItem('stockos.empresaId'); } catch (_) {}
+  } else {
+    S.empresaId = v;
+    try { localStorage.setItem('stockos.empresaId', String(v)); } catch (_) {}
+  }
   try {
     const lojas = await api('GET', '/lojas');
     S.lojas = Array.isArray(lojas) && lojas.length ? lojas : [];
@@ -1012,8 +1018,14 @@ function comLojaNoPath(path) {
   if (!/[?&]loja=/.test(p)) {
     p += (p.includes('?') ? '&' : '?') + 'loja=' + lojaAtivaId();
   }
-  // Admin migrado para outra empresa: contexto vai em todos os pedidos.
-  if (typeof podeMudarEmpresa === 'function' && podeMudarEmpresa() && S.empresaId && !/[?&]empresa=/.test(p)) {
+  // Admin migrado para OUTRA empresa: contexto vai em todos os pedidos.
+  // Na própria empresa não se acrescenta nada — os URLs (e o cache
+  // offline) ficam estáveis.
+  if (
+    typeof podeMudarEmpresa === 'function' && podeMudarEmpresa() &&
+    S.empresaId && empresaAtivaId() !== (parseInt(S.user?.empresa_id, 10) || 1) &&
+    !/[?&]empresa=/.test(p)
+  ) {
     p += '&empresa=' + empresaAtivaId();
   }
   return p;
@@ -5280,8 +5292,11 @@ function aquecerCacheOffline() {
       '/escala/template',
       '/faltas?status=pendentes',
       `/escala/semana?data_inicio=${encodeURIComponent(hoje)}&data_fim=${encodeURIComponent(hoje)}`,
-      '/face-descriptors'
+      '/face-descriptors',
+      '/lojas'
     ];
+    if (['admin', 'gestor'].includes(S.user?.role)) urls.push('/lojas?todos=1');
+    if (S.user?.role === 'admin') urls.push('/empresas');
     if (tid && !turnoIdEhLocal(tid)) {
       urls.push(
         `/dia?data=${encodeURIComponent(hoje)}&turno_id=${encodeURIComponent(tid)}`,

@@ -4632,6 +4632,26 @@ app.post('/api/empresas', auth, requireRole('admin'), async (req, res) => {
     const nome = String((req.body && req.body.nome) || '').trim();
     if (!nome) return res.status(400).json({ erro: 'Indica o nome da empresa' });
     const r = await query(`INSERT INTO empresas (nome) VALUES ($1) RETURNING id, nome, ativo, criado_em`, [nome]);
+    const empresa = r.rows[0];
+    // Cada empresa nasce com a primeira loja — sem loja não há turnos.
+    const lojaNome = String((req.body && req.body.loja_nome) || '').trim() || 'Loja 1';
+    let loja = null;
+    try {
+      const lr = await query(`INSERT INTO lojas (empresa_id, nome) VALUES ($1,$2) RETURNING id, nome`, [empresa.id, lojaNome]);
+      loja = lr.rows[0];
+      __lojaEmpresaCache.at = 0;
+    } catch (_) {}
+    res.json({ ...empresa, loja });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/empresas/:id', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const nome = String((req.body && req.body.nome) || '').trim();
+    if (!nome) return res.status(400).json({ erro: 'Indica o nome da empresa' });
+    const r = await query(`UPDATE empresas SET nome=$1 WHERE id=$2 RETURNING id, nome, ativo`, [nome, parseInt(req.params.id, 10) || 0]);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Empresa não encontrada' });
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });

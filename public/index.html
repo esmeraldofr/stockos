@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-offline-pwa">
+<html lang="pt" data-stockos-ui="2026-07-07-fila-visivel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4992,6 +4992,39 @@ function renderPedidosOfflineBanner() {
   </div>`;
 }
 
+/** Cartões dos pedidos ainda na fila local (⏳ por sincronizar) — mostram o
+ *  conteúdo completo na lista «Pedidos do turno». */
+function pedidosOfflineListaHtml(turnoId) {
+  const fila = pedidosOfflineLer().filter((it) => String(it.tid) === String(turnoId));
+  if (!fila.length) return '';
+  const catalog = window.__pedidoProdutosOpts || [];
+  const map = {};
+  catalog.forEach((o) => { map[String(o.id)] = o; });
+  return fila.map((it) => {
+    const pl = it.payload || {};
+    let total = 0;
+    const linhas = (pl.linhas || []).map((ln) => {
+      const o = map[String(ln.produto_id)] || {};
+      const { line } = pedidoBalcaoValorLinha(o, ln.quantidade);
+      total += line;
+      const isCopo = o.grupo === 'BebidaCopo' || (o.venda_por_copo === true && (parseFloat(o.kg_por_copo) || 0) > 0);
+      const unid = isCopo ? 'copo' : 'unidade';
+      return `<div style="display:flex;gap:8px;padding:3px 0;font-size:12px">
+        <div style="flex:1;min-width:0;color:#a5b4fc">${fmtNum(ln.quantidade)} ${unid}${(parseFloat(ln.quantidade) || 0) === 1 ? '' : 's'} · <span style="color:#cbd5e1">${escapeHtml(o.nome || 'Item')}</span></div>
+        <div style="color:#4ade80;font-variant-numeric:tabular-nums;white-space:nowrap">${fmt(line)}</div>
+      </div>`;
+    }).join('');
+    total += parseFloat(pl.valor_entrega) || 0;
+    return `<div style="padding:10px 0;border-bottom:1px solid #334155;border-left:3px solid rgba(251,146,60,0.6);padding-left:10px">
+      <div style="font-weight:600;color:#e2e8f0">Pedido ${escapeHtml(it.ref)} <span style="font-size:10px;background:rgba(251,146,60,0.15);color:#fdba74;padding:1px 6px;border-radius:6px;margin-left:4px">⏳ por sincronizar</span></div>
+      <div style="font-size:12px;color:#64748b">${escapeHtml(it.quando || '')} · ${pl.cliente_nome ? escapeHtml(pl.cliente_nome) : '—'}</div>
+      <div style="font-size:12px;color:#94a3b8;margin-top:2px">Pagamento: <strong style="color:#cbd5e1">${escapeHtml(pedidoTipoPagamentoLabel(pl.tipo_pagamento))}</strong>${pl.com_entrega ? ` · Entrega <strong style="color:#60a5fa">${fmt(parseFloat(pl.valor_entrega) || 0)}</strong>` : ''}</div>
+      <div style="font-size:13px;color:#94a3b8;margin-top:4px">Total <strong style="color:#4ade80">${fmt(total)}</strong></div>
+      ${linhas ? `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #334155">${linhas}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
 let __syncPedidosOfflineEmCurso = false;
 async function sincronizarPedidosOffline() {
   if (__syncPedidosOfflineEmCurso || !S.token) return;
@@ -5896,7 +5929,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   })();
   // Aba "Pedidos ao balcão": lista Pedidos do turno por baixo do POS.
   mount.innerHTML = formHtml +
-    `<div class="pedidos-balcao-lista-turno" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${listHtml}</div></div>`;
+    `<div class="pedidos-balcao-lista-turno" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px"><div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Pedidos do turno (${pedidos.length + pedidosOfflineLer().filter((it) => String(it.tid) === String(turnoId)).length})</div><button type="button" id="ver-pedidos-turno-btn" class="btn btn-ghost btn-sm" onclick="togglePedidosTurnoLista()">Mostrar pedidos do turno</button></div><div id="pedidos-turno-lista" style="display:none">${pedidosOfflineListaHtml(turnoId)}${listHtml}</div></div>`;
   // Aba "Caixa": Produtos vendidos + Comissões.
   const resumoMount = document.getElementById('pedidos-resumo-mount');
   if (resumoMount) {

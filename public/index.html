@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-lojas-ficha">
+<html lang="pt" data-stockos-ui="2026-07-27-operador-sistema">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -995,6 +995,13 @@ async function api(method, path, body) {
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
+/** Nome apresentado de cada perfil. O valor interno não muda (permissões
+ *  e histórico intactos): 'compras' passa a mostrar «Operador de sistema». */
+function roleDisplay(role) {
+  const r = String(role || '').toLowerCase();
+  const m = { admin: 'Admin', gestor: 'Gestor', operador: 'Operador', compras: 'Operador de sistema', externo: 'Externo' };
+  return m[r] || (role || '');
+}
 function fmt(v) {
   const n = parseFloat(v) || 0;
   return n.toLocaleString('pt-AO') + ' Kz';
@@ -1606,7 +1613,7 @@ function renderMenuDrawer() {
     return;
   }
   const nome = S.user?.nome || '';
-  const role = S.user?.role ? String(S.user.role).toUpperCase() : '';
+  const role = S.user?.role ? roleDisplay(S.user.role).toUpperCase() : '';
   if (userEl) userEl.textContent = nome ? `${nome}${role ? ` · ${role}` : ''}` : (role || '');
   const items = menuEntries().map((e) => {
     const n = (typeof e.badge === 'function') ? (parseInt(e.badge(), 10) || 0) : 0;
@@ -2068,7 +2075,7 @@ function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
     if (!lista.length) return '<span class="dia-escala-empty">—</span>';
     return lista.map(r => {
       const tipParts = [];
-      if (r.utilizador_role) tipParts.push(String(r.utilizador_role).toUpperCase());
+      if (r.utilizador_role) tipParts.push(roleDisplay(r.utilizador_role).toUpperCase());
       const a = r.area_trabalho != null && r.area_trabalho !== '' ? parseInt(r.area_trabalho, 10) : NaN;
       if (Number.isFinite(a) && a >= 1 && a <= 3) tipParts.push(`Área ${areaTrabalhoAbbr(a)}: ${areaTrabalhoLabel(a)}`);
       if (r.notas) tipParts.push(String(r.notas));
@@ -9291,7 +9298,7 @@ async function loadTurnoAreasEscalados() {
       }
       slot.innerHTML = pessoas.map((r) => {
         const nome = r.utilizador_nome || 'Sem nome';
-        const role = r.utilizador_role ? String(r.utilizador_role).toUpperCase() : '';
+        const role = r.utilizador_role ? roleDisplay(r.utilizador_role).toUpperCase() : '';
         const tipParts = [];
         if (role) tipParts.push(role);
         if (r.notas) tipParts.push(String(r.notas));
@@ -9400,7 +9407,7 @@ async function loadEscalaTurno() {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;${i < lista.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
         <div>
           <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>
-          <div style="font-size:12px;color:#64748b">${(r.utilizador_role || 'operador').toUpperCase()}</div>
+          <div style="font-size:12px;color:#64748b">${roleDisplay(r.utilizador_role || 'operador').toUpperCase()}</div>
           ${areaLine}
         </div>
         ${r.notas ? `<div style="font-size:12px;color:#94a3b8;text-align:right;max-width:55%">${r.notas}</div>` : '<div style="font-size:12px;color:#475569">—</div>'}
@@ -9426,7 +9433,7 @@ async function loadEscalaTurno() {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;${i < equipaReal.length - 1 ? 'border-bottom:1px solid #334155;' : ''}">
         <div>
           <div style="font-weight:600;color:#e2e8f0">${r.utilizador_nome || 'Sem nome'}</div>
-          <div style="font-size:12px;color:#64748b">${(r.utilizador_role || 'operador').toUpperCase()}</div>
+          <div style="font-size:12px;color:#64748b">${roleDisplay(r.utilizador_role || 'operador').toUpperCase()}</div>
           ${horarioLine}
           ${r.cobrindo_utilizador_nome ? `<div style="font-size:12px;color:#60a5fa;margin-top:2px">Cobrindo: ${r.cobrindo_utilizador_nome}</div>` : ''}
           ${r.motivo_falta ? `<div style="font-size:12px;color:#fbbf24;margin-top:2px">Motivo da falta: ${r.motivo_falta}</div>` : ''}
@@ -10544,7 +10551,7 @@ async function loadAssiduidade() {
         <tr>
           <td style="padding:8px 10px;color:#e2e8f0;vertical-align:top">
             <div style="font-weight:600">${escapeHtml(r.utilizador_nome || 'Sem nome')}</div>
-            <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
+            <div style="font-size:11px;color:#64748b">${escapeHtml(roleDisplay(r.utilizador_role).toUpperCase())}</div>
           </td>
           <td style="padding:8px 10px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;vertical-align:top">${esperados}</td>
           <td style="padding:8px 10px;text-align:right;vertical-align:top">
@@ -10692,7 +10699,7 @@ function audApplyFilter() {
         <td style="padding:8px 10px;color:#94a3b8;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:top">${escapeHtml(r.quando_local || '')}</td>
         <td style="padding:8px 10px;color:#e2e8f0;vertical-align:top">
           <div style="font-weight:600">${escapeHtml(r.utilizador_nome || '— anónimo —')}</div>
-          <div style="font-size:11px;color:#64748b">${escapeHtml(String(r.utilizador_role || '').toUpperCase())}</div>
+          <div style="font-size:11px;color:#64748b">${escapeHtml(roleDisplay(r.utilizador_role).toUpperCase())}</div>
         </td>
         <td style="padding:8px 10px;vertical-align:top">
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${audMetodoBadge(r.metodo)} ${audStatusBadge(r.status)}</div>
@@ -13125,7 +13132,7 @@ function showUserForm(u) {
       <div class="field"><label>Role</label>
         <select id="u-role">
           <option value="operador" ${u?.role==='operador'?'selected':''}>Operador</option>
-          <option value="compras"  ${u?.role==='compras'?'selected':''}>Compras (dia, armazém, produtos)</option>
+          <option value="compras"  ${u?.role==='compras'?'selected':''}>Operador de sistema (dia, armazém, produtos)</option>
           <option value="gestor"   ${u?.role==='gestor'?'selected':''}>Gestor</option>
           <option value="admin"    ${u?.role==='admin'?'selected':''}>Admin</option>
         </select>
@@ -13268,7 +13275,7 @@ async function drawEquipa() {
     const lista = await api('GET', '/equipa');
     // Guardar em S.equipaUsers para drawPerfil poder encontrar o utilizador
     S.equipaUsers = lista;
-    const roleLabel = { gestor: 'Gestor', operador: 'Operador', compras: 'Compras' };
+    const roleLabel = { gestor: 'Gestor', operador: 'Operador', compras: roleDisplay('compras') };
     show('equipa-users', `
       <div class="card">
         <div class="card-title">Utilizadores</div>
@@ -13863,7 +13870,7 @@ async function drawPerfil() {
   const todasListas = [...(S.utilizadores || []), ...(S.equipaUsers || [])];
   let u = todasListas.find(x => String(x.id) === String(targetUid || S.user?.id)) || S.user || {};
   u = { has_face: false, face_foto_url: '', ...u };
-  const roleLabel = { admin: 'Admin', gestor: 'Gestor', operador: 'Operador', compras: 'Compras' }[u.role] || u.role;
+  const roleLabel = roleDisplay(u.role);
   render(`
     <div id="header">
       <div style="font-size:18px;font-weight:700;color:#f1f5f9">👤 Perfil</div>

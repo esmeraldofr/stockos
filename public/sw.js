@@ -28,7 +28,26 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   let url;
   try { url = new URL(req.url); } catch (_) { return; }
-  if (url.origin !== self.location.origin) return;
+  if (url.origin !== self.location.origin) {
+    // face-api.js e modelos de reconhecimento facial (CDN): CACHE primeiro —
+    // depois da primeira utilização com rede, a página Presença abre e
+    // reconhece rostos totalmente offline.
+    if (url.hostname === 'cdn.jsdelivr.net') {
+      e.respondWith(
+        caches.match(req).then((hit) =>
+          hit ||
+          fetch(req).then((resp) => {
+            if (resp && resp.ok) {
+              const clone = resp.clone();
+              caches.open(CACHE).then((c) => c.put(req, clone)).catch(() => {});
+            }
+            return resp;
+          })
+        )
+      );
+    }
+    return;
+  }
 
   if (url.pathname.startsWith('/api/')) {
     // Dados: rede primeiro; offline → último valor conhecido.

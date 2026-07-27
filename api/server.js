@@ -7211,15 +7211,27 @@ app.delete('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
 app.post('/api/presencas', async (req, res) => {
   try {
     await dbReady;
-    const { utilizador_id, tipo } = req.body;
+    const { utilizador_id, tipo, criado_em_cliente } = req.body;
     if (!utilizador_id || !['entrada','saida'].includes(tipo)) {
       return res.status(400).json({ erro: 'Parâmetros inválidos' });
     }
     const u = await query(`SELECT id, nome FROM utilizadores WHERE id=$1 AND ativo=true`, [utilizador_id]);
     if (!u.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
+    // Presença registada offline: usa a hora do aparelho (o momento real do
+    // picar), não a hora da sincronização. Limites de sanidade: nunca no
+    // futuro (>5 min) nem com mais de 72 h — fora disso, NOW().
+    let quando = null;
+    if (criado_em_cliente) {
+      const ms = new Date(criado_em_cliente).getTime();
+      const agora = Date.now();
+      if (Number.isFinite(ms) && ms <= agora + 5 * 60 * 1000 && ms >= agora - 72 * 3600 * 1000) {
+        quando = new Date(ms).toISOString();
+      }
+    }
     const r = await query(
-      `INSERT INTO presencas (utilizador_id, tipo) VALUES ($1, $2) RETURNING id, criado_em`,
-      [utilizador_id, tipo]
+      `INSERT INTO presencas (utilizador_id, tipo, criado_em)
+       VALUES ($1, $2, COALESCE($3::timestamptz, NOW())) RETURNING id, criado_em`,
+      [utilizador_id, tipo, quando]
     );
     res.json({ ok: true, id: r.rows[0].id, nome: u.rows[0].nome, tipo, criado_em: r.rows[0].criado_em });
   } catch(e) { res.status(500).json({ erro: e.message }); }

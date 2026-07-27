@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-offline-todas-paginas">
+<html lang="pt" data-stockos-ui="2026-07-27-offline-presenca">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5111,7 +5111,8 @@ function aquecerCacheOffline() {
       '/config/turnos-bloqueados',
       '/escala/template',
       '/faltas?status=pendentes',
-      `/escala/semana?data_inicio=${encodeURIComponent(hoje)}&data_fim=${encodeURIComponent(hoje)}`
+      `/escala/semana?data_inicio=${encodeURIComponent(hoje)}&data_fim=${encodeURIComponent(hoje)}`,
+      '/face-descriptors'
     ];
     if (tid && !turnoIdEhLocal(tid)) {
       urls.push(
@@ -13685,19 +13686,22 @@ async function registarPresenca(tipo) {
   const uid = result._uid;
   const nome = result._nome;
   try {
-    await fetch('/api/presencas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ utilizador_id: uid, tipo }),
-    }).then(r => r.json());
+    // Fila offline + hora do aparelho: mesmo sem rede a presença fica
+    // registada já, com a hora certa — sincroniza sozinha depois.
+    const rP = await apiEscrita('POST', '/presencas',
+      { utilizador_id: uid, tipo, criado_em_cliente: new Date().toISOString() },
+      { desc: `Presença (${tipo}) — ${nome}`, timeoutMs: 5000 });
     const label = tipo === 'entrada' ? '✅ Entrada registada' : '🚪 Saída registada';
+    const offNota = rP && rP._offline
+      ? '<div style="color:#fdba74;font-size:12px;margin-top:4px">Guardada neste aparelho — sincroniza sozinha</div>'
+      : '';
     const confirm = document.getElementById('presenca-confirm');
     result.style.display = 'none';
     if (confirm) {
       confirm.style.display = 'block';
       confirm.innerHTML = `<div style="font-size:20px;font-weight:700;color:#4ade80">${label}</div>
         <div style="color:#94a3b8;margin-top:4px">${nome}</div>
-        <div style="color:#475569;font-size:12px;margin-top:4px">${new Date().toLocaleTimeString('pt-PT')}</div>`;
+        <div style="color:#475569;font-size:12px;margin-top:4px">${new Date().toLocaleTimeString('pt-PT')}</div>${offNota}`;
     }
     setTimeout(() => retomarPresencaCamera(), 3000);
   } catch(e) {

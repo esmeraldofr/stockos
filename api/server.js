@@ -1109,7 +1109,7 @@ async function ensureOpsIdempotencia() {
 
 app.use(function idempotenciaMiddleware(req, res, next) {
   const m = String(req.method || '').toUpperCase();
-  if (m !== 'POST' && m !== 'PUT' && m !== 'DELETE') return next();
+  if (m !== 'POST' && m !== 'PUT' && m !== 'DELETE' && m !== 'PATCH') return next();
   let p = req.path || '';
   if (!p && req.url) p = String(req.url).split('?')[0] || '';
   if (!p.startsWith('/api/')) return next();

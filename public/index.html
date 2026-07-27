@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-offline-banco">
+<html lang="pt" data-stockos-ui="2026-07-27-offline-fotos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5447,6 +5447,23 @@ function aplicarEscritasOffline(path, data) {
     }
     if (p === '/depositos' && Array.isArray(data)) {
       return overlayDepositos(params.get('data') || '', data, fila);
+    }
+    if (p === '/face-descriptors' && Array.isArray(data)) {
+      // Faces registadas/removidas offline contam já para o reconhecimento.
+      let out = data.slice();
+      for (const it of fila) {
+        const mm = String(it.path || '').match(/^\/utilizadores\/([^/]+)\/face-descriptor$/);
+        if (!mm) continue;
+        const uid = decodeURIComponent(mm[1]);
+        if (it.method === 'PUT' && it.body && Array.isArray(it.body.descriptor)) {
+          const row = { id: uid, nome: (it.extra && it.extra.nome) || uid, descriptor: it.body.descriptor, _offline: true };
+          const j = out.findIndex((r) => String(r.id) === String(uid));
+          if (j >= 0) out[j] = row; else out.push(row);
+        } else if (it.method === 'DELETE') {
+          out = out.filter((r) => String(r.id) !== String(uid));
+        }
+      }
+      return out;
     }
     if ((p === '/irregularidades/comentarios' || p === '/irregularidades/decisoes') && Array.isArray(data)) {
       return overlayIrregularidades(p, params.get('turno_id'), data, fila);
@@ -13357,7 +13374,8 @@ async function loadFaceApi() {
 
 async function loadPresencaDescriptors() {
   try {
-    const data = await fetch('/api/face-descriptors').then(r => r.json());
+    // Via api(): cache do SW offline + faces registadas offline (overlay).
+    const data = await api('GET', '/face-descriptors');
     presencaDescriptors = data.map(u => {
       const raw = typeof u.descriptor === 'string' ? JSON.parse(u.descriptor) : u.descriptor;
       return { id: u.id, nome: u.nome, descriptor: new Float32Array(raw) };
@@ -13839,6 +13857,7 @@ let enrollStream = null;
 let enrollCapturing = false;
 
 async function enrollFace(uid, nome) {
+  window._enrollNome = nome;
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px';
   modal.innerHTML = `
@@ -13888,10 +13907,15 @@ async function captureEnrollFace(uid) {
     canvas.width = video.videoWidth || 320;
     canvas.height = video.videoHeight || 240;
     canvas.getContext('2d').drawImage(video, 0, 0);
-    const foto_base64 = canvas.toDataURL('image/jpeg', 0.85);
-    await api('PUT', `/utilizadores/${uid}/face-descriptor`, { descriptor: Array.from(det.descriptor), foto_base64 });
-    if (statusEl) statusEl.textContent = '✅ Face registada com sucesso!';
-    setTimeout(() => { closeEnrollModal(); navigate('perfil'); }, 1200);
+    const foto_base64 = await comprimirFotoDataUrl(canvas.toDataURL('image/jpeg', 0.85), 640, 0.8);
+    const rFace = await apiEscrita('PUT', `/utilizadores/${uid}/face-descriptor`,
+      { descriptor: Array.from(det.descriptor), foto_base64 },
+      { chave: `face:${uid}`, desc: `Registar face — ${window._enrollNome || uid}`,
+        extra: { nome: window._enrollNome || '' }, timeoutMs: 8000 });
+    if (statusEl) statusEl.textContent = rFace && rFace._offline
+      ? '✅ Face registada neste aparelho — já funciona na Presença; sincroniza sozinha.'
+      : '✅ Face registada com sucesso!';
+    setTimeout(() => { closeEnrollModal(); navigate('perfil'); }, 1600);
   } catch(e) {
     if (statusEl) statusEl.textContent = 'Erro: ' + e.message;
     if (btn) btn.disabled = false;
@@ -13902,7 +13926,14 @@ async function captureEnrollFace(uid) {
 async function removeFace(uid) {
   if (!confirm('Remover face registada?')) return;
   try {
-    await api('DELETE', `/utilizadores/${uid}/face-descriptor`, null);
+    // Registo de face ainda em fila offline → retira-o da fila; a remoção
+    // no servidor segue na mesma (o DELETE é idempotente).
+    const filaF = escritasOfflineLer();
+    if (filaF.some((x) => x.chave === `face:${uid}`)) {
+      escritasOfflineGravar(filaF.filter((x) => x.chave !== `face:${uid}`));
+    }
+    await apiEscrita('DELETE', `/utilizadores/${uid}/face-descriptor`, {},
+      { chave: `facedel:${uid}`, desc: 'Remover face registada' });
     navigate('perfil');
   } catch(e) { alert('Erro: ' + e.message); }
 }

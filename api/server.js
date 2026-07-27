@@ -844,7 +844,7 @@ app.post('/api/auth/login', async (req, res) => {
     const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username, empresa_id: empresaId });
     auditLoginAttempt(req, res, 200, login, user);
     // Lojas da empresa (multi-ponto de venda). Sem tabela ainda → loja 1.
-    let lojas = [{ id: 1, nome: 'Loja principal' }];
+    let lojas = [{ id: 1, nome: 'Loja 1' }];
     try {
       await ensureEmpresasLojas();
       const lr = await query(`SELECT id, nome FROM lojas WHERE empresa_id=$1 AND ativo IS TRUE ORDER BY id`, [empresaId]);
@@ -1209,7 +1209,7 @@ let empresasLojasReady = false;
 async function ensureEmpresasLojas() {
   if (empresasLojasReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v1'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v2'`);
     if (r.rows.length) { empresasLojasReady = true; return; }
   } catch (_) {}
   await qry(`CREATE TABLE IF NOT EXISTS empresas (
@@ -1226,7 +1226,17 @@ async function ensureEmpresasLojas() {
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, [], 'lojas');
   await qry(`INSERT INTO empresas (nome) SELECT 'Empresa 1' WHERE NOT EXISTS (SELECT 1 FROM empresas)`, [], 'seed-empresa');
-  await qry(`INSERT INTO lojas (empresa_id, nome) SELECT 1, 'Loja principal' WHERE NOT EXISTS (SELECT 1 FROM lojas)`, [], 'seed-loja');
+  // Não existe «loja principal» — todas as lojas são iguais, cada uma com
+  // a sua ficha. O seed dá só um nome neutro à primeira (renomeável).
+  await qry(`INSERT INTO lojas (empresa_id, nome) SELECT 1, 'Loja 1' WHERE NOT EXISTS (SELECT 1 FROM lojas)`, [], 'seed-loja');
+  await qry(`UPDATE lojas SET nome='Loja 1' WHERE id=1 AND nome='Loja principal'`, [], 'loja-sem-principal');
+  // Ficha da loja (perfil completo, como fornecedores/funcionários).
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT ''`, [], 'lojas-morada');
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS telefone TEXT NOT NULL DEFAULT ''`, [], 'lojas-telefone');
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`, [], 'lojas-email');
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS nif TEXT NOT NULL DEFAULT ''`, [], 'lojas-nif');
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS responsavel TEXT NOT NULL DEFAULT ''`, [], 'lojas-responsavel');
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'lojas-notas');
   await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'utilizadores-empresa');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'turnos-loja');
   await qry(`ALTER TABLE presencas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'presencas-loja');
@@ -1238,7 +1248,7 @@ async function ensureEmpresasLojas() {
       `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='turnos' AND column_name='loja_id'`
     );
     if (chk.rows.length) {
-      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v2','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
       empresasLojasReady = true;
     }
   } catch (_) {}
@@ -4463,16 +4473,18 @@ app.delete('/api/fotos/:id', auth, async (req, res) => {
 });
 
 // ── LOJAS (pontos de venda da empresa) ────────────────────────
+const LOJA_PERFIL_CAMPOS = ['morada', 'telefone', 'email', 'nif', 'responsavel', 'notas'];
+
 app.get('/api/lojas', auth, async (req, res) => {
   try {
     await ensureEmpresasLojas();
     const empresaId = parseInt(req.user.empresa_id, 10) || 1;
     const todos = req.query.todos === '1';
     const r = await query(
-      `SELECT id, nome, ativo, criado_em FROM lojas WHERE empresa_id=$1 ${todos ? '' : 'AND ativo IS TRUE'} ORDER BY id`,
+      `SELECT * FROM lojas WHERE empresa_id=$1 ${todos ? '' : 'AND ativo IS TRUE'} ORDER BY id`,
       [empresaId]
     );
-    res.json(r.rows.length ? r.rows : [{ id: 1, nome: 'Loja principal', ativo: true }]);
+    res.json(r.rows.length ? r.rows : [{ id: 1, nome: 'Loja 1', ativo: true }]);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -4480,11 +4492,14 @@ app.post('/api/lojas', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureEmpresasLojas();
     const empresaId = parseInt(req.user.empresa_id, 10) || 1;
-    const nome = String((req.body && req.body.nome) || '').trim();
+    const b = req.body || {};
+    const nome = String(b.nome || '').trim();
     if (!nome) return res.status(400).json({ erro: 'Indica o nome da loja / ponto de venda' });
+    const perfil = LOJA_PERFIL_CAMPOS.map((c) => String(b[c] || '').trim());
     const r = await query(
-      `INSERT INTO lojas (empresa_id, nome) VALUES ($1,$2) RETURNING id, nome, ativo, criado_em`,
-      [empresaId, nome]
+      `INSERT INTO lojas (empresa_id, nome, ${LOJA_PERFIL_CAMPOS.join(', ')})
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [empresaId, nome, ...perfil]
     );
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -4494,21 +4509,28 @@ app.put('/api/lojas/:id', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureEmpresasLojas();
     const empresaId = parseInt(req.user.empresa_id, 10) || 1;
+    const b = req.body || {};
     const sets = [];
     const params = [];
-    if (req.body && typeof req.body.nome === 'string' && req.body.nome.trim()) {
-      params.push(req.body.nome.trim());
+    if (typeof b.nome === 'string' && b.nome.trim()) {
+      params.push(b.nome.trim());
       sets.push(`nome=$${params.length}`);
     }
-    if (req.body && req.body.ativo !== undefined) {
-      params.push(!!req.body.ativo);
+    for (const c of LOJA_PERFIL_CAMPOS) {
+      if (b[c] !== undefined) {
+        params.push(String(b[c] || '').trim());
+        sets.push(`${c}=$${params.length}`);
+      }
+    }
+    if (b.ativo !== undefined) {
+      params.push(!!b.ativo);
       sets.push(`ativo=$${params.length}`);
     }
     if (!sets.length) return res.status(400).json({ erro: 'Nada para alterar' });
     params.push(parseInt(req.params.id, 10) || 0);
     params.push(empresaId);
     const r = await query(
-      `UPDATE lojas SET ${sets.join(', ')} WHERE id=$${params.length - 1} AND empresa_id=$${params.length} RETURNING id, nome, ativo`,
+      `UPDATE lojas SET ${sets.join(', ')} WHERE id=$${params.length - 1} AND empresa_id=$${params.length} RETURNING *`,
       params
     );
     if (!r.rows.length) return res.status(404).json({ erro: 'Loja não encontrada' });

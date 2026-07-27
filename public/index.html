@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-07-fila-integrada">
+<html lang="pt" data-stockos-ui="2026-07-07-cache-aquecido">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2113,6 +2113,7 @@ async function loadDia() {
       <div class="turno-cards">${cards}</div>
       ${pendentesLoading}
     `);
+    aquecerCacheOffline();
 
     api('GET', '/faltas?status=pendentes')
       .catch(() => [])
@@ -5060,6 +5061,45 @@ function pedidosOfflineComoPedidos(turnoId) {
   });
 }
 
+/** Aquecimento do cache offline: com rede, pré-carrega em fundo os GETs
+ *  essenciais do dia/turno — o Service Worker guarda cada resposta e,
+ *  offline, todos os ecrãs têm dados mesmo sem terem sido visitados.
+ *  Corre no máximo uma vez por 5 minutos. */
+let __aquecerCacheUltima = 0;
+function aquecerCacheOffline() {
+  try {
+    if (!S.token || navigator.onLine === false) return;
+    const agora = Date.now();
+    if (agora - __aquecerCacheUltima < 5 * 60 * 1000) return;
+    __aquecerCacheUltima = agora;
+    const hoje = String(S.date || '').slice(0, 10);
+    const tid = S.turnoData && S.turnoData.id;
+    const urls = [
+      `/dia?data=${encodeURIComponent(hoje)}&resumo=1`,
+      '/produtos?todos=0',
+      '/receitas',
+      '/pedidos/popularidade',
+      '/promotores',
+      '/config/turnos-bloqueados',
+      '/escala/template'
+    ];
+    if (tid) {
+      urls.push(
+        `/dia?data=${encodeURIComponent(hoje)}&turno_id=${encodeURIComponent(tid)}`,
+        `/turnos/${encodeURIComponent(tid)}/pedidos`,
+        `/turnos/${encodeURIComponent(tid)}/saidas`,
+        `/turnos/${encodeURIComponent(tid)}/vendas`,
+        `/turnos/${encodeURIComponent(tid)}/entradas`,
+        `/turnos/${encodeURIComponent(tid)}/equipa-real`
+      );
+    }
+    // Fire-and-forget espaçado — não compete com o que o utilizador está a fazer.
+    urls.forEach((u, i) => {
+      setTimeout(() => { api('GET', u).catch(() => {}); }, 800 + i * 400);
+    });
+  } catch (_) {}
+}
+
 let __syncPedidosOfflineEmCurso = false;
 async function sincronizarPedidosOffline() {
   if (__syncPedidosOfflineEmCurso || !S.token) return;
@@ -6002,6 +6042,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   pedidoBalcaoSyncDraftUI();
   pedidoBalcaoLogoRefreshUI();
   renderPedidosOfflineBanner();
+  aquecerCacheOffline();
   if (pedidosOfflineLer().length) sincronizarPedidosOffline().catch(() => {});
   if (canEdit) { pedidoBalcaoLoadPromotores().catch(() => {}); }
 }

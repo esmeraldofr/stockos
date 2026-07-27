@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-multi-loja-fase1">
+<html lang="pt" data-stockos-ui="2026-07-27-lojas-ficha">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -779,7 +779,7 @@ const S = {
   faltasPendentes: 0,
   /** Multi-ponto de venda: loja activa deste aparelho + lojas da empresa. */
   lojaId: parseInt(_lsGet('stockos.lojaId'), 10) || 1,
-  lojas: (() => { try { const v = JSON.parse(_lsGet('stockos.lojas') || '[]'); return Array.isArray(v) && v.length ? v : [{ id: 1, nome: 'Loja principal' }]; } catch (_) { return [{ id: 1, nome: 'Loja principal' }]; } })()
+  lojas: (() => { try { const v = JSON.parse(_lsGet('stockos.lojas') || '[]'); return Array.isArray(v) && v.length ? v : [{ id: 1, nome: 'Loja 1' }]; } catch (_) { return [{ id: 1, nome: 'Loja 1' }]; } })()
 };
 
 /** Mudar de loja: refaz caches e volta à página Dia dessa loja. */
@@ -1491,7 +1491,7 @@ async function doLogin() {
     localStorage.setItem('token', S.token);
     localStorage.setItem('user', JSON.stringify(S.user));
     // Lojas da empresa (multi-ponto de venda).
-    S.lojas = Array.isArray(data.lojas) && data.lojas.length ? data.lojas : [{ id: 1, nome: 'Loja principal' }];
+    S.lojas = Array.isArray(data.lojas) && data.lojas.length ? data.lojas : [{ id: 1, nome: 'Loja 1' }];
     localStorage.setItem('stockos.lojas', JSON.stringify(S.lojas));
     if (!S.lojas.some((l) => String(l.id) === String(S.lojaId))) {
       S.lojaId = S.lojas[0].id;
@@ -12857,13 +12857,25 @@ async function drawConfiguracoes() {
       <div class="card mb-12">
         <div class="card-title">🏪 Lojas / Pontos de venda</div>
         <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
-          Cada loja tem os seus próprios turnos, stock, caixa, pedidos e depósitos.
-          Com mais de uma loja, aparece um selector no topo da página Dia.
+          Cada loja tem os seus próprios turnos, stock, caixa, pedidos e depósitos —
+          e a sua ficha completa. Com mais de uma loja, aparece um selector no topo da página Dia.
         </p>
         <div id="cfg-lojas-lista" style="display:flex;flex-direction:column;gap:8px"><span style="color:#64748b;font-size:12px">A carregar…</span></div>
-        <div style="display:flex;gap:8px;margin-top:10px">
-          <input id="cfg-loja-nome" type="text" placeholder="Nome da nova loja…" maxlength="80" style="flex:1;font-size:13px;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0"/>
-          <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, configCriarLoja)">+ Criar</button>
+        <div id="cfg-loja-form" style="margin-top:12px;padding:12px;background:#0f172a;border:1px dashed #334155;border-radius:10px">
+          <div id="cfg-loja-form-title" style="font-size:13px;font-weight:700;color:#e2e8f0;margin-bottom:10px">Nova loja</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px">
+            <div class="field" style="margin:0"><label>Nome *</label><input id="lj-nome" type="text" maxlength="80" placeholder="Ex.: Bar do Kilamba"/></div>
+            <div class="field" style="margin:0"><label>Responsável</label><input id="lj-responsavel" type="text" maxlength="120"/></div>
+            <div class="field" style="margin:0"><label>Telefone</label><input id="lj-telefone" type="text" maxlength="40"/></div>
+            <div class="field" style="margin:0"><label>Email</label><input id="lj-email" type="text" maxlength="200"/></div>
+            <div class="field" style="margin:0"><label>NIF</label><input id="lj-nif" type="text" maxlength="40"/></div>
+            <div class="field" style="margin:0;grid-column:1/-1"><label>Morada</label><input id="lj-morada" type="text" maxlength="300"/></div>
+            <div class="field" style="margin:0;grid-column:1/-1"><label>Notas</label><input id="lj-notas" type="text" maxlength="500"/></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button type="button" id="lj-btn-guardar" class="btn btn-primary btn-sm" onclick="runAction(event, configGuardarLoja)">Criar loja</button>
+            <button type="button" id="lj-btn-cancelar" class="btn btn-ghost btn-sm" style="display:none" onclick="configLimparFormLoja()">Cancelar</button>
+          </div>
         </div>
         <div id="cfg-lojas-msg" style="margin-top:8px;font-size:11px;color:#64748b"></div>
       </div>
@@ -12907,46 +12919,83 @@ async function drawConfiguracoes() {
 }
 
 // ── Configurações: lojas / pontos de venda ────────────────────
+// Todas as lojas são iguais (não existe «loja principal») e cada uma tem
+// a sua ficha completa: nome, responsável, contactos, NIF, morada, notas.
+const LOJA_FORM_CAMPOS = ['nome', 'responsavel', 'telefone', 'email', 'nif', 'morada', 'notas'];
+
 async function configLojasLoad() {
   const el = document.getElementById('cfg-lojas-lista');
   if (!el) return;
   try {
     const lojas = await api('GET', '/lojas?todos=1');
-    S.lojas = (Array.isArray(lojas) ? lojas : []).filter((l) => l.ativo !== false);
+    window.__cfgLojas = Array.isArray(lojas) ? lojas : [];
+    S.lojas = window.__cfgLojas.filter((l) => l.ativo !== false);
     try { localStorage.setItem('stockos.lojas', JSON.stringify(S.lojas)); } catch (_) {}
-    el.innerHTML = (Array.isArray(lojas) ? lojas : []).map((l) => `
-      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:#0f172a;border:1px solid #334155">
-        <span style="flex:1;font-size:13px;color:${l.ativo === false ? '#64748b' : '#e2e8f0'}">🏪 ${escapeHtml(l.nome)}${String(l.id) === String(lojaAtivaId()) ? ' <span class="badge badge-green" style="font-size:10px">activa neste aparelho</span>' : ''}${l.ativo === false ? ' <span style="font-size:11px">(inactiva)</span>' : ''}</span>
-        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => configRenomearLoja(${l.id}, '${escapeHtml(l.nome).replace(/'/g, '&#39;')}'))">✏️</button>
-        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => configToggleLoja(${l.id}, ${l.ativo === false}))">${l.ativo === false ? 'Reactivar' : 'Desactivar'}</button>
-      </div>`).join('') || '<span style="color:#64748b;font-size:12px">Sem lojas.</span>';
+    el.innerHTML = window.__cfgLojas.map((l) => {
+      const contactos = [
+        l.responsavel && `👤 ${escapeHtml(l.responsavel)}`,
+        l.telefone && `📞 ${escapeHtml(l.telefone)}`,
+        l.email && `✉️ ${escapeHtml(l.email)}`,
+        l.nif && `NIF ${escapeHtml(l.nif)}`,
+        l.morada && `📍 ${escapeHtml(l.morada)}`
+      ].filter(Boolean).join(' · ');
+      return `
+      <div style="padding:8px 10px;border-radius:8px;background:#0f172a;border:1px solid #334155">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="flex:1;font-size:13px;font-weight:600;color:${l.ativo === false ? '#64748b' : '#e2e8f0'}">🏪 ${escapeHtml(l.nome)}${String(l.id) === String(lojaAtivaId()) ? ' <span class="badge badge-green" style="font-size:10px">activa neste aparelho</span>' : ''}${l.ativo === false ? ' <span style="font-size:11px;font-weight:400">(inactiva)</span>' : ''}</span>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => configEditarLoja(${l.id}))">✏️ Editar</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => configToggleLoja(${l.id}, ${l.ativo === false}))">${l.ativo === false ? 'Reactivar' : 'Desactivar'}</button>
+        </div>
+        ${contactos ? `<div style="font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.5">${contactos}</div>` : ''}
+        ${l.notas ? `<div style="font-size:11px;color:#64748b;margin-top:2px">${escapeHtml(l.notas)}</div>` : ''}
+      </div>`;
+    }).join('') || '<span style="color:#64748b;font-size:12px">Sem lojas.</span>';
   } catch (e) {
     el.innerHTML = `<span style="color:#ef4444;font-size:12px">${escapeHtml(e.message)}</span>`;
   }
 }
-async function configCriarLoja() {
-  const inp = document.getElementById('cfg-loja-nome');
-  const nome = String((inp && inp.value) || '').trim();
+function configLimparFormLoja() {
+  window.__lojaEditId = null;
+  LOJA_FORM_CAMPOS.forEach((c) => { const e = document.getElementById('lj-' + c); if (e) e.value = ''; });
+  const t = document.getElementById('cfg-loja-form-title');
+  if (t) t.textContent = 'Nova loja';
+  const b = document.getElementById('lj-btn-guardar');
+  if (b) b.textContent = 'Criar loja';
+  const c = document.getElementById('lj-btn-cancelar');
+  if (c) c.style.display = 'none';
+}
+function configEditarLoja(id) {
+  const l = (window.__cfgLojas || []).find((x) => String(x.id) === String(id));
+  if (!l) return;
+  window.__lojaEditId = id;
+  LOJA_FORM_CAMPOS.forEach((c) => { const e = document.getElementById('lj-' + c); if (e) e.value = l[c] || ''; });
+  const t = document.getElementById('cfg-loja-form-title');
+  if (t) t.textContent = `Editar loja — ${l.nome}`;
+  const b = document.getElementById('lj-btn-guardar');
+  if (b) b.textContent = 'Guardar alterações';
+  const cb = document.getElementById('lj-btn-cancelar');
+  if (cb) cb.style.display = '';
+  document.getElementById('cfg-loja-form')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+async function configGuardarLoja() {
   const msg = document.getElementById('cfg-lojas-msg');
-  if (!nome) { if (msg) msg.textContent = 'Indica o nome da loja.'; return; }
+  const body = {};
+  LOJA_FORM_CAMPOS.forEach((c) => { body[c] = val('lj-' + c); });
+  if (!body.nome) { if (msg) msg.textContent = 'Indica o nome da loja.'; return; }
   try {
-    const r = await apiEscrita('POST', '/lojas', { nome }, { desc: `Criar loja ${nome}` });
-    if (inp) inp.value = '';
-    if (msg) msg.textContent = r && r._offline ? 'Loja guardada neste aparelho — sincroniza quando a rede voltar.' : `Loja «${nome}» criada.`;
+    const editId = window.__lojaEditId;
+    const r = editId
+      ? await apiEscrita('PUT', `/lojas/${editId}`, body, { chave: `loja:${editId}`, desc: 'Ficha da loja' })
+      : await apiEscrita('POST', '/lojas', body, { desc: `Criar loja ${body.nome}` });
+    if (msg) {
+      msg.textContent = r && r._offline
+        ? 'Ficha guardada neste aparelho — sincroniza quando a rede voltar.'
+        : (editId ? 'Ficha da loja actualizada.' : `Loja «${body.nome}» criada.`);
+    }
+    configLimparFormLoja();
     await configLojasLoad().catch(() => {});
     refrescarLojas();
   } catch (e) { if (msg) msg.textContent = 'Erro: ' + e.message; }
-}
-async function configRenomearLoja(id, nomeAtual) {
-  const novo = prompt('Novo nome da loja:', nomeAtual || '');
-  if (novo === null) return;
-  const nome = String(novo || '').trim();
-  if (!nome || nome === nomeAtual) return;
-  try {
-    await apiEscrita('PUT', `/lojas/${id}`, { nome }, { chave: `loja:${id}`, desc: 'Renomear loja' });
-    await configLojasLoad().catch(() => {});
-    refrescarLojas();
-  } catch (e) { alert(e.message); }
 }
 async function configToggleLoja(id, ativar) {
   if (!ativar && String(id) === String(lojaAtivaId())) {

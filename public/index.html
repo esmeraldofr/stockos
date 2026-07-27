@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-offline-total">
+<html lang="pt" data-stockos-ui="2026-07-27-offline-todas-paginas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1980,8 +1980,9 @@ async function resolverFaltaDia(id) {
   const foto = await capturarFotoResolvido();
   if (!foto) return;
   try {
-    await api('PATCH', '/faltas/' + id, { foto_base64: foto });
-    await loadDia();
+    const fotoC = await comprimirFotoDataUrl(foto, 1280, 0.72);
+    await apiEscrita('PATCH', '/faltas/' + id, { foto_base64: fotoC }, { desc: 'Resolver falta de produto' });
+    await loadDia().catch(() => {});
     await refreshFaltasBadge();
   } catch (e) { alert(e.message); }
 }
@@ -2589,8 +2590,8 @@ function updateDepPreviewTotal() {
 async function reabrirDepositosDia() {
   if (!confirm('Reabrir os depósitos deste dia para alteração?\nDepois de gravado de novo, voltam a ficar fechados.')) return;
   try {
-    await api('PATCH', `/depositos/abrir?data=${encodeURIComponent(S.date)}`);
-    await loadDepositos();
+    await apiEscrita('PATCH', `/depositos/abrir?data=${encodeURIComponent(S.date)}`, {}, { desc: 'Reabrir depósitos do dia' });
+    await loadDepositos().catch(() => {});
   } catch (e) { alert(e.message); }
 }
 
@@ -2681,12 +2682,13 @@ async function submitDepositosDia() {
     const borderoInp = document.getElementById('dep-bordero-dia');
     let borderoB64 = '';
     if (borderoInp && borderoInp.files && borderoInp.files[0]) {
-      borderoB64 = await fileToDataUrl(borderoInp.files[0]);
+      borderoB64 = await comprimirFotoDataUrl(await fileToDataUrl(borderoInp.files[0]), 1600, 0.8);
     }
     const payload = { itens, valor_saidas_total: saidasUnica, saidas_destino: destinoSaidas };
     if (borderoB64) payload.bordero_foto_base64 = borderoB64;
-    await api('POST', '/depositos/lote', payload);
-    await reloadDepositsView();
+    const rDep = await apiEscrita('POST', '/depositos/lote', payload, { desc: 'Depósitos do dia', timeoutMs: 10000 });
+    if (rDep && rDep._offline) alert('Depósitos guardados neste aparelho — entram no sistema quando a rede voltar.');
+    await reloadDepositsView().catch(() => {});
   } catch (e) {
     alert(e.message || String(e));
   }
@@ -2696,10 +2698,10 @@ async function uploadBorderoDia(inputEl) {
   if (!inputEl || !inputEl.files || !inputEl.files[0]) return;
   inputEl.disabled = true;
   try {
-    const b64 = await fileToDataUrl(inputEl.files[0]);
-    await api('POST', '/depositos/bordero-dia', { data: S.date, foto_base64: b64 });
+    const b64 = await comprimirFotoDataUrl(await fileToDataUrl(inputEl.files[0]), 1600, 0.8);
+    await apiEscrita('POST', '/depositos/bordero-dia', { data: S.date, foto_base64: b64 }, { desc: 'Foto do borderô', timeoutMs: 10000 });
     inputEl.value = '';
-    await reloadDepositsView();
+    await reloadDepositsView().catch(() => {});
   } catch (e) {
     alert(e.message || String(e));
   } finally {
@@ -2711,8 +2713,8 @@ async function removeBorderoDia(ev) {
   if (!confirm('Remover a foto do borderô deste registo?')) return;
   await runAction(ev, async () => {
     try {
-      await api('DELETE', '/depositos/bordero-dia?data=' + encodeURIComponent(S.date));
-      await reloadDepositsView();
+      await apiEscrita('DELETE', '/depositos/bordero-dia?data=' + encodeURIComponent(S.date), {}, { desc: 'Remover foto do borderô' });
+      await reloadDepositsView().catch(() => {});
     } catch (e) {
       alert(e.message || String(e));
     }
@@ -5124,6 +5126,24 @@ function aquecerCacheOffline() {
         `/irregularidades/decisoes?turno_id=${encodeURIComponent(tid)}`,
         `/irregularidades/comentarios?turno_id=${encodeURIComponent(tid)}`
       );
+    }
+    // Páginas de gestão (armazém, fornecedores, produtos, equipa): também
+    // ficam consultáveis offline para quem as usa.
+    if (['admin', 'gestor', 'compras'].includes(S.user?.role)) {
+      urls.push(
+        '/fornecedores',
+        '/fornecedores?todos=1',
+        '/produtos?todos=1',
+        `/armazem/inventario?data=${encodeURIComponent(hoje)}`,
+        `/armazem/compras?limit=50&data=${encodeURIComponent(hoje)}`,
+        `/armazem/faturas?limit=40&data=${encodeURIComponent(hoje)}`,
+        '/armazem/proformas',
+        `/armazem/saldo?data=${encodeURIComponent(hoje)}`,
+        `/armazem/saidas-dia?data=${encodeURIComponent(hoje)}`,
+        '/faltas?status=resolvidas',
+        '/equipa'
+      );
+      if (['admin', 'gestor'].includes(S.user?.role)) urls.push('/utilizadores');
     }
     // Fire-and-forget espaçado — não compete com o que o utilizador está a fazer.
     urls.forEach((u, i) => {
@@ -10669,8 +10689,13 @@ async function guardarComoProforma() {
     }
   }
   try {
-    const pf = await api('POST', '/armazem/proformas', { fornecedor: fornecedorTxt, notas: val('fx-notas'), linhas });
-    if (msg) msg.innerHTML = `<div class="alert alert-success">🧾 Proforma #${pf.id} guardada — está em «Proformas em curso»: liberta o valor quando aprovado.</div>`;
+    const pf = await apiEscrita('POST', '/armazem/proformas', { fornecedor: fornecedorTxt, notas: val('fx-notas'), linhas },
+      { desc: 'Proforma de compra' });
+    if (msg) {
+      msg.innerHTML = pf && pf._offline
+        ? '<div class="alert alert-success">🧾 Proforma guardada neste aparelho — entra em «Proformas em curso» quando a rede voltar.</div>'
+        : `<div class="alert alert-success">🧾 Proforma #${pf.id} guardada — está em «Proformas em curso»: liberta o valor quando aprovado.</div>`;
+    }
     const body = document.getElementById('fatura-linhas-body');
     if (body) { body.innerHTML = ''; addFaturaLinha(); }
     window.__faturaProformaId = null;
@@ -10731,14 +10756,15 @@ async function loadArmazemProformas() {
 
 async function libertarProforma(id) {
   if (!confirm('Libertar o valor total desta proforma? Cria uma libertação no saldo do armazém para o dia seleccionado.')) return;
-  await api('POST', `/armazem/proformas/${id}/libertar`, { data: String(S.date || '').slice(0, 10) });
+  await apiEscrita('POST', `/armazem/proformas/${id}/libertar`, { data: String(S.date || '').slice(0, 10) },
+    { desc: 'Libertar valor de proforma' });
   await refreshArmazemFundos();
   await loadArmazemProformas();
 }
 
 async function excluirProforma(id) {
   if (!confirm('Eliminar esta proforma pendente?')) return;
-  await api('DELETE', `/armazem/proformas/${id}`);
+  await apiEscrita('DELETE', `/armazem/proformas/${id}`, {}, { desc: 'Eliminar proforma' });
   await loadArmazemProformas();
 }
 
@@ -10888,12 +10914,13 @@ async function saveArmazemInventarioDiaFromRow(tr) {
   const statusEl = tr.querySelector('.amz-save-status');
   try {
     show('armazem-msg', '');
-    await api('PUT', '/armazem/inventario-diario', { data: dataIso, produto_id, encontrado, deixado });
+    const rInv = await apiEscrita('PUT', '/armazem/inventario-diario', { data: dataIso, produto_id, encontrado, deixado },
+      { chave: `amzinv:${dataIso}:${produto_id}`, desc: 'Inventário do armazém' });
     if (statusEl) {
-      statusEl.textContent = '✓';
+      statusEl.textContent = rInv && rInv._offline ? '✓⏳' : '✓';
       statusEl.style.color = '#4ade80';
       setTimeout(() => {
-        if (statusEl && statusEl.textContent === '✓') statusEl.textContent = '';
+        if (statusEl && (statusEl.textContent === '✓' || statusEl.textContent === '✓⏳')) statusEl.textContent = '';
       }, 1600);
     }
   } catch (e) {
@@ -11242,7 +11269,7 @@ async function saveEditCompraLinhaFromModal(id) {
       fornecedor: (forn && forn.value) || '',
       notas: (notas && notas.value) || ''
     };
-    await api('PUT', '/armazem/compras/' + id, payload);
+    await apiEscrita('PUT', '/armazem/compras/' + id, payload, { chave: `amzcompra:${id}`, desc: 'Editar linha de compra' });
     closeCompraLinhaModal();
     await refreshArmazemFundos();
     await loadArmazemData();
@@ -11255,8 +11282,8 @@ async function deleteCompraLinhaArmazem(ev, id) {
   if (!confirm('Remover esta linha de compra? O inventário será recalculado.')) return;
   await runAction(ev, async () => {
     try {
-      const r = await api('DELETE', '/armazem/compras/' + id);
-      if (r.fatura_deleted) alert('Última linha removida: o cabeçalho da fatura foi também removido.');
+      const r = await apiEscrita('DELETE', '/armazem/compras/' + id, {}, { desc: 'Remover linha de compra' });
+      if (r && r.fatura_deleted) alert('Última linha removida: o cabeçalho da fatura foi também removido.');
       await refreshArmazemFundos();
       await loadArmazemData();
     } catch (e) {
@@ -11320,7 +11347,7 @@ async function submitLibertacaoArmazem() {
     return;
   }
   try {
-    await api('POST', '/armazem/libertacoes', { data, valor, notas });
+    await apiEscrita('POST', '/armazem/libertacoes', { data, valor, notas }, { desc: 'Libertação de fundos' });
     document.getElementById('lib-valor').value = '';
     document.getElementById('lib-notas').value = '';
     show('armazem-msg', '');
@@ -11335,7 +11362,7 @@ async function deleteLibertacaoArmazem(ev, id) {
   if (!confirm('Remover esta libertação?')) return;
   await runAction(ev, async () => {
     try {
-      await api('DELETE', '/armazem/libertacoes/' + id);
+      await apiEscrita('DELETE', '/armazem/libertacoes/' + id, {}, { desc: 'Remover libertação' });
       await refreshArmazemFundos();
       await loadArmazemData();
     } catch (e) {
@@ -11628,7 +11655,7 @@ async function submitFaturaArmazem() {
       if (msg) msg.innerHTML = '<div class="alert alert-error">Anexa a foto da fatura (JPEG, PNG ou WebP).</div>';
       return;
     }
-    const fotoB64 = await fileToDataUrl(fotoInp.files[0]);
+    const fotoB64 = await comprimirFotoDataUrl(await fileToDataUrl(fotoInp.files[0]), 1600, 0.8);
     const totalEst = computeFaturaTotalEstimado();
     const saldo = S.armazemSaldoDia != null ? S.armazemSaldoDia : 0;
     const selF = document.getElementById('fx-fornecedor-id');
@@ -11664,12 +11691,14 @@ async function submitFaturaArmazem() {
       if (ts) payload.turno_saida_id = parseInt(ts, 10);
     }
     if (window.__faturaProformaId) payload.proforma_id = window.__faturaProformaId;
-    await api('POST', '/armazem/faturas', payload);
+    const rFat = await apiEscrita('POST', '/armazem/faturas', payload, { desc: 'Fatura de compra', timeoutMs: 10000 });
     if (window.__faturaProformaId) {
       window.__faturaProformaId = null;
       loadArmazemProformas().catch(() => {});
     }
-    if (msg) msg.innerHTML = '<div class="alert alert-success">Fatura registada com sucesso.</div>';
+    if (msg) msg.innerHTML = rFat && rFat._offline
+      ? '<div class="alert alert-success">Fatura guardada neste aparelho — entra no sistema quando a rede voltar.</div>'
+      : '<div class="alert alert-success">Fatura registada com sucesso.</div>';
     document.getElementById('fx-numero').value = '';
     const selR = document.getElementById('fx-fornecedor-id');
     if (selR) selR.value = '';
@@ -11936,11 +11965,16 @@ async function submitFornecedorForm() {
   };
   try {
     if (window.__fornEditId) {
-      await api('PUT', '/fornecedores/' + window.__fornEditId, payload);
-      show('fornec-msg', '<div class="alert alert-success">Fornecedor actualizado.</div>');
+      const rF = await apiEscrita('PUT', '/fornecedores/' + window.__fornEditId, payload,
+        { chave: `forn:${window.__fornEditId}`, desc: 'Actualizar fornecedor' });
+      show('fornec-msg', rF && rF._offline
+        ? '<div class="alert alert-success">Fornecedor actualizado neste aparelho — sincroniza quando a rede voltar.</div>'
+        : '<div class="alert alert-success">Fornecedor actualizado.</div>');
     } else {
-      await api('POST', '/fornecedores', payload);
-      show('fornec-msg', '<div class="alert alert-success">Fornecedor criado.</div>');
+      const rF = await apiEscrita('POST', '/fornecedores', payload, { desc: 'Novo fornecedor' });
+      show('fornec-msg', rF && rF._offline
+        ? '<div class="alert alert-success">Fornecedor guardado neste aparelho — aparece na lista quando a rede voltar.</div>'
+        : '<div class="alert alert-success">Fornecedor criado.</div>');
     }
     window.__fornEditId = null;
     limparFormFornecedor();
@@ -11988,7 +12022,7 @@ async function refreshFornecedoresList() {
 
 async function toggleFornecedorAtivo(id, ativo) {
   try {
-    await api('PUT', '/fornecedores/' + id, { ativo: !!ativo });
+    await apiEscrita('PUT', '/fornecedores/' + id, { ativo: !!ativo }, { chave: `fornativo:${id}`, desc: 'Estado do fornecedor' });
     await refreshFornecedoresList();
   } catch (e) {
     alert(e.message || String(e));
@@ -12398,7 +12432,7 @@ function payloadProdutoCopo() {
 
 async function createProduto() {
   try {
-    await api('POST','/produtos',{
+    const rP = await apiEscrita('POST','/produtos',{
       nome:val('p-nome'),
       preco:parseFloat(val('p-preco'))||0,
       tipo_medicao:val('p-medicao'),
@@ -12409,11 +12443,11 @@ async function createProduto() {
       comissao_pct: parseFloat(val('p-comissao')) || 0,
       imagem: val('p-imagem') || null,
       ...payloadProdutoCopo()
-    });
+    }, { desc: 'Novo produto' });
     closeProdutoModal();
-    suc('prod-msg','Produto criado!');
-    setTimeout(()=>show('prod-msg',''),2000);
-    await loadProdutos();
+    suc('prod-msg', rP && rP._offline ? 'Produto guardado neste aparelho — aparece na lista quando a rede voltar.' : 'Produto criado!');
+    setTimeout(()=>show('prod-msg',''),3000);
+    await loadProdutos().catch(() => {});
   } catch(e) { err('prod-form-msg',e.message); }
 }
 
@@ -12434,11 +12468,11 @@ async function saveProduto(id) {
       imagem: val('p-imagem') || null,
       ...payloadProdutoCopo()
     };
-    await api('PUT',`/produtos/${id}`, corpo);
+    const rP = await apiEscrita('PUT',`/produtos/${id}`, corpo, { chave: `prod:${id}`, desc: 'Actualizar produto' });
     closeProdutoModal();
-    suc('prod-msg','Produto actualizado!');
-    setTimeout(()=>show('prod-msg',''),2000);
-    await loadProdutos();
+    suc('prod-msg', rP && rP._offline ? 'Produto actualizado neste aparelho — sincroniza quando a rede voltar.' : 'Produto actualizado!');
+    setTimeout(()=>show('prod-msg',''),3000);
+    await loadProdutos().catch(() => {});
   } catch(e) { err('prod-form-msg',e.message); }
 }
 
@@ -12483,7 +12517,7 @@ async function addReceita(produtoId) {
   const qty = parseFloat(document.getElementById('r-qty')?.value) || 1;
   if (!compId) { alert('Seleccione um componente primeiro.'); return; }
   try {
-    await api('POST', '/receitas', { produto_id: produtoId, componente_id: compId, quantidade: qty });
+    await apiEscrita('POST', '/receitas', { produto_id: produtoId, componente_id: compId, quantidade: qty }, { desc: 'Componente de receita' });
     await loadReceita(produtoId);
   } catch(e) {
     alert('Erro ao adicionar: ' + e.message);
@@ -12492,7 +12526,7 @@ async function addReceita(produtoId) {
 
 async function deleteReceita(receitaId, produtoId) {
   try {
-    await api('DELETE', `/receitas/${receitaId}`);
+    await apiEscrita('DELETE', `/receitas/${receitaId}`, {}, { desc: 'Remover componente de receita' });
     await loadReceita(produtoId);
   } catch(e) { alert(e.message); }
 }
@@ -12615,12 +12649,13 @@ async function configTurnosBloqueadosChange() {
   const msg = document.getElementById('cfg-turnos-bloq-msg');
   try {
     if (msg) { msg.style.color = '#64748b'; msg.textContent = 'A guardar…'; }
-    const r = await api('PUT', '/config/turnos-bloqueados', { bloqueados: bloq });
+    const r = await apiEscrita('PUT', '/config/turnos-bloqueados', { bloqueados: bloq },
+      { chave: 'cfg:turnos-bloqueados', desc: 'Turnos bloqueados' });
     const saved = r && Array.isArray(r.bloqueados) ? r.bloqueados : bloq;
     S.turnosBloqueados = saved;
-    if (msg) msg.textContent = saved.length
+    if (msg) msg.textContent = (saved.length
       ? `Bloqueados: ${saved.map((n) => turnoLabel(n)).join(', ')}.`
-      : 'Nenhum turno bloqueado — todos podem ser abertos.';
+      : 'Nenhum turno bloqueado — todos podem ser abertos.') + (r && r._offline ? ' (guardado neste aparelho)' : '');
   } catch (e) {
     if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Erro ao guardar: ' + e.message; }
   }
@@ -12796,11 +12831,13 @@ async function createUser() {
       return;
     }
     const body = {nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role'),password:passInicial,...fichaFuncionarioBody()};
-    const resp = await api('POST','/utilizadores',body);
+    const resp = await apiEscrita('POST','/utilizadores',body, { desc: 'Novo utilizador' });
     show('admin-form','');
     const extras = [resp && resp.aviso_login, resp && resp.aviso].filter(Boolean).map((a) => ' ⚠ ' + a).join('');
-    suc('admin-msg', 'Utilizador criado com a password definida.' + extras);
-    await loadUtilizadores();
+    suc('admin-msg', resp && resp._offline
+      ? 'Utilizador guardado neste aparelho — a conta é criada quando a rede voltar.'
+      : 'Utilizador criado com a password definida.' + extras);
+    await loadUtilizadores().catch(() => {});
   } catch(e) { err('user-form-msg',e.message); }
 }
 
@@ -12815,11 +12852,13 @@ async function saveUser(id) {
       body.comissao_modo = val('u-comissao-modo') || 'produto';
       body.comissao_pct_total = parseFloat(val('u-pct-total')) || 0;
     }
-    const resp = await api('PUT',`/utilizadores/${id}`,body);
+    const resp = await apiEscrita('PUT',`/utilizadores/${id}`,body, { chave: `user:${id}`, desc: 'Actualizar utilizador' });
     show('admin-form','');
-    suc('admin-msg', resp && resp.aviso ? 'Utilizador actualizado. ⚠ ' + resp.aviso : 'Utilizador actualizado!');
+    suc('admin-msg', resp && resp._offline
+      ? 'Utilizador actualizado neste aparelho — sincroniza quando a rede voltar.'
+      : (resp && resp.aviso ? 'Utilizador actualizado. ⚠ ' + resp.aviso : 'Utilizador actualizado!'));
     setTimeout(()=>show('admin-msg',''),4000);
-    await loadUtilizadores();
+    await loadUtilizadores().catch(() => {});
   } catch(e) { err('user-form-msg',e.message); }
 }
 
@@ -12974,9 +13013,9 @@ function faltaRowHtml(f) {
 async function atribuirFalta(id, utilizadorId) {
   try {
     const body = utilizadorId ? { utilizador_id: utilizadorId } : { utilizador_id: null };
-    await api('PATCH', `/faltas/${id}/atribuir`, body);
+    await apiEscrita('PATCH', `/faltas/${id}/atribuir`, body, { chave: `faltaatrib:${id}`, desc: 'Atribuir falta de produto' });
   } catch (e) { alert(e.message); }
-  await loadFaltas();
+  await loadFaltas().catch(() => {});
 }
 
 async function submitFalta() {
@@ -12988,14 +13027,14 @@ async function submitFalta() {
     ? { produto_id: match.id, notas }
     : { produto_nome_livre: nome, notas };
   try {
-    await api('POST', '/faltas', payload);
+    const rFa = await apiEscrita('POST', '/faltas', payload, { desc: 'Aviso de falta de produto' });
     document.getElementById('falta-produto-nome').value = '';
     document.getElementById('falta-notas').value = '';
     const hint = document.getElementById('falta-produto-hint');
     if (hint) { hint.textContent = 'Escolhe da lista ou escreve um nome livre se não estiver registado.'; hint.style.color = '#64748b'; }
-    suc('faltas-msg', 'Aviso registado.');
-    setTimeout(() => show('faltas-msg', ''), 2000);
-    await loadFaltas();
+    suc('faltas-msg', rFa && rFa._offline ? 'Aviso guardado neste aparelho — entra no sistema quando a rede voltar.' : 'Aviso registado.');
+    setTimeout(() => show('faltas-msg', ''), 3000);
+    await loadFaltas().catch(() => {});
   } catch (e) { err('faltas-msg', e.message); }
 }
 
@@ -13003,8 +13042,9 @@ async function resolverFalta(id) {
   const foto = await capturarFotoResolvido();
   if (!foto) return;
   try {
-    await api('PATCH', '/faltas/' + id, { foto_base64: foto });
-    await loadFaltas();
+    const fotoC = await comprimirFotoDataUrl(foto, 1280, 0.72);
+    await apiEscrita('PATCH', '/faltas/' + id, { foto_base64: fotoC }, { desc: 'Resolver falta de produto' });
+    await loadFaltas().catch(() => {});
     await refreshFaltasBadge();
   } catch (e) { err('faltas-msg', e.message); }
 }
@@ -13065,8 +13105,8 @@ async function drawEscala() {
 async function patchEscalaTemplateArea(id, val) {
   try {
     const body = val === '' || val === undefined ? { area_trabalho: null } : { area_trabalho: parseInt(val, 10) };
-    await api('PATCH', `/escala/template/${id}`, body);
-    await loadEscalaTemplate();
+    await apiEscrita('PATCH', `/escala/template/${id}`, body, { chave: `escarea:${id}`, desc: 'Área de trabalho na escala' });
+    await loadEscalaTemplate().catch(() => {});
   } catch (e) {
     alert(e.message);
   }
@@ -13193,16 +13233,16 @@ async function addEscalaTemplate(dia_semana, turno) {
     if (!utilizador_id) return err('escala-add-msg', 'Seleciona um funcionário');
     const ar = document.getElementById('ea-area') ? val('ea-area') : '';
     const area_trabalho = ar === '' ? undefined : parseInt(ar, 10);
-    await api('POST', '/escala/template', { dia_semana, turno, utilizador_id, area_trabalho });
+    await apiEscrita('POST', '/escala/template', { dia_semana, turno, utilizador_id, area_trabalho }, { desc: 'Escalar funcionário' });
     show('escala-add-form', '');
-    await loadEscalaTemplate();
+    await loadEscalaTemplate().catch(() => {});
   } catch(e) { err('escala-add-msg', e.message); }
 }
 
 async function removeEscalaTemplate(id) {
   try {
-    await api('DELETE', `/escala/template/${id}`);
-    await loadEscalaTemplate();
+    await apiEscrita('DELETE', `/escala/template/${id}`, {}, { desc: 'Remover da escala' });
+    await loadEscalaTemplate().catch(() => {});
   } catch(e) { alert(e.message); }
 }
 

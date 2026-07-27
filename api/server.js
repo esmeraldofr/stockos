@@ -840,11 +840,20 @@ app.post('/api/auth/login', async (req, res) => {
       auditLoginAttempt(req, res, 401, login, user);
       return res.status(401).json({ erro: 'Credenciais inválidas' });
     }
-    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username });
+    const empresaId = parseInt(user.empresa_id, 10) || 1;
+    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username, empresa_id: empresaId });
     auditLoginAttempt(req, res, 200, login, user);
+    // Lojas da empresa (multi-ponto de venda). Sem tabela ainda → loja 1.
+    let lojas = [{ id: 1, nome: 'Loja principal' }];
+    try {
+      await ensureEmpresasLojas();
+      const lr = await query(`SELECT id, nome FROM lojas WHERE empresa_id=$1 AND ativo IS TRUE ORDER BY id`, [empresaId]);
+      if (lr.rows.length) lojas = lr.rows;
+    } catch (_) {}
     res.json({
       token,
-      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username, has_face: user.face_descriptor != null, face_foto_url: user.face_foto_url || '' }
+      lojas,
+      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username, empresa_id: empresaId, has_face: user.face_descriptor != null, face_foto_url: user.face_foto_url || '' }
     });
   } catch (e) {
     console.error('[auth/login]', pgErrText(e));
@@ -1187,6 +1196,61 @@ function requireRole(...roles) {
     if (!roles.includes(req.user.role)) return res.status(403).json({ erro: 'Sem permissão' });
     next();
   };
+}
+
+// ── MULTI-EMPRESA / MULTI-LOJA (fase 1) ───────────────────────
+// O sistema serve várias empresas, cada uma com vários pontos de venda.
+// Fase 1: turnos (e tudo o que deles depende), presenças e depósitos são
+// POR LOJA; utilizadores/produtos/fornecedores pertencem à empresa. Os
+// dados existentes migram automaticamente para empresa 1 / loja 1 (via
+// DEFAULT 1). Escala/armazém por loja e isolamento total entre empresas
+// entram na fase 2 — NÃO registar uma 2.ª empresa antes disso.
+let empresasLojasReady = false;
+async function ensureEmpresasLojas() {
+  if (empresasLojasReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v1'`);
+    if (r.rows.length) { empresasLojasReady = true; return; }
+  } catch (_) {}
+  await qry(`CREATE TABLE IF NOT EXISTS empresas (
+    id SERIAL PRIMARY KEY,
+    nome TEXT NOT NULL,
+    ativo BOOLEAN NOT NULL DEFAULT TRUE,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'empresas');
+  await qry(`CREATE TABLE IF NOT EXISTS lojas (
+    id SERIAL PRIMARY KEY,
+    empresa_id INTEGER NOT NULL DEFAULT 1,
+    nome TEXT NOT NULL,
+    ativo BOOLEAN NOT NULL DEFAULT TRUE,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'lojas');
+  await qry(`INSERT INTO empresas (nome) SELECT 'Empresa 1' WHERE NOT EXISTS (SELECT 1 FROM empresas)`, [], 'seed-empresa');
+  await qry(`INSERT INTO lojas (empresa_id, nome) SELECT 1, 'Loja principal' WHERE NOT EXISTS (SELECT 1 FROM lojas)`, [], 'seed-loja');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'utilizadores-empresa');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'turnos-loja');
+  await qry(`ALTER TABLE presencas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'presencas-loja');
+  await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'produtos-empresa');
+  await qry(`ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'fornecedores-empresa');
+  await qry(`CREATE INDEX IF NOT EXISTS idx_turnos_loja_data ON turnos (loja_id, data)`, [], 'idx-turnos-loja');
+  try {
+    const chk = await query(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='turnos' AND column_name='loja_id'`
+    );
+    if (chk.rows.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      empresasLojasReady = true;
+    }
+  } catch (_) {}
+}
+
+/** Loja activa do pedido: query ?loja=, header X-Loja ou 1 (principal). */
+function lojaDe(req) {
+  const q = parseInt(req.query && req.query.loja, 10);
+  if (Number.isFinite(q) && q > 0) return q;
+  const h = parseInt(req.headers && req.headers['x-loja'], 10);
+  if (Number.isFinite(h) && h > 0) return h;
+  return 1;
 }
 /** Início oficial do turno (minutos desde meia-noite), fuso Africa/Luanda. */
 const TURNO_INICIO_MINUTES = { manha: 7 * 60, tarde: 15 * 60, noite: 23 * 60 };
@@ -4398,6 +4462,60 @@ app.delete('/api/fotos/:id', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── LOJAS (pontos de venda da empresa) ────────────────────────
+app.get('/api/lojas', auth, async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const empresaId = parseInt(req.user.empresa_id, 10) || 1;
+    const todos = req.query.todos === '1';
+    const r = await query(
+      `SELECT id, nome, ativo, criado_em FROM lojas WHERE empresa_id=$1 ${todos ? '' : 'AND ativo IS TRUE'} ORDER BY id`,
+      [empresaId]
+    );
+    res.json(r.rows.length ? r.rows : [{ id: 1, nome: 'Loja principal', ativo: true }]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/lojas', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const empresaId = parseInt(req.user.empresa_id, 10) || 1;
+    const nome = String((req.body && req.body.nome) || '').trim();
+    if (!nome) return res.status(400).json({ erro: 'Indica o nome da loja / ponto de venda' });
+    const r = await query(
+      `INSERT INTO lojas (empresa_id, nome) VALUES ($1,$2) RETURNING id, nome, ativo, criado_em`,
+      [empresaId, nome]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/lojas/:id', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const empresaId = parseInt(req.user.empresa_id, 10) || 1;
+    const sets = [];
+    const params = [];
+    if (req.body && typeof req.body.nome === 'string' && req.body.nome.trim()) {
+      params.push(req.body.nome.trim());
+      sets.push(`nome=$${params.length}`);
+    }
+    if (req.body && req.body.ativo !== undefined) {
+      params.push(!!req.body.ativo);
+      sets.push(`ativo=$${params.length}`);
+    }
+    if (!sets.length) return res.status(400).json({ erro: 'Nada para alterar' });
+    params.push(parseInt(req.params.id, 10) || 0);
+    params.push(empresaId);
+    const r = await query(
+      `UPDATE lojas SET ${sets.join(', ')} WHERE id=$${params.length - 1} AND empresa_id=$${params.length} RETURNING id, nome, ativo`,
+      params
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Loja não encontrada' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ── TURNOS ────────────────────────────────────────────────────
 app.get('/api/dia', auth, async (req, res) => {
   try {
@@ -4413,17 +4531,39 @@ app.get('/api/dia', auth, async (req, res) => {
         : NaN;
     const turnoOnlyFilter = Number.isFinite(turnoOnlyId) && turnoOnlyId > 0 ? turnoOnlyId : null;
 
-    const turnos = await query(
-      turnoOnlyFilter
-        ? `SELECT t.*, u.nome as utilizador_nome FROM turnos t
-           LEFT JOIN utilizadores u ON t.utilizador_id=u.id
-           WHERE t.data=$1 AND t.id=$2`
-        : `SELECT t.*, u.nome as utilizador_nome FROM turnos t
-           LEFT JOIN utilizadores u ON t.utilizador_id=u.id
-           WHERE t.data=$1
-           ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
-      turnoOnlyFilter ? [data, turnoOnlyFilter] : [data]
-    );
+    // Multi-loja: cada ponto de venda vê apenas os seus turnos. BD antiga
+    // (sem turnos.loja_id) → fallback sem filtro (comporta-se como antes).
+    await ensureEmpresasLojas().catch(() => {});
+    const lojaId = lojaDe(req);
+    let temLojaCol = true;
+    let turnos;
+    try {
+      turnos = await query(
+        turnoOnlyFilter
+          ? `SELECT t.*, u.nome as utilizador_nome FROM turnos t
+             LEFT JOIN utilizadores u ON t.utilizador_id=u.id
+             WHERE t.data=$1 AND t.id=$2 AND t.loja_id=$3`
+          : `SELECT t.*, u.nome as utilizador_nome FROM turnos t
+             LEFT JOIN utilizadores u ON t.utilizador_id=u.id
+             WHERE t.data=$1 AND t.loja_id=$2
+             ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
+        turnoOnlyFilter ? [data, turnoOnlyFilter, lojaId] : [data, lojaId]
+      );
+    } catch (e) {
+      if (!/loja_id/.test(String(e.message || ''))) throw e;
+      temLojaCol = false;
+      turnos = await query(
+        turnoOnlyFilter
+          ? `SELECT t.*, u.nome as utilizador_nome FROM turnos t
+             LEFT JOIN utilizadores u ON t.utilizador_id=u.id
+             WHERE t.data=$1 AND t.id=$2`
+          : `SELECT t.*, u.nome as utilizador_nome FROM turnos t
+             LEFT JOIN utilizadores u ON t.utilizador_id=u.id
+             WHERE t.data=$1
+             ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
+        turnoOnlyFilter ? [data, turnoOnlyFilter] : [data]
+      );
+    }
 
     if (!turnos.rows.length) {
       return res.json([]);
@@ -4543,9 +4683,12 @@ app.get('/api/dia', auth, async (req, res) => {
       // turno imediato não foi aberto, recua até ao último turno com registos.
       const slotCase = `CASE nome WHEN 'manha' THEN 0 WHEN 'tarde' THEN 1 WHEN 'noite' THEN 2 END`;
       const slotCaseT = `CASE t.nome WHEN 'manha' THEN 0 WHEN 'tarde' THEN 1 WHEN 'noite' THEN 2 END`;
+      // Comparações anterior/próximo sempre dentro da MESMA loja.
+      const lojaSel = temLojaCol ? ', loja_id' : '';
+      const lojaCond = temLojaCol ? 'AND t.loja_id = c.loja_id' : '';
       const prevStock = await query(
         `WITH cur AS (
-           SELECT id AS turno_id, data, ${slotCase} AS slot
+           SELECT id AS turno_id, data, ${slotCase} AS slot${lojaSel}
            FROM turnos WHERE id = ANY($1::int[])
          ),
          prev AS (
@@ -4555,6 +4698,7 @@ app.get('/api/dia', auth, async (req, res) => {
              SELECT t.id AS prev_turno_id
              FROM turnos t
              WHERE (t.data < c.data OR (t.data = c.data AND ${slotCaseT} < c.slot))
+               ${lojaCond}
                AND EXISTS (
                  SELECT 1 FROM turno_stock ts
                  JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
@@ -4586,7 +4730,7 @@ app.get('/api/dia', auth, async (req, res) => {
       // Encontrado(próximo) — útil para detectar erros de contagem. ──
       const nextStock = await query(
         `WITH cur AS (
-           SELECT id AS turno_id, data, ${slotCase} AS slot
+           SELECT id AS turno_id, data, ${slotCase} AS slot${lojaSel}
            FROM turnos WHERE id = ANY($1::int[])
          ),
          nxt AS (
@@ -4596,6 +4740,7 @@ app.get('/api/dia', auth, async (req, res) => {
              SELECT t.id AS next_turno_id
              FROM turnos t
              WHERE (t.data > c.data OR (t.data = c.data AND ${slotCaseT} > c.slot))
+               ${lojaCond}
                AND EXISTS (
                  SELECT 1 FROM turno_stock ts
                  JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
@@ -4804,7 +4949,19 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
       throw new Error(`O turno ${nome} está bloqueado — a abertura de novos turnos foi desactivada pelo administrador (Configurações).`);
     }
 
-    const exists = await client.query('SELECT id FROM turnos WHERE data=$1 AND nome=$2', [data, nome]);
+    await ensureEmpresasLojas().catch(() => {});
+    const lojaId = lojaDe(req);
+    let temLojaCol = true;
+    let exists;
+    try {
+      exists = await client.query('SELECT id FROM turnos WHERE data=$1 AND nome=$2 AND loja_id=$3', [data, nome, lojaId]);
+    } catch (eL) {
+      if (!/loja_id/.test(String(eL.message || ''))) throw eL;
+      temLojaCol = false;
+      await client.query('ROLLBACK');
+      await client.query('BEGIN');
+      exists = await client.query('SELECT id FROM turnos WHERE data=$1 AND nome=$2', [data, nome]);
+    }
     if (exists.rows.length) {
       // Sincronização offline (client_ref): outro dispositivo pode já ter
       // aberto o mesmo turno — devolve o existente em vez de falhar, para
@@ -4817,10 +4974,15 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
       throw new Error(`Turno ${nome} já existe para ${data}`);
     }
 
-    const turno = await client.query(
-      'INSERT INTO turnos (data, nome, utilizador_id) VALUES ($1,$2,$3) RETURNING *',
-      [data, nome, req.user.id]
-    );
+    const turno = temLojaCol
+      ? await client.query(
+          'INSERT INTO turnos (data, nome, utilizador_id, loja_id) VALUES ($1,$2,$3,$4) RETURNING *',
+          [data, nome, req.user.id, lojaId]
+        )
+      : await client.query(
+          'INSERT INTO turnos (data, nome, utilizador_id) VALUES ($1,$2,$3) RETURNING *',
+          [data, nome, req.user.id]
+        );
     const turnoId = turno.rows[0].id;
 
     // Stock do turno: só produtos activos marcados para a folha de stock
@@ -5411,17 +5573,29 @@ app.get('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), async
     await ensureDepositosBanco();
     const data = (req.query.data || '').trim();
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
-    let sql = `SELECT d.*, u.nome AS criado_por_nome, t.nome AS turno_nome, t.data AS turno_data
+    const lojaId = lojaDe(req);
+    const montarSql = (comLoja) => {
+      let s = `SELECT d.*, u.nome AS criado_por_nome, t.nome AS turno_nome, t.data AS turno_data
                FROM depositos_banco d
                JOIN turnos t ON t.id = d.turno_id
                LEFT JOIN utilizadores u ON u.id::text = d.criado_por::text`;
-    const params = [];
-    if (data) {
-      sql += ` WHERE t.data = $1`;
-      params.push(data);
+      const w = [];
+      const p = [];
+      if (data) { p.push(data); w.push(`t.data = $${p.length}`); }
+      if (comLoja) { p.push(lojaId); w.push(`t.loja_id = $${p.length}`); }
+      if (w.length) s += ` WHERE ` + w.join(' AND ');
+      s += ` ORDER BY t.data DESC, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 ELSE 3 END, d.criado_em DESC LIMIT ${limit}`;
+      return { s, p };
+    };
+    let r;
+    try {
+      const q1 = montarSql(true);
+      r = await query(q1.s, q1.p);
+    } catch (eL) {
+      if (!/loja_id/.test(String(eL.message || ''))) throw eL;
+      const q2 = montarSql(false);
+      r = await query(q2.s, q2.p);
     }
-    sql += ` ORDER BY t.data DESC, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 ELSE 3 END, d.criado_em DESC LIMIT ${limit}`;
-    const r = await query(sql, params);
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -7361,11 +7535,21 @@ app.post('/api/presencas', async (req, res) => {
         quando = new Date(ms).toISOString();
       }
     }
-    const r = await query(
-      `INSERT INTO presencas (utilizador_id, tipo, criado_em)
-       VALUES ($1, $2, COALESCE($3::timestamptz, NOW())) RETURNING id, criado_em`,
-      [utilizador_id, tipo, quando]
-    );
+    let r;
+    try {
+      r = await query(
+        `INSERT INTO presencas (utilizador_id, tipo, criado_em, loja_id)
+         VALUES ($1, $2, COALESCE($3::timestamptz, NOW()), $4) RETURNING id, criado_em`,
+        [utilizador_id, tipo, quando, lojaDe(req)]
+      );
+    } catch (eL) {
+      if (!/loja_id/.test(String(eL.message || ''))) throw eL;
+      r = await query(
+        `INSERT INTO presencas (utilizador_id, tipo, criado_em)
+         VALUES ($1, $2, COALESCE($3::timestamptz, NOW())) RETURNING id, criado_em`,
+        [utilizador_id, tipo, quando]
+      );
+    }
     res.json({ ok: true, id: r.rows[0].id, nome: u.rows[0].nome, tipo, criado_em: r.rows[0].criado_em });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

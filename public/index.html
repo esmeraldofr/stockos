@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-troca-sim-nao">
+<html lang="pt" data-stockos-ui="2026-07-29-contador-trocas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6510,8 +6510,9 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     : null;
   const finoBarrilPidPos = finoBarrilRowPos ? String(finoBarrilRowPos.produto_id).replace(/[^0-9a-zA-Z-]/g, '') : '';
   const finoBarrilBtnPos = canEdit && finoBarrilPidPos
-    ? `<button type="button" style="margin-left:auto;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.5);color:#86efac" title="O barril acabou? Regista a troca — indica quantos barris; cada um soma ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos à Entrada do Fino Barril (cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)" onclick="runAction(event, () => adicionarFinoBarrilNovo('${finoBarrilPidPos}'))">🛢️ Troca de barril</button>`
+    ? `<button type="button" style="margin-left:auto;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.5);color:#86efac" title="O barril acabou? Regista a troca (o que sai acabou?, o que entra é novo?) — soma os kg líquidos à Entrada do Fino Barril" onclick="runAction(event, () => adicionarFinoBarrilNovo('${finoBarrilPidPos}'))">🛢️ Troca de barril<span id="troca-barril-count" style="display:none;margin-left:7px;background:rgba(34,197,94,0.3);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:700"></span></button>`
     : '';
+  if (finoBarrilPidPos) setTimeout(() => atualizarContadorTrocasBarril(turnoId, finoBarrilPidPos), 300);
   const formHtml = canEdit
     ? `<div class="pedidos-balcao-pos" style="margin-bottom:14px">
       <div class="pedidos-balcao-tiles-wrap">
@@ -9554,6 +9555,28 @@ async function perguntarPesoBarril(titulo) {
   return peso;
 }
 
+/** Nº de trocas de barril já registadas neste turno (inclui as em fila
+ *  offline, via overlay) — visível no próprio botão. */
+async function atualizarContadorTrocasBarril(turnoId, produtoId) {
+  try {
+    const rows = await api('GET', `/turnos/${turnoId}/entradas`).catch(() => {
+      try { return aplicarEscritasOffline(comLojaNoPath(`/turnos/${turnoId}/entradas`), []); } catch (_) { return []; }
+    });
+    const pid = prodIdKey(produtoId);
+    const n = (Array.isArray(rows) ? rows : []).filter((r) =>
+      prodIdKey(r.produto_id) === pid && r.tipo !== 'tirar' && /barril/i.test(String(r.notas || ''))
+    ).length;
+    const el = document.getElementById('troca-barril-count');
+    if (!el) return;
+    if (n > 0) {
+      el.textContent = `${n} troca${n === 1 ? '' : 's'}`;
+      el.style.display = 'inline-block';
+    } else {
+      el.style.display = 'none';
+    }
+  } catch (_) {}
+}
+
 async function adicionarFinoBarrilNovo(produtoId) {
   const turnoId = S.turnoData?.id;
   if (!turnoId) {
@@ -9661,6 +9684,7 @@ async function adicionarFinoBarrilNovo(produtoId) {
     const stocks = S.turnoData?.stock || [];
     await loadRegistosMovimentosSection(turnoId, stocks, true);
   } catch (_) { /* offline sem cache — o barril ficou na fila na mesma */ }
+  atualizarContadorTrocasBarril(turnoId, produtoId).catch(() => {});
 }
 
 /** Secção unificada de movimentos de caixa: entradas (+, verde) e saídas

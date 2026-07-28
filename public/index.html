@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-stock-sem-botao-barril">
+<html lang="pt" data-stockos-ui="2026-07-29-selects-pesquisa">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4788,6 +4788,92 @@ function pedidoBalcaoInitDraftForTurno(turnoId) {
     window.__pedidoBalcaoDraftTurnoId = String(turnoId);
   }
 }
+
+// ── SELECTS COM PESQUISA (toda a app) ─────────────────────────
+// Tocar em QUALQUER <select> abre um selector próprio com campo de
+// pesquisa (ignora acentos e maiúsculas). O <select> original mantém-se
+// como fonte de verdade — value, onchange e reconstruções dinâmicas
+// continuam a funcionar sem alterações nos formulários.
+function semAcentos(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+function abrirSelectPesquisavel(sel) {
+  if (document.getElementById('select-pesquisa-overlay')) return;
+  const ov = document.createElement('div');
+  ov.id = 'select-pesquisa-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:1460;display:flex;align-items:flex-end;justify-content:center';
+  const itens = [];
+  const lerNos = (nos, grupo) => {
+    for (const n of nos) {
+      if (n.tagName === 'OPTGROUP') lerNos(n.children, n.label || '');
+      else if (n.tagName === 'OPTION' && !n.disabled) {
+        itens.push({ valor: n.value, texto: n.textContent.trim(), grupo: grupo || '' });
+      }
+    }
+  };
+  lerNos(sel.children, '');
+  const rotulo = (sel.closest('.field')?.querySelector('label')?.textContent || '').trim();
+  const linhaHtml = (it) => `
+    <div data-sp-valor="${escapeHtml(it.valor)}" style="padding:11px 14px;border-bottom:1px solid rgba(148,163,184,0.10);cursor:pointer;font-size:14px;color:${it.valor === sel.value ? '#4ade80' : '#e2e8f0'};${it.valor === sel.value ? 'font-weight:700;' : ''}display:flex;align-items:center;gap:8px">
+      <span style="flex:1">${escapeHtml(it.texto) || '<span style=\'color:#64748b\'>—</span>'}</span>
+      ${it.valor === sel.value ? '<span>✓</span>' : ''}
+    </div>`;
+  const renderLista = (termo) => {
+    const t = semAcentos(termo);
+    let html = '';
+    let grupoAtual = null;
+    let visiveis = 0;
+    for (const it of itens) {
+      if (t && !semAcentos(it.texto).includes(t)) continue;
+      if (it.grupo !== grupoAtual) {
+        grupoAtual = it.grupo;
+        if (it.grupo) html += `<div style="padding:8px 14px 4px;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em">${escapeHtml(it.grupo)}</div>`;
+      }
+      html += linhaHtml(it);
+      visiveis++;
+    }
+    if (!visiveis) html = '<div style="padding:18px 14px;color:#64748b;font-size:13px;text-align:center">Sem resultados para a pesquisa.</div>';
+    const lc = ov.querySelector('#sp-lista');
+    if (lc) lc.innerHTML = html;
+  };
+  ov.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:520px;width:100%;max-height:78vh;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;gap:8px;padding:12px 14px 8px">
+        <strong style="flex:1;color:#e2e8f0;font-size:14px">${escapeHtml(rotulo || 'Escolher')}</strong>
+        <button type="button" id="sp-fechar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;padding:0 2px">✕</button>
+      </div>
+      <div style="padding:0 14px 10px">
+        <input id="sp-pesquisa" type="search" placeholder="🔍 Pesquisar…" autocomplete="off" style="width:100%;font-size:15px;padding:10px 12px;background:#1e293b;border:1px solid #334155;border-radius:10px;color:#e2e8f0;box-sizing:border-box"/>
+      </div>
+      <div id="sp-lista" style="overflow-y:auto;flex:1;border-top:1px solid #1e293b"></div>
+    </div>`;
+  const fechar = () => ov.remove();
+  ov.addEventListener('click', (ev) => {
+    if (ev.target === ov) return fechar();
+    if (ev.target.closest && ev.target.closest('#sp-fechar')) return fechar();
+    const li = ev.target.closest ? ev.target.closest('[data-sp-valor]') : null;
+    if (!li) return;
+    sel.value = li.getAttribute('data-sp-valor');
+    fechar();
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  ov.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') fechar(); });
+  document.body.appendChild(ov);
+  renderLista('');
+  const inp = ov.querySelector('#sp-pesquisa');
+  inp.addEventListener('input', () => renderLista(inp.value));
+  setTimeout(() => { try { inp.focus(); } catch (_) {} }, 60);
+}
+// Intercepta a abertura nativa de qualquer select (rato e toque).
+['mousedown', 'click'].forEach((tipoEv) => {
+  document.addEventListener(tipoEv, (ev) => {
+    const sel = ev.target && ev.target.tagName === 'SELECT' ? ev.target : null;
+    if (!sel || sel.disabled || sel.multiple || sel.size > 1) return;
+    if (!sel.options || !sel.options.length) return;
+    ev.preventDefault();
+    if (tipoEv === 'mousedown') abrirSelectPesquisavel(sel);
+  }, true);
+});
 
 /** Diálogo de quantidade ao tocar num produto do balcão: −/+, escrita
  *  directa, total em tempo real e «Adicionar». Produtos «só em lote»

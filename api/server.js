@@ -1304,6 +1304,13 @@ async function ensureEmpresasLojas() {
   await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS nif TEXT NOT NULL DEFAULT ''`, [], 'lojas-nif');
   await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS responsavel TEXT NOT NULL DEFAULT ''`, [], 'lojas-responsavel');
   await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'lojas-notas');
+  // Isolamento por empresa (fase 2): dados de gestão marcados por empresa.
+  await qry(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'faturas-empresa');
+  await qry(`ALTER TABLE armazem_libertacoes ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'libertacoes-empresa');
+  await qry(`ALTER TABLE armazem_proformas ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'proformas-empresa');
+  await qry(`ALTER TABLE escala ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'escala-empresa');
+  await qry(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'escala-template-empresa');
+  await qry(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'produto-faltas-empresa');
   // Ficha da empresa (perfil completo, como lojas/fornecedores).
   await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS nif TEXT NOT NULL DEFAULT ''`, [], 'empresas-nif');
   await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT ''`, [], 'empresas-morada');
@@ -1345,6 +1352,31 @@ function lojaDe(req) {
 function empresaDe(req) {
   if (req.empresaEfetiva) return req.empresaEfetiva;
   return parseInt(req.user && req.user.empresa_id, 10) || 1;
+}
+
+/** Isolamento por empresa com fallback: tenta a consulta filtrada; numa BD
+ *  ainda sem as colunas empresa_id/loja_id, corre a versão antiga. */
+async function queryEmpresa(sqlNovo, paramsNovo, sqlAntigo, paramsAntigo) {
+  try {
+    return await query(sqlNovo, paramsNovo);
+  } catch (e) {
+    if (!/empresa_id|loja_id/.test(String(e.message || ''))) throw e;
+    return await query(sqlAntigo, paramsAntigo);
+  }
+}
+/** Dentro de transacções não se pode tentar-e-falhar (aborta o BEGIN) —
+ *  verifica primeiro se a coluna empresa_id existe (com cache). */
+const __colunaEmpresaCache = {};
+async function colunaEmpresaDisponivel(tabela) {
+  if (__colunaEmpresaCache[tabela]) return true;
+  try {
+    const r = await query(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name='empresa_id'`,
+      [tabela]
+    );
+    if (r.rows.length) { __colunaEmpresaCache[tabela] = true; return true; }
+  } catch (_) {}
+  return false;
 }
 /** Início oficial do turno (minutos desde meia-noite), fuso Africa/Luanda. */
 const TURNO_INICIO_MINUTES = { manha: 7 * 60, tarde: 15 * 60, noite: 23 * 60 };
@@ -2727,9 +2759,14 @@ app.get('/api/produtos', auth, async (req, res) => {
     // Quando a coluna não existe, devolve forca_pacote=false para o frontend
     // não depender dela. Quando existe, p.* já a inclui.
     const fpSel = hasFP ? '' : ', false AS forca_pacote';
-    const r = await query(
+    const emp = empresaDe(req);
+    const r = await queryEmpresa(
       `SELECT p.*${fpSel}, EXISTS(SELECT 1 FROM receitas r WHERE r.componente_id = p.id) AS is_ingrediente
-       FROM produtos p ${todos ? '' : 'WHERE p.ativo=true'} ORDER BY p.ordem, p.nome`
+       FROM produtos p WHERE p.empresa_id=$1 ${todos ? '' : 'AND p.ativo=true'} ORDER BY p.ordem, p.nome`,
+      [emp],
+      `SELECT p.*${fpSel}, EXISTS(SELECT 1 FROM receitas r WHERE r.componente_id = p.id) AS is_ingrediente
+       FROM produtos p ${todos ? '' : 'WHERE p.ativo=true'} ORDER BY p.ordem, p.nome`,
+      []
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -2761,25 +2798,29 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
     const cpct = Math.max(0, Math.min(100, parseFloat(comissao_pct) || 0));
     const img = typeof imagem === 'string' && imagem.trim() ? imagem.trim() : null;
     const fp = !!forca_pacote && qcp >= 2;
-    const r = await query(
+    const paramsProd = [
+      nome,
+      preco || 0,
+      cat,
+      maxOrdem.rows[0].n,
+      !!venda_avulso,
+      medicao,
+      noTurno,
+      vpc,
+      kgc,
+      pcp,
+      qcp,
+      vendavelFinal,
+      cpct,
+      img
+    ];
+    const r = await queryEmpresa(
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel,comissao_pct,imagem,empresa_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [...paramsProd, empresaDe(req)],
       `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel,comissao_pct,imagem)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-      [
-        nome,
-        preco || 0,
-        cat,
-        maxOrdem.rows[0].n,
-        !!venda_avulso,
-        medicao,
-        noTurno,
-        vpc,
-        kgc,
-        pcp,
-        qcp,
-        vendavelFinal,
-        cpct,
-        img
-      ]
+      paramsProd
     );
     const row = r.rows[0];
     // forca_pacote em escrita separada e opcional (coluna pode não existir
@@ -2813,6 +2854,12 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
 
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
+    // Isolamento: só produtos da empresa efectiva podem ser editados.
+    const chkEmp = await queryEmpresa(
+      `SELECT 1 FROM produtos WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM produtos WHERE id=$1`, [req.params.id]
+    );
+    if (!chkEmp.rows.length) return res.status(404).json({ erro: 'Produto não encontrado' });
     const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno, vendavel } = req.body;
     const {
       venda_por_copo,
@@ -2966,8 +3013,7 @@ app.get('/api/faltas', auth, async (req, res) => {
     let where = '';
     if (status === 'pendentes') where = 'WHERE f.resolvido_em IS NULL';
     else if (status === 'resolvidas') where = "WHERE f.resolvido_em IS NOT NULL AND f.resolvido_em > NOW() - INTERVAL '30 days'";
-    const r = await query(
-      `SELECT f.id, f.produto_id, f.produto_nome_livre, f.notas,
+    const selFal = `SELECT f.id, f.produto_id, f.produto_nome_livre, f.notas,
               f.reportado_por, f.reportado_por_nome, f.reportado_em,
               f.resolvido_em, f.resolvido_por, f.resolvido_por_nome,
               (f.resolvido_foto_base64 IS NOT NULL) AS tem_foto,
@@ -2976,10 +3022,12 @@ app.get('/api/faltas', auth, async (req, res) => {
               p.categoria AS produto_categoria, p.tipo_medicao AS produto_tipo_medicao,
               (f.produto_id IS NULL) AS produto_livre
        FROM produto_faltas f
-       LEFT JOIN produtos p ON p.id = f.produto_id
-       ${where}
-       ORDER BY (f.resolvido_em IS NULL) DESC, f.reportado_em DESC
-       LIMIT 200`
+       LEFT JOIN produtos p ON p.id = f.produto_id`;
+    const ordFal = ` ORDER BY (f.resolvido_em IS NULL) DESC, f.reportado_em DESC LIMIT 200`;
+    const whereEmpFal = where ? `${where} AND f.empresa_id=$1` : 'WHERE f.empresa_id=$1';
+    const r = await queryEmpresa(
+      `${selFal} ${whereEmpFal}${ordFal}`, [empresaDe(req)],
+      `${selFal} ${where}${ordFal}`, []
     );
     res.json(r.rows);
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -2989,7 +3037,10 @@ app.get('/api/faltas', auth, async (req, res) => {
 app.get('/api/faltas/pendentes-count', auth, async (req, res) => {
   try {
     await ensureProdutoFaltas();
-    const r = await query(`SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL`);
+    const r = await queryEmpresa(
+      `SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL AND empresa_id=$1`, [empresaDe(req)],
+      `SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL`, []
+    );
     res.json({ pendentes: r.rows[0].n });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -3017,10 +3068,14 @@ app.post('/api/faltas', auth, async (req, res) => {
       );
       if (dup.rows.length) return res.status(400).json({ erro: 'Já existe um aviso pendente para este produto' });
     }
-    const r = await query(
+    const pFal = [produto_id || null, produto_id ? '' : nomeLivre, String(notas || '').trim(), String(req.user.id || ''), String(req.user.nome || '')];
+    const r = await queryEmpresa(
+      `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome, empresa_id)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [...pFal, empresaDe(req)],
       `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [produto_id || null, produto_id ? '' : nomeLivre, String(notas || '').trim(), String(req.user.id || ''), String(req.user.nome || '')]
+      pFal
     );
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -3238,8 +3293,12 @@ app.get('/api/fornecedores', auth, requireRole('admin', 'gestor', 'compras'), as
   try {
     await ensureFornecedores();
     const todos = req.query.todos === '1';
-    const r = await query(
-      `SELECT * FROM fornecedores ${todos ? '' : 'WHERE ativo = true'} ORDER BY LOWER(nome)`
+    const emp = empresaDe(req);
+    const r = await queryEmpresa(
+      `SELECT * FROM fornecedores WHERE empresa_id=$1 ${todos ? '' : 'AND ativo = true'} ORDER BY LOWER(nome)`,
+      [emp],
+      `SELECT * FROM fornecedores ${todos ? '' : 'WHERE ativo = true'} ORDER BY LOWER(nome)`,
+      []
     );
     res.json(r.rows);
   } catch (e) {
@@ -3253,12 +3312,16 @@ app.post('/api/fornecedores', auth, requireRole('admin', 'gestor', 'compras'), a
     const { nome, notas, telefone, email, morada, nif } = req.body || {};
     const n = String(nome || '').trim();
     if (!n) return res.status(400).json({ erro: 'Nome é obrigatório' });
-    const r = await query(
+    const paramsForn = [n, String(notas || '').trim(), String(req.user.id || ''),
+       String(telefone || '').trim(), String(email || '').trim(),
+       String(morada || '').trim(), String(nif || '').trim()];
+    const r = await queryEmpresa(
+      `INSERT INTO fornecedores (nome, notas, criado_por, telefone, email, morada, nif, empresa_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [...paramsForn, empresaDe(req)],
       `INSERT INTO fornecedores (nome, notas, criado_por, telefone, email, morada, nif)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [n, String(notas || '').trim(), String(req.user.id || ''),
-       String(telefone || '').trim(), String(email || '').trim(),
-       String(morada || '').trim(), String(nif || '').trim()]
+      paramsForn
     );
     res.json(r.rows[0]);
   } catch (e) {
@@ -3272,7 +3335,10 @@ app.put('/api/fornecedores/:id', auth, requireRole('admin', 'gestor', 'compras')
     const id = parseInt(req.params.id, 10);
     if (Number.isNaN(id)) return res.status(400).json({ erro: 'ID inválido' });
     const { nome, notas, ativo, telefone, email, morada, nif } = req.body || {};
-    const row = await query('SELECT * FROM fornecedores WHERE id=$1', [id]);
+    const row = await queryEmpresa(
+      'SELECT * FROM fornecedores WHERE id=$1 AND empresa_id=$2', [id, empresaDe(req)],
+      'SELECT * FROM fornecedores WHERE id=$1', [id]
+    );
     if (!row.rows.length) return res.status(404).json({ erro: 'Fornecedor não encontrado' });
     const nomeF = nome != null ? String(nome).trim() : row.rows[0].nome;
     if (!nomeF) return res.status(400).json({ erro: 'Nome é obrigatório' });
@@ -3403,13 +3469,20 @@ app.get('/api/armazem/saldo', auth, requireRole('admin','gestor','compras'), asy
   try {
     await ensureArmazemTables();
     const data = req.query.data || new Date().toISOString().split('T')[0];
-    const lib = await query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [data]);
-    const fat = await query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [data]);
-    const lis = await query(
-      `SELECT l.*, u.nome as criado_por_nome FROM armazem_libertacoes l
-       LEFT JOIN utilizadores u ON u.id::text = l.criado_por::text
-       WHERE l.data=$1 ORDER BY l.criado_em DESC`,
-      [data]
+    const emp = empresaDe(req);
+    const lib = await queryEmpresa(
+      `SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND empresa_id=$2`, [data, emp],
+      `SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [data]
+    );
+    const fat = await queryEmpresa(
+      `SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND empresa_id=$2`, [data, emp],
+      `SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [data]
+    );
+    const lisSel = `SELECT l.*, u.nome as criado_por_nome FROM armazem_libertacoes l
+       LEFT JOIN utilizadores u ON u.id::text = l.criado_por::text`;
+    const lis = await queryEmpresa(
+      `${lisSel} WHERE l.data=$1 AND l.empresa_id=$2 ORDER BY l.criado_em DESC`, [data, emp],
+      `${lisSel} WHERE l.data=$1 ORDER BY l.criado_em DESC`, [data]
     );
     const totalLib = parseFloat(lib.rows[0].t) || 0;
     const totalFat = parseFloat(fat.rows[0].t) || 0;
@@ -3427,12 +3500,13 @@ app.get('/api/armazem/saidas-dia', auth, requireRole('admin','gestor','compras')
   try {
     await ensureTurnoSaidas();
     const data = req.query.data || new Date().toISOString().split('T')[0];
-    const r = await query(
-      `SELECT s.id, s.turno_id, s.descricao, s.valor, s.notas, s.criado_em, t.nome as turno_nome
+    const selSd = `SELECT s.id, s.turno_id, s.descricao, s.valor, s.notas, s.criado_em, t.nome as turno_nome
        FROM turno_saidas s
-       JOIN turnos t ON t.id = s.turno_id
-       WHERE t.data = $1
-       ORDER BY s.criado_em DESC`,
+       JOIN turnos t ON t.id = s.turno_id`;
+    const r = await queryEmpresa(
+      `${selSd} WHERE t.data = $1 AND t.loja_id IN (SELECT id FROM lojas WHERE empresa_id=$2) ORDER BY s.criado_em DESC`,
+      [data, empresaDe(req)],
+      `${selSd} WHERE t.data = $1 ORDER BY s.criado_em DESC`,
       [data]
     );
     res.json(r.rows);
@@ -3446,9 +3520,12 @@ app.post('/api/armazem/libertacoes', auth, requireRole('admin','gestor','compras
     const d = (data || new Date().toISOString().split('T')[0]).trim();
     const v = parseFloat(valor);
     if (!v || v <= 0) return res.status(400).json({ erro: 'Indique um valor positivo para a libertação.' });
-    const r = await query(
+    const pLib = [d, v, String(notas || '').trim(), String(req.user.id || '')];
+    const r = await queryEmpresa(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por, empresa_id) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [...pLib, empresaDe(req)],
       `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [d, v, String(notas || '').trim(), String(req.user.id || '')]
+      pLib
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(400).json({ erro: e.message }); }
@@ -3513,12 +3590,14 @@ async function ensureArmazemProformas() {
 app.get('/api/armazem/proformas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemProformas();
-    const r = await query(
-      `SELECT pf.*, u.nome AS criado_por_nome
+    const selPf = `SELECT pf.*, u.nome AS criado_por_nome
        FROM armazem_proformas pf
-       LEFT JOIN utilizadores u ON u.id::text = pf.criado_por::text
-       ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC
-       LIMIT 100`
+       LEFT JOIN utilizadores u ON u.id::text = pf.criado_por::text`;
+    const r = await queryEmpresa(
+      `${selPf} WHERE pf.empresa_id=$1 ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC LIMIT 100`,
+      [empresaDe(req)],
+      `${selPf} ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC LIMIT 100`,
+      []
     );
     const ids = r.rows.map((x) => x.id);
     const byId = {};
@@ -3573,9 +3652,12 @@ app.post('/api/armazem/proformas', auth, requireRole('admin','gestor','compras')
       total += vt;
       norm.push({ produto_id: ln.produto_id, quantidade: q, caixas, qtd_por_caixa: qtdPor, preco_unitario: pu, valor_total: vt });
     }
-    const ins = await query(
+    const pPf = [String(fornecedor || '').trim(), String(notas || '').trim(), Math.round(total * 100) / 100, String(req.user.id || '')];
+    const ins = await queryEmpresa(
+      `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por, empresa_id) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [...pPf, empresaDe(req)],
       `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [String(fornecedor || '').trim(), String(notas || '').trim(), Math.round(total * 100) / 100, String(req.user.id || '')]
+      pPf
     );
     const pf = ins.rows[0];
     for (const ln of norm) {
@@ -3600,9 +3682,12 @@ app.post('/api/armazem/proformas/:id/libertar', auth, requireRole('admin','gesto
     const pf = pfr.rows[0];
     if (pf.estado !== 'pendente') return res.status(400).json({ erro: `Esta proforma já está ${pf.estado}.` });
     const d = String((req.body && req.body.data) || new Date().toISOString().split('T')[0]).slice(0, 10);
-    const lib = await query(
+    const pLibPf = [d, parseFloat(pf.total_valor) || 0, `Proforma #${pf.id}${pf.fornecedor ? ' — ' + pf.fornecedor : ''}`, String(req.user.id || '')];
+    const lib = await queryEmpresa(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por, empresa_id) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [...pLibPf, parseInt(pf.empresa_id, 10) || empresaDe(req)],
       `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [d, parseFloat(pf.total_valor) || 0, `Proforma #${pf.id}${pf.fornecedor ? ' — ' + pf.fornecedor : ''}`, String(req.user.id || '')]
+      pLibPf
     );
     const upd = await query(
       `UPDATE armazem_proformas SET estado='libertada', libertacao_id=$1 WHERE id=$2 RETURNING *`,
@@ -3638,21 +3723,38 @@ app.get('/api/armazem/inventario', auth, requireRole('admin','gestor','compras')
          FROM produtos p
          LEFT JOIN armazem_stock a ON a.produto_id = p.id
          LEFT JOIN armazem_inventario_diario d ON d.produto_id = p.id AND d.data = $1::date
-         WHERE p.ativo=true
+         WHERE p.ativo=true AND p.empresa_id=$2
          ORDER BY p.ordem, p.nome`,
-        [dataDia]
-      );
+        [dataDia, empresaDe(req)]
+      ).catch(async (e) => {
+        if (!/empresa_id/.test(String(e.message || ''))) throw e;
+        return query(
+          `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
+                  COALESCE(a.quantidade, 0) as quantidade,
+                  COALESCE(a.custo_medio, 0) as custo_medio,
+                  a.atualizado_em,
+                  COALESCE(d.encontrado, 0) as armazem_encontrado,
+                  COALESCE(d.deixado, 0) as armazem_deixado,
+                  d.atualizado_em as armazem_diario_atualizado_em
+           FROM produtos p
+           LEFT JOIN armazem_stock a ON a.produto_id = p.id
+           LEFT JOIN armazem_inventario_diario d ON d.produto_id = p.id AND d.data = $1::date
+           WHERE p.ativo=true
+           ORDER BY p.ordem, p.nome`,
+          [dataDia]
+        );
+      });
       return res.json(r.rows);
     }
-    const r = await query(
-      `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
+    const selInv = `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
               COALESCE(a.quantidade, 0) as quantidade,
               COALESCE(a.custo_medio, 0) as custo_medio,
               a.atualizado_em
        FROM produtos p
-       LEFT JOIN armazem_stock a ON a.produto_id = p.id
-       WHERE p.ativo=true
-       ORDER BY p.ordem, p.nome`
+       LEFT JOIN armazem_stock a ON a.produto_id = p.id`;
+    const r = await queryEmpresa(
+      `${selInv} WHERE p.ativo=true AND p.empresa_id=$1 ORDER BY p.ordem, p.nome`, [empresaDe(req)],
+      `${selInv} WHERE p.ativo=true ORDER BY p.ordem, p.nome`, []
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -3714,15 +3816,19 @@ app.get('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), a
       params.push(categoria); i++;
       wh.push(`p.categoria = $${i}`);
     }
-    const sql = `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, p.categoria as produto_categoria, u.nome as criado_por_nome, f.numero_fatura as fatura_numero, f.data_emissao as fatura_data_emissao
+    const baseCompras = `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, p.categoria as produto_categoria, u.nome as criado_por_nome, f.numero_fatura as fatura_numero, f.data_emissao as fatura_data_emissao
        FROM armazem_compras c
        JOIN produtos p ON p.id = c.produto_id
        LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
-       LEFT JOIN armazem_faturas f ON f.id = c.fatura_id
-       ${wh.length ? 'WHERE ' + wh.join(' AND ') : ''}
-       ORDER BY c.criado_em DESC
-       LIMIT ${limit}`;
-    const r = await query(sql, params);
+       LEFT JOIN armazem_faturas f ON f.id = c.fatura_id`;
+    params.push(empresaDe(req)); i++;
+    const whEmp = wh.concat([`p.empresa_id = $${i}`]);
+    const r = await queryEmpresa(
+      `${baseCompras} WHERE ${whEmp.join(' AND ')} ORDER BY c.criado_em DESC LIMIT ${limit}`,
+      params,
+      `${baseCompras} ${wh.length ? 'WHERE ' + wh.join(' AND ') : ''} ORDER BY c.criado_em DESC LIMIT ${limit}`,
+      params.slice(0, -1)
+    );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -3867,11 +3973,14 @@ app.get('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), a
       params.push(categoria); i++;
       wh.push(`id IN (SELECT DISTINCT c.fatura_id FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id WHERE p.categoria = $${i})`);
     }
-    const sql = `SELECT * FROM armazem_faturas
-       ${wh.length ? 'WHERE ' + wh.join(' AND ') : ''}
-       ORDER BY data_emissao DESC, criado_em DESC
-       LIMIT ${limit}`;
-    const r = await query(sql, params);
+    params.push(empresaDe(req)); i++;
+    const whEmpF = wh.concat([`empresa_id = $${i}`]);
+    const r = await queryEmpresa(
+      `SELECT * FROM armazem_faturas WHERE ${whEmpF.join(' AND ')} ORDER BY data_emissao DESC, criado_em DESC LIMIT ${limit}`,
+      params,
+      `SELECT * FROM armazem_faturas ${wh.length ? 'WHERE ' + wh.join(' AND ') : ''} ORDER BY data_emissao DESC, criado_em DESC LIMIT ${limit}`,
+      params.slice(0, -1)
+    );
     let rows = r.rows;
     // Nº de fotos adicionais por fatura (multi-foto) — melhor esforço.
     try {
@@ -4342,8 +4451,15 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
         fornecedorNome = ins.rows[0].nome;
       }
     }
-    const libRow = await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);
-    const fatRow = await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [dataFat]);
+    const empFat = empresaDe(req);
+    const temEmpLib = await colunaEmpresaDisponivel('armazem_libertacoes');
+    const temEmpFatCol = await colunaEmpresaDisponivel('armazem_faturas');
+    const libRow = temEmpLib
+      ? await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND empresa_id=$2`, [dataFat, empFat])
+      : await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);
+    const fatRow = temEmpFatCol
+      ? await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND empresa_id=$2`, [dataFat, empFat])
+      : await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [dataFat]);
     const totalLib = parseFloat(libRow.rows[0].t) || 0;
     const totalFatExistente = parseFloat(fatRow.rows[0].t) || 0;
     const saldoDisponivel = totalLib - totalFatExistente;
@@ -4386,20 +4502,27 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
       tsid = null;
     }
 
-    const ins = await client.query(
-      `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id, fornecedor_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [
-        (numero_fatura || '').trim(),
-        fornecedorNome,
-        dataFat,
-        (notas || '').trim(),
-        String(req.user.id || ''),
-        just,
-        tsid,
-        fornecedorId
-      ]
-    );
+    const pFat = [
+      (numero_fatura || '').trim(),
+      fornecedorNome,
+      dataFat,
+      (notas || '').trim(),
+      String(req.user.id || ''),
+      just,
+      tsid,
+      fornecedorId
+    ];
+    const ins = temEmpFatCol
+      ? await client.query(
+          `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id, fornecedor_id, empresa_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+          [...pFat, empFat]
+        )
+      : await client.query(
+          `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id, fornecedor_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+          pFat
+        );
     fid = ins.rows[0].id;
     const forn = fornecedorNome;
     sumTotal = 0;
@@ -5047,8 +5170,7 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
     const dataIni = `${y}-${pad(m)}-01`;
     const lastDay = new Date(y, m, 0).getDate();
     const dataFim = `${y}-${pad(m)}-${pad(lastDay)}`;
-    const r = await query(
-      `SELECT t.id, t.data, t.nome, t.estado,
+    const sqlCal = `SELECT t.id, t.data, t.nome, t.estado,
               COALESCE(c.dinheiro, 0)      AS caixa_dinheiro,
               COALESCE(c.transferencia, 0) AS caixa_transferencia,
               COALESCE(c.tpa, 0)           AS caixa_tpa,
@@ -5060,9 +5182,11 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
        FROM turnos t
        LEFT JOIN turno_caixa c     ON c.turno_id = t.id
        LEFT JOIN depositos_banco d ON d.turno_id = t.id
-       WHERE t.data >= $1::date AND t.data <= $2::date
-       ORDER BY t.data, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`,
-      [dataIni, dataFim]
+       WHERE t.data >= $1::date AND t.data <= $2::date {LOJA_FILTRO}
+       ORDER BY t.data, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`;
+    const r = await queryEmpresa(
+      sqlCal.replace('{LOJA_FILTRO}', 'AND t.loja_id = $3'), [dataIni, dataFim, lojaDe(req)],
+      sqlCal.replace('{LOJA_FILTRO}', ''), [dataIni, dataFim]
     );
     const rows = r.rows.map((row) => ({
       id: row.id,
@@ -6402,8 +6526,7 @@ app.get('/api/historico', auth, async (req, res) => {
     const { inicio, fim } = req.query;
     const d1 = inicio || '2020-01-01';
     const d2 = fim || new Date().toISOString().split('T')[0];
-    const r = await query(
-      `SELECT
+    const sqlHist = `SELECT
          t.id AS turno_id,
          t.data,
          t.nome,
@@ -6425,10 +6548,12 @@ app.get('/api/historico', auth, async (req, res) => {
          INNER JOIN turnos t ON t.id = ts.turno_id
          GROUP BY ts.turno_id
        ) v ON v.turno_id = t.id
-       WHERE t.data BETWEEN $1::date AND $2::date
+       WHERE t.data BETWEEN $1::date AND $2::date {LOJA_FILTRO}
        ORDER BY t.data DESC,
-         CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`,
-      [d1, d2]
+         CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`;
+    const r = await queryEmpresa(
+      sqlHist.replace('{LOJA_FILTRO}', 'AND t.loja_id = $3'), [d1, d2, lojaDe(req)],
+      sqlHist.replace('{LOJA_FILTRO}', ''), [d1, d2]
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -6461,8 +6586,7 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
         ELSE
           tv.quantidade * (${precoUnitDirecto})
       END`;
-    const r = await query(
-      `WITH preco_compra_atual AS (
+    const sqlVp = `WITH preco_compra_atual AS (
          SELECT DISTINCT ON (produto_id) produto_id,
            CASE WHEN quantidade > 0 AND valor_total > 0
                 THEN (valor_total / quantidade)
@@ -6489,7 +6613,7 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
          INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
          INNER JOIN turnos t ON t.id = ts.turno_id
          LEFT JOIN preco_compra_atual pc ON pc.produto_id = p.id
-         WHERE t.data BETWEEN $1::date AND $2::date
+         WHERE t.data BETWEEN $1::date AND $2::date {LOJA_FILTRO}
          GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.preco, pc.preco_unitario, p.ordem
        ),
        direct_sales AS (
@@ -6509,14 +6633,16 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
          INNER JOIN produtos p ON p.id = tv.produto_id AND p.em_stock_turno IS FALSE AND ${"p.categoria IN ('menu','ingredientes','bebida')"}
          INNER JOIN turnos t ON t.id = tv.turno_id
          LEFT JOIN preco_compra_atual pc ON pc.produto_id = p.id
-         WHERE t.data BETWEEN $1::date AND $2::date
+         WHERE t.data BETWEEN $1::date AND $2::date {LOJA_FILTRO}
          GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.preco, pc.preco_unitario, p.ordem
        )
        SELECT * FROM stock_sales WHERE qtd_vendida > 0 OR valor_vendas > 0
        UNION ALL
        SELECT * FROM direct_sales WHERE qtd_vendida > 0 OR valor_vendas > 0
-       ORDER BY categoria, ordem NULLS LAST, produto_nome`,
-      [d1, d2]
+       ORDER BY categoria, ordem NULLS LAST, produto_nome`;
+    const r = await queryEmpresa(
+      sqlVp.split('{LOJA_FILTRO}').join('AND t.loja_id = $3'), [d1, d2, lojaDe(req)],
+      sqlVp.split('{LOJA_FILTRO}').join(''), [d1, d2]
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -7221,6 +7347,12 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
     await ensureTurnoPedidos();
     const params = [];
     const where = ['tp.promotor_id IS NOT NULL'];
+    let whereLojaCom = '';
+    try {
+      params.push(lojaDe(req));
+      whereLojaCom = `t.loja_id = $${params.length}`;
+      where.push(whereLojaCom);
+    } catch (_) {}
     if (req.query.turno_id) {
       params.push(parseInt(req.query.turno_id, 10));
       where.push(`tp.turno_id = $${params.length}`);
@@ -7275,7 +7407,16 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
       WHERE ${where.join(' AND ')}
       ORDER BY tp.criado_em DESC
     `;
-    const r = await query(sql, params);
+    let r;
+    try {
+      r = await query(sql, params);
+    } catch (eL) {
+      // BD sem turnos.loja_id (por migrar) — repete sem o filtro de loja
+      // (a condição vira sempre-verdadeira mantendo o parâmetro referenciado).
+      if (!/loja_id/.test(String(eL.message || '')) || !whereLojaCom) throw eL;
+      const semLoja = whereLojaCom.replace('t.loja_id = ', '') + '::int IS NOT NULL';
+      r = await query(sql.replace(whereLojaCom, semLoja), params);
+    }
     const linhas = r.rows.map(row => {
       const auto = row.promotor_id && row.operador_id && row.promotor_id === row.operador_id;
       const temEscala = row.promotor_tem_escala === true;
@@ -7445,11 +7586,12 @@ app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
     const isAdminReq = req.user && req.user.role === 'admin';
     const fin = isAdminReq ? ", salario_base, COALESCE(iban,'') AS iban" : "";
     const ficha = ", COALESCE(telefone,'') AS telefone, COALESCE(bi,'') AS bi, COALESCE(morada,'') AS morada, data_nascimento::text AS data_nascimento, data_admissao::text AS data_admissao" + fin + ", COALESCE(contacto_emergencia,'') AS contacto_emergencia, COALESCE(notas_funcionario,'') AS notas_funcionario, loja_id, empresa_id";
+    const emp = empresaDe(req);
     let r;
     try {
-      r = await query(`SELECT ${base}${ficha} FROM utilizadores ORDER BY nome`);
+      r = await query(`SELECT ${base}${ficha} FROM utilizadores WHERE empresa_id=$1 ORDER BY nome`, [emp]);
     } catch (_) {
-      // BD sem as colunas da ficha (por migrar) — lista na mesma.
+      // BD sem as colunas da ficha/empresa (por migrar) — lista na mesma.
       r = await query(`SELECT ${base} FROM utilizadores ORDER BY nome`);
     }
     res.json(r.rows);
@@ -7460,7 +7602,11 @@ app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
 app.get('/api/equipa', auth, requireRole('admin','gestor','operador','compras'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor FROM utilizadores ORDER BY nome");
+    const selEq = "SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor FROM utilizadores";
+    const r = await queryEmpresa(
+      `${selEq} WHERE empresa_id=$1 ORDER BY nome`, [empresaDe(req)],
+      `${selEq} ORDER BY nome`, []
+    );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -7468,8 +7614,10 @@ app.get('/api/equipa', auth, requireRole('admin','gestor','operador','compras'),
 /** Promotores activos — usado no dropdown de pedido balcão. */
 app.get('/api/promotores', auth, async (req, res) => {
   try {
-    const r = await query(
-      "SELECT id, nome, username, COALESCE(comissao_modo,'produto') AS comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total FROM utilizadores WHERE ativo=true ORDER BY nome"
+    const selProm = "SELECT id, nome, username, COALESCE(comissao_modo,'produto') AS comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total FROM utilizadores WHERE ativo=true";
+    const r = await queryEmpresa(
+      `${selProm} AND empresa_id=$1 ORDER BY nome`, [empresaDe(req)],
+      `${selProm} ORDER BY nome`, []
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -7685,11 +7833,26 @@ async function ensurePresencas() {
   }
 }
 
-/** Descritores faciais de todos os utilizadores activos (sem auth — necessário no ecrã de presença). */
+/** Descritores faciais dos utilizadores activos (sem auth — necessário no
+ *  ecrã de presença). Isolado por empresa: o quiosque envia ?loja= e a
+ *  empresa deriva do mapa loja→empresa. */
 app.get('/api/face-descriptors', async (req, res) => {
   try {
     await dbReady;
-    const r = await query(`SELECT id, nome, face_descriptor FROM utilizadores WHERE ativo=true AND face_descriptor IS NOT NULL`);
+    let emp = null;
+    try {
+      const qL = parseInt(req.query && req.query.loja, 10);
+      if (Number.isFinite(qL) && qL > 0) {
+        const mapa = await mapaLojaEmpresa();
+        if (mapa && mapa[String(qL)] != null) emp = mapa[String(qL)];
+      }
+    } catch (_) {}
+    const r = emp != null
+      ? await queryEmpresa(
+          `SELECT id, nome, face_descriptor FROM utilizadores WHERE ativo=true AND face_descriptor IS NOT NULL AND empresa_id=$1`, [emp],
+          `SELECT id, nome, face_descriptor FROM utilizadores WHERE ativo=true AND face_descriptor IS NOT NULL`, []
+        )
+      : await query(`SELECT id, nome, face_descriptor FROM utilizadores WHERE ativo=true AND face_descriptor IS NOT NULL`);
     res.json(r.rows.map(u => ({ id: u.id, nome: u.nome, descriptor: u.face_descriptor })));
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -7775,8 +7938,11 @@ app.get('/api/presencas', auth, requireRole('admin','gestor'), async (req, res) 
     const params = [];
     if (data) { params.push(data); sql += ` AND p.criado_em::date = $${params.length}`; }
     if (utilizador_id) { params.push(utilizador_id); sql += ` AND p.utilizador_id = $${params.length}`; }
-    sql += ` ORDER BY p.criado_em DESC LIMIT 500`;
-    const r = await query(sql, params);
+    const ordP = ` ORDER BY p.criado_em DESC LIMIT 500`;
+    const r = await queryEmpresa(
+      `${sql} AND u.empresa_id = $${params.length + 1}${ordP}`, [...params, empresaDe(req)],
+      `${sql}${ordP}`, params
+    );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -7863,28 +8029,32 @@ app.get('/api/escala/semana', auth, async (req, res) => {
   try {
     const { data_inicio, data_fim } = req.query;
     if (!data_inicio || !data_fim) return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios' });
-    const cacheKey = `${data_inicio}\t${data_fim}`;
+    const empEsc = empresaDe(req);
+    const cacheKey = `${data_inicio}\t${data_fim}\te${empEsc}`;
     const now = Date.now();
     const hit = _escalaSemanaCache.get(cacheKey);
     if (hit && now - hit.at < ESCALA_SEMANA_CACHE_MS) {
       return res.json(hit.body);
     }
-    const [sem, tpl] = await Promise.all([
-      query(
-        `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id, e.area_trabalho,
+    const selSem = `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id, e.area_trabalho,
                 u.nome as utilizador_nome, u.role as utilizador_role
          FROM escala e
          LEFT JOIN utilizadores u ON e.utilizador_id::text = u.id::text
-         WHERE e.data >= $1 AND e.data <= $2
-         ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
-        [data_inicio, data_fim]
-      ),
-      query(`
-        SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, et.notas, et.area_trabalho, u.nome as utilizador_nome
+         WHERE e.data >= $1 AND e.data <= $2`;
+    const ordSem = ` ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`;
+    const selTpl = `SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, et.notas, et.area_trabalho, u.nome as utilizador_nome
         FROM escala_template et
-        LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text
-        ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
-      `)
+        LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text`;
+    const ordTpl = ` ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome`;
+    const [sem, tpl] = await Promise.all([
+      queryEmpresa(
+        `${selSem} AND u.empresa_id = $3${ordSem}`, [data_inicio, data_fim, empEsc],
+        `${selSem}${ordSem}`, [data_inicio, data_fim]
+      ),
+      queryEmpresa(
+        `${selTpl} WHERE u.empresa_id = $1${ordTpl}`, [empEsc],
+        `${selTpl}${ordTpl}`, []
+      )
     ]);
     const body = { semana: sem.rows, template: tpl.rows };
     _escalaSemanaCache.set(cacheKey, { at: now, body });
@@ -7914,14 +8084,15 @@ app.get('/api/escala', auth, async (req, res) => {
   try {
     const { data_inicio, data_fim } = req.query;
     if (!data_inicio || !data_fim) return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios' });
-    const r = await query(
-      `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id, e.area_trabalho,
+    const selE = `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id, e.area_trabalho,
               u.nome as utilizador_nome, u.role as utilizador_role
        FROM escala e
        LEFT JOIN utilizadores u ON e.utilizador_id::text = u.id::text
-       WHERE e.data >= $1 AND e.data <= $2
-       ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
-      [data_inicio, data_fim]
+       WHERE e.data >= $1 AND e.data <= $2`;
+    const ordE = ` ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`;
+    const r = await queryEmpresa(
+      `${selE} AND u.empresa_id = $3${ordE}`, [data_inicio, data_fim, empresaDe(req)],
+      `${selE}${ordE}`, [data_inicio, data_fim]
     );
     res.json(r.rows);
   } catch(e) {
@@ -7986,12 +8157,14 @@ async function ensureEscalaTemplate() {
 
 app.get('/api/escala/template', auth, async (req, res) => {
   try {
-    const r = await query(`
-      SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, et.notas, et.area_trabalho, u.nome as utilizador_nome
+    const selT = `SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, et.notas, et.area_trabalho, u.nome as utilizador_nome
       FROM escala_template et
-      LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text
-      ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
-    `);
+      LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text`;
+    const ordT = ` ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome`;
+    const r = await queryEmpresa(
+      `${selT} WHERE u.empresa_id = $1${ordT}`, [empresaDe(req)],
+      `${selT}${ordT}`, []
+    );
     res.json(r.rows);
   } catch(e) {
     if (e.message.includes('does not exist')) {
@@ -8348,10 +8521,13 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
                ) x
              ), '[]'::json) AS horas_extra_detalhe
       FROM utilizadores u
-      WHERE u.ativo = TRUE
+      WHERE u.ativo = TRUE {EMPRESA_FILTRO}
       ORDER BY u.nome ASC
     `;
-    const r = await query(sql, [inicio, fim]);
+    const r = await queryEmpresa(
+      sql.replace('{EMPRESA_FILTRO}', 'AND u.empresa_id = $3'), [inicio, fim, empresaDe(req)],
+      sql.replace('{EMPRESA_FILTRO}', ''), [inicio, fim]
+    );
     const rows = r.rows.map((row) => {
       const esp = parseInt(row.turnos_esperados, 10) || 0;
       const espPassados = parseInt(row.turnos_esperados_passados, 10) || 0;

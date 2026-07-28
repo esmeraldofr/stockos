@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-espaco-visivel">
+<html lang="pt" data-stockos-ui="2026-07-29-limite-30mb">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5488,9 +5488,11 @@ function renderOfflineBanner() {
     }
     const base = 'position:fixed;left:0;right:0;z-index:1350;text-align:center;letter-spacing:.02em;box-shadow:0 2px 10px rgba(0,0,0,0.45);cursor:pointer;';
     const pill = (txt) => `<span style="background:rgba(255,255,255,0.22);border-radius:999px;padding:2px 10px">${txt}</span>`;
+    const usoBytes = bytesFilaOffline();
+    const usoTxt = usoBytes > LIMITE_OFFLINE_BYTES / 2 ? ` · ${mbTxt(usoBytes)}/30 MB` : '';
     if (semRede) {
       el.style.cssText = base + 'background:#b91c1c;color:#fff;font-size:13px;font-weight:700;padding:9px 12px';
-      el.innerHTML = `📴 SEM INTERNET — a trabalhar offline · ${pill(`⏳ ${n} registo${n === 1 ? '' : 's'} por sincronizar`)} <span style="font-weight:400;opacity:.85">· tudo fica guardado e sincroniza sozinho</span>`;
+      el.innerHTML = `📴 SEM INTERNET — a trabalhar offline · ${pill(`⏳ ${n} registo${n === 1 ? '' : 's'} por sincronizar${usoTxt}`)} <span style="font-weight:400;opacity:.85">· tudo fica guardado e sincroniza sozinho</span>`;
     } else if (n) {
       el.style.cssText = base + 'background:#b45309;color:#fff;font-size:13px;font-weight:700;padding:8px 12px';
       el.innerHTML = `🌐 COM INTERNET · ${pill(`⏳ ${n} registo${n === 1 ? '' : 's'} a sincronizar…`)} <span style="font-weight:400;opacity:.85">· toca para ver</span>`;
@@ -5579,7 +5581,7 @@ function abrirGestorFilaOffline() {
           const m = (v || 0) / (1024 * 1024);
           return m >= 1024 ? (m / 1024).toFixed(1) + ' GB' : Math.round(m) + ' MB';
         };
-        el.textContent = `Espaço offline: ${mb(est.usage)} usados de ${mb(est.quota)} disponíveis`;
+        el.textContent = `Fila: ${mbTxt(bytesFilaOffline())} de 30 MB (limite) · aparelho: ${mb(est.quota)} disponíveis`;
       }).catch(() => {});
     }
   } catch (_) {}
@@ -5645,9 +5647,12 @@ async function apiEscrita(method, path, body, opts) {
     item.localId = 'off-' + ref;
     item.tid = item.localId;
   }
-  // Fotos grandes vão para o IndexedDB (quota de centenas de MB) — a fila
-  // no localStorage fica leve, dias de registos com fotos deixam de esbarrar
-  // no limite de ~5 MB.
+  // LIMITE: a fila offline (registos + fotos) não passa dos 30 MB.
+  const tamanhoNovo = JSON.stringify(item).length;
+  if (bytesFilaOffline() + tamanhoNovo > LIMITE_OFFLINE_BYTES) {
+    throw new Error(`Limite de 30 MB de registos offline atingido (${mbTxt(bytesFilaOffline())} em fila). Liga à internet para sincronizar antes de continuar a registar.`);
+  }
+  // Fotos grandes vão para o IndexedDB — a fila no localStorage fica leve.
   await descarregarFotosParaIDB(item).catch(() => {});
   let fila = escritasOfflineLer();
   if (item.chave) fila = fila.filter((x) => x.chave !== item.chave);
@@ -5694,6 +5699,34 @@ const idbListarChaves = () => idbOp('readonly', (st) => st.getAllKeys()).catch((
 
 const FOTO_IDB_LIMIAR = 60000; // ~45 KB binário — abaixo disto fica inline
 
+// ── LIMITE DA FILA OFFLINE: 30 MB ─────────────────────────────
+// Tecto rígido para os registos por sincronizar (fila + fotos). Ao
+// atingir, novos registos são recusados com aviso claro — sincronizar
+// liberta o espaço. O consumo das fotos no IndexedDB é contabilizado num
+// livro-razão (chave→bytes) para a soma ser instantânea.
+const LIMITE_OFFLINE_BYTES = 30 * 1024 * 1024;
+const IDB_BYTES_KEY = 'stockos.idbBytes';
+function idbBytesLedger() {
+  try {
+    const v = JSON.parse(localStorage.getItem(IDB_BYTES_KEY) || '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch (_) { return {}; }
+}
+function idbBytesGravar(ledger) {
+  try { localStorage.setItem(IDB_BYTES_KEY, JSON.stringify(ledger)); } catch (_) {}
+}
+function bytesFilaOffline() {
+  let total = 0;
+  try { total += (localStorage.getItem(ESCRITAS_OFFLINE_KEY) || '').length; } catch (_) {}
+  try { total += (localStorage.getItem(PEDIDOS_OFFLINE_KEY) || '').length; } catch (_) {}
+  const ledger = idbBytesLedger();
+  for (const k in ledger) total += ledger[k] || 0;
+  return total;
+}
+function mbTxt(bytes) {
+  return (bytes / (1024 * 1024)).toFixed(1).replace('.', ',') + ' MB';
+}
+
 /** Move as fotos grandes do body para o IndexedDB (referência @idb:…). */
 async function descarregarFotosParaIDB(item) {
   const ehFotoGrande = (v) => typeof v === 'string' && v.startsWith('data:image') && v.length > FOTO_IDB_LIMIAR;
@@ -5704,12 +5737,14 @@ async function descarregarFotosParaIDB(item) {
       if (ehFotoGrande(b[campo])) {
         const k = `foto:${item.ref}:${n++}`;
         await idbGuardarFoto(k, b[campo]);
+        const lg = idbBytesLedger(); lg[k] = b[campo].length; idbBytesGravar(lg);
         b[campo] = '@idb:' + k;
       } else if (Array.isArray(b[campo])) {
         for (let i = 0; i < b[campo].length; i++) {
           if (ehFotoGrande(b[campo][i])) {
             const k = `foto:${item.ref}:${n++}`;
             await idbGuardarFoto(k, b[campo][i]);
+            const lg = idbBytesLedger(); lg[k] = b[campo][i].length; idbBytesGravar(lg);
             b[campo][i] = '@idb:' + k;
           }
         }
@@ -5739,10 +5774,22 @@ async function limparFotosOrfasIDB() {
     const chaves = await idbListarChaves();
     if (!chaves || !chaves.length) return;
     const refs = new Set(escritasOfflineLer().map((x) => x.ref));
+    const lg = idbBytesLedger();
+    let mudou = false;
     for (const k of chaves) {
       const m = String(k).match(/^foto:([^:]+):/);
-      if (m && !refs.has(m[1])) await idbApagarFoto(k);
+      if (m && !refs.has(m[1])) {
+        await idbApagarFoto(k);
+        if (lg[k] != null) { delete lg[k]; mudou = true; }
+      }
     }
+    // Entradas do razão sem chave no IDB (limpeza dupla) também saem.
+    const setChaves = new Set((chaves || []).map(String));
+    for (const k in lg) {
+      const m = String(k).match(/^foto:([^:]+):/);
+      if ((m && !refs.has(m[1])) || !setChaves.has(k)) { delete lg[k]; mudou = true; }
+    }
+    if (mudou) idbBytesGravar(lg);
   } catch (_) {}
 }
 

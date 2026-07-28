@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-faixa-estado">
+<html lang="pt" data-stockos-ui="2026-07-28-faixa-contagem">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5491,7 +5491,7 @@ function renderOfflineBanner() {
       el.innerHTML = `🌐 COM INTERNET · ${pill(`⏳ ${n} registo${n === 1 ? '' : 's'} a sincronizar…`)} <span style="font-weight:400;opacity:.85">· toca para ver</span>`;
     } else {
       el.style.cssText = base + 'background:#14532d;color:#bbf7d0;font-size:11px;font-weight:600;padding:3px 10px;cursor:default';
-      el.innerHTML = `🌐 Com internet · ✅ tudo sincronizado`;
+      el.innerHTML = `🌐 Com internet · ✅ tudo sincronizado · 0 em fila`;
     }
     // A faixa é fixa: empurra o conteúdo para não tapar o topo da app.
     document.body.style.paddingTop = el.offsetHeight + 'px';

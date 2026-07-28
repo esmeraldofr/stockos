@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-qtd-com-foto">
+<html lang="pt" data-stockos-ui="2026-07-29-stock-sem-botao-barril">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1448,16 +1448,8 @@ async function runAction(ev, work) {
   }
 }
 
-document.addEventListener('click', (ev) => {
-  const btn = ev.target && ev.target.closest && ev.target.closest('.stock-fino-novo-btn');
-  if (!btn) return;
-  ev.preventDefault();
-  const pid = btn.getAttribute('data-fino-pid') || '';
-  if (!pid) return;
-  runAction({ currentTarget: btn }, async () => {
-    await adicionarFinoBarrilNovo(pid);
-  });
-});
+// (O botão «+ Novo barril» da folha de Stock foi retirado — a troca de
+// barril regista-se nos Pedidos ao balcão, com o fluxo completo.)
 
 // ── ROUTER ────────────────────────────────────────────────────
 async function navigate(page, params) {
@@ -3528,13 +3520,10 @@ async function loadTurno() {
         const deixInputAttr = canEdit && !deixadosFechados ? '' : 'disabled';
         const taraKg = parseFloat(s.peso_tara_kg) || 0;
         const metaLinha = taraKg > 0 ? `recipiente ${fmtNum(taraKg)} kg` : '';
-        const isFB = isFinoBarrilNome(s.produto_nome);
-        const fbPid = String(s.produto_id || '').replace(/[^0-9a-zA-Z-]/g, '');
-        const fbBtnHtml =
-          canEdit && isFB && fbPid
-            ? `<button type="button" class="btn btn-ghost btn-sm stock-fino-novo-btn" data-fino-pid="${fbPid}" style="margin-top:6px;font-size:11px;padding:4px 10px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.5);color:#86efac;line-height:1.2"
-                title="Soma ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos à coluna Entrada (cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)">+ Novo barril (+${fmtNum(KG_FINO_BARRIL_NET)} kg)</button>`
-            : '';
+        // O registo de barris faz-se pelo botão «🛢️ Troca de barril» nos
+        // Pedidos ao balcão (fluxo completo com estado dos dois barris) —
+        // sem botão duplicado na folha de Stock.
+        const fbBtnHtml = '';
         return `
           <tr class="stock-row">
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div>${metaLinha ? `<div class="stock-prod-meta">${metaLinha}</div>` : ''}${fbBtnHtml}</td>

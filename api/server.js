@@ -1318,7 +1318,7 @@ let empresasLojasReady = false;
 async function ensureEmpresasLojas() {
   if (empresasLojasReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v5'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v6'`);
     if (r.rows.length) { empresasLojasReady = true; return; }
   } catch (_) {}
   await qry(`CREATE TABLE IF NOT EXISTS empresas (
@@ -1360,6 +1360,7 @@ async function ensureEmpresasLojas() {
   await qry(`ALTER TABLE armazem_libertacoes ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'libertacoes-loja');
   await qry(`ALTER TABLE armazem_proformas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'proformas-loja');
   await qry(`ALTER TABLE armazem_inventario_diario ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'inventario-loja');
+  await qry(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'produto-faltas-loja');
   // Ficha da empresa (perfil completo, como lojas/fornecedores).
   await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS nif TEXT NOT NULL DEFAULT ''`, [], 'empresas-nif');
   await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT ''`, [], 'empresas-morada');
@@ -1381,7 +1382,7 @@ async function ensureEmpresasLojas() {
       `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='turnos' AND column_name='loja_id'`
     );
     if (chk.rows.length) {
-      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v5','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v6','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
       empresasLojasReady = true;
     }
   } catch (_) {}
@@ -3075,11 +3076,12 @@ app.get('/api/faltas', auth, async (req, res) => {
        FROM produto_faltas f
        LEFT JOIN produtos p ON p.id = f.produto_id`;
     const ordFal = ` ORDER BY (f.resolvido_em IS NULL) DESC, f.reportado_em DESC LIMIT 200`;
+    const whereLojaFal = where ? `${where} AND f.loja_id=$1` : 'WHERE f.loja_id=$1';
     const whereEmpFal = where ? `${where} AND f.empresa_id=$1` : 'WHERE f.empresa_id=$1';
     const r = await queryEmpresa(
-      `${selFal} ${whereEmpFal}${ordFal}`, [empresaDe(req)],
-      `${selFal} ${where}${ordFal}`, []
-    );
+      `${selFal} ${whereLojaFal}${ordFal}`, [lojaDe(req)],
+      `${selFal} ${whereEmpFal}${ordFal}`, [empresaDe(req)]
+    ).catch(() => query(`${selFal} ${where}${ordFal}`, []));
     res.json(r.rows);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -3089,9 +3091,9 @@ app.get('/api/faltas/pendentes-count', auth, async (req, res) => {
   try {
     await ensureProdutoFaltas();
     const r = await queryEmpresa(
-      `SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL AND empresa_id=$1`, [empresaDe(req)],
-      `SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL`, []
-    );
+      `SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL AND loja_id=$1`, [lojaDe(req)],
+      `SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL AND empresa_id=$1`, [empresaDe(req)]
+    ).catch(() => query(`SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL`, []));
     res.json({ pendentes: r.rows[0].n });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -3121,13 +3123,20 @@ app.post('/api/faltas', auth, async (req, res) => {
     }
     const pFal = [produto_id || null, produto_id ? '' : nomeLivre, String(notas || '').trim(), String(req.user.id || ''), String(req.user.nome || '')];
     const r = await queryEmpresa(
+      `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome, empresa_id, loja_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [...pFal, empresaDe(req), lojaDe(req)],
+      `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      pFal
+    ).catch(() => queryEmpresa(
       `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome, empresa_id)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
       [...pFal, empresaDe(req)],
       `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
       pFal
-    );
+    ));
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -7812,9 +7821,12 @@ app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
     const fin = isAdminReq ? ", salario_base, COALESCE(iban,'') AS iban" : "";
     const ficha = ", COALESCE(telefone,'') AS telefone, COALESCE(bi,'') AS bi, COALESCE(morada,'') AS morada, data_nascimento::text AS data_nascimento, data_admissao::text AS data_admissao" + fin + ", COALESCE(contacto_emergencia,'') AS contacto_emergencia, COALESCE(notas_funcionario,'') AS notas_funcionario, loja_id, empresa_id";
     const emp = empresaDe(req);
+    const todosDaEmpresa = req.query.todos === '1';
     let r;
     try {
-      r = await query(`SELECT ${base}${ficha} FROM utilizadores WHERE empresa_id=$1 ORDER BY nome`, [emp]);
+      r = todosDaEmpresa
+        ? await query(`SELECT ${base}${ficha} FROM utilizadores WHERE empresa_id=$1 ORDER BY nome`, [emp])
+        : await query(`SELECT ${base}${ficha} FROM utilizadores WHERE empresa_id=$1 AND (loja_id IS NULL OR loja_id=$2) ORDER BY nome`, [emp, lojaDe(req)]);
     } catch (_) {
       // BD sem as colunas da ficha/empresa (por migrar) — lista na mesma.
       r = await query(`SELECT ${base} FROM utilizadores ORDER BY nome`);
@@ -7827,11 +7839,12 @@ app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
 app.get('/api/equipa', auth, requireRole('admin','gestor','operador','compras'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const selEq = "SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor FROM utilizadores";
+    const selEq = "SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor, loja_id FROM utilizadores";
+    const selEqSem = selEq.replace(', loja_id FROM', ' FROM');
     const r = await queryEmpresa(
-      `${selEq} WHERE empresa_id=$1 ORDER BY nome`, [empresaDe(req)],
-      `${selEq} ORDER BY nome`, []
-    );
+      `${selEq} WHERE empresa_id=$1 AND (loja_id IS NULL OR loja_id=$2) ORDER BY nome`, [empresaDe(req), lojaDe(req)],
+      `${selEqSem} WHERE empresa_id=$1 ORDER BY nome`, [empresaDe(req)]
+    ).catch(() => query(`${selEqSem} ORDER BY nome`, []));
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -8704,12 +8717,12 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
       esperados AS (
         SELECT e.utilizador_id::text AS utilizador_id, e.data::date AS d, e.turno
         FROM escala e
-        WHERE e.data BETWEEN $1::date AND $2::date AND e.utilizador_id IS NOT NULL
+        WHERE e.data BETWEEN $1::date AND $2::date AND e.utilizador_id IS NOT NULL {LOJA_ESC}
         UNION
         SELECT et.utilizador_id::text AS utilizador_id, dias.d, et.turno
         FROM dias
         JOIN escala_template et ON et.dia_semana = ((EXTRACT(ISODOW FROM dias.d)::int) - 1)
-        WHERE et.utilizador_id IS NOT NULL
+        WHERE et.utilizador_id IS NOT NULL {LOJA_TPL}
           AND NOT EXISTS (SELECT 1 FROM dias_com_escala_dia x WHERE x.d = dias.d)
       ),
       trabalhados AS (
@@ -8719,7 +8732,7 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
                COALESCE(er.hora_extra, FALSE) AS hora_extra
         FROM turno_equipa_real er
         JOIN turnos t ON t.id = er.turno_id
-        WHERE t.data BETWEEN $1::date AND $2::date
+        WHERE t.data BETWEEN $1::date AND $2::date {LOJA_TRB}
       )
       SELECT u.id::text AS utilizador_id,
              u.nome AS utilizador_nome,
@@ -8792,10 +8805,19 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
       WHERE u.ativo = TRUE {EMPRESA_FILTRO}
       ORDER BY u.nome ASC
     `;
-    const r = await queryEmpresa(
-      sql.replace('{EMPRESA_FILTRO}', 'AND u.empresa_id = $3'), [inicio, fim, empresaDe(req)],
-      sql.replace('{EMPRESA_FILTRO}', ''), [inicio, fim]
-    );
+    const montarAssiduidade = (comLoja, comEmpresa) => sql
+      .replace('{LOJA_ESC}', comLoja ? 'AND e.loja_id = $4' : '')
+      .replace('{LOJA_TPL}', comLoja ? 'AND et.loja_id = $4' : '')
+      .replace('{LOJA_TRB}', comLoja ? 'AND t.loja_id = $4' : '')
+      .replace('{EMPRESA_FILTRO}', comEmpresa ? 'AND u.empresa_id = $3' : '');
+    const r = await query(montarAssiduidade(true, true), [inicio, fim, empresaDe(req), lojaDe(req)])
+      .catch((eA) => {
+        if (!/loja_id/.test(String(eA.message || ''))) throw eA;
+        return queryEmpresa(
+          montarAssiduidade(false, true), [inicio, fim, empresaDe(req)],
+          montarAssiduidade(false, false), [inicio, fim]
+        );
+      });
     const rows = r.rows.map((row) => {
       const esp = parseInt(row.turnos_esperados, 10) || 0;
       const espPassados = parseInt(row.turnos_esperados_passados, 10) || 0;

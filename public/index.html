@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-rapido-com-internet">
+<html lang="pt" data-stockos-ui="2026-07-28-local-first-total">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2956,7 +2956,11 @@ async function abrirTurno(nome) {
         criado_em: new Date().toISOString()
       });
       turnosLocaisGravar(locais);
-      alert(`Turno ${turnoLabel(nome)} aberto neste aparelho (sem rede). Podes registar tudo normalmente — sincroniza sozinho quando a rede voltar.`);
+      // Só avisa quando realmente não há internet; com rede a sincronização
+      // em fundo troca o id local pelo real em segundos, sem interromper.
+      if (navigator.onLine === false) {
+        alert(`Turno ${turnoLabel(nome)} aberto neste aparelho (sem rede). Podes registar tudo normalmente — sincroniza sozinho quando a rede voltar.`);
+      }
     }
     await loadDia();
   } catch(e) { alert(e.message); }
@@ -5592,16 +5596,18 @@ async function limparRegistosPresos() {
 }
 
 /**
- * Escrita resiliente: tenta a rede com timeout curto; se falhar (ou já
- * houver fila deste turno — mantém a ordem), guarda na fila offline e
- * devolve { _offline: true }. Nunca duplica: cada escrita leva client_ref.
+ * Escrita LOCAL-FIRST TOTAL: mesmo com internet, o registo entra SEMPRE
+ * primeiro na fila local (zero espera — como os pedidos ao balcão) e a
+ * sincronização corre em fundo pela ordem original. Nunca duplica: cada
+ * escrita leva client_ref e o servidor devolve a resposta original nas
+ * repetições.
  *  opts: { tid, desc, tipo ('abrir'|'fechar'), chave (dedupe última-ganha),
- *          extra (dados só para o overlay), timeoutMs, forcarFila }
+ *          extra (dados só para o overlay) }
  */
 async function apiEscrita(method, path, body, opts) {
   opts = opts || {};
-  // Loja fixada JÁ no caminho: se o registo ficar em fila e o utilizador
-  // mudar de loja antes de sincronizar, o registo vai para a loja certa.
+  // Loja fixada JÁ no caminho: se o utilizador mudar de loja antes de a
+  // fila sincronizar, o registo vai para a loja certa.
   path = comLojaNoPath(path);
   const ref = novoClientRef();
   const b = Object.assign({}, body || {}, { client_ref: ref });
@@ -5616,24 +5622,7 @@ async function apiEscrita(method, path, body, opts) {
     criado_em: new Date().toISOString(),
     quando: new Date().toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' })
   };
-  const filaTemDoTurno = item.tid ? escritasOfflineLer().some((x) => String(x.tid) === item.tid) : false;
-  const forcarFila =
-    opts.forcarFila === true ||
-    navigator.onLine === false ||
-    (item.tid && turnoIdEhLocal(item.tid)) ||
-    filaTemDoTurno;
-  if (!forcarFila) {
-    try {
-      return await Promise.race([
-        api(method, path, b),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), opts.timeoutMs || 3500))
-      ]);
-    } catch (e) {
-      if (!ehErroDeRede(e)) throw e;
-      // Rede em baixo/lenta → segue para a fila offline.
-    }
-  }
-  // Abrir turno offline: nasce já com o id local para as escritas seguintes.
+  // Abrir turno: nasce já com o id local para as escritas seguintes.
   if (item.tipo === 'abrir') {
     item.localId = 'off-' + ref;
     item.tid = item.localId;
@@ -5642,8 +5631,9 @@ async function apiEscrita(method, path, body, opts) {
   if (item.chave) fila = fila.filter((x) => x.chave !== item.chave);
   fila.push(item);
   if (!escritasOfflineGravar(fila)) {
-    throw new Error('Sem rede e sem espaço local — não foi possível guardar o registo offline.');
+    throw new Error('Sem espaço local — não foi possível guardar o registo neste aparelho.');
   }
+  // Sincronização em fundo — não bloqueia quem está a registar.
   if (navigator.onLine !== false) sincronizarEscritasOffline().catch(() => {});
   return { _offline: true, ref, criado_em: item.criado_em };
 }

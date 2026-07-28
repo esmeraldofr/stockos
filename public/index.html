@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-dia-sempre-offline">
+<html lang="pt" data-stockos-ui="2026-07-28-gestor-fila">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5450,12 +5450,91 @@ function renderOfflinePendentesBadge() {
       el = document.createElement('div');
       el.id = 'offline-pendentes-badge';
       el.style.cssText = 'position:fixed;right:10px;bottom:78px;z-index:1300;background:rgba(124,45,18,0.95);border:1px solid rgba(251,146,60,0.6);color:#fdba74;font-size:11px;padding:6px 10px;border-radius:999px;box-shadow:0 4px 12px rgba(0,0,0,0.4);cursor:pointer;display:flex;align-items:center;gap:6px';
-      el.title = 'Registos guardados neste aparelho, a caminho do servidor. Toca para sincronizar já.';
-      el.onclick = () => { sincronizarEscritasOffline().then(() => sincronizarPedidosOffline()).catch(() => {}); };
+      el.title = 'Registos guardados neste aparelho, a caminho do servidor. Toca para ver e sincronizar.';
+      el.onclick = () => {
+        sincronizarEscritasOffline().then(() => sincronizarPedidosOffline()).catch(() => {});
+        abrirGestorFilaOffline();
+      };
       document.body.appendChild(el);
     }
     el.innerHTML = `⏳ <strong>${n}</strong> registo${n === 1 ? '' : 's'} por sincronizar`;
   } catch (_) {}
+}
+
+// ── Gestor da fila offline (toca na pastilha) ─────────────────
+// Mostra o que está por sincronizar, deixa remover registos um a um e
+// limpar «presos» (itens de turnos locais de versões antigas cujo «abrir»
+// já não existe — nunca conseguiriam sincronizar).
+function filaOfflinePresos() {
+  const fila = escritasOfflineLer();
+  const abrires = new Set(fila.filter((x) => x.tipo === 'abrir').map((x) => String(x.localId || x.tid || '')));
+  const presosEscritas = fila.filter((x) => x.tid && turnoIdEhLocal(x.tid) && !abrires.has(String(x.tid)));
+  const presosPedidos = pedidosOfflineLer().filter((x) => turnoIdEhLocal(x.tid) && !abrires.has(String(x.tid)));
+  return { presosEscritas, presosPedidos };
+}
+function abrirGestorFilaOffline() {
+  fecharGestorFilaOffline();
+  const fila = escritasOfflineLer();
+  const pedidos = pedidosOfflineLer();
+  if (!fila.length && !pedidos.length) return;
+  const { presosEscritas, presosPedidos } = filaOfflinePresos();
+  const presosRefs = new Set(presosEscritas.map((x) => x.ref));
+  const linhaHtml = (titulo, quando, preso, onRemove) => `
+    <div style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid rgba(148,163,184,0.12)">
+      <span style="flex:1;font-size:12px;color:${preso ? '#f87171' : '#e2e8f0'};line-height:1.35">${titulo}${preso ? ' <span style="font-size:10px">(preso — turno local sem abertura)</span>' : ''}<br><span style="font-size:10px;color:#64748b">${quando || ''}</span></span>
+      <button type="button" class="btn btn-ghost btn-sm" style="color:#f87171;padding:2px 8px" onclick="${onRemove}">✕</button>
+    </div>`;
+  const itens = fila.map((x) =>
+    linhaHtml(escapeHtml(x.desc || (x.method + ' ' + x.path)), x.quando, presosRefs.has(x.ref), `gestorFilaRemover('escrita','${x.ref}')`)
+  ).join('') + pedidos.map((x) =>
+    linhaHtml(`Pedido ao balcão ${escapeHtml(x.ref || '')}`, x.quando, turnoIdEhLocal(x.tid) && presosPedidos.includes(x), `gestorFilaRemover('pedido','${escapeHtml(String(x.ref))}')`)
+  ).join('');
+  const nPresos = presosEscritas.length + presosPedidos.length;
+  const modal = document.createElement('div');
+  modal.id = 'gestor-fila-offline';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.8);z-index:1400;display:flex;align-items:flex-end;justify-content:center';
+  modal.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:520px;width:100%;max-height:75vh;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid #1e293b">
+        <strong style="flex:1;color:#e2e8f0;font-size:14px">⏳ Registos por sincronizar</strong>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="fecharGestorFilaOffline()">Fechar</button>
+      </div>
+      <div style="overflow-y:auto;padding:6px 14px;flex:1">${itens || '<div style="color:#64748b;font-size:12px;padding:12px 0">Fila vazia.</div>'}</div>
+      <div style="display:flex;gap:8px;padding:12px 14px;border-top:1px solid #1e293b;flex-wrap:wrap">
+        <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, async () => { await sincronizarEscritasOffline(); await sincronizarPedidosOffline(); abrirGestorFilaOffline(); })">↻ Sincronizar agora</button>
+        ${nPresos ? `<button type="button" class="btn btn-ghost btn-sm" style="color:#f87171" onclick="runAction(event, limparRegistosPresos)">🗑 Limpar ${nPresos} preso${nPresos === 1 ? '' : 's'}</button>` : ''}
+      </div>
+    </div>`;
+  modal.addEventListener('click', (ev) => { if (ev.target === modal) fecharGestorFilaOffline(); });
+  document.body.appendChild(modal);
+}
+function fecharGestorFilaOffline() {
+  document.getElementById('gestor-fila-offline')?.remove();
+}
+function gestorFilaRemover(tipo, ref) {
+  if (!confirm('Remover este registo da fila? Não será enviado ao servidor.')) return;
+  if (tipo === 'escrita') {
+    escritasOfflineGravar(escritasOfflineLer().filter((x) => x.ref !== ref));
+  } else {
+    pedidosOfflineGravar(pedidosOfflineLer().filter((x) => String(x.ref) !== String(ref)));
+  }
+  abrirGestorFilaOffline();
+}
+async function limparRegistosPresos() {
+  const { presosEscritas, presosPedidos } = filaOfflinePresos();
+  const n = presosEscritas.length + presosPedidos.length;
+  if (!n) { abrirGestorFilaOffline(); return; }
+  if (!confirm(`Remover ${n} registo${n === 1 ? '' : 's'} preso${n === 1 ? '' : 's'}? São de turnos locais de versões antigas, sem abertura na fila — nunca conseguiriam sincronizar.`)) return;
+  const refs = new Set(presosEscritas.map((x) => x.ref));
+  escritasOfflineGravar(escritasOfflineLer().filter((x) => !refs.has(x.ref)));
+  const pedRefs = new Set(presosPedidos.map((x) => String(x.ref)));
+  pedidosOfflineGravar(pedidosOfflineLer().filter((x) => !pedRefs.has(String(x.ref))));
+  // Turnos locais órfãos também saem.
+  const filaT = escritasOfflineLer();
+  turnosLocaisGravar(turnosLocaisLer().filter((t) =>
+    filaT.some((x) => x.tipo === 'abrir' && String(x.localId || x.tid) === String(t.id))
+  ));
+  abrirGestorFilaOffline();
 }
 
 /**
@@ -5562,10 +5641,11 @@ async function sincronizarEscritasOffline() {
   let precisaRefrescar = false;
   try {
     let guard = 0;
+    let idx = 0; // avança por cima de itens que não podem sincronizar já
     while (guard++ < 500) {
       const fila = escritasOfflineLer();
-      if (!fila.length) break;
-      const item = fila[0];
+      if (!fila.length || idx >= fila.length) break;
+      const item = fila[idx];
       const removeDaFila = () => {
         escritasOfflineGravar(escritasOfflineLer().filter((x) => x.ref !== item.ref));
       };
@@ -5578,14 +5658,17 @@ async function sincronizarEscritasOffline() {
             remapTurnoLocal(item.localId, turno.id);
             precisaRefrescar = precisaRefrescar || viaLocal;
           }
+          idx = 0; // remap pode ter destravado itens anteriores
           continue;
         }
-        // Escritas de um turno ainda local esperam pelo «abrir» respectivo.
-        if (item.tid && turnoIdEhLocal(item.tid)) break;
+        // Escritas de um turno ainda local: esperam pelo respectivo «abrir».
+        // Se o «abrir» já não está na fila (item órfão de versões antigas),
+        // NÃO bloqueia os restantes — salta e segue.
+        if (item.tid && turnoIdEhLocal(item.tid)) { idx++; continue; }
         if (item.tipo === 'fechar') {
           // Pedidos deste turno têm de entrar antes do fecho (vendas/caixa).
           try { await sincronizarPedidosOffline(); } catch (_) {}
-          if (pedidosOfflineLer().some((x) => String(x.tid) === String(item.tid))) break;
+          if (pedidosOfflineLer().some((x) => String(x.tid) === String(item.tid))) { idx++; continue; }
         }
         await apiEscritaComTimeout(item, 25000);
         removeDaFila();

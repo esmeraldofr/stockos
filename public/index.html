@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-selects-pesquisa">
+<html lang="pt" data-stockos-ui="2026-07-29-margem-inferior">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4837,7 +4837,7 @@ function abrirSelectPesquisavel(sel) {
     if (lc) lc.innerHTML = html;
   };
   ov.innerHTML = `
-    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:520px;width:100%;max-height:78vh;display:flex;flex-direction:column">
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:520px;width:100%;max-height:78vh;display:flex;flex-direction:column;padding-bottom:calc(16px + env(safe-area-inset-bottom, 0px))">
       <div style="display:flex;align-items:center;gap:8px;padding:12px 14px 8px">
         <strong style="flex:1;color:#e2e8f0;font-size:14px">${escapeHtml(rotulo || 'Escolher')}</strong>
         <button type="button" id="sp-fechar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;padding:0 2px">✕</button>
@@ -5721,7 +5721,7 @@ function abrirGestorFilaOffline() {
   modal.id = 'gestor-fila-offline';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.8);z-index:1400;display:flex;align-items:flex-end;justify-content:center';
   modal.innerHTML = `
-    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:520px;width:100%;max-height:75vh;display:flex;flex-direction:column">
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:520px;width:100%;max-height:75vh;display:flex;flex-direction:column;padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px))">
       <div style="display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid #1e293b">
         <strong style="flex:1;color:#e2e8f0;font-size:14px">⏳ Registos por sincronizar</strong>
         <button type="button" class="btn btn-ghost btn-sm" onclick="fecharGestorFilaOffline()">Fechar</button>

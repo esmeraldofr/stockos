@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-faixa-contagem">
+<html lang="pt" data-stockos-ui="2026-07-28-faixa-abaixo-dev">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5481,7 +5481,7 @@ function renderOfflineBanner() {
       };
       document.body.appendChild(el);
     }
-    const base = 'position:fixed;top:0;left:0;right:0;z-index:1350;text-align:center;letter-spacing:.02em;box-shadow:0 2px 10px rgba(0,0,0,0.45);cursor:pointer;';
+    const base = 'position:fixed;left:0;right:0;z-index:1350;text-align:center;letter-spacing:.02em;box-shadow:0 2px 10px rgba(0,0,0,0.45);cursor:pointer;';
     const pill = (txt) => `<span style="background:rgba(255,255,255,0.22);border-radius:999px;padding:2px 10px">${txt}</span>`;
     if (semRede) {
       el.style.cssText = base + 'background:#b91c1c;color:#fff;font-size:13px;font-weight:700;padding:9px 12px';
@@ -5493,7 +5493,11 @@ function renderOfflineBanner() {
       el.style.cssText = base + 'background:#14532d;color:#bbf7d0;font-size:11px;font-weight:600;padding:3px 10px;cursor:default';
       el.innerHTML = `🌐 Com internet · ✅ tudo sincronizado · 0 em fila`;
     }
-    // A faixa é fixa: empurra o conteúdo para não tapar o topo da app.
+    // Fica ABAIXO do banner de ambiente (dev/qualidade, z-index 9999) e
+    // empurra o conteúdo para não tapar o topo da app.
+    const envB = document.getElementById('env-banner');
+    const envH = envB && getComputedStyle(envB).display !== 'none' ? envB.offsetHeight : 0;
+    el.style.top = envH + 'px';
     document.body.style.paddingTop = el.offsetHeight + 'px';
   } catch (_) {}
 }

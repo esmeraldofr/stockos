@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-troca-1-barril">
+<html lang="pt" data-stockos-ui="2026-07-29-troca-sim-nao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9491,13 +9491,60 @@ async function submitEntrada(turnoId) {
 }
 
 /** Adiciona 1 barril novo de Fino (peso líquido = cheio − tara) à coluna Entrada. */
-/** Lê um peso (kg) por prompt, validado entre a tara e o barril cheio. */
-function perguntarPesoBarril(titulo) {
-  const resp = prompt(
-    `${titulo}\n\nPeso na balança, em kg (barril com casca).\n` +
-      `Tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg · cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg`,
-    ''
-  );
+/** Diálogo próprio (em vez do confirm/prompt nativos): perguntas de
+ *  Sim/Não com botões claros, campos de texto/número e confirmação.
+ *  Devolve: simnao → true/false · texto → string · confirmar → true;
+ *  ✕ ou Cancelar → null (aborta o fluxo). */
+function dialogoTroca(opts) {
+  return new Promise((resolve) => {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:1450;display:flex;align-items:center;justify-content:center;padding:18px';
+    const ehTexto = opts.tipo === 'texto';
+    const ehSimNao = opts.tipo === 'simnao';
+    ov.innerHTML = `
+      <div style="background:#0f172a;border:1px solid #334155;border-radius:14px;max-width:440px;width:100%;padding:16px 16px 14px;box-shadow:0 10px 40px rgba(0,0,0,0.5)">
+        <div style="display:flex;align-items:flex-start;gap:8px">
+          <div style="flex:1;font-size:15px;font-weight:700;color:#f1f5f9">${opts.titulo || ''}</div>
+          <button type="button" data-dlg="cancel" aria-label="Cancelar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;padding:0 2px">✕</button>
+        </div>
+        ${opts.texto ? `<div style="font-size:13px;color:#94a3b8;margin-top:8px;white-space:pre-line;line-height:1.5">${opts.texto}</div>` : ''}
+        ${ehTexto ? `<input id="dlg-troca-input" type="text" ${opts.numero ? 'inputmode="decimal"' : ''} placeholder="${opts.placeholder || ''}" value="${opts.valor || ''}" style="width:100%;margin-top:12px;font-size:15px;padding:10px 12px;background:#1e293b;border:1px solid #334155;border-radius:8px;color:#e2e8f0;box-sizing:border-box"/>` : ''}
+        <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+          ${ehSimNao
+            ? `<button type="button" class="btn btn-ghost" data-dlg="nao" style="min-width:96px;font-size:14px">Não</button>
+               <button type="button" class="btn btn-primary" data-dlg="sim" style="min-width:96px;font-size:14px">Sim</button>`
+            : `<button type="button" class="btn btn-ghost" data-dlg="cancel" style="min-width:96px;font-size:14px">Cancelar</button>
+               <button type="button" class="btn btn-primary" data-dlg="ok" style="min-width:120px;font-size:14px">${opts.botaoOk || 'Confirmar'}</button>`}
+        </div>
+      </div>`;
+    const done = (v) => { ov.remove(); resolve(v); };
+    ov.addEventListener('click', (ev) => {
+      const b = ev.target && ev.target.closest ? ev.target.closest('[data-dlg]') : null;
+      if (!b) return;
+      const a = b.getAttribute('data-dlg');
+      if (a === 'sim') done(true);
+      else if (a === 'nao') done(false);
+      else if (a === 'ok') done(ehTexto ? String((document.getElementById('dlg-troca-input') || {}).value || '') : true);
+      else done(null);
+    });
+    ov.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') done(null);
+      if (ev.key === 'Enter' && ehTexto) done(String((document.getElementById('dlg-troca-input') || {}).value || ''));
+    });
+    document.body.appendChild(ov);
+    setTimeout(() => { (document.getElementById('dlg-troca-input') || ov.querySelector('[data-dlg="sim"],[data-dlg="ok"]'))?.focus(); }, 50);
+  });
+}
+
+/** Pede um peso (kg) no diálogo, validado entre a tara e o barril cheio. */
+async function perguntarPesoBarril(titulo) {
+  const resp = await dialogoTroca({
+    titulo,
+    texto: `Peso na balança, em kg (barril com casca).\nTara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg · cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg`,
+    tipo: 'texto',
+    numero: true,
+    placeholder: 'ex.: 30,5'
+  });
   if (resp === null) return null; // cancelado
   const peso = parsePtOrIsoNumberString(resp);
   if (!Number.isFinite(peso) || peso < KG_FINO_BARRIL_VAZIO || peso > KG_FINO_BARRIL_CHEIO + 5) {
@@ -9517,24 +9564,41 @@ async function adicionarFinoBarrilNovo(produtoId) {
 
   // ── Barril que SAI: acabou? Se não, motivo + peso (o resto de cerveja
   //    que sai com ele é registado como saída de stock). ──
-  const saiuAcabou = confirm('O barril que está a SAIR acabou (ficou vazio)?\n\nOK = acabou · Cancelar = ainda tinha cerveja');
+  const saiuAcabou = await dialogoTroca({
+    titulo: '🛢️ Troca de barril',
+    texto: 'O barril que está a SAIR acabou (ficou vazio)?',
+    tipo: 'simnao'
+  });
+  if (saiuAcabou === null) return; // cancelado
   let motivoSaida = '';
   let restoLiquidoKg = 0;
   let pesoSaida = null;
   if (!saiuAcabou) {
-    motivoSaida = String(prompt('Motivo de tirar o barril SEM acabar (obrigatório):\n(ex.: avaria, cerveja com problema, fim do turno)') || '').trim();
+    const motivoResp = await dialogoTroca({
+      titulo: 'Barril sai SEM acabar',
+      texto: 'Indica o motivo (obrigatório):',
+      tipo: 'texto',
+      placeholder: 'ex.: avaria, cerveja com problema'
+    });
+    if (motivoResp === null) return;
+    motivoSaida = String(motivoResp).trim();
     if (!motivoSaida) { alert('Indica o motivo — é obrigatório quando o barril sai sem acabar.'); return; }
-    pesoSaida = perguntarPesoBarril('Barril que SAI — quanto pesa?');
+    pesoSaida = await perguntarPesoBarril('Barril que SAI — quanto pesa?');
     if (pesoSaida === null) return;
     restoLiquidoKg = Math.round(Math.max(0, pesoSaida - KG_FINO_BARRIL_VAZIO) * 1000) / 1000;
   }
 
   // ── Barril que ENTRA: novo? Se não, peso (líquidos = peso − tara). ──
-  const entraNovo = confirm('O barril que está a ENTRAR é NOVO (cheio)?\n\nOK = novo · Cancelar = barril já usado');
+  const entraNovo = await dialogoTroca({
+    titulo: '🛢️ Troca de barril',
+    texto: 'O barril que está a ENTRAR é NOVO (cheio)?',
+    tipo: 'simnao'
+  });
+  if (entraNovo === null) return; // cancelado
   let entradaLiquidosKg = KG_FINO_BARRIL_NET;
   let pesoEntrada = null;
   if (!entraNovo) {
-    pesoEntrada = perguntarPesoBarril('Barril que ENTRA — quanto pesa?');
+    pesoEntrada = await perguntarPesoBarril('Barril que ENTRA — quanto pesa?');
     if (pesoEntrada === null) return;
     entradaLiquidosKg = Math.round(Math.max(0, pesoEntrada - KG_FINO_BARRIL_VAZIO) * 1000) / 1000;
     if (entradaLiquidosKg <= 0) { alert('O barril que entra está vazio (peso = tara) — não há nada para registar.'); return; }
@@ -9548,7 +9612,12 @@ async function adicionarFinoBarrilNovo(produtoId) {
   linhas.push(entraNovo
     ? `Entra: barril NOVO → + ${fmtNum(entradaLiquidosKg)} kg líquidos`
     : `Entra: barril USADO — pesou ${fmtNum(pesoEntrada)} kg → + ${fmtNum(entradaLiquidosKg)} kg líquidos`);
-  if (!confirm(`Registar a troca de barril?\n\n${linhas.join('\n')}`)) return;
+  const okFinal = await dialogoTroca({
+    titulo: 'Registar a troca de barril?',
+    texto: linhas.join('\n'),
+    botaoOk: 'Registar troca'
+  });
+  if (okFinal !== true) return;
 
   // ── Registos (fila offline, pela ordem: saída do resto → entrada) ──
   if (!saiuAcabou && restoLiquidoKg > 0) {

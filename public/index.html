@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-troca-n-barris">
+<html lang="pt" data-stockos-ui="2026-07-29-troca-detalhada">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9491,6 +9491,22 @@ async function submitEntrada(turnoId) {
 }
 
 /** Adiciona 1 barril novo de Fino (peso líquido = cheio − tara) à coluna Entrada. */
+/** Lê um peso (kg) por prompt, validado entre a tara e o barril cheio. */
+function perguntarPesoBarril(titulo) {
+  const resp = prompt(
+    `${titulo}\n\nPeso na balança, em kg (barril com casca).\n` +
+      `Tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg · cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg`,
+    ''
+  );
+  if (resp === null) return null; // cancelado
+  const peso = parsePtOrIsoNumberString(resp);
+  if (!Number.isFinite(peso) || peso < KG_FINO_BARRIL_VAZIO || peso > KG_FINO_BARRIL_CHEIO + 5) {
+    alert(`Peso inválido — indica um valor entre ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg (tara) e ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg (cheio).`);
+    return null;
+  }
+  return peso;
+}
+
 async function adicionarFinoBarrilNovo(produtoId) {
   const turnoId = S.turnoData?.id;
   if (!turnoId) {
@@ -9498,34 +9514,76 @@ async function adicionarFinoBarrilNovo(produtoId) {
     return;
   }
   if (!produtoId) return;
-  // Quantidade de barris trocados (1 por omissão; até 20 de uma vez).
-  const resp = prompt(
-    `Troca de barril — quantos barris novos?\n\n` +
-      `Cada barril soma ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos à Entrada\n` +
-      `(cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)`,
-    '1'
-  );
-  if (resp === null) return;
-  const nBarris = parseInt(String(resp).trim(), 10);
-  if (!Number.isFinite(nBarris) || nBarris < 1 || nBarris > 20) {
-    alert('Indica um número de barris entre 1 e 20.');
-    return;
+
+  // ── Barril que SAI: acabou? Se não, motivo + peso (o resto de cerveja
+  //    que sai com ele é registado como saída de stock). ──
+  const saiuAcabou = confirm('O barril que está a SAIR acabou (ficou vazio)?\n\nOK = acabou · Cancelar = ainda tinha cerveja');
+  let motivoSaida = '';
+  let restoLiquidoKg = 0;
+  let pesoSaida = null;
+  if (!saiuAcabou) {
+    motivoSaida = String(prompt('Motivo de tirar o barril SEM acabar (obrigatório):\n(ex.: avaria, cerveja com problema, fim do turno)') || '').trim();
+    if (!motivoSaida) { alert('Indica o motivo — é obrigatório quando o barril sai sem acabar.'); return; }
+    pesoSaida = perguntarPesoBarril('Barril que SAI — quanto pesa?');
+    if (pesoSaida === null) return;
+    restoLiquidoKg = Math.round(Math.max(0, pesoSaida - KG_FINO_BARRIL_VAZIO) * 1000) / 1000;
   }
-  const kgTotal = Math.round(nBarris * KG_FINO_BARRIL_NET * 1000) / 1000;
-  const ok = confirm(
-    `Registar a troca de ${nBarris} barri${nBarris === 1 ? 'l' : 's'} de Fino?\n\n` +
-      `+ ${fmtNum(kgTotal)} kg líquidos à Entrada` +
-      (nBarris > 1 ? `\n(${nBarris} × ${fmtNum(KG_FINO_BARRIL_NET)} kg)` : '')
-  );
-  if (!ok) return;
+
+  // ── Barril que ENTRA: novo? Se não, peso (líquidos = peso − tara). ──
+  const entraNovo = confirm('O barril que está a ENTRAR é NOVO (cheio)?\n\nOK = novo · Cancelar = barril já usado');
+  let entradaLiquidosKg = KG_FINO_BARRIL_NET;
+  let pesoEntrada = null;
+  if (!entraNovo) {
+    pesoEntrada = perguntarPesoBarril('Barril que ENTRA — quanto pesa?');
+    if (pesoEntrada === null) return;
+    entradaLiquidosKg = Math.round(Math.max(0, pesoEntrada - KG_FINO_BARRIL_VAZIO) * 1000) / 1000;
+    if (entradaLiquidosKg <= 0) { alert('O barril que entra está vazio (peso = tara) — não há nada para registar.'); return; }
+  }
+
+  // ── Troca padrão (acabou + novo): pode registar vários de uma vez. ──
+  let nBarris = 1;
+  if (saiuAcabou && entraNovo) {
+    const resp = prompt('Quantos barris trocados (acabado → novo)?', '1');
+    if (resp === null) return;
+    nBarris = parseInt(String(resp).trim(), 10);
+    if (!Number.isFinite(nBarris) || nBarris < 1 || nBarris > 20) {
+      alert('Indica um número de barris entre 1 e 20.');
+      return;
+    }
+    entradaLiquidosKg = Math.round(nBarris * KG_FINO_BARRIL_NET * 1000) / 1000;
+  }
+
+  // ── Resumo e confirmação ──
+  const linhas = [];
+  linhas.push(saiuAcabou
+    ? `Sai: ${nBarris} barri${nBarris === 1 ? 'l' : 's'} acabado${nBarris === 1 ? '' : 's'} (vazio)`
+    : `Sai: barril SEM acabar — motivo: ${motivoSaida}\n  pesou ${fmtNum(pesoSaida)} kg → sai com ${fmtNum(restoLiquidoKg)} kg de cerveja (regista saída de stock)`);
+  linhas.push(entraNovo
+    ? `Entra: ${nBarris} barri${nBarris === 1 ? 'l novo' : 's novos'} → + ${fmtNum(entradaLiquidosKg)} kg líquidos${nBarris > 1 ? ` (${nBarris} × ${fmtNum(KG_FINO_BARRIL_NET)} kg)` : ''}`
+    : `Entra: barril USADO — pesou ${fmtNum(pesoEntrada)} kg → + ${fmtNum(entradaLiquidosKg)} kg líquidos`);
+  if (!confirm(`Registar a troca de barril?\n\n${linhas.join('\n')}`)) return;
+
+  // ── Registos (fila offline, pela ordem: saída do resto → entrada) ──
+  if (!saiuAcabou && restoLiquidoKg > 0) {
+    await apiEscrita('POST', `/turnos/${turnoId}/entradas`, {
+      produto_id: produtoId,
+      tipo: 'tirar',
+      origem: 'armazem',
+      preco: 0,
+      quantidade: restoLiquidoKg,
+      notas: `Barril retirado SEM acabar — motivo: ${motivoSaida} (pesou ${fmtNum(pesoSaida)} kg; resto de cerveja ${fmtNum(restoLiquidoKg)} kg)`
+    }, { tid: turnoId, desc: 'Barril retirado sem acabar', extra: { produto_nome: 'Fino' } });
+  }
   await apiEscrita('POST', `/turnos/${turnoId}/entradas`, {
     produto_id: produtoId,
     tipo: 'entrada',
     origem: 'armazem',
     preco: 0,
-    quantidade: kgTotal,
-    notas: `${nBarris} barri${nBarris === 1 ? 'l' : 's'} novo${nBarris === 1 ? '' : 's'} (${nBarris} × ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos; cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)`
-  }, { tid: turnoId, desc: `Troca de ${nBarris} barri${nBarris === 1 ? 'l' : 's'} de Fino`, extra: { produto_nome: 'Fino' } });
+    quantidade: entradaLiquidosKg,
+    notas: entraNovo
+      ? `${nBarris} barri${nBarris === 1 ? 'l novo' : 's novos'} (${nBarris} × ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos; cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)${!saiuAcabou ? ` · trocou barril não acabado (${motivoSaida})` : ''}`
+      : `Barril USADO a entrar (pesou ${fmtNum(pesoEntrada)} kg; líquidos ${fmtNum(entradaLiquidosKg)} kg)${!saiuAcabou ? ` · trocou barril não acabado (${motivoSaida})` : ''}`
+  }, { tid: turnoId, desc: 'Troca de barril de Fino', extra: { produto_nome: 'Fino' } });
   try {
     const pid = prodIdKey(produtoId);
     const entradasRows = await api('GET', `/turnos/${turnoId}/entradas`).catch(() => {

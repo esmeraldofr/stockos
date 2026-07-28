@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-menu-visivel">
+<html lang="pt" data-stockos-ui="2026-07-28-storage-persistente">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6091,6 +6091,16 @@ async function sintetizarGetTurnoLocal(path) {
   }
   return [];
 }
+
+// Pede ao browser ARMAZENAMENTO PERSISTENTE: a fila offline (localStorage)
+// fica protegida contra limpeza automática do sistema (ex.: iOS a libertar
+// espaço) — desligar/reiniciar o aparelho nunca apaga registos por
+// sincronizar.
+try {
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().catch(() => {});
+  }
+} catch (_) {}
 
 // Ao arrancar: mostra a pastilha e tenta despachar o que ficou pendente.
 setTimeout(() => {

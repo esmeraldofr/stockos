@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-config-por-empresa">
+<html lang="pt" data-stockos-ui="2026-07-28-loja-total">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2875,7 +2875,7 @@ async function submitDepositosDia() {
     const nomesTurnos = {};
     (S.turnosDia || []).forEach((t) => { nomesTurnos[String(t.id)] = t.nome; });
     const rDep = await apiEscrita('POST', '/depositos/lote', payload,
-      { desc: 'Depósitos do dia', timeoutMs: 10000, chave: `deplote:${S.date}`, extra: { data: S.date, turnos: nomesTurnos } });
+      { desc: 'Depósitos do dia', timeoutMs: 10000, chave: `deplote:${lojaAtivaId()}:${S.date}`, extra: { data: S.date, turnos: nomesTurnos } });
     // Fotos adicionais do borderô — entram na fila depois do lote (FIFO).
     for (const bx of borderoExtras) {
       await apiEscrita('POST', '/fotos', { chave: `bordero:${S.date}`, foto_base64: bx }, { desc: 'Foto adicional do borderô', timeoutMs: 10000 });
@@ -11387,7 +11387,7 @@ async function saveArmazemInventarioDiaFromRow(tr) {
   try {
     show('armazem-msg', '');
     const rInv = await apiEscrita('PUT', '/armazem/inventario-diario', { data: dataIso, produto_id, encontrado, deixado },
-      { chave: `amzinv:${dataIso}:${produto_id}`, desc: 'Inventário do armazém' });
+      { chave: `amzinv:${lojaAtivaId()}:${dataIso}:${produto_id}`, desc: 'Inventário do armazém' });
     if (statusEl) {
       statusEl.textContent = rInv && rInv._offline ? '✓⏳' : '✓';
       statusEl.style.color = '#4ade80';

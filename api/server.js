@@ -1207,7 +1207,49 @@ async function auth(req, res, next) {
   }
   req.user = payload;
   await resolverContextoAcesso(req).catch(() => {});
+  // Guarda central: qualquer /api/turnos/<id>/… só é acessível se o turno
+  // pertencer ao âmbito do utilizador (empresa do gestor; loja fixa do
+  // operador; admin passa sempre). Cobre stock, caixa, pedidos, fechos,
+  // entradas, saídas, equipa, fotos do TPA, etc. de uma só vez.
+  const mTurno = String(req.path || '').match(/^\/api\/turnos\/(\d+)(\/|$)/);
+  if (mTurno) {
+    const ok = await turnoNoContexto(req, parseInt(mTurno[1], 10)).catch(() => true);
+    if (!ok) return res.status(404).json({ erro: 'Turno não encontrado' });
+  }
   next();
+}
+
+/** O turno pertence ao âmbito do pedido? (admin: sempre; gestor: empresa;
+ *  operador/compras: a sua loja fixa). BD antiga sem loja_id → permite. */
+const __turnoLojaCache = new Map();
+async function turnoLojaId(turnoId) {
+  const k = String(turnoId);
+  const hit = __turnoLojaCache.get(k);
+  if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.loja;
+  try {
+    const r = await query(`SELECT loja_id FROM turnos WHERE id=$1`, [turnoId]);
+    const loja = r.rows.length ? (parseInt(r.rows[0].loja_id, 10) || 1) : null;
+    if (__turnoLojaCache.size > 500) __turnoLojaCache.clear();
+    __turnoLojaCache.set(k, { loja, at: Date.now() });
+    return loja;
+  } catch (_) {
+    return undefined; // coluna inexistente — sem como validar
+  }
+}
+async function turnoNoContexto(req, turnoId) {
+  const role = String((req.user && req.user.role) || '');
+  if (role === 'admin') return true;
+  const loja = await turnoLojaId(turnoId);
+  if (loja === undefined) return true; // BD antiga
+  if (loja === null) return false; // turno não existe
+  if (role === 'operador' || role === 'compras') {
+    const fixa = parseInt(req.user && req.user.loja_id, 10);
+    return Number.isFinite(fixa) && fixa > 0 ? loja === fixa : true;
+  }
+  // gestor: loja do turno tem de ser da sua empresa
+  const mapa = await mapaLojaEmpresa();
+  if (!mapa || mapa[String(loja)] == null) return true;
+  return mapa[String(loja)] === (parseInt(req.user && req.user.empresa_id, 10) || 1);
 }
 
 // ── Contexto de acesso por perfil ─────────────────────────────
@@ -1276,7 +1318,7 @@ let empresasLojasReady = false;
 async function ensureEmpresasLojas() {
   if (empresasLojasReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v4'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v5'`);
     if (r.rows.length) { empresasLojasReady = true; return; }
   } catch (_) {}
   await qry(`CREATE TABLE IF NOT EXISTS empresas (
@@ -1311,6 +1353,13 @@ async function ensureEmpresasLojas() {
   await qry(`ALTER TABLE escala ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'escala-empresa');
   await qry(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'escala-template-empresa');
   await qry(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'produto-faltas-empresa');
+  // Escala e armazém POR LOJA.
+  await qry(`ALTER TABLE escala ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'escala-loja');
+  await qry(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'escala-template-loja');
+  await qry(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'faturas-loja');
+  await qry(`ALTER TABLE armazem_libertacoes ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'libertacoes-loja');
+  await qry(`ALTER TABLE armazem_proformas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'proformas-loja');
+  await qry(`ALTER TABLE armazem_inventario_diario ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'inventario-loja');
   // Ficha da empresa (perfil completo, como lojas/fornecedores).
   await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS nif TEXT NOT NULL DEFAULT ''`, [], 'empresas-nif');
   await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT ''`, [], 'empresas-morada');
@@ -1332,7 +1381,7 @@ async function ensureEmpresasLojas() {
       `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='turnos' AND column_name='loja_id'`
     );
     if (chk.rows.length) {
-      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v4','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v5','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
       empresasLojasReady = true;
     }
   } catch (_) {}
@@ -1366,18 +1415,20 @@ async function queryEmpresa(sqlNovo, paramsNovo, sqlAntigo, paramsAntigo) {
 }
 /** Dentro de transacções não se pode tentar-e-falhar (aborta o BEGIN) —
  *  verifica primeiro se a coluna empresa_id existe (com cache). */
-const __colunaEmpresaCache = {};
-async function colunaEmpresaDisponivel(tabela) {
-  if (__colunaEmpresaCache[tabela]) return true;
+const __colunaCache = {};
+async function colunaDisponivel(tabela, coluna) {
+  const k = tabela + '.' + coluna;
+  if (__colunaCache[k]) return true;
   try {
     const r = await query(
-      `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name='empresa_id'`,
-      [tabela]
+      `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name=$2`,
+      [tabela, coluna]
     );
-    if (r.rows.length) { __colunaEmpresaCache[tabela] = true; return true; }
+    if (r.rows.length) { __colunaCache[k] = true; return true; }
   } catch (_) {}
   return false;
 }
+function colunaEmpresaDisponivel(tabela) { return colunaDisponivel(tabela, 'empresa_id'); }
 /** Início oficial do turno (minutos desde meia-noite), fuso Africa/Luanda. */
 const TURNO_INICIO_MINUTES = { manha: 7 * 60, tarde: 15 * 60, noite: 23 * 60 };
 const TZ_STOCKOS = 'Africa/Luanda';
@@ -3084,6 +3135,12 @@ app.post('/api/faltas', auth, async (req, res) => {
 /** Marcar como resolvido — exige foto (prova). Qualquer utilizador autenticado. */
 app.patch('/api/faltas/:id', auth, async (req, res) => {
   try {
+    const chkF = await queryEmpresa(
+      `SELECT 1 FROM produto_faltas WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM produto_faltas WHERE id=$1`, [req.params.id]
+    );
+    if (!chkF.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado' });
+
     await ensureProdutoFaltas();
     const foto = String(req.body?.foto_base64 || '').trim();
     if (!foto || !foto.startsWith('data:image/')) {
@@ -3107,6 +3164,12 @@ app.patch('/api/faltas/:id', auth, async (req, res) => {
 /** Atribuir o aviso pendente a um utilizador (responsável por resolver). Qualquer auth. */
 app.patch('/api/faltas/:id/atribuir', auth, async (req, res) => {
   try {
+    const chkF = await queryEmpresa(
+      `SELECT 1 FROM produto_faltas WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM produto_faltas WHERE id=$1`, [req.params.id]
+    );
+    if (!chkF.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado' });
+
     await ensureProdutoFaltas();
     const uid = req.body?.utilizador_id ? String(req.body.utilizador_id).trim() : null;
     if (uid) {
@@ -3136,6 +3199,12 @@ app.patch('/api/faltas/:id/atribuir', auth, async (req, res) => {
 /** Devolve a foto base64 de um aviso resolvido (lazy — não inclui na lista). */
 app.get('/api/faltas/:id/foto', auth, async (req, res) => {
   try {
+    const chkF = await queryEmpresa(
+      `SELECT 1 FROM produto_faltas WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM produto_faltas WHERE id=$1`, [req.params.id]
+    );
+    if (!chkF.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado' });
+
     await ensureProdutoFaltas();
     const r = await query(`SELECT resolvido_foto_base64 FROM produto_faltas WHERE id=$1`, [req.params.id]);
     if (!r.rows.length || !r.rows[0].resolvido_foto_base64) return res.status(404).json({ erro: 'Sem foto.' });
@@ -3470,20 +3539,21 @@ app.get('/api/armazem/saldo', auth, requireRole('admin','gestor','compras'), asy
     await ensureArmazemTables();
     const data = req.query.data || new Date().toISOString().split('T')[0];
     const emp = empresaDe(req);
+    const lojaAmz = lojaDe(req);
     const lib = await queryEmpresa(
-      `SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND empresa_id=$2`, [data, emp],
-      `SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [data]
-    );
+      `SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND loja_id=$2`, [data, lojaAmz],
+      `SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND empresa_id=$2`, [data, emp]
+    ).catch(() => query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [data]));
     const fat = await queryEmpresa(
-      `SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND empresa_id=$2`, [data, emp],
-      `SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [data]
-    );
+      `SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND loja_id=$2`, [data, lojaAmz],
+      `SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND empresa_id=$2`, [data, emp]
+    ).catch(() => query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [data]));
     const lisSel = `SELECT l.*, u.nome as criado_por_nome FROM armazem_libertacoes l
        LEFT JOIN utilizadores u ON u.id::text = l.criado_por::text`;
     const lis = await queryEmpresa(
-      `${lisSel} WHERE l.data=$1 AND l.empresa_id=$2 ORDER BY l.criado_em DESC`, [data, emp],
-      `${lisSel} WHERE l.data=$1 ORDER BY l.criado_em DESC`, [data]
-    );
+      `${lisSel} WHERE l.data=$1 AND l.loja_id=$2 ORDER BY l.criado_em DESC`, [data, lojaAmz],
+      `${lisSel} WHERE l.data=$1 AND l.empresa_id=$2 ORDER BY l.criado_em DESC`, [data, emp]
+    ).catch(() => query(`${lisSel} WHERE l.data=$1 ORDER BY l.criado_em DESC`, [data]));
     const totalLib = parseFloat(lib.rows[0].t) || 0;
     const totalFat = parseFloat(fat.rows[0].t) || 0;
     res.json({
@@ -3504,8 +3574,8 @@ app.get('/api/armazem/saidas-dia', auth, requireRole('admin','gestor','compras')
        FROM turno_saidas s
        JOIN turnos t ON t.id = s.turno_id`;
     const r = await queryEmpresa(
-      `${selSd} WHERE t.data = $1 AND t.loja_id IN (SELECT id FROM lojas WHERE empresa_id=$2) ORDER BY s.criado_em DESC`,
-      [data, empresaDe(req)],
+      `${selSd} WHERE t.data = $1 AND t.loja_id = $2 ORDER BY s.criado_em DESC`,
+      [data, lojaDe(req)],
       `${selSd} WHERE t.data = $1 ORDER BY s.criado_em DESC`,
       [data]
     );
@@ -3522,11 +3592,16 @@ app.post('/api/armazem/libertacoes', auth, requireRole('admin','gestor','compras
     if (!v || v <= 0) return res.status(400).json({ erro: 'Indique um valor positivo para a libertação.' });
     const pLib = [d, v, String(notas || '').trim(), String(req.user.id || '')];
     const r = await queryEmpresa(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por, empresa_id, loja_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [...pLib, empresaDe(req), lojaDe(req)],
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      pLib
+    ).catch(() => queryEmpresa(
       `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por, empresa_id) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
       [...pLib, empresaDe(req)],
       `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
       pLib
-    );
+    ));
     res.json(r.rows[0]);
   } catch(e) { res.status(400).json({ erro: e.message }); }
 });
@@ -3534,7 +3609,10 @@ app.post('/api/armazem/libertacoes', auth, requireRole('admin','gestor','compras
 app.delete('/api/armazem/libertacoes/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
-    const r = await query('DELETE FROM armazem_libertacoes WHERE id=$1 RETURNING id', [req.params.id]);
+    const r = await queryEmpresa(
+      'DELETE FROM armazem_libertacoes WHERE id=$1 AND empresa_id=$2 RETURNING id', [req.params.id, empresaDe(req)],
+      'DELETE FROM armazem_libertacoes WHERE id=$1 RETURNING id', [req.params.id]
+    );
     if (!r.rows.length) return res.status(404).json({ erro: 'Libertação não encontrada' });
     res.json({ ok: true });
   } catch(e) { res.status(400).json({ erro: e.message }); }
@@ -3594,11 +3672,11 @@ app.get('/api/armazem/proformas', auth, requireRole('admin','gestor','compras'),
        FROM armazem_proformas pf
        LEFT JOIN utilizadores u ON u.id::text = pf.criado_por::text`;
     const r = await queryEmpresa(
+      `${selPf} WHERE pf.loja_id=$1 ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC LIMIT 100`,
+      [lojaDe(req)],
       `${selPf} WHERE pf.empresa_id=$1 ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC LIMIT 100`,
-      [empresaDe(req)],
-      `${selPf} ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC LIMIT 100`,
-      []
-    );
+      [empresaDe(req)]
+    ).catch(() => query(`${selPf} ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC LIMIT 100`, []));
     const ids = r.rows.map((x) => x.id);
     const byId = {};
     r.rows.forEach((pf) => { byId[pf.id] = { ...pf, linhas: [] }; });
@@ -3654,11 +3732,16 @@ app.post('/api/armazem/proformas', auth, requireRole('admin','gestor','compras')
     }
     const pPf = [String(fornecedor || '').trim(), String(notas || '').trim(), Math.round(total * 100) / 100, String(req.user.id || '')];
     const ins = await queryEmpresa(
+      `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por, empresa_id, loja_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [...pPf, empresaDe(req), lojaDe(req)],
+      `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      pPf
+    ).catch(() => queryEmpresa(
       `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por, empresa_id) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
       [...pPf, empresaDe(req)],
       `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
       pPf
-    );
+    ));
     const pf = ins.rows[0];
     for (const ln of norm) {
       await query(
@@ -3677,18 +3760,26 @@ app.post('/api/armazem/proformas/:id/libertar', auth, requireRole('admin','gesto
   try {
     await ensureArmazemProformas();
     await ensureArmazemTables();
-    const pfr = await query(`SELECT * FROM armazem_proformas WHERE id=$1`, [req.params.id]);
+    const pfr = await queryEmpresa(
+      `SELECT * FROM armazem_proformas WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT * FROM armazem_proformas WHERE id=$1`, [req.params.id]
+    );
     if (!pfr.rows.length) return res.status(404).json({ erro: 'Proforma não encontrada' });
     const pf = pfr.rows[0];
     if (pf.estado !== 'pendente') return res.status(400).json({ erro: `Esta proforma já está ${pf.estado}.` });
     const d = String((req.body && req.body.data) || new Date().toISOString().split('T')[0]).slice(0, 10);
     const pLibPf = [d, parseFloat(pf.total_valor) || 0, `Proforma #${pf.id}${pf.fornecedor ? ' — ' + pf.fornecedor : ''}`, String(req.user.id || '')];
     const lib = await queryEmpresa(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por, empresa_id, loja_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [...pLibPf, parseInt(pf.empresa_id, 10) || empresaDe(req), parseInt(pf.loja_id, 10) || lojaDe(req)],
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      pLibPf
+    ).catch(() => queryEmpresa(
       `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por, empresa_id) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
       [...pLibPf, parseInt(pf.empresa_id, 10) || empresaDe(req)],
       `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
       pLibPf
-    );
+    ));
     const upd = await query(
       `UPDATE armazem_proformas SET estado='libertada', libertacao_id=$1 WHERE id=$2 RETURNING *`,
       [lib.rows[0].id, pf.id]
@@ -3700,7 +3791,10 @@ app.post('/api/armazem/proformas/:id/libertar', auth, requireRole('admin','gesto
 app.delete('/api/armazem/proformas/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemProformas();
-    const r = await query(`DELETE FROM armazem_proformas WHERE id=$1 AND estado='pendente' RETURNING id`, [req.params.id]);
+    const r = await queryEmpresa(
+      `DELETE FROM armazem_proformas WHERE id=$1 AND estado='pendente' AND empresa_id=$2 RETURNING id`, [req.params.id, empresaDe(req)],
+      `DELETE FROM armazem_proformas WHERE id=$1 AND estado='pendente' RETURNING id`, [req.params.id]
+    );
     if (!r.rows.length) return res.status(400).json({ erro: 'Só proformas pendentes podem ser eliminadas.' });
     res.json({ ok: true });
   } catch (e) { res.status(400).json({ erro: e.message }); }
@@ -3722,11 +3816,28 @@ app.get('/api/armazem/inventario', auth, requireRole('admin','gestor','compras')
                 d.atualizado_em as armazem_diario_atualizado_em
          FROM produtos p
          LEFT JOIN armazem_stock a ON a.produto_id = p.id
-         LEFT JOIN armazem_inventario_diario d ON d.produto_id = p.id AND d.data = $1::date
+         LEFT JOIN armazem_inventario_diario d ON d.produto_id = p.id AND d.data = $1::date AND d.loja_id = $3
          WHERE p.ativo=true AND p.empresa_id=$2
          ORDER BY p.ordem, p.nome`,
-        [dataDia, empresaDe(req)]
-      ).catch(async (e) => {
+        [dataDia, empresaDe(req), lojaDe(req)]
+      ).catch((eInv) => {
+        if (!/loja_id/.test(String(eInv.message || ''))) throw eInv;
+        return query(
+          `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
+                  COALESCE(a.quantidade, 0) as quantidade,
+                  COALESCE(a.custo_medio, 0) as custo_medio,
+                  a.atualizado_em,
+                  COALESCE(d.encontrado, 0) as armazem_encontrado,
+                  COALESCE(d.deixado, 0) as armazem_deixado,
+                  d.atualizado_em as armazem_diario_atualizado_em
+           FROM produtos p
+           LEFT JOIN armazem_stock a ON a.produto_id = p.id
+           LEFT JOIN armazem_inventario_diario d ON d.produto_id = p.id AND d.data = $1::date
+           WHERE p.ativo=true AND p.empresa_id=$2
+           ORDER BY p.ordem, p.nome`,
+          [dataDia, empresaDe(req)]
+        );
+      }).catch(async (e) => {
         if (!/empresa_id/.test(String(e.message || ''))) throw e;
         return query(
           `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
@@ -3772,15 +3883,28 @@ app.put('/api/armazem/inventario-diario', auth, requireRole('admin','gestor','co
     if (!Number.isFinite(enc) || enc < 0) return res.status(400).json({ erro: '«Encontrado» inválido.' });
     if (!Number.isFinite(deix) || deix < 0) return res.status(400).json({ erro: '«Deixado» inválido.' });
     const r = await query(
-      `INSERT INTO armazem_inventario_diario (data, produto_id, encontrado, deixado)
-       VALUES ($1::date, $2, $3, $4)
-       ON CONFLICT (data, produto_id) DO UPDATE SET
+      `INSERT INTO armazem_inventario_diario (data, produto_id, encontrado, deixado, loja_id)
+       VALUES ($1::date, $2, $3, $4, $5)
+       ON CONFLICT (loja_id, data, produto_id) DO UPDATE SET
          encontrado = EXCLUDED.encontrado,
          deixado = EXCLUDED.deixado,
          atualizado_em = NOW()
        RETURNING *`,
-      [d, produto_id, enc, deix]
-    );
+      [d, produto_id, enc, deix, lojaDe(req)]
+    ).catch((eInv) => {
+      // BD antiga: sem loja_id ou ainda com a unicidade antiga (data, produto).
+      if (!/loja_id|ON CONFLICT/i.test(String(eInv.message || ''))) throw eInv;
+      return query(
+        `INSERT INTO armazem_inventario_diario (data, produto_id, encontrado, deixado)
+         VALUES ($1::date, $2, $3, $4)
+         ON CONFLICT (data, produto_id) DO UPDATE SET
+           encontrado = EXCLUDED.encontrado,
+           deixado = EXCLUDED.deixado,
+           atualizado_em = NOW()
+         RETURNING *`,
+        [d, produto_id, enc, deix]
+      );
+    });
     res.json(r.rows[0]);
   } catch (e) {
     res.status(400).json({ erro: e.message });
@@ -3862,6 +3986,12 @@ app.delete('/api/armazem/compras/:id', auth, requireRole('admin'), async (req, r
   await ensureArmazemTables();
   const id = parseInt(String(req.params.id || ''), 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ erro: 'ID inválido' });
+  const chkC = await queryEmpresa(
+    `SELECT 1 FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id WHERE c.id=$1 AND p.empresa_id=$2`,
+    [id, empresaDe(req)],
+    `SELECT 1 FROM armazem_compras WHERE id=$1`, [id]
+  );
+  if (!chkC.rows.length) return res.status(404).json({ erro: 'Linha de compra não encontrada' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -3894,6 +4024,12 @@ app.put('/api/armazem/compras/:id', auth, requireRole('admin'), async (req, res)
   await ensureArmazemTables();
   const id = parseInt(String(req.params.id || ''), 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ erro: 'ID inválido' });
+  const chkC = await queryEmpresa(
+    `SELECT 1 FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id WHERE c.id=$1 AND p.empresa_id=$2`,
+    [id, empresaDe(req)],
+    `SELECT 1 FROM armazem_compras WHERE id=$1`, [id]
+  );
+  if (!chkC.rows.length) return res.status(404).json({ erro: 'Linha de compra não encontrada' });
   const body = req.body || {};
   const caixasNum = parseFloat(body.caixas) || 0;
   const qtdPorCaixaNum = parseFloat(body.qtd_por_caixa) || 0;
@@ -3973,14 +4109,18 @@ app.get('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), a
       params.push(categoria); i++;
       wh.push(`id IN (SELECT DISTINCT c.fatura_id FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id WHERE p.categoria = $${i})`);
     }
-    params.push(empresaDe(req)); i++;
+    const paramsSem = params.slice();
+    params.push(lojaDe(req)); i++;
+    const whLojaF = wh.concat([`loja_id = $${i}`]);
     const whEmpF = wh.concat([`empresa_id = $${i}`]);
+    const paramsEmp = [...paramsSem, empresaDe(req)];
+    const ordF = ` ORDER BY data_emissao DESC, criado_em DESC LIMIT ${limit}`;
     const r = await queryEmpresa(
-      `SELECT * FROM armazem_faturas WHERE ${whEmpF.join(' AND ')} ORDER BY data_emissao DESC, criado_em DESC LIMIT ${limit}`,
-      params,
-      `SELECT * FROM armazem_faturas ${wh.length ? 'WHERE ' + wh.join(' AND ') : ''} ORDER BY data_emissao DESC, criado_em DESC LIMIT ${limit}`,
-      params.slice(0, -1)
-    );
+      `SELECT * FROM armazem_faturas WHERE ${whLojaF.join(' AND ')}${ordF}`, params,
+      `SELECT * FROM armazem_faturas WHERE ${whEmpF.join(' AND ')}${ordF}`, paramsEmp
+    ).catch(() => query(
+      `SELECT * FROM armazem_faturas ${wh.length ? 'WHERE ' + wh.join(' AND ') : ''}${ordF}`, paramsSem
+    ));
     let rows = r.rows;
     // Nº de fotos adicionais por fatura (multi-foto) — melhor esforço.
     try {
@@ -4003,7 +4143,10 @@ app.get('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), a
 app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
-    const f = await query('SELECT * FROM armazem_faturas WHERE id=$1', [req.params.id]);
+    const f = await queryEmpresa(
+      'SELECT * FROM armazem_faturas WHERE id=$1 AND empresa_id=$2', [req.params.id, empresaDe(req)],
+      'SELECT * FROM armazem_faturas WHERE id=$1', [req.params.id]
+    );
     if (!f.rows.length) return res.status(404).json({ erro: 'Fatura não encontrada' });
     const linhas = await query(
       `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
@@ -4452,14 +4595,21 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
       }
     }
     const empFat = empresaDe(req);
+    const lojaFat = lojaDe(req);
     const temEmpLib = await colunaEmpresaDisponivel('armazem_libertacoes');
     const temEmpFatCol = await colunaEmpresaDisponivel('armazem_faturas');
-    const libRow = temEmpLib
-      ? await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND empresa_id=$2`, [dataFat, empFat])
-      : await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);
-    const fatRow = temEmpFatCol
-      ? await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND empresa_id=$2`, [dataFat, empFat])
-      : await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [dataFat]);
+    const temLojaLib = await colunaDisponivel('armazem_libertacoes', 'loja_id');
+    const temLojaFat = await colunaDisponivel('armazem_faturas', 'loja_id');
+    const libRow = temLojaLib
+      ? await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND loja_id=$2`, [dataFat, lojaFat])
+      : temEmpLib
+        ? await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND empresa_id=$2`, [dataFat, empFat])
+        : await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);
+    const fatRow = temLojaFat
+      ? await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND loja_id=$2`, [dataFat, lojaFat])
+      : temEmpFatCol
+        ? await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND empresa_id=$2`, [dataFat, empFat])
+        : await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [dataFat]);
     const totalLib = parseFloat(libRow.rows[0].t) || 0;
     const totalFatExistente = parseFloat(fatRow.rows[0].t) || 0;
     const saldoDisponivel = totalLib - totalFatExistente;
@@ -4512,7 +4662,13 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
       tsid,
       fornecedorId
     ];
-    const ins = temEmpFatCol
+    const ins = temLojaFat && temEmpFatCol
+      ? await client.query(
+          `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id, fornecedor_id, empresa_id, loja_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+          [...pFat, empFat, lojaFat]
+        )
+      : temEmpFatCol
       ? await client.query(
           `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id, fornecedor_id, empresa_id)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
@@ -4620,6 +4776,10 @@ app.get('/api/fotos', auth, async (req, res) => {
   try {
     const chave = String(req.query.chave || '').trim();
     if (!fotosAnexosChaveValida(chave)) return res.status(400).json({ erro: 'Chave inválida' });
+    const mTpaF = chave.match(/^tpa:(\d+)$/);
+    if (mTpaF && !(await turnoNoContexto(req, parseInt(mTpaF[1], 10)).catch(() => true))) {
+      return res.status(404).json({ erro: 'Turno não encontrado' });
+    }
     await ensureFotosAnexos();
     const r = await query(
       `SELECT id, chave, foto, criado_por, criado_em FROM fotos_anexos WHERE chave=$1 ORDER BY criado_em, id`,
@@ -4635,6 +4795,10 @@ app.post('/api/fotos', auth, async (req, res) => {
     if (!fotosAnexosChaveValida(chave)) return res.status(400).json({ erro: 'Chave inválida' });
     if (typeof foto_base64 !== 'string' || !foto_base64.startsWith('data:image')) {
       return res.status(400).json({ erro: 'Envia a foto (data URL de imagem)' });
+    }
+    const mTpaP = String(chave).match(/^tpa:(\d+)$/);
+    if (mTpaP && !(await turnoNoContexto(req, parseInt(mTpaP[1], 10)).catch(() => true))) {
+      return res.status(404).json({ erro: 'Turno não encontrado' });
     }
     await ensureFotosAnexos();
     const r = await query(
@@ -5945,6 +6109,9 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), asyn
     const vtransfRaw = parseFloat(req.body?.valor_transferencia);
     const vtransf = Number.isNaN(vtransfRaw) ? 0 : Math.max(0, vtransfRaw);
     await assertTurnoFechado(turno_id);
+    if (!(await turnoNoContexto(req, parseInt(turno_id, 10)).catch(() => true))) {
+      return res.status(404).json({ erro: 'Turno não encontrado' });
+    }
     // Bloqueia alterações se já registado e fechado — só admin reabre.
     const ex = await query(`SELECT fechado FROM depositos_banco WHERE turno_id=$1`, [parseInt(turno_id, 10)]);
     if (ex.rows.length && ex.rows[0].fechado === true && req.user.role !== 'admin') {
@@ -6026,6 +6193,9 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
       const vtransfRaw = parseFloat(raw.valor_transferencia);
       const vtransf = Number.isNaN(vtransfRaw) ? 0 : Math.max(0, vtransfRaw);
       await assertTurnoFechado(tid);
+      if (!(await turnoNoContexto(req, tid).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
       valid.push({
         turno_id: tid,
         data_deposito: (raw.data_deposito || new Date().toISOString().split('T')[0]).trim(),
@@ -6127,7 +6297,10 @@ app.patch('/api/depositos/abrir', auth, requireRole('admin'), async (req, res) =
     await ensureDepositosBanco();
     const data = String(req.query.data || req.body?.data || '').trim();
     if (!data) return res.status(400).json({ erro: 'Indica a data (?data=YYYY-MM-DD).' });
-    const r = await query(
+    const r = await queryEmpresa(
+      `UPDATE depositos_banco d SET fechado = FALSE
+       FROM turnos t WHERE t.id = d.turno_id AND t.data = $1::date AND t.loja_id = $2 AND d.fechado = TRUE`,
+      [data, lojaDe(req)],
       `UPDATE depositos_banco d SET fechado = FALSE
        FROM turnos t WHERE t.id = d.turno_id AND t.data = $1::date AND d.fechado = TRUE`,
       [data]
@@ -6221,6 +6394,13 @@ async function ensureIrregularidadeDecisoes() {
 /** GET decisões por turno(s). Aceita ?turno_id=1,2,3 ou ?turno_id=1 */
 app.get('/api/irregularidades/decisoes', auth, async (req, res) => {
   try {
+    {
+      const tIrr = parseInt((req.query && req.query.turno_id) || '', 10);
+      if (Number.isFinite(tIrr) && tIrr > 0 && !(await turnoNoContexto(req, tIrr).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
+    }
+
     await ensureIrregularidadeDecisoes();
     const raw = String(req.query.turno_id || '').trim();
     if (!raw) return res.json([]);
@@ -6242,6 +6422,13 @@ app.get('/api/irregularidades/decisoes', auth, async (req, res) => {
 /** POST decidir (upsert). { turno_id, categoria, aceite=true, justificacao='' } */
 app.post('/api/irregularidades/decisao', auth, requireRole('admin'), async (req, res) => {
   try {
+    {
+      const tIrr = parseInt((req.body && req.body.turno_id) || '', 10);
+      if (Number.isFinite(tIrr) && tIrr > 0 && !(await turnoNoContexto(req, tIrr).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
+    }
+
     await ensureIrregularidadeDecisoes();
     const tid = parseInt(req.body?.turno_id, 10);
     const cat = String(req.body?.categoria || '').trim().toLowerCase();
@@ -6272,6 +6459,13 @@ app.post('/api/irregularidades/decisao', auth, requireRole('admin'), async (req,
 /** DELETE — remover decisão (volta a pendente). */
 app.delete('/api/irregularidades/decisao', auth, requireRole('admin'), async (req, res) => {
   try {
+    {
+      const tIrr = parseInt((req.query && req.query.turno_id) || '', 10);
+      if (Number.isFinite(tIrr) && tIrr > 0 && !(await turnoNoContexto(req, tIrr).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
+    }
+
     await ensureIrregularidadeDecisoes();
     const tid = parseInt(req.query.turno_id, 10);
     const cat = String(req.query.categoria || '').trim().toLowerCase();
@@ -6316,6 +6510,13 @@ async function ensureIrregularidadeComentarios() {
 /** GET comentários por turno(s). ?turno_id=1,2,3 — devolve todos ordenados por criado_em ASC. */
 app.get('/api/irregularidades/comentarios', auth, async (req, res) => {
   try {
+    {
+      const tIrr = parseInt((req.query && req.query.turno_id) || '', 10);
+      if (Number.isFinite(tIrr) && tIrr > 0 && !(await turnoNoContexto(req, tIrr).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
+    }
+
     await ensureIrregularidadeComentarios();
     const raw = String(req.query.turno_id || '').trim();
     if (!raw) return res.json([]);
@@ -6337,6 +6538,13 @@ app.get('/api/irregularidades/comentarios', auth, async (req, res) => {
 /** POST adicionar comentário. { turno_id, categoria, comentario } — qualquer utilizador autenticado. */
 app.post('/api/irregularidades/comentario', auth, async (req, res) => {
   try {
+    {
+      const tIrr = parseInt((req.body && req.body.turno_id) || '', 10);
+      if (Number.isFinite(tIrr) && tIrr > 0 && !(await turnoNoContexto(req, tIrr).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
+    }
+
     await ensureIrregularidadeComentarios();
     const tid = parseInt(req.body?.turno_id, 10);
     const cat = String(req.body?.categoria || '').trim().toLowerCase();
@@ -7758,6 +7966,12 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
 
 app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) => {
   try {
+    const chkU = await queryEmpresa(
+      `SELECT 1 FROM utilizadores WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM utilizadores WHERE id=$1`, [req.params.id]
+    );
+    if (!chkU.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
+
     await ensureUsernameColumn();
     const { nome, role, ativo, password, username, promotor, comissao_modo, comissao_pct_total } = req.body;
     const un = normalizeUsername(username);
@@ -7860,6 +8074,12 @@ app.get('/api/face-descriptors', async (req, res) => {
 /** Guardar descritor facial — qualquer utilizador autenticado pode registar (próprio ou de outro). */
 app.put('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
   try {
+    const chkU = await queryEmpresa(
+      `SELECT 1 FROM utilizadores WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM utilizadores WHERE id=$1`, [req.params.id]
+    );
+    if (!chkU.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
+
     const { descriptor, foto_base64 } = req.body;
     if (!Array.isArray(descriptor) || descriptor.length !== 128) {
       return res.status(400).json({ erro: 'Descritor inválido (array de 128 números)' });
@@ -7881,6 +8101,12 @@ app.put('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
 /** Remover descritor facial — qualquer utilizador autenticado pode remover. */
 app.delete('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
   try {
+    const chkU = await queryEmpresa(
+      `SELECT 1 FROM utilizadores WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM utilizadores WHERE id=$1`, [req.params.id]
+    );
+    if (!chkU.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
+
     const r = await query(`SELECT face_foto_url FROM utilizadores WHERE id=$1`, [req.params.id]);
     const oldUrl = r.rows[0]?.face_foto_url;
     await query(`UPDATE utilizadores SET face_descriptor=NULL, face_foto_url='' WHERE id=$1`, [req.params.id]);
@@ -8030,7 +8256,8 @@ app.get('/api/escala/semana', auth, async (req, res) => {
     const { data_inicio, data_fim } = req.query;
     if (!data_inicio || !data_fim) return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios' });
     const empEsc = empresaDe(req);
-    const cacheKey = `${data_inicio}\t${data_fim}\te${empEsc}`;
+    const lojaEsc = lojaDe(req);
+    const cacheKey = `${data_inicio}\t${data_fim}\te${empEsc}\tl${lojaEsc}`;
     const now = Date.now();
     const hit = _escalaSemanaCache.get(cacheKey);
     if (hit && now - hit.at < ESCALA_SEMANA_CACHE_MS) {
@@ -8048,13 +8275,13 @@ app.get('/api/escala/semana', auth, async (req, res) => {
     const ordTpl = ` ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome`;
     const [sem, tpl] = await Promise.all([
       queryEmpresa(
-        `${selSem} AND u.empresa_id = $3${ordSem}`, [data_inicio, data_fim, empEsc],
-        `${selSem}${ordSem}`, [data_inicio, data_fim]
-      ),
+        `${selSem} AND e.loja_id = $3${ordSem}`, [data_inicio, data_fim, lojaEsc],
+        `${selSem} AND u.empresa_id = $3${ordSem}`, [data_inicio, data_fim, empEsc]
+      ).catch(() => query(`${selSem}${ordSem}`, [data_inicio, data_fim])),
       queryEmpresa(
-        `${selTpl} WHERE u.empresa_id = $1${ordTpl}`, [empEsc],
-        `${selTpl}${ordTpl}`, []
-      )
+        `${selTpl} WHERE et.loja_id = $1${ordTpl}`, [lojaEsc],
+        `${selTpl} WHERE u.empresa_id = $1${ordTpl}`, [empEsc]
+      ).catch(() => query(`${selTpl}${ordTpl}`, []))
     ]);
     const body = { semana: sem.rows, template: tpl.rows };
     _escalaSemanaCache.set(cacheKey, { at: now, body });
@@ -8091,9 +8318,9 @@ app.get('/api/escala', auth, async (req, res) => {
        WHERE e.data >= $1 AND e.data <= $2`;
     const ordE = ` ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`;
     const r = await queryEmpresa(
-      `${selE} AND u.empresa_id = $3${ordE}`, [data_inicio, data_fim, empresaDe(req)],
-      `${selE}${ordE}`, [data_inicio, data_fim]
-    );
+      `${selE} AND e.loja_id = $3${ordE}`, [data_inicio, data_fim, lojaDe(req)],
+      `${selE} AND u.empresa_id = $3${ordE}`, [data_inicio, data_fim, empresaDe(req)]
+    ).catch(() => query(`${selE}${ordE}`, [data_inicio, data_fim]));
     res.json(r.rows);
   } catch(e) {
     if (e.message.includes('does not exist')) {
@@ -8116,7 +8343,12 @@ app.put('/api/escala', auth, requireRole('admin', 'gestor'), async (req, res) =>
     const area = parseAreaTrabalhoBody(area_trabalho);
     if (area === false) return res.status(400).json({ erro: 'area_trabalho deve ser 1, 2 ou 3' });
     if (utilizador_id) {
-      const r = await query(
+      const r = await queryEmpresa(
+        `INSERT INTO escala (data, turno, utilizador_id, notas, area_trabalho, loja_id)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (data, turno, utilizador_id) DO UPDATE SET notas = EXCLUDED.notas, area_trabalho = EXCLUDED.area_trabalho, loja_id = EXCLUDED.loja_id
+         RETURNING *`,
+        [data, turno, utilizador_id, notas || '', area, lojaDe(req)],
         `INSERT INTO escala (data, turno, utilizador_id, notas, area_trabalho)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (data, turno, utilizador_id) DO UPDATE SET notas = EXCLUDED.notas, area_trabalho = EXCLUDED.area_trabalho
@@ -8162,9 +8394,9 @@ app.get('/api/escala/template', auth, async (req, res) => {
       LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text`;
     const ordT = ` ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome`;
     const r = await queryEmpresa(
-      `${selT} WHERE u.empresa_id = $1${ordT}`, [empresaDe(req)],
-      `${selT}${ordT}`, []
-    );
+      `${selT} WHERE et.loja_id = $1${ordT}`, [lojaDe(req)],
+      `${selT} WHERE u.empresa_id = $1${ordT}`, [empresaDe(req)]
+    ).catch(() => query(`${selT}${ordT}`, []));
     res.json(r.rows);
   } catch(e) {
     if (e.message.includes('does not exist')) {
@@ -8182,7 +8414,12 @@ app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (re
     const n = notas || '';
     const area = parseAreaTrabalhoBody(area_trabalho);
     if (area === false) return res.status(400).json({ erro: 'area_trabalho deve ser 1, 2 ou 3' });
-    const ins = await query(
+    const ins = await queryEmpresa(
+      `INSERT INTO escala_template (dia_semana, turno, utilizador_id, notas, area_trabalho, loja_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (dia_semana, turno, utilizador_id) DO UPDATE SET notas=EXCLUDED.notas, area_trabalho=EXCLUDED.area_trabalho, loja_id=EXCLUDED.loja_id
+       RETURNING *`,
+      [dia_semana, turno, u, n, area, lojaDe(req)],
       `INSERT INTO escala_template (dia_semana, turno, utilizador_id, notas, area_trabalho)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (dia_semana, turno, utilizador_id) DO UPDATE SET notas=EXCLUDED.notas, area_trabalho=EXCLUDED.area_trabalho
@@ -8200,6 +8437,13 @@ app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (re
 
 app.delete('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
+    const chkT = await queryEmpresa(
+      `SELECT 1 FROM escala_template et LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text WHERE et.id=$1 AND u.empresa_id=$2`,
+      [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM escala_template WHERE id=$1`, [req.params.id]
+    );
+    if (!chkT.rows.length) return res.status(404).json({ erro: 'Registo de escala não encontrado' });
+
     await query(`DELETE FROM escala_template WHERE id=$1`, [req.params.id]);
     clearEscalaSemanaCache();
     res.json({ sucesso: true });
@@ -8208,6 +8452,13 @@ app.delete('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), asy
 
 app.patch('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
+    const chkT = await queryEmpresa(
+      `SELECT 1 FROM escala_template et LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text WHERE et.id=$1 AND u.empresa_id=$2`,
+      [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM escala_template WHERE id=$1`, [req.params.id]
+    );
+    if (!chkT.rows.length) return res.status(404).json({ erro: 'Registo de escala não encontrado' });
+
     const { area_trabalho } = req.body;
     const area = parseAreaTrabalhoBody(area_trabalho);
     if (area === false) return res.status(400).json({ erro: 'area_trabalho deve ser 1, 2 ou 3' });

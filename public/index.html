@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-27-cache-estavel">
+<html lang="pt" data-stockos-ui="2026-07-28-dia-sempre-offline">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2208,8 +2208,16 @@ async function loadDia() {
     const qMon = encodeURIComponent(monEsc);
     const qDom = encodeURIComponent(addDays(monEsc, 6));
 
+    // Sem rede e sem cache desta data (ex.: dia futuro nunca aberto): a
+    // página funciona na mesma — cartões vazios + turnos abertos offline
+    // (overlay); dá para abrir turno e registar tudo localmente.
+    let diaSemCache = false;
     const [turnos, cfgBloq] = await Promise.all([
-      api('GET', `/dia?data=${S.date}&resumo=1`),
+      api('GET', `/dia?data=${S.date}&resumo=1`).catch((e) => {
+        if (!ehErroDeRede(e) && !/Sem ligação/i.test(String(e && e.message || ''))) throw e;
+        diaSemCache = true;
+        return aplicarEscritasOffline(`/dia?data=${S.date}&resumo=1&loja=${lojaAtivaId()}`, []);
+      }),
       api('GET', '/config/turnos-bloqueados').catch(() => null)
     ]);
     S.turnosBloqueados = cfgBloq && Array.isArray(cfgBloq.bloqueados)
@@ -2279,7 +2287,12 @@ async function loadDia() {
 
     const pendentesLoading = `<div id="dia-pendentes-slot" class="card"><div class="text-center" style="padding:28px;color:#64748b"><div class="spinner"></div><div style="margin-top:10px;font-size:12px">A carregar avisos…</div></div></div>`;
 
+    const avisoOffline = diaSemCache
+      ? `<div style="margin-bottom:10px;padding:8px 12px;background:rgba(251,146,60,0.10);border:1px solid rgba(251,146,60,0.45);border-radius:8px;font-size:12px;color:#fdba74">📴 Sem rede e sem dados desta data neste aparelho — a mostrar só o que está registado localmente. Podes abrir turnos e registar normalmente; sincroniza quando a rede voltar.</div>`
+      : '';
+
     show('dia-content', `
+      ${avisoOffline}
       <div class="turno-cards">${cards}</div>
       ${pendentesLoading}
     `);
@@ -5284,6 +5297,8 @@ function aquecerCacheOffline() {
     const tid = S.turnoData && S.turnoData.id;
     const urls = [
       `/dia?data=${encodeURIComponent(hoje)}&resumo=1`,
+      `/dia?data=${encodeURIComponent(addDays(hoje, -1))}&resumo=1`,
+      `/dia?data=${encodeURIComponent(addDays(hoje, 1))}&resumo=1`,
       '/produtos?todos=0',
       '/receitas',
       '/pedidos/popularidade',

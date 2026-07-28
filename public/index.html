@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-loja-no-topo">
+<html lang="pt" data-stockos-ui="2026-07-28-loja-sempre-visivel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1751,8 +1751,6 @@ function navBar() {
 
 // ── PÁGINA DIA ────────────────────────────────────────────────
 function lojaSelectorHtml() {
-  // Operador / operador de sistema: loja fixa — sem selector.
-  if (!podeMudarLoja()) return '';
   const partes = [];
   const emps = S.empresas || [];
   if (podeMudarEmpresa() && emps.length > 1) {
@@ -1761,12 +1759,15 @@ function lojaSelectorHtml() {
     </select>`);
   }
   const lojas = S.lojas || [];
-  if (lojas.length > 1) {
+  // Operador / operador de sistema (loja fixa): mostra o nome, sem dropdown.
+  if (podeMudarLoja() && lojas.length > 1) {
     partes.push(`<select onchange="runAction(event, () => mudarLoja(this.value))" style="background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:8px;font-size:12px;padding:6px 8px;max-width:150px">
       ${lojas.map((l) => `<option value="${l.id}" ${String(l.id) === String(lojaAtivaId()) ? 'selected' : ''}>🏪 ${escapeHtml(l.nome)}</option>`).join('')}
     </select>`);
+  } else {
+    // Uma só loja: mostra o nome na mesma (pastilha fixa, sem dropdown).
+    partes.push(`<span style="display:inline-block;background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:8px;font-size:12px;padding:6px 8px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🏪 ${escapeHtml(lojaAtivaNome())}</span>`);
   }
-  if (!partes.length) return '';
   return `<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">${partes.join('')}</div>`;
 }
 

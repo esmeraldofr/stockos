@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-storage-persistente">
+<html lang="pt" data-stockos-ui="2026-07-29-fotos-idb">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5630,20 +5630,111 @@ async function apiEscrita(method, path, body, opts) {
     item.localId = 'off-' + ref;
     item.tid = item.localId;
   }
+  // Fotos grandes vão para o IndexedDB (quota de centenas de MB) — a fila
+  // no localStorage fica leve, dias de registos com fotos deixam de esbarrar
+  // no limite de ~5 MB.
+  await descarregarFotosParaIDB(item).catch(() => {});
   let fila = escritasOfflineLer();
   if (item.chave) fila = fila.filter((x) => x.chave !== item.chave);
   fila.push(item);
   if (!escritasOfflineGravar(fila)) {
     throw new Error('Sem espaço local — não foi possível guardar o registo neste aparelho.');
   }
+  limparFotosOrfasIDB().catch(() => {});
   // Sincronização em fundo — não bloqueia quem está a registar.
   if (navigator.onLine !== false) sincronizarEscritasOffline().catch(() => {});
   return { _offline: true, ref, criado_em: item.criado_em };
 }
 
-function apiEscritaComTimeout(item, ms) {
+// ── FOTOS DA FILA NO INDEXEDDB ────────────────────────────────
+// O localStorage tem ~5 MB — pouco para dias de fotos em fila. As fotos
+// grandes saem da fila para o IndexedDB (quota de centenas de MB/GB) e a
+// fila guarda só uma referência «@idb:chave»; ao sincronizar, a foto é
+// recarregada e enviada. Uma limpeza automática apaga fotos órfãs.
+const IDB_NOME = 'stockos-offline';
+const IDB_STORE = 'fotos';
+function idbAbrir() {
+  return new Promise((resolve, reject) => {
+    const rq = indexedDB.open(IDB_NOME, 1);
+    rq.onupgradeneeded = () => {
+      if (!rq.result.objectStoreNames.contains(IDB_STORE)) rq.result.createObjectStore(IDB_STORE);
+    };
+    rq.onsuccess = () => resolve(rq.result);
+    rq.onerror = () => reject(rq.error);
+  });
+}
+function idbOp(modo, fn) {
+  return idbAbrir().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, modo);
+    const st = tx.objectStore(IDB_STORE);
+    const rq = fn(st);
+    tx.oncomplete = () => { db.close(); resolve(rq && rq.result); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  }));
+}
+const idbGuardarFoto = (k, v) => idbOp('readwrite', (st) => st.put(v, k));
+const idbLerFoto = (k) => idbOp('readonly', (st) => st.get(k));
+const idbApagarFoto = (k) => idbOp('readwrite', (st) => st.delete(k)).catch(() => {});
+const idbListarChaves = () => idbOp('readonly', (st) => st.getAllKeys()).catch(() => []);
+
+const FOTO_IDB_LIMIAR = 60000; // ~45 KB binário — abaixo disto fica inline
+
+/** Move as fotos grandes do body para o IndexedDB (referência @idb:…). */
+async function descarregarFotosParaIDB(item) {
+  const ehFotoGrande = (v) => typeof v === 'string' && v.startsWith('data:image') && v.length > FOTO_IDB_LIMIAR;
+  const b = item.body || {};
+  let n = 0;
+  for (const campo of Object.keys(b)) {
+    try {
+      if (ehFotoGrande(b[campo])) {
+        const k = `foto:${item.ref}:${n++}`;
+        await idbGuardarFoto(k, b[campo]);
+        b[campo] = '@idb:' + k;
+      } else if (Array.isArray(b[campo])) {
+        for (let i = 0; i < b[campo].length; i++) {
+          if (ehFotoGrande(b[campo][i])) {
+            const k = `foto:${item.ref}:${n++}`;
+            await idbGuardarFoto(k, b[campo][i]);
+            b[campo][i] = '@idb:' + k;
+          }
+        }
+      }
+    } catch (_) { /* IDB indisponível → a foto segue inline (limite antigo) */ }
+  }
+}
+/** Devolve o body com as referências @idb resolvidas (para enviar). */
+async function resolverFotosDoIDB(body) {
+  const ehRef = (v) => typeof v === 'string' && v.startsWith('@idb:');
+  const precisa = Object.keys(body || {}).some((c) => ehRef(body[c]) || (Array.isArray(body[c]) && body[c].some(ehRef)));
+  if (!precisa) return body;
+  const out = JSON.parse(JSON.stringify(body));
+  for (const campo of Object.keys(out)) {
+    if (ehRef(out[campo])) out[campo] = (await idbLerFoto(out[campo].slice(5)).catch(() => '')) || '';
+    else if (Array.isArray(out[campo])) {
+      for (let i = 0; i < out[campo].length; i++) {
+        if (ehRef(out[campo][i])) out[campo][i] = (await idbLerFoto(out[campo][i].slice(5)).catch(() => '')) || '';
+      }
+    }
+  }
+  return out;
+}
+/** Limpeza: apaga do IndexedDB fotos cujo item já saiu da fila. */
+async function limparFotosOrfasIDB() {
+  try {
+    const chaves = await idbListarChaves();
+    if (!chaves || !chaves.length) return;
+    const refs = new Set(escritasOfflineLer().map((x) => x.ref));
+    for (const k of chaves) {
+      const m = String(k).match(/^foto:([^:]+):/);
+      if (m && !refs.has(m[1])) await idbApagarFoto(k);
+    }
+  } catch (_) {}
+}
+
+async function apiEscritaComTimeout(item, ms) {
+  const body = await resolverFotosDoIDB(item.body);
   return Promise.race([
-    api(item.method, item.path, item.body),
+    api(item.method, item.path, body),
     new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms || 25000))
   ]);
 }
@@ -5729,6 +5820,7 @@ async function sincronizarEscritasOffline() {
   } finally {
     __syncEscritasEmCurso = false;
     renderOfflinePendentesBadge();
+    limparFotosOrfasIDB().catch(() => {});
   }
   if (precisaRefrescar) {
     try {
@@ -5844,7 +5936,7 @@ function aplicarEscritasAoTurno(t, fila) {
     } else if (it.method === 'PUT' && p.endsWith('/notas')) {
       out.notas = b.notas || '';
     } else if (p.endsWith('/caixa/tpa-foto')) {
-      out.caixa.tpa_foto_url = b.foto_base64 || 'offline-pendente';
+      out.caixa.tpa_foto_url = (typeof b.foto_base64 === 'string' && b.foto_base64.startsWith('data:')) ? b.foto_base64 : 'offline-pendente';
     } else if (p.endsWith('/encontrados/fechar')) { out.encontrados_fechados_em = it.criado_em; }
     else if (p.endsWith('/encontrados/reabrir')) { out.encontrados_fechados_em = null; }
     else if (p.endsWith('/deixados/fechar')) { out.deixados_fechados_em = it.criado_em; }
@@ -6011,7 +6103,7 @@ function overlayDepositos(dataQ, rows, fila) {
           fechado: true,
           criado_em: it.criado_em,
           criado_por_nome: (S.user && S.user.nome) || '',
-          bordero_foto_url: b.bordero_foto_base64 || '',
+          bordero_foto_url: (typeof b.bordero_foto_base64 === 'string' && b.bordero_foto_base64.startsWith('data:')) ? b.bordero_foto_base64 : '',
           turno_nome: nomes[String(x.turno_id)] || '',
           turno_data: dExtra || dataQ,
           _offline: true
@@ -6021,7 +6113,7 @@ function overlayDepositos(dataQ, rows, fila) {
       });
     } else if (it.method === 'POST' && p === '/depositos/bordero-dia') {
       if (!dataQ || String(b.data || '').slice(0, 10) === dataQ) {
-        out = out.map((r) => Object.assign({}, r, { bordero_foto_url: b.foto_base64 || r.bordero_foto_url }));
+        out = out.map((r) => Object.assign({}, r, { bordero_foto_url: (typeof b.foto_base64 === 'string' && b.foto_base64.startsWith('data:')) ? b.foto_base64 : r.bordero_foto_url }));
       }
     } else if (it.method === 'DELETE' && p.startsWith('/depositos/bordero-dia')) {
       const q2 = new URLSearchParams(String(it.path).split('?')[1] || '');
@@ -6134,6 +6226,14 @@ async function fotosAnexosRender(el) {
   } catch (_) {
     // Sem rede e sem cache deste GET: mostra pelo menos as fotos em fila.
     try { fotos = aplicarEscritasOffline(`/fotos?chave=${encodeURIComponent(chave)}`, []); } catch (_2) { fotos = []; }
+  }
+  // Fotos em fila cujo conteúdo vive no IndexedDB → carrega p/ pré-visualizar.
+  if (Array.isArray(fotos)) {
+    for (const f of fotos) {
+      if (typeof f.foto === 'string' && f.foto.startsWith('@idb:')) {
+        f.foto = (await idbLerFoto(f.foto.slice(5)).catch(() => '')) || '';
+      }
+    }
   }
   const thumbs = (Array.isArray(fotos) ? fotos : []).map((f) => `
     <span style="position:relative;display:inline-block">

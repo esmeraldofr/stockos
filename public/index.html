@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-tudo-por-loja">
+<html lang="pt" data-stockos-ui="2026-07-28-entradas-offline">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9114,9 +9114,15 @@ async function loadRegistosMovimentosSection(turnoId, stocks, canEdit) {
   if (elE) elE.innerHTML = '<span style="color:#64748b">A carregar...</span>';
   if (elM) elM.innerHTML = '<span style="color:#64748b">A carregar...</span>';
   try {
+    // Offline sem cache: as listas caem para vazio + registos em fila —
+    // o FORMULÁRIO renderiza sempre (registar entradas/saídas funciona
+    // offline; a lista completa aparece quando houver rede/cache).
+    const listaOffline = (p) => {
+      try { return aplicarEscritasOffline(comLojaNoPath(p), []); } catch (_) { return []; }
+    };
     const [entradas, saidas, caixaEntradas] = await Promise.all([
-      api('GET', `/turnos/${turnoId}/entradas`),
-      api('GET', `/turnos/${turnoId}/saidas`),
+      api('GET', `/turnos/${turnoId}/entradas`).catch(() => listaOffline(`/turnos/${turnoId}/entradas`)),
+      api('GET', `/turnos/${turnoId}/saidas`).catch(() => listaOffline(`/turnos/${turnoId}/saidas`)),
       api('GET', `/turnos/${turnoId}/caixa-entradas`).catch(() => [])
     ]);
     if (elE) renderEntradasSection(turnoId, stocks, canEdit, entradas);
@@ -9269,7 +9275,9 @@ async function submitEntrada(turnoId) {
   }
   // Refrescar é «melhor esforço» — offline, o GET vem do cache + fila.
   try {
-    const novaEntrada = await api('GET', `/turnos/${turnoId}/entradas`);
+    const novaEntrada = await api('GET', `/turnos/${turnoId}/entradas`).catch(() => {
+      try { return aplicarEscritasOffline(comLojaNoPath(`/turnos/${turnoId}/entradas`), []); } catch (_) { return []; }
+    });
     const soma = novaEntrada.filter((e) => prodIdKey(e.produto_id) === pid)
                             .reduce((s, e) => s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1), 0);
     const cell = document.getElementById(`entrada-${pid}`);
@@ -9310,7 +9318,9 @@ async function adicionarFinoBarrilNovo(produtoId) {
   }, { tid: turnoId, desc: 'Barril novo de Fino', extra: { produto_nome: 'Fino' } });
   try {
     const pid = prodIdKey(produtoId);
-    const entradasRows = await api('GET', `/turnos/${turnoId}/entradas`);
+    const entradasRows = await api('GET', `/turnos/${turnoId}/entradas`).catch(() => {
+      try { return aplicarEscritasOffline(comLojaNoPath(`/turnos/${turnoId}/entradas`), []); } catch (_) { return []; }
+    });
     const soma = entradasRows
       .filter((e) => prodIdKey(e.produto_id) === pid)
       .reduce(

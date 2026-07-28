@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-local-first-total">
+<html lang="pt" data-stockos-ui="2026-07-28-menu-visivel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5504,6 +5504,9 @@ function renderOfflineBanner() {
     const envH = envB && getComputedStyle(envB).display !== 'none' ? envB.offsetHeight : 0;
     el.style.top = envH + 'px';
     document.body.style.paddingTop = el.offsetHeight + 'px';
+    // O botão do menu (☰) é fixed — empurra-o também para baixo da faixa.
+    const mt = document.getElementById('menu-toggle');
+    if (mt) mt.style.top = (envH + el.offsetHeight + 8) + 'px';
   } catch (_) {}
 }
 window.addEventListener('offline', () => renderOfflineBanner());

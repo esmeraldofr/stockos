@@ -5084,15 +5084,37 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
   }
 });
 
-// ── Config: turnos bloqueados (não permitir abrir NOVOS turnos) ──
-// Guardado em stockos_meta (k='turnos_bloqueados', v=JSON array) — aplica-se
-// a todos os dispositivos. Turnos já abertos não são afectados.
-const TURNOS_NOMES_VALIDOS = ['manha', 'tarde', 'noite'];
-async function getTurnosBloqueados() {
+// ── Configuração POR EMPRESA ──────────────────────────────────
+// Cada empresa tem a sua própria configuração, guardada em stockos_meta
+// com a chave «cfg:e<empresaId>:<nome>». A Empresa 1 herda o valor da
+// chave global antiga na primeira leitura (migração suave).
+async function getConfigEmpresa(empresaId, chave, chaveLegada) {
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='turnos_bloqueados'`);
-    if (!r.rows.length) return [];
-    const arr = JSON.parse(r.rows[0].v);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k=$1`, [`cfg:e${empresaId}:${chave}`]);
+    if (r.rows.length) return r.rows[0].v;
+    if (parseInt(empresaId, 10) === 1 && chaveLegada) {
+      const l = await query(`SELECT v FROM stockos_meta WHERE k=$1`, [chaveLegada]);
+      if (l.rows.length) return l.rows[0].v;
+    }
+  } catch (_) {}
+  return null;
+}
+async function setConfigEmpresa(empresaId, chave, valor) {
+  await query(
+    `INSERT INTO stockos_meta (k,v) VALUES ($1,$2) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [`cfg:e${empresaId}:${chave}`, valor]
+  );
+}
+
+// ── Config: turnos bloqueados (não permitir abrir NOVOS turnos) ──
+// POR EMPRESA — cada empresa bloqueia os seus períodos. Turnos já
+// abertos não são afectados.
+const TURNOS_NOMES_VALIDOS = ['manha', 'tarde', 'noite'];
+async function getTurnosBloqueados(empresaId) {
+  try {
+    const v = await getConfigEmpresa(empresaId || 1, 'turnos_bloqueados', 'turnos_bloqueados');
+    if (v == null) return [];
+    const arr = JSON.parse(v);
     return Array.isArray(arr) ? arr.filter((n) => TURNOS_NOMES_VALIDOS.includes(n)) : [];
   } catch (_) {
     return [];
@@ -5100,18 +5122,14 @@ async function getTurnosBloqueados() {
 }
 
 app.get('/api/config/turnos-bloqueados', auth, async (req, res) => {
-  res.json({ bloqueados: await getTurnosBloqueados() });
+  res.json({ bloqueados: await getTurnosBloqueados(empresaDe(req)) });
 });
 
 app.put('/api/config/turnos-bloqueados', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
     const raw = Array.isArray(req.body && req.body.bloqueados) ? req.body.bloqueados : [];
     const bloq = [...new Set(raw.map(String))].filter((n) => TURNOS_NOMES_VALIDOS.includes(n));
-    await query(
-      `INSERT INTO stockos_meta (k,v) VALUES ('turnos_bloqueados',$1)
-       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
-      [JSON.stringify(bloq)]
-    );
+    await setConfigEmpresa(empresaDe(req), 'turnos_bloqueados', JSON.stringify(bloq));
     res.json({ bloqueados: bloq });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -5125,7 +5143,7 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
     const { data, nome } = req.body;
     if (!data || !nome) throw new Error('Data e nome obrigatórios');
     assertPodeAbrirTurno(data, nome);
-    const bloqueados = await getTurnosBloqueados();
+    const bloqueados = await getTurnosBloqueados(empresaDe(req));
     if (bloqueados.includes(nome)) {
       throw new Error(`O turno ${nome} está bloqueado — a abertura de novos turnos foi desactivada pelo administrador (Configurações).`);
     }

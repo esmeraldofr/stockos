@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-pagina-empresas">
+<html lang="pt" data-stockos-ui="2026-07-28-config-por-empresa">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -13099,8 +13099,8 @@ async function drawConfiguracoes() {
         <div class="card-title">⛔ Turnos bloqueados</div>
         <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
           Bloqueia a abertura de <strong style="color:#cbd5e1">novos turnos</strong> nos períodos marcados
-          (para períodos que não estão a ser utilizados). Aplica-se a <strong style="color:#cbd5e1">todos os dispositivos</strong>.
-          Turnos já abertos ou fechados não são afectados.
+          (para períodos que não estão a ser utilizados). Aplica-se a <strong style="color:#cbd5e1">todos os dispositivos desta empresa</strong> —
+          cada empresa tem a sua própria configuração. Turnos já abertos ou fechados não são afectados.
         </p>
         <div id="cfg-turnos-bloqueados" style="display:flex;flex-direction:column;gap:8px"><span style="color:#64748b;font-size:12px">A carregar…</span></div>
         <div id="cfg-turnos-bloq-msg" style="margin-top:8px;font-size:11px;color:#64748b"></div>
@@ -13389,7 +13389,7 @@ async function configTurnosBloqueadosChange() {
   try {
     if (msg) { msg.style.color = '#64748b'; msg.textContent = 'A guardar…'; }
     const r = await apiEscrita('PUT', '/config/turnos-bloqueados', { bloqueados: bloq },
-      { chave: 'cfg:turnos-bloqueados', desc: 'Turnos bloqueados' });
+      { chave: `cfg:turnos-bloqueados:${empresaAtivaId()}`, desc: 'Turnos bloqueados' });
     const saved = r && Array.isArray(r.bloqueados) ? r.bloqueados : bloq;
     S.turnosBloqueados = saved;
     if (msg) msg.textContent = (saved.length

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-faixa-abaixo-dev">
+<html lang="pt" data-stockos-ui="2026-07-28-rapido-com-internet">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5367,9 +5367,10 @@ function aquecerCacheOffline() {
       );
       if (['admin', 'gestor'].includes(S.user?.role)) urls.push('/utilizadores');
     }
-    // Fire-and-forget espaçado — não compete com o que o utilizador está a fazer.
+    // Fire-and-forget bem espaçado — em redes lentas o aquecimento não pode
+    // competir com o que o utilizador está a fazer.
     urls.forEach((u, i) => {
-      setTimeout(() => { api('GET', u).catch(() => {}); }, 800 + i * 400);
+      setTimeout(() => { api('GET', u).catch(() => {}); }, 3000 + i * 1500);
     });
   } catch (_) {}
 }

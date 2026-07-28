@@ -50,9 +50,12 @@ self.addEventListener('fetch', (e) => {
   }
 
   if (url.pathname.startsWith('/api/')) {
-    // Dados: rede primeiro; offline → último valor conhecido.
-    e.respondWith(
-      fetch(req)
+    // Dados: rede com PRAZO CURTO. Se a rede responde em <800 ms, dados
+    // frescos; se demora (3G, servidor a acordar), o cache serve JÁ e a
+    // rede continua em fundo a actualizar o cache para a próxima vez —
+    // com internet fica tão rápido como offline.
+    e.respondWith((async () => {
+      const network = fetch(req)
         .then((resp) => {
           if (resp && resp.ok) {
             const clone = resp.clone();
@@ -60,31 +63,38 @@ self.addEventListener('fetch', (e) => {
           }
           return resp;
         })
-        .catch(async () => {
-          // Fallback progressivo: exacto → sem «empresa=» (admin que usou o
-          // selector de empresa não perde o cache da própria) → sem «loja=»
-          // (cache pré-multi-loja, só para a loja 1 — nunca mistura lojas).
-          const hit = await caches.match(req);
-          if (hit) return hit;
-          if (url.searchParams.has('empresa')) {
-            const semEmpresa = new URL(url.href);
-            semEmpresa.searchParams.delete('empresa');
-            const h2 = await caches.match(new Request(semEmpresa.href));
-            if (h2) return h2;
-          }
-          if (url.searchParams.get('loja') === '1') {
-            const antiga = new URL(url.href);
-            antiga.searchParams.delete('loja');
-            antiga.searchParams.delete('empresa');
-            const hitAntigo = await caches.match(new Request(antiga.href));
-            if (hitAntigo) return hitAntigo;
-          }
-          return new Response(
-            JSON.stringify({ erro: 'Sem ligação e ainda sem dados guardados para este ecrã. Abre-o uma vez com rede.' }),
-            { status: 503, headers: { 'Content-Type': 'application/json' } }
-          );
-        })
-    );
+        .catch(() => null);
+      e.waitUntil(network); // a actualização em fundo completa mesmo após responder
+      const cached = await caches.match(req);
+      if (cached) {
+        const timer = new Promise((res) => setTimeout(() => res('timeout'), 800));
+        const winner = await Promise.race([network, timer]);
+        if (winner && winner !== 'timeout') return winner;
+        return cached;
+      }
+      // Sem cache exacto: espera pela rede; falhando, fallback progressivo —
+      // sem «empresa=» (admin que usou o selector não perde o cache da
+      // própria) → sem «loja=» (cache pré-multi-loja, só loja 1).
+      const resp = await network;
+      if (resp) return resp;
+      if (url.searchParams.has('empresa')) {
+        const semEmpresa = new URL(url.href);
+        semEmpresa.searchParams.delete('empresa');
+        const h2 = await caches.match(new Request(semEmpresa.href));
+        if (h2) return h2;
+      }
+      if (url.searchParams.get('loja') === '1') {
+        const antiga = new URL(url.href);
+        antiga.searchParams.delete('loja');
+        antiga.searchParams.delete('empresa');
+        const hitAntigo = await caches.match(new Request(antiga.href));
+        if (hitAntigo) return hitAntigo;
+      }
+      return new Response(
+        JSON.stringify({ erro: 'Sem ligação e ainda sem dados guardados para este ecrã. Abre-o uma vez com rede.' }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } }
+      );
+    })());
     return;
   }
 

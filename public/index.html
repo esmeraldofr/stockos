@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-fotos-idb">
+<html lang="pt" data-stockos-ui="2026-07-29-espaco-visivel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5561,13 +5561,28 @@ function abrirGestorFilaOffline() {
         <button type="button" class="btn btn-ghost btn-sm" onclick="fecharGestorFilaOffline()">Fechar</button>
       </div>
       <div style="overflow-y:auto;padding:6px 14px;flex:1">${itens || '<div style="color:#64748b;font-size:12px;padding:12px 0">Fila vazia.</div>'}</div>
-      <div style="display:flex;gap:8px;padding:12px 14px;border-top:1px solid #1e293b;flex-wrap:wrap">
+      <div style="display:flex;gap:8px;padding:12px 14px;border-top:1px solid #1e293b;flex-wrap:wrap;align-items:center">
         <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, async () => { await sincronizarEscritasOffline(); await sincronizarPedidosOffline(); abrirGestorFilaOffline(); })">↻ Sincronizar agora</button>
         ${nPresos ? `<button type="button" class="btn btn-ghost btn-sm" style="color:#f87171" onclick="runAction(event, limparRegistosPresos)">🗑 Limpar ${nPresos} preso${nPresos === 1 ? '' : 's'}</button>` : ''}
+        <span id="gestor-fila-espaco" style="margin-left:auto;font-size:10px;color:#64748b"></span>
       </div>
     </div>`;
   modal.addEventListener('click', (ev) => { if (ev.target === modal) fecharGestorFilaOffline(); });
   document.body.appendChild(modal);
+  // Espaço real disponível para offline neste aparelho (varia por telemóvel).
+  try {
+    if (navigator.storage && navigator.storage.estimate) {
+      navigator.storage.estimate().then((est) => {
+        const el = document.getElementById('gestor-fila-espaco');
+        if (!el || !est) return;
+        const mb = (v) => {
+          const m = (v || 0) / (1024 * 1024);
+          return m >= 1024 ? (m / 1024).toFixed(1) + ' GB' : Math.round(m) + ' MB';
+        };
+        el.textContent = `Espaço offline: ${mb(est.usage)} usados de ${mb(est.quota)} disponíveis`;
+      }).catch(() => {});
+    }
+  } catch (_) {}
 }
 function fecharGestorFilaOffline() {
   document.getElementById('gestor-fila-offline')?.remove();

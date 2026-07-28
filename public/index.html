@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-isolamento-activo">
+<html lang="pt" data-stockos-ui="2026-07-28-loja-no-topo">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1010,6 +1010,11 @@ function lojaAtivaId() {
   const v = parseInt(S.lojaId, 10);
   return Number.isFinite(v) && v > 0 ? v : 1;
 }
+/** Nome da loja activa — mostrado nos cabeçalhos mesmo com uma só loja. */
+function lojaAtivaNome() {
+  const l = (S.lojas || []).find((x) => String(x.id) === String(lojaAtivaId()));
+  return (l && l.nome) || `Loja ${lojaAtivaId()}`;
+}
 /** Acrescenta a loja activa ao caminho (uma vez) — o servidor filtra por
  *  loja e o cache do Service Worker fica separado por loja. */
 function comLojaNoPath(path) {
@@ -1771,7 +1776,7 @@ async function drawDia() {
     <div id="header">
       <div>
         <div id="header-h1" style="font-size:18px;font-weight:700;color:#f1f5f9">StockOS</div>
-        <div class="header-sub">${S.user?.nome}${S.user?.username ? ` · @${S.user.username}` : ''}${(S.lojas || []).length > 1 ? ` · ${escapeHtml((S.lojas.find((l) => String(l.id) === String(lojaAtivaId())) || {}).nome || '')}` : ''}</div>
+        <div class="header-sub">${S.user?.nome}${S.user?.username ? ` · @${S.user.username}` : ''} · 🏪 ${escapeHtml(lojaAtivaNome())}</div>
       </div>
       <div style="flex-shrink:0">${lojaSelectorHtml()}</div>
     </div>
@@ -3433,7 +3438,7 @@ async function loadTurno() {
     };
 
     document.getElementById('turno-title').textContent =
-      `${turnoLabel(turno.nome)} — ${dateLabelWithWeekday(S.date)}`;
+      `🏪 ${lojaAtivaNome()} · ${turnoLabel(turno.nome)} — ${dateLabelWithWeekday(S.date)}`;
 
     const turnoMsgEl = document.getElementById('turno-msg');
     if (turnoMsgEl) {

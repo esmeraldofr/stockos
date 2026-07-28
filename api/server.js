@@ -5043,7 +5043,15 @@ app.get('/api/dia', auth, async (req, res) => {
     if (resumo) {
       const [caixaAll, vendasAgg, pedidosAgg] = await Promise.all([
         query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids]),
-        query(
+        queryEmpresa(
+          `SELECT ts.turno_id,
+             COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS total_vendas
+           FROM turno_stock ts
+           INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+           INNER JOIN turnos t ON t.id = ts.turno_id
+           WHERE ts.turno_id = ANY($1::int[]) AND p.empresa_id = $2
+           GROUP BY ts.turno_id`,
+          [ids, empresaDe(req)],
           `SELECT ts.turno_id,
              COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS total_vendas
            FROM turno_stock ts
@@ -5114,18 +5122,19 @@ app.get('/api/dia', auth, async (req, res) => {
       return res.json(result);
     }
 
-    const [stockAll, caixaAll] = await Promise.all([
-      query(
-        `SELECT ts.*, p.nome as produto_nome,
+    const selStockDia = `SELECT ts.*, p.nome as produto_nome,
                 ${sqlPPrecoNaData()} AS preco,
                 p.categoria, p.ordem, p.tipo_medicao,
                 COALESCE(p.peso_tara_kg, 0)::numeric AS peso_tara_kg
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
          JOIN turnos t ON t.id = ts.turno_id
-         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
-         ORDER BY ts.turno_id, p.ordem, p.nome`,
-        [ids]
+         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}`;
+    const ordStockDia = ` ORDER BY ts.turno_id, p.ordem, p.nome`;
+    const [stockAll, caixaAll] = await Promise.all([
+      queryEmpresa(
+        `${selStockDia} AND p.empresa_id = $2${ordStockDia}`, [ids, empresaDe(req)],
+        `${selStockDia}${ordStockDia}`, [ids]
       ),
       query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids])
     ]);
@@ -5425,6 +5434,9 @@ app.put('/api/config/turnos-bloqueados', auth, requireRole('admin', 'gestor'), a
 });
 
 app.post('/api/turnos/abrir', auth, async (req, res) => {
+  // Antes da transacção: a folha de stock do turno usa SÓ produtos da
+  // empresa (verificação prévia da coluna — nunca aborta o BEGIN).
+  const temEmpProd = await colunaEmpresaDisponivel('produtos').catch(() => false);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -5472,10 +5484,15 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
         );
     const turnoId = turno.rows[0].id;
 
-    // Stock do turno: só produtos activos marcados para a folha de stock
-    const produtos = await client.query(
-      `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`
-    );
+    // Stock do turno: só produtos activos DA EMPRESA marcados para a folha
+    const produtos = temEmpProd
+      ? await client.query(
+          `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND empresa_id=$1 AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`,
+          [empresaDe(req)]
+        )
+      : await client.query(
+          `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`
+        );
     for (const p of produtos.rows) {
       await client.query(
         'INSERT INTO turno_stock (turno_id, produto_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',

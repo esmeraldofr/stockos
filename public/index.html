@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-abertura-instantanea">
+<html lang="pt" data-stockos-ui="2026-07-29-qtd-no-toque">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4800,18 +4800,81 @@ function pedidoBalcaoInitDraftForTurno(turnoId) {
   }
 }
 
-function pedidoBalcaoTileClick(pid) {
+/** Diálogo de quantidade ao tocar num produto do balcão: −/+, escrita
+ *  directa, total em tempo real e «Adicionar». Produtos «só em lote»
+ *  andam em múltiplos do pacote. Devolve a quantidade ou null. */
+function pedidoBalcaoDialogQtd(o, passo) {
+  return new Promise((resolve) => {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:1450;display:flex;align-items:center;justify-content:center;padding:18px';
+    ov.innerHTML = `
+      <div style="background:#0f172a;border:1px solid #334155;border-radius:14px;max-width:360px;width:100%;padding:16px;box-shadow:0 10px 40px rgba(0,0,0,0.5)">
+        <div style="display:flex;gap:8px;align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:15px;font-weight:700;color:#f1f5f9">${escapeHtml(o.nome)}</div>
+            <div style="font-size:12px;color:#94a3b8;margin-top:2px">${fmt(parseFloat(o.preco) || 0)}${o.grupo === 'BebidaCopo' ? ' / copo' : ' / un.'}${passo > 1 ? ` · vendido em lotes de ${passo}` : ''}</div>
+          </div>
+          <button type="button" data-q="cancel" aria-label="Cancelar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;padding:0 2px">✕</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;justify-content:center;margin:16px 0 6px">
+          <button type="button" data-q="menos" style="width:54px;height:54px;font-size:26px;background:#1e293b;border:1px solid #334155;border-radius:12px;color:#e2e8f0;cursor:pointer">−</button>
+          <input id="pedido-qtd-input" type="text" inputmode="numeric" value="${passo}" style="width:88px;text-align:center;font-size:24px;font-weight:700;padding:10px 6px;background:#0b1220;border:1px solid #334155;border-radius:12px;color:#f1f5f9;box-sizing:border-box"/>
+          <button type="button" data-q="mais" style="width:54px;height:54px;font-size:26px;background:#1e293b;border:1px solid #334155;border-radius:12px;color:#e2e8f0;cursor:pointer">+</button>
+        </div>
+        <div id="pedido-qtd-total" style="text-align:center;font-size:14px;color:#4ade80;font-weight:700;margin-bottom:12px"></div>
+        <div style="display:flex;gap:8px">
+          <button type="button" class="btn btn-ghost" data-q="cancel" style="flex:1;font-size:14px">Cancelar</button>
+          <button type="button" class="btn btn-primary" data-q="ok" style="flex:2;font-size:15px">Adicionar</button>
+        </div>
+      </div>`;
+    const inp = () => ov.querySelector('#pedido-qtd-input');
+    const lerQtd = () => {
+      let q = parseFloat(String(inp().value).replace(',', '.'));
+      if (!Number.isFinite(q) || q <= 0) q = passo;
+      q = Math.max(passo, Math.round(q / passo) * passo);
+      return q;
+    };
+    const atualizar = () => {
+      const q = lerQtd();
+      const { line } = pedidoBalcaoValorLinha(o, q);
+      const t = ov.querySelector('#pedido-qtd-total');
+      if (t) t.textContent = `Total: ${fmt(line)}`;
+    };
+    const done = (v) => { ov.remove(); resolve(v); };
+    ov.addEventListener('click', (ev) => {
+      const b = ev.target && ev.target.closest ? ev.target.closest('[data-q]') : null;
+      if (!b) return;
+      const a = b.getAttribute('data-q');
+      if (a === 'menos') { inp().value = Math.max(passo, lerQtd() - passo); atualizar(); }
+      else if (a === 'mais') { inp().value = lerQtd() + passo; atualizar(); }
+      else if (a === 'ok') done(lerQtd());
+      else done(null);
+    });
+    ov.addEventListener('input', atualizar);
+    ov.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') done(lerQtd());
+      if (ev.key === 'Escape') done(null);
+    });
+    document.body.appendChild(ov);
+    atualizar();
+    setTimeout(() => { try { inp().focus(); inp().select(); } catch (_) {} }, 60);
+  });
+}
+
+async function pedidoBalcaoTileClick(pid) {
   if (!pid) return;
   if (!window.__pedidoBalcaoDraft) window.__pedidoBalcaoDraft = {};
   const k = String(pid);
-  // Produtos com "Só em lote" são adicionados em múltiplos do pacote
-  // (ex.: Fino 1000 a 3 em 3); os outros, 1 a 1.
   const catalog = window.__pedidoProdutosOpts || [];
   const o = catalog.find((x) => String(x.id) === k);
-  const lote = o && o.forca_pacote && parseInt(o.qtd_copos_pacote, 10) >= 2
+  if (!o) return;
+  // Produtos com "Só em lote" andam em múltiplos do pacote (ex.: 3 em 3).
+  const lote = o.forca_pacote && parseInt(o.qtd_copos_pacote, 10) >= 2
     ? parseInt(o.qtd_copos_pacote, 10)
     : 1;
-  window.__pedidoBalcaoDraft[k] = (parseFloat(window.__pedidoBalcaoDraft[k]) || 0) + lote;
+  const qtd = await pedidoBalcaoDialogQtd(o, lote);
+  if (qtd == null) return;
+  window.__pedidoBalcaoDraft[k] = (parseFloat(window.__pedidoBalcaoDraft[k]) || 0) + qtd;
   pedidoBalcaoSyncDraftUI();
 }
 

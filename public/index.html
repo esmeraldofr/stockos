@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-troca-detalhada">
+<html lang="pt" data-stockos-ui="2026-07-29-troca-1-barril">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9540,26 +9540,13 @@ async function adicionarFinoBarrilNovo(produtoId) {
     if (entradaLiquidosKg <= 0) { alert('O barril que entra está vazio (peso = tara) — não há nada para registar.'); return; }
   }
 
-  // ── Troca padrão (acabou + novo): pode registar vários de uma vez. ──
-  let nBarris = 1;
-  if (saiuAcabou && entraNovo) {
-    const resp = prompt('Quantos barris trocados (acabado → novo)?', '1');
-    if (resp === null) return;
-    nBarris = parseInt(String(resp).trim(), 10);
-    if (!Number.isFinite(nBarris) || nBarris < 1 || nBarris > 20) {
-      alert('Indica um número de barris entre 1 e 20.');
-      return;
-    }
-    entradaLiquidosKg = Math.round(nBarris * KG_FINO_BARRIL_NET * 1000) / 1000;
-  }
-
-  // ── Resumo e confirmação ──
+  // ── Resumo e confirmação (uma troca = sempre 1 barril a entrar) ──
   const linhas = [];
   linhas.push(saiuAcabou
-    ? `Sai: ${nBarris} barri${nBarris === 1 ? 'l' : 's'} acabado${nBarris === 1 ? '' : 's'} (vazio)`
+    ? `Sai: barril acabado (vazio)`
     : `Sai: barril SEM acabar — motivo: ${motivoSaida}\n  pesou ${fmtNum(pesoSaida)} kg → sai com ${fmtNum(restoLiquidoKg)} kg de cerveja (regista saída de stock)`);
   linhas.push(entraNovo
-    ? `Entra: ${nBarris} barri${nBarris === 1 ? 'l novo' : 's novos'} → + ${fmtNum(entradaLiquidosKg)} kg líquidos${nBarris > 1 ? ` (${nBarris} × ${fmtNum(KG_FINO_BARRIL_NET)} kg)` : ''}`
+    ? `Entra: barril NOVO → + ${fmtNum(entradaLiquidosKg)} kg líquidos`
     : `Entra: barril USADO — pesou ${fmtNum(pesoEntrada)} kg → + ${fmtNum(entradaLiquidosKg)} kg líquidos`);
   if (!confirm(`Registar a troca de barril?\n\n${linhas.join('\n')}`)) return;
 
@@ -9581,7 +9568,7 @@ async function adicionarFinoBarrilNovo(produtoId) {
     preco: 0,
     quantidade: entradaLiquidosKg,
     notas: entraNovo
-      ? `${nBarris} barri${nBarris === 1 ? 'l novo' : 's novos'} (${nBarris} × ${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos; cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)${!saiuAcabou ? ` · trocou barril não acabado (${motivoSaida})` : ''}`
+      ? `Barril novo (${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos; cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)${!saiuAcabou ? ` · trocou barril não acabado (${motivoSaida})` : ''}`
       : `Barril USADO a entrar (pesou ${fmtNum(pesoEntrada)} kg; líquidos ${fmtNum(entradaLiquidosKg)} kg)${!saiuAcabou ? ` · trocou barril não acabado (${motivoSaida})` : ''}`
   }, { tid: turnoId, desc: 'Troca de barril de Fino', extra: { produto_nome: 'Fino' } });
   try {

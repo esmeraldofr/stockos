@@ -1276,7 +1276,7 @@ let empresasLojasReady = false;
 async function ensureEmpresasLojas() {
   if (empresasLojasReady) return;
   try {
-    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v3'`);
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v4'`);
     if (r.rows.length) { empresasLojasReady = true; return; }
   } catch (_) {}
   await qry(`CREATE TABLE IF NOT EXISTS empresas (
@@ -1304,6 +1304,13 @@ async function ensureEmpresasLojas() {
   await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS nif TEXT NOT NULL DEFAULT ''`, [], 'lojas-nif');
   await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS responsavel TEXT NOT NULL DEFAULT ''`, [], 'lojas-responsavel');
   await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'lojas-notas');
+  // Ficha da empresa (perfil completo, como lojas/fornecedores).
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS nif TEXT NOT NULL DEFAULT ''`, [], 'empresas-nif');
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT ''`, [], 'empresas-morada');
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS telefone TEXT NOT NULL DEFAULT ''`, [], 'empresas-telefone');
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`, [], 'empresas-email');
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS responsavel TEXT NOT NULL DEFAULT ''`, [], 'empresas-responsavel');
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'empresas-notas');
   await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'utilizadores-empresa');
   // Loja fixa do funcionário (operador / operador de sistema). NULL para
   // admin (todas as empresas) e gestor (todas as lojas da sua empresa).
@@ -1318,7 +1325,7 @@ async function ensureEmpresasLojas() {
       `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='turnos' AND column_name='loja_id'`
     );
     if (chk.rows.length) {
-      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v3','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v4','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
       empresasLojasReady = true;
     }
   } catch (_) {}
@@ -4618,23 +4625,44 @@ app.put('/api/lojas/:id', auth, requireRole('admin'), async (req, res) => {
 });
 
 // ── EMPRESAS (só admin — pode migrar entre todas) ─────────────
+const EMPRESA_PERFIL_CAMPOS = ['nif', 'morada', 'telefone', 'email', 'responsavel', 'notas'];
+
 app.get('/api/empresas', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureEmpresasLojas();
-    const r = await query(`SELECT id, nome, ativo, criado_em FROM empresas WHERE ativo IS TRUE ORDER BY id`);
-    res.json(r.rows.length ? r.rows : [{ id: 1, nome: 'Empresa 1', ativo: true }]);
+    let r;
+    try {
+      r = await query(
+        `SELECT e.*, (SELECT COUNT(*)::int FROM lojas l WHERE l.empresa_id = e.id AND l.ativo IS TRUE) AS lojas_n
+         FROM empresas e WHERE e.ativo IS TRUE ORDER BY e.id`
+      );
+    } catch (_) {
+      r = await query(`SELECT id, nome, ativo, criado_em FROM empresas WHERE ativo IS TRUE ORDER BY id`);
+    }
+    res.json(r.rows.length ? r.rows : [{ id: 1, nome: 'Empresa 1', ativo: true, lojas_n: 1 }]);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 app.post('/api/empresas', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureEmpresasLojas();
-    const nome = String((req.body && req.body.nome) || '').trim();
+    const b = req.body || {};
+    const nome = String(b.nome || '').trim();
     if (!nome) return res.status(400).json({ erro: 'Indica o nome da empresa' });
-    const r = await query(`INSERT INTO empresas (nome) VALUES ($1) RETURNING id, nome, ativo, criado_em`, [nome]);
+    const perfil = EMPRESA_PERFIL_CAMPOS.map((c) => String(b[c] || '').trim());
+    let r;
+    try {
+      r = await query(
+        `INSERT INTO empresas (nome, ${EMPRESA_PERFIL_CAMPOS.join(', ')})
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [nome, ...perfil]
+      );
+    } catch (_) {
+      r = await query(`INSERT INTO empresas (nome) VALUES ($1) RETURNING *`, [nome]);
+    }
     const empresa = r.rows[0];
     // Cada empresa nasce com a primeira loja — sem loja não há turnos.
-    const lojaNome = String((req.body && req.body.loja_nome) || '').trim() || 'Loja 1';
+    const lojaNome = String(b.loja_nome || '').trim() || 'Loja 1';
     let loja = null;
     try {
       const lr = await query(`INSERT INTO lojas (empresa_id, nome) VALUES ($1,$2) RETURNING id, nome`, [empresa.id, lojaNome]);
@@ -4648,9 +4676,22 @@ app.post('/api/empresas', auth, requireRole('admin'), async (req, res) => {
 app.put('/api/empresas/:id', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureEmpresasLojas();
-    const nome = String((req.body && req.body.nome) || '').trim();
-    if (!nome) return res.status(400).json({ erro: 'Indica o nome da empresa' });
-    const r = await query(`UPDATE empresas SET nome=$1 WHERE id=$2 RETURNING id, nome, ativo`, [nome, parseInt(req.params.id, 10) || 0]);
+    const b = req.body || {};
+    const sets = [];
+    const params = [];
+    if (typeof b.nome === 'string' && b.nome.trim()) {
+      params.push(b.nome.trim());
+      sets.push(`nome=$${params.length}`);
+    }
+    for (const c of EMPRESA_PERFIL_CAMPOS) {
+      if (b[c] !== undefined) {
+        params.push(String(b[c] || '').trim());
+        sets.push(`${c}=$${params.length}`);
+      }
+    }
+    if (!sets.length) return res.status(400).json({ erro: 'Nada para alterar' });
+    params.push(parseInt(req.params.id, 10) || 0);
+    const r = await query(`UPDATE empresas SET ${sets.join(', ')} WHERE id=$${params.length} RETURNING *`, params);
     if (!r.rows.length) return res.status(404).json({ erro: 'Empresa não encontrada' });
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }

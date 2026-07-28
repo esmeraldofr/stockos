@@ -1182,23 +1182,32 @@ function verifyToken(token) {
   } catch { return null; }
 }
 function hashPassword(p) { return crypto.createHash('sha256').update(p + PWD_SALT).digest('hex'); }
+const __authUserCache = new Map();
 async function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ','');
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ erro: 'Não autenticado' });
   try {
-    // Lê role/empresa/loja FRESCOS da BD — mudanças de perfil ou de loja
-    // fixa aplicam-se sem novo login. Fallback: BD antiga sem as colunas.
-    let r;
-    try {
-      r = await query(`SELECT ativo, role::text AS role, empresa_id, loja_id FROM utilizadores WHERE id=$1`, [payload.id]);
-    } catch (_) {
-      r = await query(`SELECT ativo FROM utilizadores WHERE id=$1`, [payload.id]);
+    // Lê role/empresa/loja da BD com cache curto (15 s) — corta uma ida à
+    // BD por pedido (latência) mantendo mudanças de perfil quase imediatas.
+    let u = null;
+    const hitAuth = __authUserCache.get(String(payload.id));
+    if (hitAuth && Date.now() - hitAuth.at < 15000) {
+      u = hitAuth.u;
+    } else {
+      let r;
+      try {
+        r = await query(`SELECT ativo, role::text AS role, empresa_id, loja_id FROM utilizadores WHERE id=$1`, [payload.id]);
+      } catch (_) {
+        r = await query(`SELECT ativo FROM utilizadores WHERE id=$1`, [payload.id]);
+      }
+      u = r.rows.length ? r.rows[0] : null;
+      if (__authUserCache.size > 300) __authUserCache.clear();
+      __authUserCache.set(String(payload.id), { at: Date.now(), u });
     }
-    if (!r.rows.length || !r.rows[0].ativo) {
+    if (!u || !u.ativo) {
       return res.status(401).json({ erro: 'Conta inactiva' });
     }
-    const u = r.rows[0];
     if (u.role) payload.role = u.role;
     if (u.empresa_id != null) payload.empresa_id = parseInt(u.empresa_id, 10) || 1;
     payload.loja_id = u.loja_id != null ? (parseInt(u.loja_id, 10) || null) : null;

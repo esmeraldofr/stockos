@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-contador-trocas">
+<html lang="pt" data-stockos-ui="2026-07-29-abertura-instantanea">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2222,27 +2222,9 @@ function htmlEscalaSemanaReadonly(rowsWeek, rowsTemplate, anchorDateStr) {
     </div>`;
 }
 
-async function loadDia() {
-  try {
-    const monEsc = mondayOfWeekIso(S.date);
-    const qMon = encodeURIComponent(monEsc);
-    const qDom = encodeURIComponent(addDays(monEsc, 6));
-
-    // Sem rede e sem cache desta data (ex.: dia futuro nunca aberto): a
-    // página funciona na mesma — cartões vazios + turnos abertos offline
-    // (overlay); dá para abrir turno e registar tudo localmente.
-    let diaSemCache = false;
-    const [turnos, cfgBloq] = await Promise.all([
-      api('GET', `/dia?data=${S.date}&resumo=1`).catch((e) => {
-        if (!ehErroDeRede(e) && !/Sem ligação/i.test(String(e && e.message || ''))) throw e;
-        diaSemCache = true;
-        return aplicarEscritasOffline(`/dia?data=${S.date}&resumo=1&loja=${lojaAtivaId()}`, []);
-      }),
-      api('GET', '/config/turnos-bloqueados').catch(() => null)
-    ]);
-    S.turnosBloqueados = cfgBloq && Array.isArray(cfgBloq.bloqueados)
-      ? cfgBloq.bloqueados
-      : (S.turnosBloqueados || []);
+/** Desenha os cartões do Dia. provisorio=true: pintura imediata com os
+ *  dados locais enquanto o servidor responde (substituída a seguir). */
+function renderDiaCards(turnos, provisorio, diaSemCache) {
     S.turnosDia = turnos;
     const turnoMap = {};
     turnos.forEach(t => { turnoMap[t.nome] = t; });
@@ -2307,7 +2289,9 @@ async function loadDia() {
 
     const pendentesLoading = `<div id="dia-pendentes-slot" class="card"><div class="text-center" style="padding:28px;color:#64748b"><div class="spinner"></div><div style="margin-top:10px;font-size:12px">A carregar avisos…</div></div></div>`;
 
-    const avisoOffline = diaSemCache
+    const avisoOffline = provisorio
+      ? `<div style="margin-bottom:10px;padding:8px 12px;background:rgba(96,165,250,0.10);border:1px solid rgba(96,165,250,0.45);border-radius:8px;font-size:12px;color:#93c5fd">⏳ A receber os dados do servidor… — já podes trabalhar; os totais actualizam sozinhos daqui a instantes.</div>`
+      : diaSemCache
       ? `<div style="margin-bottom:10px;padding:8px 12px;background:rgba(251,146,60,0.10);border:1px solid rgba(251,146,60,0.45);border-radius:8px;font-size:12px;color:#fdba74">📴 Sem rede e sem dados desta data neste aparelho — a mostrar só o que está registado localmente. Podes abrir turnos e registar normalmente; sincroniza quando a rede voltar.</div>`
       : '';
 
@@ -2316,6 +2300,45 @@ async function loadDia() {
       <div class="turno-cards">${cards}</div>
       ${pendentesLoading}
     `);
+}
+
+async function loadDia() {
+  try {
+    const monEsc = mondayOfWeekIso(S.date);
+    const qMon = encodeURIComponent(monEsc);
+    const qDom = encodeURIComponent(addDays(monEsc, 6));
+
+    // Sem rede e sem cache desta data (ex.: dia futuro nunca aberto): a
+    // página funciona na mesma — cartões vazios + turnos abertos offline
+    // (overlay); dá para abrir turno e registar tudo localmente.
+    let diaSemCache = false;
+    const promessaDia = Promise.all([
+      api('GET', `/dia?data=${S.date}&resumo=1`).catch((e) => {
+        if (!ehErroDeRede(e) && !/Sem ligação/i.test(String(e && e.message || ''))) throw e;
+        diaSemCache = true;
+        return aplicarEscritasOffline(`/dia?data=${S.date}&resumo=1&loja=${lojaAtivaId()}`, []);
+      }),
+      api('GET', '/config/turnos-bloqueados').catch(() => null)
+    ]);
+    // ABERTURA INSTANTÂNEA: se o servidor demora (primeira abertura do dia
+    // sem cache + cold start), pinta já os cartões com o que há localmente
+    // e substitui quando os dados chegarem — com internet fica tão rápido
+    // como offline.
+    const dataProvisoria = S.date;
+    const timerProvisorio = setTimeout(() => {
+      try {
+        if (S.page !== 'dia' || S.date !== dataProvisoria) return;
+        const locais = aplicarEscritasOffline(`/dia?data=${dataProvisoria}&resumo=1&loja=${lojaAtivaId()}`, []);
+        renderDiaCards(locais, true);
+      } catch (_) {}
+    }, 1200);
+    const [turnos, cfgBloq] = await promessaDia;
+    clearTimeout(timerProvisorio);
+    if (S.page !== 'dia' || S.date !== dataProvisoria) return;
+    S.turnosBloqueados = cfgBloq && Array.isArray(cfgBloq.bloqueados)
+      ? cfgBloq.bloqueados
+      : (S.turnosBloqueados || []);
+    renderDiaCards(turnos, false, diaSemCache);
     aquecerCacheOffline();
 
     api('GET', '/faltas?status=pendentes')

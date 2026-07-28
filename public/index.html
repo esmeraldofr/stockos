@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-28-loja-sempre-visivel">
+<html lang="pt" data-stockos-ui="2026-07-28-tudo-por-loja">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1009,6 +1009,12 @@ function sanitizeAuthLoginResponseErro(raw) {
 function lojaAtivaId() {
   const v = parseInt(S.lojaId, 10);
   return Number.isFinite(v) && v > 0 ? v : 1;
+}
+/** Nome de uma loja por id (badges nas listas de funcionários). */
+function lojaNomeDe(id) {
+  if (id == null || id === '') return '';
+  const l = (S.lojas || []).find((x) => String(x.id) === String(id));
+  return (l && l.nome) || `Loja ${id}`;
 }
 /** Nome da loja activa — mostrado nos cabeçalhos mesmo com uma só loja. */
 function lojaAtivaNome() {
@@ -13446,7 +13452,7 @@ async function drawAdmin() {
 
 async function loadUtilizadores() {
   try {
-    S.utilizadores = await api('GET','/utilizadores');
+    S.utilizadores = await api('GET','/utilizadores?todos=1');
     show('admin-users', `
       <div class="card">
         <div class="card-title">Utilizadores</div>
@@ -13665,7 +13671,7 @@ async function drawEquipa() {
               }
               <div class="produto-info">
                 <div class="produto-nome">${escapeHtml(u.nome)}</div>
-                <div class="produto-meta">${escapeHtml(u.username||'—')} · ${roleLabel[u.role]||u.role}${!u.ativo?' · Inactivo':''}</div>
+                <div class="produto-meta">${escapeHtml(u.username||'—')} · ${roleLabel[u.role]||u.role}${u.loja_id ? ` · 🏪 ${escapeHtml(lojaNomeDe(u.loja_id))}` : ''}${!u.ativo?' · Inactivo':''}</div>
               </div>
             </div>
             <button class="btn btn-ghost btn-sm" onclick='verPerfil("${u.id}")'>Perfil</button>
@@ -14261,7 +14267,7 @@ async function drawPerfil() {
           }
           <div>
             <div style="font-size:18px;font-weight:700;color:#f1f5f9">${escapeHtml(u.nome||'')}</div>
-            <div style="font-size:13px;color:#94a3b8;margin-top:2px">${escapeHtml(u.username||emailVisivel(u.email)||'')} · ${roleLabel}</div>
+            <div style="font-size:13px;color:#94a3b8;margin-top:2px">${escapeHtml(u.username||emailVisivel(u.email)||'')} · ${roleLabel}${u.loja_id ? ` · 🏪 ${escapeHtml(lojaNomeDe(u.loja_id))}` : ''}</div>
           </div>
         </div>
         ${emailVisivel(u.email) ? `<div style="font-size:13px;color:#64748b;padding-top:8px;border-top:1px solid #1e293b">${escapeHtml(emailVisivel(u.email))}</div>` : ''}

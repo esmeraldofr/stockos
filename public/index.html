@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-produto-nao-registado">
+<html lang="pt" data-stockos-ui="2026-07-29-historico-gestor">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1490,7 +1490,7 @@ async function draw() {
         await drawTurno();
         break;
       case 'historico':
-        if (S.user?.role !== 'admin') {
+        if (!['admin', 'gestor'].includes(S.user?.role)) {
           await navigate('dia');
           break;
         }
@@ -1611,7 +1611,7 @@ function doLogout() {
 function menuEntries() {
   const role = S.user?.role;
   const isAdmin = role === 'admin';
-  const showHistorico = role === 'admin';
+  const showHistorico = role === 'admin' || role === 'gestor';
   const showIrregularidades = !!role;
   const showAssiduidade = ['admin','gestor','compras'].includes(role);
   const showAuditoria = ['admin','gestor'].includes(role);

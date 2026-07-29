@@ -6801,11 +6801,30 @@ app.delete('/api/presencas/justificacao', auth, async (req, res) => {
 
 // ── HISTÓRICO ─────────────────────────────────────────────────
 /** Uma linha por turno: total_vendas (stock×preço), total_gerado e total_final (caixa), como em GET /dia. */
+/** Filtro opcional por HORA no Histórico. `inicio`/`fim` aceitam
+ *  'YYYY-MM-DD' ou 'YYYY-MM-DDTHH:MM'. Sem hora (ou dia inteiro
+ *  00:00–23:59) fica só o filtro por data, como antes. Com hora, filtra
+ *  pelos turnos ABERTOS dentro do intervalo (criado_em em hora local de
+ *  Angola). Os valores passam por regex antes de irem inline no SQL. */
+function filtroHoraTurnos(inicio, fim, defD1, defD2) {
+  const m1 = String(inicio || '').match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2}))?$/);
+  const m2 = String(fim || '').match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2}))?$/);
+  const d1 = m1 ? m1[1] : defD1;
+  const d2 = m2 ? m2[1] : defD2;
+  const h1 = m1 && m1[2] != null ? `${m1[2]}:${m1[3]}` : null;
+  const h2 = m2 && m2[2] != null ? `${m2[2]}:${m2[3]}` : null;
+  const diaInteiro = (!h1 || h1 === '00:00') && (!h2 || h2 === '23:59');
+  if (diaInteiro) return { d1, d2, horaSql: '' };
+  const horaSql = ` AND COALESCE(t.criado_em AT TIME ZONE 'Africa/Luanda', t.data::timestamp) BETWEEN '${d1} ${h1 || '00:00'}'::timestamp AND '${d2} ${h2 || '23:59'}:59.999'::timestamp`;
+  return { d1, d2, horaSql };
+}
+
 app.get('/api/historico', auth, async (req, res) => {
   try {
     const { inicio, fim } = req.query;
-    const d1 = inicio || '2020-01-01';
-    const d2 = fim || new Date().toISOString().split('T')[0];
+    const { d1, d2, horaSql } = filtroHoraTurnos(
+      inicio, fim, '2020-01-01', new Date().toISOString().split('T')[0]
+    );
     const sqlHist = `SELECT
          t.id AS turno_id,
          t.data,
@@ -6828,12 +6847,13 @@ app.get('/api/historico', auth, async (req, res) => {
          INNER JOIN turnos t ON t.id = ts.turno_id
          GROUP BY ts.turno_id
        ) v ON v.turno_id = t.id
-       WHERE t.data BETWEEN $1::date AND $2::date {LOJA_FILTRO}
+       WHERE t.data BETWEEN $1::date AND $2::date{HORA_FILTRO} {LOJA_FILTRO}
        ORDER BY t.data DESC,
          CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`;
+    const sqlHistH = sqlHist.replace('{HORA_FILTRO}', horaSql);
     const r = await queryEmpresa(
-      sqlHist.replace('{LOJA_FILTRO}', 'AND t.loja_id = $3'), [d1, d2, lojaDe(req)],
-      sqlHist.replace('{LOJA_FILTRO}', ''), [d1, d2]
+      sqlHistH.replace('{LOJA_FILTRO}', 'AND t.loja_id = $3'), [d1, d2, lojaDe(req)],
+      sqlHistH.replace('{LOJA_FILTRO}', ''), [d1, d2]
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -6848,8 +6868,9 @@ app.get('/api/historico', auth, async (req, res) => {
 app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
   try {
     const { inicio, fim } = req.query;
-    const d1 = inicio || '2020-01-01';
-    const d2 = fim || new Date().toISOString().split('T')[0];
+    const { d1, d2, horaSql } = filtroHoraTurnos(
+      inicio, fim, '2020-01-01', new Date().toISOString().split('T')[0]
+    );
     const precoUnitDirecto = _sqlUsePrecoHistorico
       ? `COALESCE(tv.preco_unit_snapshot, (SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`
       : `COALESCE(tv.preco_unit_snapshot, p.preco)::numeric`;
@@ -6893,7 +6914,7 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
          INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
          INNER JOIN turnos t ON t.id = ts.turno_id
          LEFT JOIN preco_compra_atual pc ON pc.produto_id = p.id
-         WHERE t.data BETWEEN $1::date AND $2::date {LOJA_FILTRO}
+         WHERE t.data BETWEEN $1::date AND $2::date{HORA_FILTRO} {LOJA_FILTRO}
          GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.preco, pc.preco_unitario, p.ordem
        ),
        direct_sales AS (
@@ -6913,16 +6934,17 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
          INNER JOIN produtos p ON p.id = tv.produto_id AND p.em_stock_turno IS FALSE AND ${"p.categoria IN ('menu','ingredientes','bebida')"}
          INNER JOIN turnos t ON t.id = tv.turno_id
          LEFT JOIN preco_compra_atual pc ON pc.produto_id = p.id
-         WHERE t.data BETWEEN $1::date AND $2::date {LOJA_FILTRO}
+         WHERE t.data BETWEEN $1::date AND $2::date{HORA_FILTRO} {LOJA_FILTRO}
          GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.preco, pc.preco_unitario, p.ordem
        )
        SELECT * FROM stock_sales WHERE qtd_vendida > 0 OR valor_vendas > 0
        UNION ALL
        SELECT * FROM direct_sales WHERE qtd_vendida > 0 OR valor_vendas > 0
        ORDER BY categoria, ordem NULLS LAST, produto_nome`;
+    const sqlVpH = sqlVp.split('{HORA_FILTRO}').join(horaSql);
     const r = await queryEmpresa(
-      sqlVp.split('{LOJA_FILTRO}').join('AND t.loja_id = $3'), [d1, d2, lojaDe(req)],
-      sqlVp.split('{LOJA_FILTRO}').join(''), [d1, d2]
+      sqlVpH.split('{LOJA_FILTRO}').join('AND t.loja_id = $3'), [d1, d2, lojaDe(req)],
+      sqlVpH.split('{LOJA_FILTRO}').join(''), [d1, d2]
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }

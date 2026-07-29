@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-produto-dinheiro">
+<html lang="pt" data-stockos-ui="2026-07-29-dropdowns-obrigatorios">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9547,20 +9547,23 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
 
     const formHtml = canEdit ? `
       <div class="entradas-form">
-        <div class="entradas-tipo-toggle">
-          <button id="mv-alvo-stock" class="tipo-btn tipo-btn-active" onclick="setMvAlvo('stock')">📦 Produto</button>
-          <button id="mv-alvo-dinheiro" class="tipo-btn" onclick="setMvAlvo('dinheiro')">💰 Dinheiro</button>
-        </div>
-        <div class="entradas-tipo-toggle">
-          <button id="e-tipo-entrada" class="tipo-btn tipo-btn-active-green" onclick="setTipo('entrada')">+ Entrada</button>
-          <button id="e-tipo-tirar" class="tipo-btn" onclick="setTipo('tirar')">− Saída</button>
-        </div>
-        <div class="entradas-tipo-toggle" id="e-origem-wrap">
-          <button id="e-orig-armazem" class="tipo-btn tipo-btn-active" onclick="setOrigem('armazem')">Armazém</button>
-          <button id="e-orig-compra" class="tipo-btn" onclick="setOrigem('compra')">Compra</button>
-        </div>
-        <select id="e-produto" class="entradas-select">${opts}</select>
-        <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd (un)" class="entradas-qty"/>
+        <select id="mv-alvo" class="entradas-select" required onchange="mvFormSync()">
+          <option value="">— Movimentar… * —</option>
+          <option value="stock">📦 Produto</option>
+          <option value="dinheiro">💰 Dinheiro</option>
+        </select>
+        <select id="e-tipo" class="entradas-select" required style="display:none" onchange="mvFormSync()">
+          <option value="">— Entrada ou saída? * —</option>
+          <option value="entrada">+ Entrada</option>
+          <option value="tirar">− Saída</option>
+        </select>
+        <select id="e-origem" class="entradas-select" required style="display:none" onchange="mvFormSync()">
+          <option value="">— Origem * —</option>
+          <option value="armazem">Armazém</option>
+          <option value="compra">Compra</option>
+        </select>
+        <select id="e-produto" class="entradas-select" style="display:none">${opts}</select>
+        <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd (un)" class="entradas-qty" style="display:none"/>
         <input id="e-preco" type="number" min="0" step="any" placeholder="Preço" class="entradas-qty" style="display:none"/>
         <input id="mc-desc" type="text" placeholder="Descrição (ex: gasóleo, fundo de caixa)" class="entradas-notas" style="flex:2;display:none"/>
         <input id="mc-valor" type="number" min="0.01" step="any" placeholder="Valor" class="entradas-qty" style="display:none"/>
@@ -9578,9 +9581,7 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
 
     el.innerHTML = formHtml + chipsHtml + '<div id="mv-tabela"></div>';
 
-    // Estado do formulário (mantém o alvo escolhido entre re-renders)
-    window._entradaTipo   = 'entrada';
-    window._entradaOrigem = 'armazem';
+    // Estado do formulário: drop-downs obrigatórios, começam por escolher
     if (canEdit) {
       const prodEl = document.getElementById('e-produto');
       const qtyEl = document.getElementById('e-qty');
@@ -9592,7 +9593,7 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
       };
       if (prodEl) prodEl.addEventListener('change', syncEntradaQtyPlaceholder);
       syncEntradaQtyPlaceholder();
-      setMvAlvo(window._mvAlvo === 'dinheiro' ? 'dinheiro' : 'stock');
+      mvFormSync();
     }
     setMvFiltro(window._mvFiltro || 'tudo');
 
@@ -9615,47 +9616,27 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
   }
 }
 
-/** Alterna o formulário unificado entre registar stock e registar dinheiro. */
-function setMvAlvo(alvo) {
+/** Drop-downs obrigatórios em cascata do formulário unificado:
+ *  Movimentar… → Entrada/Saída → (Produto: origem → preço | Dinheiro:
+ *  descrição + valor). Cada campo só aparece quando o anterior está
+ *  escolhido; guarda o estado nas variáveis que o submit usa. */
+function mvFormSync() {
+  const alvo   = document.getElementById('mv-alvo')?.value || '';
+  const tipo   = document.getElementById('e-tipo')?.value || '';
+  const origem = document.getElementById('e-origem')?.value || '';
   window._mvAlvo = alvo;
-  const bS = document.getElementById('mv-alvo-stock');
-  const bD = document.getElementById('mv-alvo-dinheiro');
-  if (bS) bS.className = alvo === 'stock'    ? 'tipo-btn tipo-btn-active' : 'tipo-btn';
-  if (bD) bD.className = alvo === 'dinheiro' ? 'tipo-btn tipo-btn-active' : 'tipo-btn';
+  window._entradaTipo = tipo;
+  window._entradaOrigem = origem;
   const mostra = (id, on) => { const e = document.getElementById(id); if (e) e.style.display = on ? '' : 'none'; };
   const stock = alvo === 'stock';
-  const tipo = window._entradaTipo || 'entrada';
-  mostra('e-produto', stock);
-  mostra('e-qty', stock);
-  mostra('mc-desc', !stock);
-  mostra('mc-valor', !stock);
-  mostra('e-origem-wrap', stock && tipo !== 'tirar');
-  mostra('e-preco', stock && tipo !== 'tirar' && (window._entradaOrigem || 'armazem') === 'compra');
-}
-
-function setTipo(tipo) {
-  window._entradaTipo = tipo;
-  const btnE = document.getElementById('e-tipo-entrada');
-  const btnT = document.getElementById('e-tipo-tirar');
-  const origemWrap = document.getElementById('e-origem-wrap');
-  if (btnE) btnE.className = tipo === 'entrada' ? 'tipo-btn tipo-btn-active-green' : 'tipo-btn';
-  if (btnT) btnT.className = tipo === 'tirar'   ? 'tipo-btn tipo-btn-active-red'   : 'tipo-btn';
-  const ehStock = (window._mvAlvo || 'stock') === 'stock';
-  // Origem/preço só fazem sentido em ENTRADAS de STOCK
-  if (origemWrap) origemWrap.style.display = (ehStock && tipo !== 'tirar') ? '' : 'none';
-  const p = document.getElementById('e-preco');
-  if (p) p.style.display = (ehStock && tipo !== 'tirar' && (window._entradaOrigem || 'armazem') === 'compra') ? '' : 'none';
-}
-
-function setOrigem(origem) {
-  window._entradaOrigem = origem;
-  const btnA = document.getElementById('e-orig-armazem');
-  const btnC = document.getElementById('e-orig-compra');
-  const precoEl = document.getElementById('e-preco');
-  if (btnA) btnA.className = origem === 'armazem' ? 'tipo-btn tipo-btn-active' : 'tipo-btn';
-  if (btnC) btnC.className = origem === 'compra'  ? 'tipo-btn tipo-btn-active-orange' : 'tipo-btn';
-  const ehStock = (window._mvAlvo || 'stock') === 'stock';
-  if (precoEl) precoEl.style.display = (ehStock && origem === 'compra' && (window._entradaTipo || 'entrada') !== 'tirar') ? '' : 'none';
+  const dinheiro = alvo === 'dinheiro';
+  mostra('e-tipo', !!alvo);
+  mostra('e-produto', stock && !!tipo);
+  mostra('e-qty', stock && !!tipo);
+  mostra('e-origem', stock && tipo === 'entrada');
+  mostra('e-preco', stock && tipo === 'entrada' && origem === 'compra');
+  mostra('mc-desc', dinheiro && !!tipo);
+  mostra('mc-valor', dinheiro && !!tipo);
 }
 
 /** Aplica o filtro Tudo/Stock/Caixa e (re)constrói só a tabela unificada. */
@@ -9725,10 +9706,23 @@ function setMvFiltro(filtro) {
 }
 
 /** Regista o movimento consoante o alvo do formulário unificado:
- *  📦 Stock → turno_entradas (submitEntrada) · 💰 Dinheiro → turno_saidas. */
+ *  📦 Produto → turno_entradas (submitEntrada) · 💰 Dinheiro → turno_saidas.
+ *  Os drop-downs são obrigatórios — sem escolha, não regista. */
 async function submitMovimento(turnoId) {
-  if ((window._mvAlvo || 'stock') !== 'dinheiro') return submitEntrada(turnoId);
-  const tipo  = (window._entradaTipo === 'tirar') ? 'saida' : 'entrada';
+  const alvo    = document.getElementById('mv-alvo')?.value || '';
+  const tipoSel = document.getElementById('e-tipo')?.value || '';
+  const msgEl   = document.getElementById('entrada-form-msg');
+  const erro = (t) => { if (msgEl) { msgEl.className = 'alert alert-error'; msgEl.textContent = t; } };
+  if (!alvo)    { erro('Escolhe o que estás a movimentar: 📦 Produto ou 💰 Dinheiro.'); return; }
+  if (!tipoSel) { erro('Escolhe se é + Entrada ou − Saída.'); return; }
+  if (alvo !== 'dinheiro') {
+    if (tipoSel === 'entrada' && !(document.getElementById('e-origem')?.value)) {
+      erro('Escolhe a origem: Armazém ou Compra.');
+      return;
+    }
+    return submitEntrada(turnoId);
+  }
+  const tipo  = (tipoSel === 'tirar') ? 'saida' : 'entrada';
   const desc  = document.getElementById('mc-desc')?.value.trim() || '';
   const valor = parseFloat(document.getElementById('mc-valor')?.value);
   const notas = document.getElementById('e-notas')?.value.trim() || '';

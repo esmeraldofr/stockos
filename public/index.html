@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-dropdowns-obrigatorios">
+<html lang="pt" data-stockos-ui="2026-07-29-produto-nao-registado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6205,8 +6205,8 @@ function overlayListaTurno(tid, tipoLista, rows, fila) {
       out = out.concat([{
         id: 'off:' + it.ref,
         turno_id: tid,
-        produto_id: b.produto_id,
-        produto_nome: (prodMap[String(b.produto_id)] || {}).nome || (it.extra && it.extra.produto_nome) || 'Produto',
+        produto_id: b.produto_id || null,
+        produto_nome: b.produto_livre || (prodMap[String(b.produto_id)] || {}).nome || (it.extra && it.extra.produto_nome) || 'Produto',
         tipo: b.tipo === 'tirar' ? 'tirar' : 'entrada',
         origem: b.origem === 'compra' ? 'compra' : 'armazem',
         preco: b.preco || 0,
@@ -9507,7 +9507,8 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
       const compra = e.origem === 'compra' && e.tipo !== 'tirar';
       movs.push({
         ts: e.criado_em, cat: 'stock', dir: e.tipo === 'tirar' ? 'out' : 'in',
-        desc: e.produto_nome || '', tag: e.tipo === 'tirar' ? '' : (compra ? 'compra' : 'armazém'),
+        desc: (e.produto_nome || '') + (e.produto_id ? '' : ' ✏️'),
+        tag: e.tipo === 'tirar' ? '' : (compra ? 'compra' : 'armazém'),
         qtd: parseFloat(e.quantidade) || 0,
         med: medicaoSigla(e.tipo_medicao || stockById[String(e.produto_id)]?.tipo_medicao),
         valor: compra && parseFloat(e.preco) > 0 ? parseFloat(e.preco) : null, // dinheiro que saiu na compra
@@ -9544,6 +9545,9 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
       items.forEach(s => { opts += `<option value="${s.produto_id}" data-medicao="${s.tipo_medicao || 'unidade'}">${s.produto_nome} (${medicaoSigla(s.tipo_medicao)})</option>`; });
       opts += '</optgroup>';
     });
+    // Produto que ainda não está registado no catálogo: escreve-se o nome à
+    // mão (não entra na folha de stock; a compra conta na caixa na mesma).
+    opts += '<optgroup label="Outro"><option value="__livre" data-medicao="unidade">✏️ Produto não registado…</option></optgroup>';
 
     const formHtml = canEdit ? `
       <div class="entradas-form">
@@ -9563,6 +9567,7 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
           <option value="compra">Compra</option>
         </select>
         <select id="e-produto" class="entradas-select" style="display:none">${opts}</select>
+        <input id="e-produto-livre" type="text" placeholder="Nome do produto (não registado)" class="entradas-notas" style="flex:1.5;display:none"/>
         <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd (un)" class="entradas-qty" style="display:none"/>
         <input id="e-preco" type="number" min="0" step="any" placeholder="Preço" class="entradas-qty" style="display:none"/>
         <input id="mc-desc" type="text" placeholder="Descrição (ex: gasóleo, fundo de caixa)" class="entradas-notas" style="flex:2;display:none"/>
@@ -9591,7 +9596,7 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
         const med = opt?.getAttribute('data-medicao') || 'unidade';
         qtyEl.placeholder = `Qtd (${medicaoSigla(med)})`;
       };
-      if (prodEl) prodEl.addEventListener('change', syncEntradaQtyPlaceholder);
+      if (prodEl) prodEl.addEventListener('change', () => { syncEntradaQtyPlaceholder(); mvFormSync(); });
       syncEntradaQtyPlaceholder();
       mvFormSync();
     }
@@ -9632,6 +9637,7 @@ function mvFormSync() {
   const dinheiro = alvo === 'dinheiro';
   mostra('e-tipo', !!alvo);
   mostra('e-produto', stock && !!tipo);
+  mostra('e-produto-livre', stock && !!tipo && document.getElementById('e-produto')?.value === '__livre');
   mostra('e-qty', stock && !!tipo);
   mostra('e-origem', stock && tipo === 'entrada');
   mostra('e-preco', stock && tipo === 'entrada' && origem === 'compra');
@@ -9745,21 +9751,31 @@ async function submitMovimento(turnoId) {
 
 async function submitEntrada(turnoId) {
   const pidRaw = document.getElementById('e-produto')?.value;
-  const pid = prodIdKey(pidRaw);
+  const ehLivre = pidRaw === '__livre';
+  const nomeLivre = document.getElementById('e-produto-livre')?.value.trim() || '';
+  const pid = ehLivre ? '' : prodIdKey(pidRaw);
   const qty    = parseFloat(document.getElementById('e-qty')?.value);
   const notas  = document.getElementById('e-notas')?.value.trim() || '';
   const tipo   = window._entradaTipo   || 'entrada';
   const origem = window._entradaOrigem || 'armazem';
   const preco  = parseFloat(document.getElementById('e-preco')?.value) || 0;
   const msg    = document.getElementById('entrada-form-msg');
-  if (!pidRaw || !pid)  { if (msg) { msg.className='alert alert-error'; msg.textContent='Selecciona um produto.'; } return; }
+  if (!pidRaw)  { if (msg) { msg.className='alert alert-error'; msg.textContent='Selecciona um produto.'; } return; }
+  if (ehLivre && !nomeLivre) { if (msg) { msg.className='alert alert-error'; msg.textContent='Escreve o nome do produto não registado.'; } return; }
   if (!qty || qty <= 0) { if (msg) { msg.className='alert alert-error'; msg.textContent='Quantidade inválida.'; } return; }
   try {
     const selEl = document.getElementById('e-produto');
-    const nomeProd = selEl && selEl.selectedOptions && selEl.selectedOptions[0] ? selEl.selectedOptions[0].textContent : '';
-    await apiEscrita('POST', `/turnos/${turnoId}/entradas`, { produto_id: pidRaw, tipo, origem, preco, quantidade: qty, notas },
+    const nomeProd = ehLivre
+      ? nomeLivre
+      : (selEl && selEl.selectedOptions && selEl.selectedOptions[0] ? selEl.selectedOptions[0].textContent : '');
+    const body = ehLivre
+      ? { produto_livre: nomeLivre, tipo, origem, preco, quantidade: qty, notas }
+      : { produto_id: pidRaw, tipo, origem, preco, quantidade: qty, notas };
+    await apiEscrita('POST', `/turnos/${turnoId}/entradas`, body,
       { tid: turnoId, desc: 'Entrada/saída de stock', extra: { produto_nome: nomeProd } });
     document.getElementById('e-produto').value = '';
+    const livreEl = document.getElementById('e-produto-livre');
+    if (livreEl) livreEl.value = '';
     document.getElementById('e-qty').value = '';
     document.getElementById('e-notas').value = '';
     document.getElementById('e-preco').value = '';
@@ -9769,16 +9785,18 @@ async function submitEntrada(turnoId) {
   }
   // Refrescar é «melhor esforço» — offline, o GET vem do cache + fila.
   try {
-    const novaEntrada = await api('GET', `/turnos/${turnoId}/entradas`).catch(() => {
-      try { return aplicarEscritasOffline(comLojaNoPath(`/turnos/${turnoId}/entradas`), []); } catch (_) { return []; }
-    });
-    const soma = novaEntrada.filter((e) => prodIdKey(e.produto_id) === pid)
-                            .reduce((s, e) => s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1), 0);
-    const cell = document.getElementById(`entrada-${pid}`);
-    if (cell) cell.textContent = fmtQtyInput(soma);
-    if (!stockBuf[pid]) stockBuf[pid] = { encontrado: null, entrada: 0, deixado: null, fechados: 0 };
-    stockBuf[pid].entrada = soma;
-    updateStock(pidRaw, 'entrada', soma);
+    if (!ehLivre) {
+      const novaEntrada = await api('GET', `/turnos/${turnoId}/entradas`).catch(() => {
+        try { return aplicarEscritasOffline(comLojaNoPath(`/turnos/${turnoId}/entradas`), []); } catch (_) { return []; }
+      });
+      const soma = novaEntrada.filter((e) => prodIdKey(e.produto_id) === pid)
+                              .reduce((s, e) => s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1), 0);
+      const cell = document.getElementById(`entrada-${pid}`);
+      if (cell) cell.textContent = fmtQtyInput(soma);
+      if (!stockBuf[pid]) stockBuf[pid] = { encontrado: null, entrada: 0, deixado: null, fechados: 0 };
+      stockBuf[pid].entrada = soma;
+      updateStock(pidRaw, 'entrada', soma);
+    }
     const stocks = S.turnoData?.stock || [];
     await loadRegistosMovimentosSection(turnoId, stocks, true);
   } catch (_) { /* sem cache deste GET — o registo ficou na fila na mesma */ }

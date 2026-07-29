@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-margem-inferior">
+<html lang="pt" data-stockos-ui="2026-07-29-movimentos-unificados">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3734,7 +3734,7 @@ async function loadTurno() {
     const tg =
       cx1 === null || cx2 === null || cx3 === null ? NaN : cx1 + cx2 + cx3;
     const tf = Number.isFinite(tg) ? tg - parseFloat(caixa.saida || 0) : NaN;
-    // Reset do total de entradas extra (recalculado em renderCaixaMovimentos).
+    // Reset do total de entradas extra (recalculado em renderMovimentosUnificados).
     window.__turnoEntradasExtraTotal = 0;
 
     // Em turnos abertos (operação) mostramos só Stock/Pedidos/Escala.
@@ -3792,15 +3792,9 @@ async function loadTurno() {
 
       <div id="tab-movimentos" class="${panelCls('movimentos')}">
         <div class="card" id="registos-movimentos-card">
-          <div class="card-title">📦 Entradas de stock</div>
-          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 18px"><strong style="color:#cbd5e1">Quantidades</strong> que entram ou saem do stock (armazém ou compra).</p>
-          <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Stock — quantidades</div>
-          <div id="entradas-section"><span style="color:#64748b">A carregar...</span></div>
-        </div>
-        <div class="card mt-16" id="caixa-movimentos-card">
-          <div class="card-title">💰 Caixa — movimentos</div>
-          <p style="font-size:12px;color:#64748b;margin:-2px 0 12px;line-height:1.45"><strong style="color:#4ade80">Entradas (+)</strong> e <strong style="color:#f87171">saídas (−)</strong> de dinheiro na caixa do turno: despesas, compras de stock, comissões pagas, fundo de caixa, devoluções, etc.</p>
-          <div id="caixa-movimentos-section"><span style="color:#64748b">A carregar...</span></div>
+          <div class="card-title">🔄 Movimentos do turno</div>
+          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 14px"><strong style="color:#cbd5e1">📦 Stock</strong> — quantidades de produto que entram ou saem (armazém ou compra) · <strong style="color:#cbd5e1">💰 Dinheiro</strong> — <strong style="color:#4ade80">entradas (+)</strong> e <strong style="color:#f87171">saídas (−)</strong> de dinheiro na caixa: despesas, comissões pagas, fundo de caixa, devoluções, etc. Uma compra de stock aparece numa única linha: a quantidade que entrou e o dinheiro que saiu.</p>
+          <div id="movimentos-section"><span style="color:#64748b">A carregar...</span></div>
         </div>
       </div>
 
@@ -9473,11 +9467,9 @@ async function reabrirTurno(ev, id) {
 
 // ── REGISTOS: STOCK + SAÍDAS DE CAIXA (unificado) ──────────────
 async function loadRegistosMovimentosSection(turnoId, stocks, canEdit) {
-  const elE = document.getElementById('entradas-section');             // stock (aba Stock)
-  const elM = document.getElementById('caixa-movimentos-section');     // dinheiro (aba Caixa)
-  if (!elE && !elM) return;
-  if (elE) elE.innerHTML = '<span style="color:#64748b">A carregar...</span>';
-  if (elM) elM.innerHTML = '<span style="color:#64748b">A carregar...</span>';
+  const el = document.getElementById('movimentos-section');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#64748b">A carregar...</span>';
   try {
     // Offline sem cache: as listas caem para vazio + registos em fila —
     // o FORMULÁRIO renderiza sempre (registar entradas/saídas funciona
@@ -9490,28 +9482,63 @@ async function loadRegistosMovimentosSection(turnoId, stocks, canEdit) {
       api('GET', `/turnos/${turnoId}/saidas`).catch(() => listaOffline(`/turnos/${turnoId}/saidas`)),
       api('GET', `/turnos/${turnoId}/caixa-entradas`).catch(() => [])
     ]);
-    if (elE) renderEntradasSection(turnoId, stocks, canEdit, entradas);
-    if (elM) renderCaixaMovimentos(turnoId, canEdit, saidas, entradas, caixaEntradas);
+    renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, caixaEntradas);
   } catch (e) {
-    const msg = `<div class="alert alert-error">${e.message}</div>`;
-    if (elE) elE.innerHTML = msg;
-    if (elM) elM.innerHTML = msg;
+    el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }
 }
 
-function renderEntradasSection(turnoId, stocks, canEdit, entradas) {
-  const el = document.getElementById('entradas-section');
+/** Card único «Movimentos do turno»: stock (quantidades) e caixa (dinheiro)
+ *  num só formulário adaptativo e numa só tabela cronológica com filtros
+ *  Tudo/Stock/Caixa. Uma compra de stock aparece numa ÚNICA linha (quantidade
+ *  que entrou + dinheiro que saiu) em vez de duplicada em duas tabelas.
+ *  Grava exactamente onde gravava antes: stock em turno_entradas, dinheiro
+ *  em turno_saidas (entradas de caixa com ENTRADA_MARK nas notas). */
+function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, caixaEntradas) {
+  const el = document.getElementById('movimentos-section');
   if (!el) return;
   try {
     const stockById = {};
     (stocks || []).forEach(s => { stockById[String(s.produto_id)] = s; });
 
-    // Opções do select agrupadas por categoria
+    // ---- linhas unificadas (stock + dinheiro, cronológicas) ----
+    const movs = [];
+    (entradas || []).forEach(e => {
+      const compra = e.origem === 'compra' && e.tipo !== 'tirar';
+      movs.push({
+        ts: e.criado_em, cat: 'stock', dir: e.tipo === 'tirar' ? 'out' : 'in',
+        desc: e.produto_nome || '', tag: e.tipo === 'tirar' ? '' : (compra ? 'compra' : 'armazém'),
+        qtd: parseFloat(e.quantidade) || 0,
+        med: medicaoSigla(e.tipo_medicao || stockById[String(e.produto_id)]?.tipo_medicao),
+        valor: compra && parseFloat(e.preco) > 0 ? parseFloat(e.preco) : null, // dinheiro que saiu na compra
+        notas: e.notas || ''
+      });
+    });
+    const isEntradaMarcada = (s) => String(s.notas || '').startsWith(ENTRADA_MARK);
+    (saidas || []).forEach(s => {
+      if (isEntradaMarcada(s)) {
+        movs.push({ ts: s.criado_em, cat: 'caixa', dir: 'in', desc: s.descricao || '', tag: '', qtd: null, valor: parseFloat(s.valor) || 0, notas: String(s.notas).slice(ENTRADA_MARK.length) });
+      } else {
+        movs.push({ ts: s.criado_em, cat: 'caixa', dir: 'out', desc: s.descricao || '', tag: '', qtd: null, valor: parseFloat(s.valor) || 0, notas: s.notas || '' });
+      }
+    });
+    (caixaEntradas || []).forEach(s => {
+      movs.push({ ts: s.criado_em, cat: 'caixa', dir: 'in', desc: s.descricao || '', tag: '', qtd: null, valor: parseFloat(s.valor) || 0, notas: s.notas || '' });
+    });
+    movs.sort((a, b) => new Date(b.ts || 0) - new Date(a.ts || 0));
+
+    // Totais de DINHEIRO (quantidades de stock não se somam entre produtos):
+    // saídas = despesas de caixa + preços das compras de stock; entradas = caixa.
+    const totalSaidas = movs.reduce((t, m) => t + (m.cat === 'caixa' && m.dir === 'out' ? m.valor : (m.cat === 'stock' && m.valor ? m.valor : 0)), 0);
+    const totalEntradas = movs.filter(m => m.cat === 'caixa' && m.dir === 'in').reduce((t, m) => t + m.valor, 0);
+    window.__mvDados = { movs, totalSaidas, totalEntradas };
+
+    // ---- formulário adaptativo (📦 Stock ↔ 💰 Dinheiro) ----
     const cats = ['ingredientes','bebida','outro'];
     const labels = { ingredientes:'Ingredientes', bebida:'Bebidas', outro:'Outros' };
     let opts = '<option value="">— Produto —</option>';
     cats.forEach(cat => {
-      const items = stocks.filter(s => (s.categoria === cat || (!['ingredientes','bebida'].includes(s.categoria) && cat === 'outro')));
+      const items = (stocks || []).filter(s => (s.categoria === cat || (!['ingredientes','bebida'].includes(s.categoria) && cat === 'outro')));
       if (!items.length) return;
       opts += `<optgroup label="${labels[cat] || cat}">`;
       items.forEach(s => { opts += `<option value="${s.produto_id}" data-medicao="${s.tipo_medicao || 'unidade'}">${s.produto_nome} (${medicaoSigla(s.tipo_medicao)})</option>`; });
@@ -9520,6 +9547,10 @@ function renderEntradasSection(turnoId, stocks, canEdit, entradas) {
 
     const formHtml = canEdit ? `
       <div class="entradas-form">
+        <div class="entradas-tipo-toggle">
+          <button id="mv-alvo-stock" class="tipo-btn tipo-btn-active" onclick="setMvAlvo('stock')">📦 Stock</button>
+          <button id="mv-alvo-dinheiro" class="tipo-btn" onclick="setMvAlvo('dinheiro')">💰 Dinheiro</button>
+        </div>
         <div class="entradas-tipo-toggle">
           <button id="e-tipo-entrada" class="tipo-btn tipo-btn-active-green" onclick="setTipo('entrada')">+ Entrada</button>
           <button id="e-tipo-tirar" class="tipo-btn" onclick="setTipo('tirar')">− Saída</button>
@@ -9531,62 +9562,75 @@ function renderEntradasSection(turnoId, stocks, canEdit, entradas) {
         <select id="e-produto" class="entradas-select">${opts}</select>
         <input id="e-qty" type="number" min="0.001" step="any" placeholder="Qtd (un)" class="entradas-qty"/>
         <input id="e-preco" type="number" min="0" step="any" placeholder="Preço" class="entradas-qty" style="display:none"/>
+        <input id="mc-desc" type="text" placeholder="Descrição (ex: gasóleo, fundo de caixa)" class="entradas-notas" style="flex:2;display:none"/>
+        <input id="mc-valor" type="number" min="0.01" step="any" placeholder="Valor" class="entradas-qty" style="display:none"/>
         <input id="e-notas" type="text" placeholder="Notas (opcional)" class="entradas-notas"/>
-        <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, () => submitEntrada(${turnoId}))">Registar</button>
+        <button type="button" class="btn btn-success btn-sm" onclick="runAction(event, () => submitMovimento('${turnoId}'))">Registar</button>
       </div>
       <div id="entrada-form-msg" style="margin-bottom:8px"></div>` : '';
 
-    const listaHtml = entradas.length === 0
-      ? '<div style="color:#475569;font-size:13px;padding:8px 0">Nenhum registo neste turno.</div>'
-      : `<div class="table-wrap"><table>
-          <thead><tr>
-            <th style="text-align:left">Hora</th>
-            <th style="text-align:left">Tipo</th>
-            <th style="text-align:left">Origem</th>
-            <th style="text-align:left">Produto</th>
-            <th style="text-align:right">Qtd</th>
-            <th style="text-align:right">Preço</th>
-            <th style="text-align:left">Nota</th>
-          </tr></thead>
-          <tbody>${entradas.map(e => {
-            const dt = new Date(e.criado_em).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
-            const tipoLabel = e.tipo === 'tirar'
-              ? '<span style="color:#f87171;font-weight:600">− Saída</span>'
-              : '<span style="color:#4ade80;font-weight:600">+ Entrada</span>';
-            const origemLabel = e.origem === 'compra'
-              ? '<span style="color:#fb923c">Compra</span>'
-              : '<span style="color:#94a3b8">Armazém</span>';
-            const precoLabel = e.origem === 'compra' && parseFloat(e.preco) > 0
-              ? `<span style="color:#fbbf24">${fmt(e.preco)}</span>`
-              : '—';
-            return `<tr>
-              <td style="color:#64748b;font-size:12px;white-space:nowrap">${dt}</td>
-              <td style="font-size:12px">${tipoLabel}</td>
-              <td style="font-size:12px">${origemLabel}</td>
-              <td style="font-size:13px">${e.produto_nome}</td>
-              <td style="text-align:right;font-weight:600;color:#e2e8f0">${fmtNum(e.quantidade)} ${medicaoSigla(e.tipo_medicao || stockById[String(e.produto_id)]?.tipo_medicao)}</td>
-              <td style="text-align:right;font-size:12px">${precoLabel}</td>
-              <td style="color:#94a3b8;font-size:12px">${e.notas}</td>
-            </tr>`;
-          }).join('')}</tbody>
-        </table></div>`;
+    const chipsHtml = `
+      <div style="display:flex;gap:6px;margin:0 0 8px">
+        <button type="button" id="mv-f-tudo" class="tipo-btn" onclick="setMvFiltro('tudo')">Tudo</button>
+        <button type="button" id="mv-f-stock" class="tipo-btn" onclick="setMvFiltro('stock')">📦 Stock</button>
+        <button type="button" id="mv-f-caixa" class="tipo-btn" onclick="setMvFiltro('caixa')">💰 Caixa</button>
+      </div>`;
 
-    el.innerHTML = formHtml + listaHtml;
-    const prodEl = document.getElementById('e-produto');
-    const qtyEl = document.getElementById('e-qty');
-    function syncEntradaQtyPlaceholder() {
-      if (!prodEl || !qtyEl) return;
-      const opt = prodEl.options[prodEl.selectedIndex];
-      const med = opt?.getAttribute('data-medicao') || 'unidade';
-      qtyEl.placeholder = `Qtd (${medicaoSigla(med)})`;
-    }
-    if (prodEl) prodEl.addEventListener('change', syncEntradaQtyPlaceholder);
-    syncEntradaQtyPlaceholder();
+    el.innerHTML = formHtml + chipsHtml + '<div id="mv-tabela"></div>';
+
+    // Estado do formulário (mantém o alvo escolhido entre re-renders)
     window._entradaTipo   = 'entrada';
     window._entradaOrigem = 'armazem';
-  } catch(e) {
-    el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+    if (canEdit) {
+      const prodEl = document.getElementById('e-produto');
+      const qtyEl = document.getElementById('e-qty');
+      const syncEntradaQtyPlaceholder = () => {
+        if (!prodEl || !qtyEl) return;
+        const opt = prodEl.options[prodEl.selectedIndex];
+        const med = opt?.getAttribute('data-medicao') || 'unidade';
+        qtyEl.placeholder = `Qtd (${medicaoSigla(med)})`;
+      };
+      if (prodEl) prodEl.addEventListener('change', syncEntradaQtyPlaceholder);
+      syncEntradaQtyPlaceholder();
+      setMvAlvo(window._mvAlvo === 'dinheiro' ? 'dinheiro' : 'stock');
+    }
+    setMvFiltro(window._mvFiltro || 'tudo');
+
+    // ---- reflexos no card Caixa (iguais aos da secção antiga) ----
+    const cSaida = document.getElementById('c-saida');
+    if (cSaida) cSaida.value = totalSaidas.toFixed(2);
+    const cEntradas = document.getElementById('c-entradas');
+    if (cEntradas) cEntradas.value = totalEntradas.toFixed(2);
+    window.__turnoEntradasExtraTotal = totalEntradas;
+    const elTG = document.getElementById('c-total-gerado');
+    const elTF = document.getElementById('c-total-final');
+    if (elTG && elTF) {
+      const tg = parseCaixaTriploFromInputs();
+      const tf = Number.isFinite(tg) ? tg - totalSaidas + totalEntradas : NaN;
+      elTG.textContent = Number.isFinite(tg) ? fmtKzOrEmpty(tg) : '—';
+      elTF.textContent = Number.isFinite(tf) ? fmtKzOrEmpty(tf) : '—';
+    }
+  } catch (e) {
+    el.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
   }
+}
+
+/** Alterna o formulário unificado entre registar stock e registar dinheiro. */
+function setMvAlvo(alvo) {
+  window._mvAlvo = alvo;
+  const bS = document.getElementById('mv-alvo-stock');
+  const bD = document.getElementById('mv-alvo-dinheiro');
+  if (bS) bS.className = alvo === 'stock'    ? 'tipo-btn tipo-btn-active' : 'tipo-btn';
+  if (bD) bD.className = alvo === 'dinheiro' ? 'tipo-btn tipo-btn-active' : 'tipo-btn';
+  const mostra = (id, on) => { const e = document.getElementById(id); if (e) e.style.display = on ? '' : 'none'; };
+  const stock = alvo === 'stock';
+  const tipo = window._entradaTipo || 'entrada';
+  mostra('e-produto', stock);
+  mostra('e-qty', stock);
+  mostra('mc-desc', !stock);
+  mostra('mc-valor', !stock);
+  mostra('e-origem-wrap', stock && tipo !== 'tirar');
+  mostra('e-preco', stock && tipo !== 'tirar' && (window._entradaOrigem || 'armazem') === 'compra');
 }
 
 function setTipo(tipo) {
@@ -9596,12 +9640,11 @@ function setTipo(tipo) {
   const origemWrap = document.getElementById('e-origem-wrap');
   if (btnE) btnE.className = tipo === 'entrada' ? 'tipo-btn tipo-btn-active-green' : 'tipo-btn';
   if (btnT) btnT.className = tipo === 'tirar'   ? 'tipo-btn tipo-btn-active-red'   : 'tipo-btn';
-  // Origem só faz sentido em entradas
-  if (origemWrap) origemWrap.style.display = tipo === 'tirar' ? 'none' : '';
-  if (tipo === 'tirar') {
-    const p = document.getElementById('e-preco');
-    if (p) p.style.display = 'none';
-  }
+  const ehStock = (window._mvAlvo || 'stock') === 'stock';
+  // Origem/preço só fazem sentido em ENTRADAS de STOCK
+  if (origemWrap) origemWrap.style.display = (ehStock && tipo !== 'tirar') ? '' : 'none';
+  const p = document.getElementById('e-preco');
+  if (p) p.style.display = (ehStock && tipo !== 'tirar' && (window._entradaOrigem || 'armazem') === 'compra') ? '' : 'none';
 }
 
 function setOrigem(origem) {
@@ -9611,7 +9654,99 @@ function setOrigem(origem) {
   const precoEl = document.getElementById('e-preco');
   if (btnA) btnA.className = origem === 'armazem' ? 'tipo-btn tipo-btn-active' : 'tipo-btn';
   if (btnC) btnC.className = origem === 'compra'  ? 'tipo-btn tipo-btn-active-orange' : 'tipo-btn';
-  if (precoEl) precoEl.style.display = origem === 'compra' ? '' : 'none';
+  const ehStock = (window._mvAlvo || 'stock') === 'stock';
+  if (precoEl) precoEl.style.display = (ehStock && origem === 'compra' && (window._entradaTipo || 'entrada') !== 'tirar') ? '' : 'none';
+}
+
+/** Aplica o filtro Tudo/Stock/Caixa e (re)constrói só a tabela unificada. */
+function setMvFiltro(filtro) {
+  window._mvFiltro = filtro;
+  ['tudo','stock','caixa'].forEach(f => {
+    const b = document.getElementById('mv-f-' + f);
+    if (b) b.className = f === filtro ? 'tipo-btn tipo-btn-active' : 'tipo-btn';
+  });
+  const tb = document.getElementById('mv-tabela');
+  const d = window.__mvDados;
+  if (!tb) return;
+  const movs = (d && d.movs) || [];
+  const lista = movs.filter(m => filtro === 'tudo' || m.cat === filtro);
+  if (!lista.length) {
+    tb.innerHTML = '<div style="color:#475569;font-size:13px;padding:8px 0">Nenhum movimento neste turno.</div>';
+    return;
+  }
+  const linha = (m) => {
+    const hora = m.ts ? new Date(m.ts).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }) : '';
+    const cor = m.dir === 'in' ? '#4ade80' : '#f87171';
+    const qtdHtml = m.qtd == null
+      ? '<span style="color:#334155">—</span>'
+      : `<span style="color:${cor};font-weight:600;white-space:nowrap">${m.dir === 'out' ? '−' : '+'} ${fmtNum(m.qtd)} ${m.med || ''}</span>`;
+    let valorHtml = '<span style="color:#334155">—</span>';
+    if (m.cat === 'caixa') {
+      valorHtml = `<span style="color:${cor};font-weight:600;white-space:nowrap">${m.dir === 'in' ? '+' : '−'} ${fmt(m.valor)}</span>`;
+    } else if (m.valor) {
+      // compra de stock: a quantidade ENTROU, o dinheiro SAIU — mesma linha
+      valorHtml = `<span style="color:#f87171;font-weight:600;white-space:nowrap">− ${fmt(m.valor)}</span>`;
+    }
+    const tag = m.tag ? ` <span style="color:${m.tag === 'compra' ? '#fb923c' : '#64748b'};font-size:11px">(${escapeHtml(m.tag)})</span>` : '';
+    return `<tr>
+      <td style="color:#64748b;font-size:12px;white-space:nowrap">${escapeHtml(hora)}</td>
+      <td style="font-size:13px;text-align:center">${m.cat === 'stock' ? '📦' : '💰'}</td>
+      <td style="font-size:13px">${escapeHtml(m.desc)}${tag}</td>
+      <td style="text-align:right">${qtdHtml}</td>
+      <td style="text-align:right">${valorHtml}</td>
+      <td style="color:#94a3b8;font-size:12px">${escapeHtml(m.notas)}</td>
+    </tr>`;
+  };
+  // Rodapé só com totais de dinheiro — escondido no filtro Stock
+  const footer = (filtro === 'stock' || !d) ? '' : `
+    <tr style="border-top:2px solid #334155">
+      <td colspan="4" style="color:#94a3b8;font-size:12px;padding:6px 10px;font-weight:700">Total saídas (dinheiro)</td>
+      <td style="text-align:right;color:#f87171;font-weight:700;white-space:nowrap">− ${fmt(d.totalSaidas)}</td><td></td>
+    </tr>
+    <tr>
+      <td colspan="4" style="color:#94a3b8;font-size:12px;padding:6px 10px;font-weight:700">Total entradas (dinheiro)</td>
+      <td style="text-align:right;color:#4ade80;font-weight:700;white-space:nowrap">+ ${fmt(d.totalEntradas)}</td><td></td>
+    </tr>
+    <tr style="border-top:1px solid #334155">
+      <td colspan="4" style="color:#cbd5e1;font-size:12px;padding:6px 10px;font-weight:700">Saldo (entradas − saídas)</td>
+      <td style="text-align:right;color:${(d.totalEntradas - d.totalSaidas) >= 0 ? '#4ade80' : '#f87171'};font-weight:700;white-space:nowrap">${(d.totalEntradas - d.totalSaidas) >= 0 ? '+' : '−'} ${fmt(Math.abs(d.totalEntradas - d.totalSaidas))}</td><td></td>
+    </tr>`;
+  tb.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr>
+      <th style="text-align:left">Hora</th>
+      <th></th>
+      <th style="text-align:left">Descrição</th>
+      <th style="text-align:right">Qtd</th>
+      <th style="text-align:right">Valor</th>
+      <th style="text-align:left">Nota</th>
+    </tr></thead>
+    <tbody>${lista.map(linha).join('')}${footer}</tbody>
+  </table></div>`;
+}
+
+/** Regista o movimento consoante o alvo do formulário unificado:
+ *  📦 Stock → turno_entradas (submitEntrada) · 💰 Dinheiro → turno_saidas. */
+async function submitMovimento(turnoId) {
+  if ((window._mvAlvo || 'stock') !== 'dinheiro') return submitEntrada(turnoId);
+  const tipo  = (window._entradaTipo === 'tirar') ? 'saida' : 'entrada';
+  const desc  = document.getElementById('mc-desc')?.value.trim() || '';
+  const valor = parseFloat(document.getElementById('mc-valor')?.value);
+  const notas = document.getElementById('e-notas')?.value.trim() || '';
+  const msg   = document.getElementById('entrada-form-msg');
+  const setErr = (t) => { if (msg) { msg.className = 'alert alert-error'; msg.textContent = t; } };
+  if (!desc) { setErr('Descrição obrigatória.'); return; }
+  if (!valor || valor <= 0) { setErr('Valor inválido.'); return; }
+  try {
+    // Entradas e saídas vão ambas para turno_saidas; a entrada leva o
+    // marcador nas notas e é tratada como dinheiro que entrou.
+    const notasFinal = tipo === 'entrada' ? (ENTRADA_MARK + notas) : notas;
+    await apiEscrita('POST', `/turnos/${turnoId}/saidas`, { descricao: desc, valor, notas: notasFinal },
+      { tid: turnoId, desc: tipo === 'entrada' ? 'Entrada de caixa' : 'Saída de caixa' });
+    ['mc-desc', 'mc-valor', 'e-notas'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], true);
+  } catch (e) {
+    setErr(e.message);
+  }
 }
 
 async function submitEntrada(turnoId) {
@@ -9851,140 +9986,11 @@ async function adicionarFinoBarrilNovo(produtoId) {
   atualizarContadorTrocasBarril(turnoId, produtoId).catch(() => {});
 }
 
-/** Secção unificada de movimentos de caixa: entradas (+, verde) e saídas
- *  (−, vermelho) numa só tabela cronológica, com saldo. As saídas vêm de
- *  despesas (turno_saidas) + compras de stock; as entradas de
- *  turno_caixa_entradas. Actualiza o campo "Saída" e os totais do card Caixa. */
-function renderCaixaMovimentos(turnoId, canEdit, saidas, entradas, caixaEntradas) {
-  const el = document.getElementById('caixa-movimentos-section');
-  if (!el) return;
-  try {
-    const hora = (d) => d ? new Date(d).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }) : '';
-    const movimentos = [];
-    // Entradas guardadas em turno_saidas marcadas com ENTRADA_MARK nas notas
-    // (não precisam de tabela própria — funciona em qualquer BD).
-    const isEntradaMarcada = (s) => String(s.notas || '').startsWith(ENTRADA_MARK);
-    // Saídas: compras de stock
-    (entradas || []).filter(e => e.origem === 'compra' && e.tipo === 'entrada').forEach(e => {
-      movimentos.push({ ts: e.criado_em, dir: 'out', desc: `${e.produto_nome || 'Compra'}`, tag: 'compra', valor: parseFloat(e.preco) || 0, notas: e.notas || '' });
-    });
-    // turno_saidas: separa saídas reais de entradas marcadas
-    (saidas || []).forEach(s => {
-      if (isEntradaMarcada(s)) {
-        movimentos.push({ ts: s.criado_em, dir: 'in', desc: s.descricao || '', tag: '', valor: parseFloat(s.valor) || 0, notas: String(s.notas).slice(ENTRADA_MARK.length) });
-      } else {
-        movimentos.push({ ts: s.criado_em, dir: 'out', desc: s.descricao || '', tag: '', valor: parseFloat(s.valor) || 0, notas: s.notas || '' });
-      }
-    });
-    // Entradas da tabela dedicada (turno_caixa_entradas), se existir/usada.
-    (caixaEntradas || []).forEach(s => {
-      movimentos.push({ ts: s.criado_em, dir: 'in', desc: s.descricao || '', tag: '', valor: parseFloat(s.valor) || 0, notas: s.notas || '' });
-    });
-    movimentos.sort((a, b) => new Date(b.ts || 0) - new Date(a.ts || 0));
-
-    const totalSaidas = movimentos.filter(m => m.dir === 'out').reduce((s, m) => s + m.valor, 0);
-    const totalEntradas = movimentos.filter(m => m.dir === 'in').reduce((s, m) => s + m.valor, 0);
-    const saldo = totalEntradas - totalSaidas;
-
-    const formHtml = canEdit ? `
-      <div class="entradas-form">
-        <select id="mc-tipo" class="entradas-qty" style="flex:0 0 96px;cursor:pointer">
-          <option value="saida">− Saída</option>
-          <option value="entrada">+ Entrada</option>
-        </select>
-        <input id="mc-desc" type="text" placeholder="Descrição (ex: gasóleo, fundo de caixa)" class="entradas-notas" style="flex:2"/>
-        <input id="mc-valor" type="number" min="0.01" step="any" placeholder="Valor" class="entradas-qty"/>
-        <input id="mc-notas" type="text" placeholder="Notas (opcional)" class="entradas-notas" style="flex:1.3"/>
-        <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, () => submitMovimentoCaixa('${turnoId}'))">Registar</button>
-      </div>
-      <div id="mc-form-msg" style="margin-bottom:8px"></div>` : '';
-
-    const rows = movimentos.map(m => {
-      const isIn = m.dir === 'in';
-      const cor = isIn ? '#4ade80' : '#f87171';
-      const sinal = isIn ? '+' : '−';
-      const tag = m.tag ? ` <span style="color:#fb923c;font-size:11px">(${escapeHtml(m.tag)})</span>` : '';
-      return `<tr>
-        <td style="color:#64748b;font-size:12px;white-space:nowrap">${escapeHtml(hora(m.ts))}</td>
-        <td style="font-size:13px">${escapeHtml(m.desc)}${tag}</td>
-        <td style="text-align:right;font-weight:600;color:${cor};white-space:nowrap">${sinal} ${fmt(m.valor)}</td>
-        <td style="color:#94a3b8;font-size:12px">${escapeHtml(m.notas)}</td>
-      </tr>`;
-    });
-
-    const listaHtml = rows.length === 0
-      ? '<div style="color:#475569;font-size:13px;padding:8px 0">Nenhum movimento de caixa neste turno.</div>'
-      : `<div class="table-wrap"><table>
-          <thead><tr>
-            <th style="text-align:left">Hora</th>
-            <th style="text-align:left">Descrição</th>
-            <th style="text-align:right">Valor</th>
-            <th style="text-align:left">Nota</th>
-          </tr></thead>
-          <tbody>
-            ${rows.join('')}
-            <tr style="border-top:2px solid #334155">
-              <td colspan="2" style="color:#94a3b8;font-size:12px;padding:6px 10px;font-weight:700">Total saídas</td>
-              <td style="text-align:right;color:#f87171;font-weight:700">− ${fmt(totalSaidas)}</td><td></td>
-            </tr>
-            <tr>
-              <td colspan="2" style="color:#94a3b8;font-size:12px;padding:6px 10px;font-weight:700">Total entradas</td>
-              <td style="text-align:right;color:#4ade80;font-weight:700">+ ${fmt(totalEntradas)}</td><td></td>
-            </tr>
-            <tr style="border-top:1px solid #334155">
-              <td colspan="2" style="color:#cbd5e1;font-size:12px;padding:6px 10px;font-weight:700">Saldo (entradas − saídas)</td>
-              <td style="text-align:right;color:${saldo >= 0 ? '#4ade80' : '#f87171'};font-weight:700">${saldo >= 0 ? '+' : '−'} ${fmt(Math.abs(saldo))}</td><td></td>
-            </tr>
-          </tbody>
-        </table></div>`;
-
-    el.innerHTML = formHtml + listaHtml;
-    // O campo "Saída" do card Caixa reflete só o dinheiro que saiu;
-    // as entradas extra entram no Total Final via __turnoEntradasExtraTotal.
-    const cSaida = document.getElementById('c-saida');
-    if (cSaida) cSaida.value = totalSaidas.toFixed(2);
-    const cEntradas = document.getElementById('c-entradas');
-    if (cEntradas) cEntradas.value = totalEntradas.toFixed(2);
-    window.__turnoEntradasExtraTotal = totalEntradas;
-    const elTG = document.getElementById('c-total-gerado');
-    const elTF = document.getElementById('c-total-final');
-    if (elTG && elTF) {
-      const tg = parseCaixaTriploFromInputs();
-      const tf = Number.isFinite(tg) ? tg - totalSaidas + totalEntradas : NaN;
-      elTG.textContent = Number.isFinite(tg) ? fmtKzOrEmpty(tg) : '—';
-      elTF.textContent = Number.isFinite(tf) ? fmtKzOrEmpty(tf) : '—';
-    }
-  } catch (e) {
-    el.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
-  }
-}
-
 /** Marcador (no campo notas) que distingue uma ENTRADA de caixa guardada na
  *  tabela turno_saidas. Permite registar entradas sem precisar de uma tabela
  *  própria (que a app pode não ter permissão para criar). */
 const ENTRADA_MARK = 'ENTRADA::';
 
-async function submitMovimentoCaixa(turnoId) {
-  const tipo  = document.getElementById('mc-tipo')?.value || 'saida';
-  const desc  = document.getElementById('mc-desc')?.value.trim() || '';
-  const valor = parseFloat(document.getElementById('mc-valor')?.value);
-  const notas = document.getElementById('mc-notas')?.value.trim() || '';
-  const msg   = document.getElementById('mc-form-msg');
-  const setErr = (t) => { if (msg) { msg.className = 'alert alert-error'; msg.textContent = t; } };
-  if (!desc) { setErr('Descrição obrigatória.'); return; }
-  if (!valor || valor <= 0) { setErr('Valor inválido.'); return; }
-  try {
-    // Entradas e saídas vão ambas para turno_saidas; a entrada leva o
-    // marcador nas notas e é tratada como dinheiro que entrou.
-    const notasFinal = tipo === 'entrada' ? (ENTRADA_MARK + notas) : notas;
-    await apiEscrita('POST', `/turnos/${turnoId}/saidas`, { descricao: desc, valor, notas: notasFinal },
-      { tid: turnoId, desc: tipo === 'entrada' ? 'Entrada de caixa' : 'Saída de caixa' });
-    ['mc-desc', 'mc-valor', 'mc-notas'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
-    await loadRegistosMovimentosSection(turnoId, S.turnoData?.stock || [], true);
-  } catch (e) {
-    setErr(e.message);
-  }
-}
 
 /** Preenche, no cartão «Áreas de trabalho», quem está escalado para cada área (1–3). */
 async function loadTurnoAreasEscalados() {

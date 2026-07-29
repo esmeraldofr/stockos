@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-movimentos-unificados">
+<html lang="pt" data-stockos-ui="2026-07-29-produto-dinheiro">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3793,7 +3793,7 @@ async function loadTurno() {
       <div id="tab-movimentos" class="${panelCls('movimentos')}">
         <div class="card" id="registos-movimentos-card">
           <div class="card-title">🔄 Movimentos do turno</div>
-          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 14px"><strong style="color:#cbd5e1">📦 Stock</strong> — quantidades de produto que entram ou saem (armazém ou compra) · <strong style="color:#cbd5e1">💰 Dinheiro</strong> — <strong style="color:#4ade80">entradas (+)</strong> e <strong style="color:#f87171">saídas (−)</strong> de dinheiro na caixa: despesas, comissões pagas, fundo de caixa, devoluções, etc. Uma compra de stock aparece numa única linha: a quantidade que entrou e o dinheiro que saiu.</p>
+          <p style="color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 14px"><strong style="color:#cbd5e1">📦 Produto</strong> — quantidades que entram ou saem do stock (armazém ou compra) · <strong style="color:#cbd5e1">💰 Dinheiro</strong> — <strong style="color:#4ade80">entradas (+)</strong> e <strong style="color:#f87171">saídas (−)</strong> de dinheiro na caixa: despesas, comissões pagas, fundo de caixa, devoluções, etc. Uma compra aparece numa única linha: a quantidade que entrou e o dinheiro que saiu.</p>
           <div id="movimentos-section"><span style="color:#64748b">A carregar...</span></div>
         </div>
       </div>
@@ -9548,7 +9548,7 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
     const formHtml = canEdit ? `
       <div class="entradas-form">
         <div class="entradas-tipo-toggle">
-          <button id="mv-alvo-stock" class="tipo-btn tipo-btn-active" onclick="setMvAlvo('stock')">📦 Stock</button>
+          <button id="mv-alvo-stock" class="tipo-btn tipo-btn-active" onclick="setMvAlvo('stock')">📦 Produto</button>
           <button id="mv-alvo-dinheiro" class="tipo-btn" onclick="setMvAlvo('dinheiro')">💰 Dinheiro</button>
         </div>
         <div class="entradas-tipo-toggle">
@@ -9572,7 +9572,7 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
     const chipsHtml = `
       <div style="display:flex;gap:6px;margin:0 0 8px">
         <button type="button" id="mv-f-tudo" class="tipo-btn" onclick="setMvFiltro('tudo')">Tudo</button>
-        <button type="button" id="mv-f-stock" class="tipo-btn" onclick="setMvFiltro('stock')">📦 Stock</button>
+        <button type="button" id="mv-f-stock" class="tipo-btn" onclick="setMvFiltro('stock')">📦 Produto</button>
         <button type="button" id="mv-f-caixa" class="tipo-btn" onclick="setMvFiltro('caixa')">💰 Caixa</button>
       </div>`;
 

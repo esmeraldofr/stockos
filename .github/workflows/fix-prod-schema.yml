@@ -50,7 +50,7 @@ jobs:
           DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN }}
         run: |
           if [ -z "${DATABASE_URL_PROD_ADMIN}" ]; then
-            echo "::error::Secret DATABASE_URL_PROD_ADMIN em falta. Cria-o em Settings → Secrets com a connection string ADMIN da BD de produção (aproveita para rodar a password antiga, que esteve exposta em texto simples)."
+            echo "::error::Secret DATABASE_URL_PROD_ADMIN em falta. Cria-o em Settings → Secrets com a connection string ADMIN DIRECTA da BD de produção (db.<ref>.supabase.co:5432 — não a do pooler :6543, que o pg_dump não suporta). Aproveita para rodar a password antiga, que esteve exposta em texto simples."
             exit 1
           fi
 
@@ -58,9 +58,33 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client
+          sudo apt-get install -y -qq postgresql-common
+          # Repositório oficial PGDG: garante um pg_dump igual ou mais recente
+          # que o servidor (o pg_dump recusa servidores mais novos que ele).
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
+          sudo apt-get install -y -qq postgresql-client-17
 
       - uses: actions/checkout@v4
+
+      - name: Backup de produção (antes de qualquer alteração)
+        env:
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
+          NOME="backup-producao-$(date -u +%Y%m%d-%H%M%S).sql.gz"
+          /usr/lib/postgresql/17/bin/pg_dump --no-owner --no-privileges | gzip > "$NOME"
+          ls -lh "$NOME"
+          # Falha cedo se o dump vier vazio (ligação errada, permissões…)
+          [ "$(stat -c%s "$NOME")" -gt 1024 ] || { echo "::error::Backup suspeito (menos de 1 KB) — abortar antes de alterar seja o que for."; exit 1; }
+
+      - name: Guardar backup como artefacto (30 dias)
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-producao
+          path: backup-producao-*.sql.gz
+          retention-days: 30
+          if-no-files-found: error
 
       - name: 'FASE 1: DDL aditivo (seguro com código antigo)'
         env:

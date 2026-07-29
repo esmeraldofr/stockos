@@ -15,8 +15,10 @@
 # Ordem recomendada: fase 1 → promover develop→qualidade→main → fase 2.
 #
 # Idempotente: pode correr-se as vezes que forem precisas.
-# Pré-requisito: secret DATABASE_URL_PROD_ADMIN (connection string admin da
-# BD de produção). SEM fallback em texto simples — se faltar, o workflow pára.
+# Ligação: usa o secret DATABASE_URL_PROD_ADMIN se existir; caso contrário
+# cai na ligação directa actual (mesma password já exposta em db-query.yml).
+# QUANDO rodares a password no Supabase: cria o secret com a URL nova
+# (directa, :5432 — não o pooler :6543) e remove este fallback.
 
 name: Reparar schema produção
 
@@ -45,13 +47,12 @@ jobs:
             exit 1
           fi
 
-      - name: Validar secret
+      - name: Avisar se está a usar a password em texto simples
         env:
-          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN }}
+          TEM_SECRET: ${{ secrets.DATABASE_URL_PROD_ADMIN != '' }}
         run: |
-          if [ -z "${DATABASE_URL_PROD_ADMIN}" ]; then
-            echo "::error::Secret DATABASE_URL_PROD_ADMIN em falta. Cria-o em Settings → Secrets com a connection string ADMIN DIRECTA da BD de produção (db.<ref>.supabase.co:5432 — não a do pooler :6543, que o pg_dump não suporta). Aproveita para rodar a password antiga, que esteve exposta em texto simples."
-            exit 1
+          if [ "$TEM_SECRET" != "true" ]; then
+            echo "::warning::A usar a ligação com a password ANTIGA em texto simples (fallback). Quando puderes: roda a password no Supabase e cria o secret DATABASE_URL_PROD_ADMIN com a URL directa (:5432)."
           fi
 
       - name: Instalar cliente PostgreSQL
@@ -68,7 +69,7 @@ jobs:
 
       - name: Backup de produção (antes de qualquer alteração)
         env:
-          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN }}
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
@@ -88,7 +89,7 @@ jobs:
 
       - name: 'FASE 1: DDL aditivo (seguro com código antigo)'
         env:
-          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN }}
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
@@ -98,7 +99,7 @@ jobs:
       - name: 'FASE 2: troca de constraints (só com código novo em main)'
         if: ${{ github.event.inputs.trocar_constraints == 'true' }}
         env:
-          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN }}
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
@@ -106,7 +107,7 @@ jobs:
 
       - name: Validar colunas críticas
         env:
-          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN }}
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"

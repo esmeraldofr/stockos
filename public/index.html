@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-historico-gestor">
+<html lang="pt" data-stockos-ui="2026-07-29-historico-hora">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10502,11 +10502,14 @@ async function drawHistorico() {
     <div id="content">
       <div class="card">
         <div class="card-title">Período</div>
-        <div style="display:flex;gap:10px;align-items:flex-end">
-          <div class="field" style="flex:1;margin:0"><label>De</label><input type="date" id="h-inicio"/></div>
-          <div class="field" style="flex:1;margin:0"><label>Até</label><input type="date" id="h-fim"/></div>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          <div class="field" style="flex:1 1 120px;margin:0"><label>De</label><input type="date" id="h-inicio"/></div>
+          <div class="field" style="flex:0 1 92px;margin:0"><label>Hora</label><input type="time" id="h-inicio-hora" value="00:00"/></div>
+          <div class="field" style="flex:1 1 120px;margin:0"><label>Até</label><input type="date" id="h-fim"/></div>
+          <div class="field" style="flex:0 1 92px;margin:0"><label>Hora</label><input type="time" id="h-fim-hora" value="23:59"/></div>
           <button type="button" class="btn btn-primary" onclick="runAction(event, loadHistorico)">Ver</button>
         </div>
+        <p style="font-size:11px;color:#64748b;margin:8px 0 0;line-height:1.4">Com hora definida, contam os turnos <strong style="color:#94a3b8">abertos</strong> dentro do intervalo. 00:00–23:59 = dias inteiros.</p>
       </div>
       <div id="hist-content"></div>
     </div>
@@ -10773,11 +10776,16 @@ function histVendasProdutosCardHtml(rows) {
 
 async function loadHistorico() {
   const ini = val('h-inicio'), fim = val('h-fim');
+  // Hora e minutos opcionais: 00:00–23:59 (predefinição) = dias inteiros.
+  const hIni = val('h-inicio-hora') || '00:00';
+  const hFim = val('h-fim-hora') || '23:59';
+  const qIni = encodeURIComponent(`${ini}T${hIni}`);
+  const qFim = encodeURIComponent(`${fim}T${hFim}`);
   show('hist-content','<div class="text-center" style="padding:20px;color:#64748b"><div class="spinner"></div></div>');
   try {
     const [rows, vendasProdutos] = await Promise.all([
-      api('GET', `/historico?inicio=${ini}&fim=${fim}`),
-      api('GET', `/historico/vendas-produtos?inicio=${encodeURIComponent(ini)}&fim=${encodeURIComponent(fim)}`).catch(() => [])
+      api('GET', `/historico?inicio=${qIni}&fim=${qFim}`),
+      api('GET', `/historico/vendas-produtos?inicio=${qIni}&fim=${qFim}`).catch(() => [])
     ]);
     if (!rows.length) { show('hist-content','<div class="alert alert-error">Sem dados neste período</div>'); return; }
 

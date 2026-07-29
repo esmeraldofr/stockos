@@ -5783,14 +5783,37 @@ async function ensureTurnoEntradas() {
   turnoEntradasReady = true;
 }
 
+// Produto NÃO registado numa entrada/saída: produto_id fica NULL e o nome
+// escrito à mão vai para produto_nome_livre (não entra na folha de stock,
+// mas a compra conta na caixa).
+let entradaLivreReady = false;
+async function ensureEntradaLivre() {
+  if (entradaLivreReady) return;
+  await query(`ALTER TABLE turno_entradas ALTER COLUMN produto_id DROP NOT NULL`).catch(() => {});
+  await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS produto_nome_livre TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  entradaLivreReady = true;
+}
+
 app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
   try {
-    const r = await query(
-      `SELECT te.*, p.nome as produto_nome, p.tipo_medicao
-       FROM turno_entradas te JOIN produtos p ON te.produto_id=p.id
-       WHERE te.turno_id=$1 ORDER BY te.criado_em DESC`,
-      [req.params.id]
-    );
+    let r;
+    try {
+      r = await query(
+        `SELECT te.*, COALESCE(p.nome, NULLIF(te.produto_nome_livre,''), 'Produto') as produto_nome, p.tipo_medicao
+         FROM turno_entradas te LEFT JOIN produtos p ON te.produto_id=p.id
+         WHERE te.turno_id=$1 ORDER BY te.criado_em DESC`,
+        [req.params.id]
+      );
+    } catch (e1) {
+      // BD ainda sem a coluna produto_nome_livre — SQL antigo (só registados)
+      if (!/produto_nome_livre/.test(e1.message)) throw e1;
+      r = await query(
+        `SELECT te.*, p.nome as produto_nome, p.tipo_medicao
+         FROM turno_entradas te JOIN produtos p ON te.produto_id=p.id
+         WHERE te.turno_id=$1 ORDER BY te.criado_em DESC`,
+        [req.params.id]
+      );
+    }
     res.json(r.rows);
   } catch(e) {
     if (e.message.includes('does not exist')) {
@@ -5800,41 +5823,55 @@ app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
 });
 
 app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
+  const produtoLivre = String(req.body.produto_livre || '').trim();
+  // DDL do produto livre fora da transacção (um catch dentro de BEGIN aborta-a)
+  if (!req.body.produto_id && produtoLivre) { try { await ensureEntradaLivre(); } catch (_) {} }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const turnoId = req.params.id;
     const { produto_id, tipo, origem, preco, quantidade, notas } = req.body;
-    if (!produto_id || !quantidade || parseFloat(quantidade) <= 0)
-      throw new Error('produto_id e quantidade (> 0) são obrigatórios');
+    if ((!produto_id && !produtoLivre) || !quantidade || parseFloat(quantidade) <= 0)
+      throw new Error('produto (registado ou nome livre) e quantidade (> 0) são obrigatórios');
     const notasVal = String(notas != null ? notas : '').trim();
     const tipoVal   = tipo   === 'tirar'  ? 'tirar'  : 'entrada';
     const origemVal = origem === 'compra' ? 'compra' : 'armazem';
     const precoVal  = origemVal === 'compra' ? (parseFloat(preco) || 0) : 0;
 
-    const emStock = await client.query(
-      `SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS}`,
-      [produto_id]
-    );
-    if (!emStock.rows.length) {
-      throw new Error(
-        'Este produto não está na folha de stock do turno. Activa «Stock no turno» em Produtos ou regista no armazém.'
+    let registo;
+    if (produto_id) {
+      const emStock = await client.query(
+        `SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS}`,
+        [produto_id]
       );
+      if (!emStock.rows.length) {
+        throw new Error(
+          'Este produto não está na folha de stock do turno. Activa «Stock no turno» em Produtos ou regista no armazém.'
+        );
+      }
+
+      registo = await client.query(
+        'INSERT INTO turno_entradas (turno_id, produto_id, tipo, origem, preco, quantidade, notas) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+        [turnoId, produto_id, tipoVal, origemVal, precoVal, quantidade, notasVal]
+      );
+
+      // entrada = soma das entradas - soma das saídas
+      await client.query(
+        `UPDATE turno_stock SET entrada=(
+           SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE -quantidade END),0)
+           FROM turno_entradas WHERE turno_id=$1 AND produto_id=$2
+         ) WHERE turno_id=$1 AND produto_id=$2`,
+        [turnoId, produto_id]
+      );
+    } else {
+      // Produto NÃO registado: sem folha de stock a actualizar — fica o
+      // registo do movimento (e a compra conta na caixa, abaixo).
+      registo = await client.query(
+        'INSERT INTO turno_entradas (turno_id, produto_id, produto_nome_livre, tipo, origem, preco, quantidade, notas) VALUES ($1,NULL,$2,$3,$4,$5,$6,$7) RETURNING *',
+        [turnoId, produtoLivre, tipoVal, origemVal, precoVal, quantidade, notasVal]
+      );
+      registo.rows[0].produto_nome = produtoLivre;
     }
-
-    const registo = await client.query(
-      'INSERT INTO turno_entradas (turno_id, produto_id, tipo, origem, preco, quantidade, notas) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
-      [turnoId, produto_id, tipoVal, origemVal, precoVal, quantidade, notasVal]
-    );
-
-    // entrada = soma das entradas - soma das saídas
-    await client.query(
-      `UPDATE turno_stock SET entrada=(
-         SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE -quantidade END),0)
-         FROM turno_entradas WHERE turno_id=$1 AND produto_id=$2
-       ) WHERE turno_id=$1 AND produto_id=$2`,
-      [turnoId, produto_id]
-    );
 
     // Se for compra, recalcular saida da caixa
     if (origemVal === 'compra') {

@@ -1,0 +1,91 @@
+# Repara o schema da BD de DESENVOLVIMENTO: corre todos os ALTER TABLE …
+# ADD COLUMN IF NOT EXISTS do initDB com a ligação ADMIN (postgres.<ref>,
+# dona das tabelas). Necessário porque o initDB do servidor corre com o
+# role da app, que pode não ser owner das tabelas — nesses casos os ALTERs
+# falham silenciosamente e endpoints partem com "column … does not exist"
+# (ex.: turnos.encontrados_fechados_em).
+#
+# Idempotente: pode correr-se quantas vezes for preciso. No fim re-concede
+# privilégios ao role stockos_app e valida as colunas críticas.
+#
+# Pré-requisito: secret DATABASE_URL_DEV_ADMIN (o mesmo do backup/data-sync).
+
+name: Reparar schema develop
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    name: ALTERs idempotentes via admin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar cliente PostgreSQL
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - uses: actions/checkout@v4
+
+      - name: Validar secret
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          if [ -z "${DATABASE_URL_DEV_ADMIN}" ]; then
+            echo "::error::Secret DATABASE_URL_DEV_ADMIN em falta."
+            exit 1
+          fi
+
+      - name: Aplicar colunas em falta (idempotente)
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          # SQL partilhado com «Reparar schema produção» (supabase/reparar_schema_*.sql).
+          # Em develop o código novo já está no ar, por isso corre as DUAS fases.
+          # Sem ON_ERROR_STOP: cada statement é independente; um falhar
+          # (ex.: tabela inexistente neste ambiente) não trava os restantes.
+          psql -f supabase/reparar_schema_aditivo.sql -f supabase/reparar_schema_constraints.sql
+
+      - name: Re-conceder privilégios a stockos_app
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'stockos_app') THEN
+              GRANT USAGE ON SCHEMA public TO stockos_app;
+              GRANT ALL ON ALL TABLES IN SCHEMA public TO stockos_app;
+              GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO stockos_app;
+            END IF;
+          END
+          $$;
+          SQL
+
+      - name: Validar colunas críticas
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT
+            (SELECT COUNT(*) FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='turnos'
+                AND column_name='encontrados_fechados_em') AS turnos_encontrados_fechados_em,
+            (SELECT COUNT(*) FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='turnos'
+                AND column_name='deixados_fechados_em') AS turnos_deixados_fechados_em,
+            (SELECT COUNT(*) FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='turno_pedido_linhas'
+                AND column_name='qtd_devolvida') AS linhas_qtd_devolvida,
+            (SELECT COUNT(*) FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='produtos'
+                AND column_name='forca_pacote') AS produtos_forca_pacote;
+          SQL
+          echo "Se alguma coluna acima mostrar 0, vê os ERRORs no step anterior."

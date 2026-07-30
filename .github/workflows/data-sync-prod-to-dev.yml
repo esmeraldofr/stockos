@@ -1,0 +1,254 @@
+# Sincroniza APENAS DADOS (rows) de PRODUÇÃO para DESENVOLVIMENTO,
+# preservando a ESTRUTURA do develop (colunas extra, índices, etc).
+#
+# Diferenças face a `sync-db-prod-to-dev.yml` (clone completo):
+#  - pg_dump --data-only (gera COPY table (col1,col2,...) FROM stdin;
+#    ignora DDL). COPY é 100–1000× mais rápido que --column-inserts e
+#    continua robusto a colunas existentes só no destino (ficam com
+#    o DEFAULT do schema).
+#  - DELETE iterativo das tabelas do schema public no develop
+#    (preserva o schema; mais permissivo que TRUNCATE quando há tabelas
+#    com owners diferentes). FKs/triggers off via session_replication_role.
+#  - session_replication_role = replica desactiva FKs/triggers durante o
+#    restore (ordem dos COPYs não importa).
+#  - setval às sequências para max(id) após restore.
+#  - Colunas que existem no develop mas NÃO em produção mantêm o DEFAULT
+#    (ex.: turno_pedido_linhas.qtd_devolvida = 0).
+#  - stockos_meta NUNCA é sincronizada: guarda os markers de migração do
+#    PRÓPRIO ambiente (bootstrap, *_ddl_v1). Copiar a de produção fazia o
+#    servidor do develop saltar migrações no arranque e endpoints partiam
+#    com "column … does not exist" (ex.: turnos.encontrados_fechados_em).
+#
+# Pré-requisitos (GitHub → Settings → Secrets → Actions):
+#   DATABASE_URL              — URI postgres de produção (a usada no deploy).
+#   DATABASE_URL_DEV_ADMIN    — URI com user postgres.<ref-dev> do projecto
+#                               dev (pooler Supabase: porta 5432).
+#                               Não uses stockos_app — precisa de privilégio
+#                               DELETE generalizado e desactivar triggers.
+
+name: Sync DADOS produção → desenvolvimento
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: pg_dump --data-only prod → restore dev
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar cliente PostgreSQL 17 (igual ao Supabase)
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          pg_dump --version
+
+      - name: Validar secrets
+        env:
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          if [ -z "${DATABASE_URL_PROD}" ]; then
+            echo "::error::Secret DATABASE_URL em falta."
+            exit 1
+          fi
+          if [ -z "${DATABASE_URL_DEV_ADMIN}" ]; then
+            echo "::error::Define DATABASE_URL_DEV_ADMIN — ver cabeçalho deste workflow."
+            exit 1
+          fi
+          python3 <<'PY'
+          import os, urllib.parse
+          for name, key in [
+              ("DATABASE_URL (prod)", "DATABASE_URL_PROD"),
+              ("DATABASE_URL_DEV_ADMIN", "DATABASE_URL_DEV_ADMIN"),
+          ]:
+              raw = os.environ[key]
+              u = urllib.parse.urlparse(raw)
+              host = (u.hostname or "").lower()
+              user = urllib.parse.unquote(u.username or "")
+              if "pooler.supabase.com" in host and not user.startswith("postgres."):
+                  print(f"::error::{name}: com host pooler Supabase o utilizador deve ser postgres.<project_ref>.")
+                  raise SystemExit(1)
+          PY
+
+      - name: Dump produção (data-only, COPY)
+        env:
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD")"
+          # --data-only: sem DDL.
+          # Sem --column-inserts: pg_dump default emite
+          #   COPY tabela (col1, col2,…) FROM stdin;
+          # — 100–1000× mais rápido que INSERTs individuais. A lista
+          # explícita de colunas mantém-no robusto a colunas existentes no
+          # destino que não existem na origem (ficam com o DEFAULT).
+          # --exclude-table-data=stockos_meta: os markers de migração são do
+          # PRÓPRIO ambiente — nunca se copiam entre ambientes.
+          # --no-owner / --no-acl: ignora dono e privilégios.
+          pg_dump \
+            --data-only \
+            --no-owner \
+            --no-acl \
+            --schema=public \
+            --exclude-table-data=public.stockos_meta \
+            --file=prod-data.sql
+          echo "Dump gerado:"
+          ls -la prod-data.sql
+          echo "Linhas no ficheiro: $(wc -l < prod-data.sql)"
+
+      - name: Limpar tabelas do develop (DELETE com FKs off)
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          # TRUNCATE exige owner. Usamos DELETE (só precisa de privilégio DELETE,
+          # que o user da connection tem na maior parte das tabelas). FKs são
+          # desactivadas via session_replication_role=replica para a ordem dos
+          # DELETEs não importar. Erros por tabela são logados como warnings e
+          # não abortam — tabelas sem permissão (raras) ficam com dados antigos.
+          # stockos_meta fica intacta: são os markers de migração do develop.
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          SET session_replication_role = 'replica';
+          DO $$
+          DECLARE
+            tbl text;
+            ok int := 0;
+            ko int := 0;
+            skipped text := '';
+          BEGIN
+            FOR tbl IN
+              SELECT format('%I.%I', schemaname, tablename)
+                FROM pg_tables
+               WHERE schemaname = 'public'
+                 AND tablename <> 'stockos_meta'
+               ORDER BY tablename
+            LOOP
+              BEGIN
+                EXECUTE 'DELETE FROM ' || tbl;
+                ok := ok + 1;
+              EXCEPTION WHEN OTHERS THEN
+                ko := ko + 1;
+                skipped := skipped || ' ' || tbl;
+                RAISE WARNING 'Falhou DELETE em %: %', tbl, SQLERRM;
+              END;
+            END LOOP;
+            RAISE NOTICE 'DELETE concluido: % OK, % falhas.', ok, ko;
+            IF ko > 0 THEN
+              RAISE NOTICE 'Tabelas que ficaram sem limpar:%', skipped;
+            END IF;
+          END
+          $$;
+          RESET session_replication_role;
+          SQL
+
+      - name: Restaurar dados no develop
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          # session_replication_role = replica desactiva FKs e triggers para
+          # esta sessão — ordem dos COPYs não importa. Mais permissivo que
+          # ALTER TABLE … DISABLE TRIGGER (que requer superuser).
+          # Anteceder com SET e seguir com RESET garante que o COPY roda sem
+          # validação cruzada e que a configuração não fica colada na pool.
+          {
+            echo "SET session_replication_role = 'replica';"
+            cat prod-data.sql
+            echo "RESET session_replication_role;"
+          } | psql -v ON_ERROR_STOP=1 2>&1 | tee restore.log
+          echo "Restore terminado. Avisos (não-fatais):"
+          grep -E '^WARNING:|^NOTICE:' restore.log | head -50 || true
+
+      - name: Forçar re-arranque das migrações no develop
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          # Segurança extra: apaga o marker bootstrap para o próximo cold
+          # start do develop correr o initDB completo (idempotente). Garante
+          # que qualquer coluna/tabela nova do develop é criada mesmo que a
+          # stockos_meta tenha sido tocada por syncs antigos.
+          psql -v ON_ERROR_STOP=1 -c "DELETE FROM stockos_meta WHERE k = 'bootstrap';" || true
+
+      - name: Sincronizar sequências (max(id) → setval)
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          # Como usámos DELETE (não TRUNCATE RESTART IDENTITY), as sequências
+          # SERIAL/IDENTITY mantiveram o nextval anterior. Os COPYs trouxeram
+          # IDs explícitos vindos de produção — sincronizamos cada sequência ao
+          # max(id) da tabela associada para os próximos INSERTs não colidirem.
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE
+            r record;
+            max_id bigint;
+          BEGIN
+            FOR r IN
+              SELECT
+                n.nspname AS schema_name,
+                c.relname AS table_name,
+                a.attname AS column_name,
+                pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname) AS seq_name
+              FROM pg_attribute a
+              JOIN pg_class c ON c.oid = a.attrelid
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'public'
+                AND c.relkind = 'r'
+                AND a.attnum > 0
+                AND NOT a.attisdropped
+                AND pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname) IS NOT NULL
+            LOOP
+              BEGIN
+                EXECUTE format('SELECT COALESCE(MAX(%I), 0) FROM %I.%I', r.column_name, r.schema_name, r.table_name) INTO max_id;
+                PERFORM setval(r.seq_name, GREATEST(max_id, 1), max_id > 0);
+                RAISE NOTICE 'setval(%) = %', r.seq_name, max_id;
+              EXCEPTION WHEN OTHERS THEN
+                RAISE WARNING 'Falhou setval para %: %', r.seq_name, SQLERRM;
+              END;
+            END LOOP;
+          END
+          $$;
+          SQL
+
+      - name: Re-conceder privilégios a stockos_app
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'stockos_app') THEN
+              GRANT USAGE ON SCHEMA public TO stockos_app;
+              GRANT ALL ON ALL TABLES IN SCHEMA public TO stockos_app;
+              GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO stockos_app;
+              ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON TABLES TO stockos_app;
+              ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON SEQUENCES TO stockos_app;
+            END IF;
+          END
+          $$;
+          SQL
+
+      - name: Resumo
+        run: |
+          echo "## Sync de DADOS concluído"
+          echo "- Produção: read-only (apenas leitura via pg_dump --data-only)."
+          echo "- Develop: rows substituídos via DELETE (FKs off); estrutura PRESERVADA (colunas extra, índices)."
+          echo "- stockos_meta do develop preservada; marker bootstrap apagado → próximo arranque corre migrações."
+          echo "- Sequências sincronizadas (setval = max(id) por tabela)."
+          echo "- Colunas só do develop (ex.: turno_pedido_linhas.qtd_devolvida) mantêm o DEFAULT (0)."
+          echo "- Tabelas que falharem DELETE (sem permissão) ficam com dados antigos — ver warnings acima."

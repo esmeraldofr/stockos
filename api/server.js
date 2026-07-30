@@ -424,7 +424,7 @@ function markDbReady() {
  * Quando bate com o valor em stockos_meta.bootstrap, initDB só confirma o enum «compras» (1–2 queries).
  * Subir este valor sempre que adicionares migrações em initDB() para forçar um arranque completo uma vez.
  */
-const STOCKOS_BOOTSTRAP_VERSION = '2026-05-19-stock-caixa';
+const STOCKOS_BOOTSTRAP_VERSION = '2026-07-07-registo-deixados';
 
 /** Versão das migrações realmente aplicada na BD (lida de stockos_meta.bootstrap).
  *  Cacheada para que /api/health não bata na BD a cada pedido. */
@@ -477,6 +477,8 @@ async function initDB() {
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS fechados NUMERIC(10,3) NOT NULL DEFAULT 0`, [], 'turno_stock-fechados');
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS encontrado_caixa NUMERIC(10,3)`, [], 'turno_stock-encontrado-caixa');
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS deixado_caixa NUMERIC(10,3)`, [], 'turno_stock-deixado-caixa');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS encontrados_fechados_em TIMESTAMPTZ`, [], 'turnos-encontrados-fechados-em');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_fechados_em TIMESTAMPTZ`, [], 'turnos-deixados-fechados-em');
   await qry(`CREATE TABLE IF NOT EXISTS turno_caixa (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
     tpa NUMERIC(15,2), transferencia NUMERIC(15,2), dinheiro NUMERIC(15,2),
@@ -508,6 +510,11 @@ async function initDB() {
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS qtd_copos_pacote SMALLINT NOT NULL DEFAULT 0`,
     [],
     'produtos-qtd-copos-pacote'
+  );
+  await qry(
+    `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS forca_pacote BOOLEAN`,
+    [],
+    'produtos-forca-pacote'
   );
   await qry(
     `ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem TEXT`,
@@ -833,11 +840,25 @@ app.post('/api/auth/login', async (req, res) => {
       auditLoginAttempt(req, res, 401, login, user);
       return res.status(401).json({ erro: 'Credenciais inválidas' });
     }
-    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username });
+    const empresaId = parseInt(user.empresa_id, 10) || 1;
+    const token = createToken({ id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username, empresa_id: empresaId });
     auditLoginAttempt(req, res, 200, login, user);
+    // Lojas da empresa (multi-ponto de venda). Sem tabela ainda → loja 1.
+    let lojas = [{ id: 1, nome: 'Loja 1' }];
+    try {
+      await ensureEmpresasLojas();
+      const lr = await query(`SELECT id, nome FROM lojas WHERE empresa_id=$1 AND ativo IS TRUE ORDER BY id`, [empresaId]);
+      if (lr.rows.length) lojas = lr.rows;
+    } catch (_) {}
     res.json({
       token,
-      user: { id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username, has_face: user.face_descriptor != null, face_foto_url: user.face_foto_url || '' }
+      lojas,
+      user: {
+        id: user.id, email: user.email, nome: user.nome, role: user.role, username: user.username,
+        empresa_id: empresaId,
+        loja_id: user.loja_id != null ? (parseInt(user.loja_id, 10) || null) : null,
+        has_face: user.face_descriptor != null, face_foto_url: user.face_foto_url || ''
+      }
     });
   } catch (e) {
     console.error('[auth/login]', pgErrText(e));
@@ -1063,6 +1084,83 @@ app.use((req, res, next) => {
   });
 });
 
+// ── IDEMPOTÊNCIA DAS ESCRITAS OFFLINE ─────────────────────────
+// A fila offline do frontend repete escritas (POST/PUT/DELETE) até obter
+// resposta. Com rede fraca, um pedido pode ter chegado sem o cliente saber
+// (timeout) — na repetição, o client_ref permite devolver a resposta já
+// gravada em vez de duplicar o registo.
+let opsIdemReady = false;
+async function ensureOpsIdempotencia() {
+  if (opsIdemReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='ops_idempotencia_v1'`);
+    if (r.rows.length) { opsIdemReady = true; return; }
+  } catch (_) {}
+  await qry(
+    `CREATE TABLE IF NOT EXISTS ops_idempotencia (
+      client_ref TEXT PRIMARY KEY,
+      metodo TEXT,
+      caminho TEXT,
+      status INTEGER,
+      resposta TEXT,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    [],
+    'ops-idempotencia'
+  );
+  try {
+    const chk = await query(
+      `SELECT 1 FROM information_schema.tables
+       WHERE table_schema='public' AND table_name='ops_idempotencia'`
+    );
+    if (chk.rows.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('ops_idempotencia_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      await query(`DELETE FROM ops_idempotencia WHERE criado_em < NOW() - INTERVAL '60 days'`).catch(() => {});
+      opsIdemReady = true;
+    }
+  } catch (_) {}
+}
+
+app.use(function idempotenciaMiddleware(req, res, next) {
+  const m = String(req.method || '').toUpperCase();
+  if (m !== 'POST' && m !== 'PUT' && m !== 'DELETE' && m !== 'PATCH') return next();
+  let p = req.path || '';
+  if (!p && req.url) p = String(req.url).split('?')[0] || '';
+  if (!p.startsWith('/api/')) return next();
+  const clientRef = String((req.body && req.body.client_ref) || '').trim().slice(0, 64);
+  if (!clientRef) return next();
+  (async () => {
+    try { await ensureOpsIdempotencia(); } catch (_) {}
+    if (opsIdemReady) {
+      try {
+        const dup = await query(`SELECT status, resposta FROM ops_idempotencia WHERE client_ref=$1`, [clientRef]);
+        if (dup.rows.length) {
+          const st = parseInt(dup.rows[0].status, 10) || 200;
+          let body = {};
+          try { body = JSON.parse(dup.rows[0].resposta || '{}'); } catch (_) {}
+          if (body && typeof body === 'object' && !Array.isArray(body)) body.duplicado = true;
+          return res.status(st).json(body);
+        }
+      } catch (_) {}
+      const origJson = res.json.bind(res);
+      res.json = (body) => {
+        try {
+          const st = res.statusCode || 200;
+          if (st >= 200 && st < 300) {
+            query(
+              `INSERT INTO ops_idempotencia (client_ref, metodo, caminho, status, resposta)
+               VALUES ($1,$2,$3,$4,$5) ON CONFLICT (client_ref) DO NOTHING`,
+              [clientRef, m, p, st, JSON.stringify(body == null ? {} : body).slice(0, 200000)]
+            ).catch(() => {});
+          }
+        } catch (_) {}
+        return origJson(body);
+      };
+    }
+    next();
+  })().catch(() => { try { next(); } catch (_) {} });
+});
+
 // ── HELPERS AUTH ──────────────────────────────────────────────
 function base64url(str) {
   return Buffer.from(str).toString('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
@@ -1084,19 +1182,132 @@ function verifyToken(token) {
   } catch { return null; }
 }
 function hashPassword(p) { return crypto.createHash('sha256').update(p + PWD_SALT).digest('hex'); }
+const __authUserCache = new Map();
 async function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ','');
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ erro: 'Não autenticado' });
   try {
-    const r = await query(`SELECT ativo FROM utilizadores WHERE id=$1`, [payload.id]);
-    if (!r.rows.length || !r.rows[0].ativo) {
+    // Lê role/empresa/loja da BD com cache curto (15 s) — corta uma ida à
+    // BD por pedido (latência) mantendo mudanças de perfil quase imediatas.
+    let u = null;
+    const hitAuth = __authUserCache.get(String(payload.id));
+    if (hitAuth && Date.now() - hitAuth.at < 15000) {
+      u = hitAuth.u;
+    } else {
+      let r;
+      try {
+        r = await query(`SELECT ativo, role::text AS role, empresa_id, loja_id FROM utilizadores WHERE id=$1`, [payload.id]);
+      } catch (_) {
+        r = await query(`SELECT ativo FROM utilizadores WHERE id=$1`, [payload.id]);
+      }
+      u = r.rows.length ? r.rows[0] : null;
+      if (__authUserCache.size > 300) __authUserCache.clear();
+      __authUserCache.set(String(payload.id), { at: Date.now(), u });
+    }
+    if (!u || !u.ativo) {
       return res.status(401).json({ erro: 'Conta inactiva' });
     }
+    if (u.role) payload.role = u.role;
+    if (u.empresa_id != null) payload.empresa_id = parseInt(u.empresa_id, 10) || 1;
+    payload.loja_id = u.loja_id != null ? (parseInt(u.loja_id, 10) || null) : null;
   } catch (e) {
     console.warn('[auth] verificação ativo falhou:', e.message);
   }
-  req.user = payload; next();
+  req.user = payload;
+  await resolverContextoAcesso(req).catch(() => {});
+  // Guarda central: qualquer /api/turnos/<id>/… só é acessível se o turno
+  // pertencer ao âmbito do utilizador (empresa do gestor; loja fixa do
+  // operador; admin passa sempre). Cobre stock, caixa, pedidos, fechos,
+  // entradas, saídas, equipa, fotos do TPA, etc. de uma só vez.
+  const mTurno = String(req.path || '').match(/^\/api\/turnos\/(\d+)(\/|$)/);
+  if (mTurno) {
+    const ok = await turnoNoContexto(req, parseInt(mTurno[1], 10)).catch(() => true);
+    if (!ok) return res.status(404).json({ erro: 'Turno não encontrado' });
+  }
+  next();
+}
+
+/** O turno pertence ao âmbito do pedido? (admin: sempre; gestor: empresa;
+ *  operador/compras: a sua loja fixa). BD antiga sem loja_id → permite. */
+const __turnoLojaCache = new Map();
+async function turnoLojaId(turnoId) {
+  const k = String(turnoId);
+  const hit = __turnoLojaCache.get(k);
+  if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.loja;
+  try {
+    const r = await query(`SELECT loja_id FROM turnos WHERE id=$1`, [turnoId]);
+    const loja = r.rows.length ? (parseInt(r.rows[0].loja_id, 10) || 1) : null;
+    if (__turnoLojaCache.size > 500) __turnoLojaCache.clear();
+    __turnoLojaCache.set(k, { loja, at: Date.now() });
+    return loja;
+  } catch (_) {
+    return undefined; // coluna inexistente — sem como validar
+  }
+}
+async function turnoNoContexto(req, turnoId) {
+  const role = String((req.user && req.user.role) || '');
+  if (role === 'admin') return true;
+  const loja = await turnoLojaId(turnoId);
+  if (loja === undefined) return true; // BD antiga
+  if (loja === null) return false; // turno não existe
+  if (role === 'operador' || role === 'compras') {
+    const fixa = parseInt(req.user && req.user.loja_id, 10);
+    return Number.isFinite(fixa) && fixa > 0 ? loja === fixa : true;
+  }
+  // gestor: loja do turno tem de ser da sua empresa
+  const mapa = await mapaLojaEmpresa();
+  if (!mapa || mapa[String(loja)] == null) return true;
+  return mapa[String(loja)] === (parseInt(req.user && req.user.empresa_id, 10) || 1);
+}
+
+// ── Contexto de acesso por perfil ─────────────────────────────
+// admin           → todas as empresas e lojas (migra com ?empresa= / ?loja=)
+// gestor          → só a sua empresa; migra entre as lojas dela (?loja=)
+// operador/compras→ presos à sua loja fixa (utilizadores.loja_id)
+const __lojaEmpresaCache = { at: 0, map: null };
+async function mapaLojaEmpresa() {
+  if (__lojaEmpresaCache.map && Date.now() - __lojaEmpresaCache.at < 60000) return __lojaEmpresaCache.map;
+  try {
+    const r = await query(`SELECT id, empresa_id FROM lojas`);
+    const m = {};
+    r.rows.forEach((x) => { m[String(x.id)] = parseInt(x.empresa_id, 10) || 1; });
+    __lojaEmpresaCache.map = m;
+    __lojaEmpresaCache.at = Date.now();
+    return m;
+  } catch (_) { return __lojaEmpresaCache.map || null; }
+}
+
+async function resolverContextoAcesso(req) {
+  const role = String((req.user && req.user.role) || '');
+  const empresaPropria = parseInt(req.user && req.user.empresa_id, 10) || 1;
+  // Empresa efectiva: só o admin migra de empresa.
+  let empresa = empresaPropria;
+  if (role === 'admin') {
+    const qE = parseInt(req.query && req.query.empresa, 10);
+    if (Number.isFinite(qE) && qE > 0) empresa = qE;
+  }
+  req.empresaEfetiva = empresa;
+  // Loja pedida (query/header).
+  const qL = parseInt(req.query && req.query.loja, 10);
+  const hL = parseInt(req.headers && req.headers['x-loja'], 10);
+  const pedida = Number.isFinite(qL) && qL > 0 ? qL : (Number.isFinite(hL) && hL > 0 ? hL : null);
+  // Operador / operador de sistema: loja FIXA — o pedido não manda.
+  if (role === 'operador' || role === 'compras') {
+    req.lojaEfetiva = (req.user && req.user.loja_id) || pedida || 1;
+    return;
+  }
+  // Admin / gestor: a loja pedida tem de pertencer à empresa efectiva.
+  let loja = pedida;
+  const mapa = await mapaLojaEmpresa();
+  if (mapa && Object.keys(mapa).length) {
+    if (loja != null && mapa[String(loja)] != null && mapa[String(loja)] !== empresa) loja = null;
+    if (loja == null) {
+      const primeira = Object.keys(mapa).map(Number).sort((a, b) => a - b).find((k) => mapa[String(k)] === empresa);
+      loja = primeira || 1;
+    }
+  }
+  req.lojaEfetiva = loja || 1;
 }
 function requireRole(...roles) {
   return (req, res, next) => {
@@ -1104,6 +1315,130 @@ function requireRole(...roles) {
     next();
   };
 }
+
+// ── MULTI-EMPRESA / MULTI-LOJA (fase 1) ───────────────────────
+// O sistema serve várias empresas, cada uma com vários pontos de venda.
+// Fase 1: turnos (e tudo o que deles depende), presenças e depósitos são
+// POR LOJA; utilizadores/produtos/fornecedores pertencem à empresa. Os
+// dados existentes migram automaticamente para empresa 1 / loja 1 (via
+// DEFAULT 1). Escala/armazém por loja e isolamento total entre empresas
+// entram na fase 2 — NÃO registar uma 2.ª empresa antes disso.
+let empresasLojasReady = false;
+async function ensureEmpresasLojas() {
+  if (empresasLojasReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='empresas_lojas_v6'`);
+    if (r.rows.length) { empresasLojasReady = true; return; }
+  } catch (_) {}
+  await qry(`CREATE TABLE IF NOT EXISTS empresas (
+    id SERIAL PRIMARY KEY,
+    nome TEXT NOT NULL,
+    ativo BOOLEAN NOT NULL DEFAULT TRUE,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'empresas');
+  await qry(`CREATE TABLE IF NOT EXISTS lojas (
+    id SERIAL PRIMARY KEY,
+    empresa_id INTEGER NOT NULL DEFAULT 1,
+    nome TEXT NOT NULL,
+    ativo BOOLEAN NOT NULL DEFAULT TRUE,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, [], 'lojas');
+  await qry(`INSERT INTO empresas (nome) SELECT 'Empresa 1' WHERE NOT EXISTS (SELECT 1 FROM empresas)`, [], 'seed-empresa');
+  // Não existe «loja principal» — todas as lojas são iguais, cada uma com
+  // a sua ficha. O seed dá só um nome neutro à primeira (renomeável).
+  await qry(`INSERT INTO lojas (empresa_id, nome) SELECT 1, 'Loja 1' WHERE NOT EXISTS (SELECT 1 FROM lojas)`, [], 'seed-loja');
+  await qry(`UPDATE lojas SET nome='Loja 1' WHERE id=1 AND nome='Loja principal'`, [], 'loja-sem-principal');
+  // Ficha da loja (perfil completo, como fornecedores/funcionários).
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT ''`, [], 'lojas-morada');
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS telefone TEXT NOT NULL DEFAULT ''`, [], 'lojas-telefone');
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`, [], 'lojas-email');
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS nif TEXT NOT NULL DEFAULT ''`, [], 'lojas-nif');
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS responsavel TEXT NOT NULL DEFAULT ''`, [], 'lojas-responsavel');
+  await qry(`ALTER TABLE lojas ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'lojas-notas');
+  // Isolamento por empresa (fase 2): dados de gestão marcados por empresa.
+  await qry(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'faturas-empresa');
+  await qry(`ALTER TABLE armazem_libertacoes ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'libertacoes-empresa');
+  await qry(`ALTER TABLE armazem_proformas ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'proformas-empresa');
+  await qry(`ALTER TABLE escala ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'escala-empresa');
+  await qry(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'escala-template-empresa');
+  await qry(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'produto-faltas-empresa');
+  // Escala e armazém POR LOJA.
+  await qry(`ALTER TABLE escala ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'escala-loja');
+  await qry(`ALTER TABLE escala_template ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'escala-template-loja');
+  await qry(`ALTER TABLE armazem_faturas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'faturas-loja');
+  await qry(`ALTER TABLE armazem_libertacoes ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'libertacoes-loja');
+  await qry(`ALTER TABLE armazem_proformas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'proformas-loja');
+  await qry(`ALTER TABLE armazem_inventario_diario ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'inventario-loja');
+  await qry(`ALTER TABLE produto_faltas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'produto-faltas-loja');
+  // Ficha da empresa (perfil completo, como lojas/fornecedores).
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS nif TEXT NOT NULL DEFAULT ''`, [], 'empresas-nif');
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT ''`, [], 'empresas-morada');
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS telefone TEXT NOT NULL DEFAULT ''`, [], 'empresas-telefone');
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`, [], 'empresas-email');
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS responsavel TEXT NOT NULL DEFAULT ''`, [], 'empresas-responsavel');
+  await qry(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS notas TEXT NOT NULL DEFAULT ''`, [], 'empresas-notas');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'utilizadores-empresa');
+  // Loja fixa do funcionário (operador / operador de sistema). NULL para
+  // admin (todas as empresas) e gestor (todas as lojas da sua empresa).
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS loja_id INTEGER`, [], 'utilizadores-loja');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'turnos-loja');
+  await qry(`ALTER TABLE presencas ADD COLUMN IF NOT EXISTS loja_id INTEGER NOT NULL DEFAULT 1`, [], 'presencas-loja');
+  await qry(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'produtos-empresa');
+  await qry(`ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1`, [], 'fornecedores-empresa');
+  await qry(`CREATE INDEX IF NOT EXISTS idx_turnos_loja_data ON turnos (loja_id, data)`, [], 'idx-turnos-loja');
+  try {
+    const chk = await query(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='turnos' AND column_name='loja_id'`
+    );
+    if (chk.rows.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('empresas_lojas_v6','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      empresasLojasReady = true;
+    }
+  } catch (_) {}
+}
+
+/** Loja activa do pedido, já validada por perfil no auth() (loja fixa para
+ *  operador/compras; lojas da empresa para gestor; livre para admin). */
+function lojaDe(req) {
+  if (req.lojaEfetiva) return req.lojaEfetiva;
+  const q = parseInt(req.query && req.query.loja, 10);
+  if (Number.isFinite(q) && q > 0) return q;
+  const h = parseInt(req.headers && req.headers['x-loja'], 10);
+  if (Number.isFinite(h) && h > 0) return h;
+  return 1;
+}
+/** Empresa efectiva do pedido (admin pode migrar; restantes ficam na sua). */
+function empresaDe(req) {
+  if (req.empresaEfetiva) return req.empresaEfetiva;
+  return parseInt(req.user && req.user.empresa_id, 10) || 1;
+}
+
+/** Isolamento por empresa com fallback: tenta a consulta filtrada; numa BD
+ *  ainda sem as colunas empresa_id/loja_id, corre a versão antiga. */
+async function queryEmpresa(sqlNovo, paramsNovo, sqlAntigo, paramsAntigo) {
+  try {
+    return await query(sqlNovo, paramsNovo);
+  } catch (e) {
+    if (!/empresa_id|loja_id/.test(String(e.message || ''))) throw e;
+    return await query(sqlAntigo, paramsAntigo);
+  }
+}
+/** Dentro de transacções não se pode tentar-e-falhar (aborta o BEGIN) —
+ *  verifica primeiro se a coluna empresa_id existe (com cache). */
+const __colunaCache = {};
+async function colunaDisponivel(tabela, coluna) {
+  const k = tabela + '.' + coluna;
+  if (__colunaCache[k]) return true;
+  try {
+    const r = await query(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name=$2`,
+      [tabela, coluna]
+    );
+    if (r.rows.length) { __colunaCache[k] = true; return true; }
+  } catch (_) {}
+  return false;
+}
+function colunaEmpresaDisponivel(tabela) { return colunaDisponivel(tabela, 'empresa_id'); }
 /** Início oficial do turno (minutos desde meia-noite), fuso Africa/Luanda. */
 const TURNO_INICIO_MINUTES = { manha: 7 * 60, tarde: 15 * 60, noite: 23 * 60 };
 const TZ_STOCKOS = 'Africa/Luanda';
@@ -1494,6 +1829,24 @@ async function ensurePrecosVendasSnapshots() {
     await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_unit_snapshot NUMERIC(15,2)`, [], 'turno_vendas-precio-snap');
     await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS preco_copos_pacote_snapshot NUMERIC(15,2)`, [], 'turno_vendas-preco-copo-snap');
     await qry(`ALTER TABLE turno_vendas ADD COLUMN IF NOT EXISTS qtd_copos_pacote_snapshot INTEGER`, [], 'turno_vendas-qtd-copo-snap');
+    // Garante o UNIQUE (turno_id, produto_id) — caso a tabela tenha sido criada
+    // sem ele (ambientes antigos), o INSERT ... ON CONFLICT (turno_id, produto_id)
+    // falhava com "there is no unique or exclusion constraint matching the ON
+    // CONFLICT specification" ao registar pedidos.
+    try {
+      const hasUnique = await query(
+        `SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='turno_vendas'
+           AND indexdef ILIKE '%UNIQUE%' AND indexdef ILIKE '%turno_id%' AND indexdef ILIKE '%produto_id%'`
+      );
+      if (!hasUnique.rows.length) {
+        // Remove duplicados (mantém o id mais alto) antes de aplicar o UNIQUE.
+        await query(`DELETE FROM turno_vendas a USING turno_vendas b
+          WHERE a.turno_id=b.turno_id AND a.produto_id=b.produto_id AND a.id<b.id`).catch(() => {});
+        await query(`CREATE UNIQUE INDEX IF NOT EXISTS turno_vendas_turno_id_produto_id_key ON turno_vendas(turno_id, produto_id)`);
+      }
+    } catch (e) {
+      console.warn('[ensureTurnoVendasUnique]', e && e.message);
+    }
     await qry(`INSERT INTO stockos_meta(k,v) VALUES('preco_snap_ddl_v1','done') ON CONFLICT(k) DO UPDATE SET v='done'`, [], 'preco-snap-meta');
     precosVendasSnapshotsReady = true;
     // Backfill runs in background — never blocks markDbReady()
@@ -1608,11 +1961,20 @@ async function applyTurnoVendaQuantity(client, turnoId, produto_id, newQty) {
   const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
   const delta = nq - oldQty;
 
-  await client.query(
-    `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
-     ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
-    [turnoId, produto_id, nq]
-  );
+  // Upsert SEM ON CONFLICT (não depende do índice único existir na BD —
+  // algumas BDs/ambientes têm turno_vendas sem a constraint, e a app pode
+  // não ter permissão para a criar).
+  if (old.rows.length) {
+    await client.query(
+      `UPDATE turno_vendas SET quantidade=$3 WHERE turno_id=$1 AND produto_id=$2`,
+      [turnoId, produto_id, nq]
+    );
+  } else {
+    await client.query(
+      `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)`,
+      [turnoId, produto_id, nq]
+    );
+  }
 
   if (delta === 0) return;
 
@@ -2406,12 +2768,66 @@ app.post('/api/auth/alterar-password', auth, async (req, res) => {
 });
 
 // ── PRODUTOS ──────────────────────────────────────────────────
+/** Indica se a coluna produtos.forca_pacote está disponível.
+ *  A BD da app pode usar um role SEM permissão de owner (erro "must be owner
+ *  of table produtos"), por isso NÃO podemos depender de ALTER. Detectamos a
+ *  existência via information_schema (leitura, não precisa de owner) e, só se
+ *  faltar, tentamos criar — falhando em silêncio se não houver permissão.
+ *  Quando indisponível, o resto do código trata forca_pacote como false. */
+let _forcaPacoteAvail = null; // null/false=re-verifica; true=fica fixo
+async function forcaPacoteAvailable() {
+  // Só cacheamos o resultado positivo: uma vez que a coluna existe, não
+  // desaparece. Se ainda for false/desconhecido, RE-VERIFICAMOS sempre —
+  // assim, quando a coluna for criada (por um owner), é apanhada sem ser
+  // preciso reiniciar o servidor (evita instância quente colada em false).
+  if (_forcaPacoteAvail === true) return true;
+  try {
+    const r = await query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='produtos' AND column_name='forca_pacote' LIMIT 1`
+    );
+    _forcaPacoteAvail = r.rows.length > 0;
+  } catch (e) {
+    console.warn('[forcaPacoteAvailable]', e && e.message);
+    _forcaPacoteAvail = false;
+  }
+  return _forcaPacoteAvail;
+}
+
+/** Indica se a coluna turno_pedido_linhas.qtd_devolvida existe (devoluções
+ *  por unidade). Apenas leitura via information_schema; nunca tenta ALTER
+ *  em runtime (a app pode não ter permissão). */
+let _qtdDevolvidaAvail = null;
+async function qtdDevolvidaAvailable() {
+  if (_qtdDevolvidaAvail === true) return true;
+  try {
+    const r = await query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='turno_pedido_linhas' AND column_name='qtd_devolvida' LIMIT 1`
+    );
+    _qtdDevolvidaAvail = r.rows.length > 0;
+  } catch (e) {
+    console.warn('[qtdDevolvidaAvailable]', e && e.message);
+    _qtdDevolvidaAvail = false;
+  }
+  return _qtdDevolvidaAvail;
+}
+
 app.get('/api/produtos', auth, async (req, res) => {
   try {
+    const hasFP = await forcaPacoteAvailable();
     const todos = req.query.todos === '1';
-    const r = await query(
-      `SELECT p.*, EXISTS(SELECT 1 FROM receitas r WHERE r.componente_id = p.id) AS is_ingrediente
-       FROM produtos p ${todos ? '' : 'WHERE p.ativo=true'} ORDER BY p.ordem, p.nome`
+    // Quando a coluna não existe, devolve forca_pacote=false para o frontend
+    // não depender dela. Quando existe, p.* já a inclui.
+    const fpSel = hasFP ? '' : ', false AS forca_pacote';
+    const emp = empresaDe(req);
+    const r = await queryEmpresa(
+      `SELECT p.*${fpSel}, EXISTS(SELECT 1 FROM receitas r WHERE r.componente_id = p.id) AS is_ingrediente
+       FROM produtos p WHERE p.empresa_id=$1 ${todos ? '' : 'AND p.ativo=true'} ORDER BY p.ordem, p.nome`,
+      [emp],
+      `SELECT p.*${fpSel}, EXISTS(SELECT 1 FROM receitas r WHERE r.componente_id = p.id) AS is_ingrediente
+       FROM produtos p ${todos ? '' : 'WHERE p.ativo=true'} ORDER BY p.ordem, p.nome`,
+      []
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -2425,6 +2841,7 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
       kg_por_copo,
       preco_copos_pacote,
       qtd_copos_pacote,
+      forca_pacote,
       comissao_pct,
       imagem
     } = req.body;
@@ -2441,27 +2858,42 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
     const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
     const cpct = Math.max(0, Math.min(100, parseFloat(comissao_pct) || 0));
     const img = typeof imagem === 'string' && imagem.trim() ? imagem.trim() : null;
-    const r = await query(
+    const fp = !!forca_pacote && qcp >= 2;
+    const paramsProd = [
+      nome,
+      preco || 0,
+      cat,
+      maxOrdem.rows[0].n,
+      !!venda_avulso,
+      medicao,
+      noTurno,
+      vpc,
+      kgc,
+      pcp,
+      qcp,
+      vendavelFinal,
+      cpct,
+      img
+    ];
+    const r = await queryEmpresa(
+      `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel,comissao_pct,imagem,empresa_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [...paramsProd, empresaDe(req)],
       `INSERT INTO produtos (nome,preco,categoria,ordem,venda_avulso,tipo_medicao,em_stock_turno,venda_por_copo,kg_por_copo,preco_copos_pacote,qtd_copos_pacote,vendavel,comissao_pct,imagem)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-      [
-        nome,
-        preco || 0,
-        cat,
-        maxOrdem.rows[0].n,
-        !!venda_avulso,
-        medicao,
-        noTurno,
-        vpc,
-        kgc,
-        pcp,
-        qcp,
-        vendavelFinal,
-        cpct,
-        img
-      ]
+      paramsProd
     );
     const row = r.rows[0];
+    // forca_pacote em escrita separada e opcional (coluna pode não existir
+    // se a BD não permitir ALTER — feature degrada sem partir o save).
+    if (await forcaPacoteAvailable()) {
+      try {
+        await query(`UPDATE produtos SET forca_pacote=$1 WHERE id=$2`, [fp, row.id]);
+        row.forca_pacote = fp;
+      } catch (e) { console.warn('[produtos POST forca_pacote]', e && e.message); }
+    } else {
+      row.forca_pacote = false;
+    }
     if (_sqlUsePrecoHistorico) {
       try {
         await query(
@@ -2483,12 +2915,19 @@ app.post('/api/produtos', auth, requireRole('admin','gestor','compras'), async (
 
 app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
+    // Isolamento: só produtos da empresa efectiva podem ser editados.
+    const chkEmp = await queryEmpresa(
+      `SELECT 1 FROM produtos WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM produtos WHERE id=$1`, [req.params.id]
+    );
+    if (!chkEmp.rows.length) return res.status(404).json({ erro: 'Produto não encontrado' });
     const { nome, preco, categoria, ordem, ativo, venda_avulso, tipo_medicao, em_stock_turno, vendavel } = req.body;
     const {
       venda_por_copo,
       kg_por_copo,
       preco_copos_pacote,
       qtd_copos_pacote,
+      forca_pacote,
       comissao_pct,
       imagem
     } = req.body;
@@ -2503,6 +2942,7 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
     const kgc = parseFloat(kg_por_copo) || 0;
     const pcp = parseFloat(preco_copos_pacote) || 0;
     const qcp = Math.min(999, Math.max(0, parseInt(qtd_copos_pacote, 10) || 0));
+    const fp = !!forca_pacote && qcp >= 2;
     const cpct = comissao_pct === undefined || comissao_pct === null
       ? undefined
       : Math.max(0, Math.min(100, parseFloat(comissao_pct) || 0));
@@ -2564,7 +3004,17 @@ app.put('/api/produtos/:id', auth, requireRole('admin','gestor','compras'), asyn
               req.params.id
             ]
           );
-    res.json(r.rows[0]);
+    const out = r.rows[0];
+    // forca_pacote em escrita separada e opcional.
+    if (out && await forcaPacoteAvailable()) {
+      try {
+        await query(`UPDATE produtos SET forca_pacote=$1 WHERE id=$2`, [fp, req.params.id]);
+        out.forca_pacote = fp;
+      } catch (e) { console.warn('[produtos PUT forca_pacote]', e && e.message); }
+    } else if (out) {
+      out.forca_pacote = false;
+    }
+    res.json(out);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -2624,8 +3074,7 @@ app.get('/api/faltas', auth, async (req, res) => {
     let where = '';
     if (status === 'pendentes') where = 'WHERE f.resolvido_em IS NULL';
     else if (status === 'resolvidas') where = "WHERE f.resolvido_em IS NOT NULL AND f.resolvido_em > NOW() - INTERVAL '30 days'";
-    const r = await query(
-      `SELECT f.id, f.produto_id, f.produto_nome_livre, f.notas,
+    const selFal = `SELECT f.id, f.produto_id, f.produto_nome_livre, f.notas,
               f.reportado_por, f.reportado_por_nome, f.reportado_em,
               f.resolvido_em, f.resolvido_por, f.resolvido_por_nome,
               (f.resolvido_foto_base64 IS NOT NULL) AS tem_foto,
@@ -2634,11 +3083,14 @@ app.get('/api/faltas', auth, async (req, res) => {
               p.categoria AS produto_categoria, p.tipo_medicao AS produto_tipo_medicao,
               (f.produto_id IS NULL) AS produto_livre
        FROM produto_faltas f
-       LEFT JOIN produtos p ON p.id = f.produto_id
-       ${where}
-       ORDER BY (f.resolvido_em IS NULL) DESC, f.reportado_em DESC
-       LIMIT 200`
-    );
+       LEFT JOIN produtos p ON p.id = f.produto_id`;
+    const ordFal = ` ORDER BY (f.resolvido_em IS NULL) DESC, f.reportado_em DESC LIMIT 200`;
+    const whereLojaFal = where ? `${where} AND f.loja_id=$1` : 'WHERE f.loja_id=$1';
+    const whereEmpFal = where ? `${where} AND f.empresa_id=$1` : 'WHERE f.empresa_id=$1';
+    const r = await queryEmpresa(
+      `${selFal} ${whereLojaFal}${ordFal}`, [lojaDe(req)],
+      `${selFal} ${whereEmpFal}${ordFal}`, [empresaDe(req)]
+    ).catch(() => query(`${selFal} ${where}${ordFal}`, []));
     res.json(r.rows);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -2647,7 +3099,10 @@ app.get('/api/faltas', auth, async (req, res) => {
 app.get('/api/faltas/pendentes-count', auth, async (req, res) => {
   try {
     await ensureProdutoFaltas();
-    const r = await query(`SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL`);
+    const r = await queryEmpresa(
+      `SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL AND loja_id=$1`, [lojaDe(req)],
+      `SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL AND empresa_id=$1`, [empresaDe(req)]
+    ).catch(() => query(`SELECT COUNT(*)::int AS n FROM produto_faltas WHERE resolvido_em IS NULL`, []));
     res.json({ pendentes: r.rows[0].n });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -2675,11 +3130,22 @@ app.post('/api/faltas', auth, async (req, res) => {
       );
       if (dup.rows.length) return res.status(400).json({ erro: 'Já existe um aviso pendente para este produto' });
     }
-    const r = await query(
+    const pFal = [produto_id || null, produto_id ? '' : nomeLivre, String(notas || '').trim(), String(req.user.id || ''), String(req.user.nome || '')];
+    const r = await queryEmpresa(
+      `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome, empresa_id, loja_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [...pFal, empresaDe(req), lojaDe(req)],
       `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [produto_id || null, produto_id ? '' : nomeLivre, String(notas || '').trim(), String(req.user.id || ''), String(req.user.nome || '')]
-    );
+      pFal
+    ).catch(() => queryEmpresa(
+      `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome, empresa_id)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [...pFal, empresaDe(req)],
+      `INSERT INTO produto_faltas (produto_id, produto_nome_livre, notas, reportado_por, reportado_por_nome)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      pFal
+    ));
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -2687,6 +3153,12 @@ app.post('/api/faltas', auth, async (req, res) => {
 /** Marcar como resolvido — exige foto (prova). Qualquer utilizador autenticado. */
 app.patch('/api/faltas/:id', auth, async (req, res) => {
   try {
+    const chkF = await queryEmpresa(
+      `SELECT 1 FROM produto_faltas WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM produto_faltas WHERE id=$1`, [req.params.id]
+    );
+    if (!chkF.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado' });
+
     await ensureProdutoFaltas();
     const foto = String(req.body?.foto_base64 || '').trim();
     if (!foto || !foto.startsWith('data:image/')) {
@@ -2710,6 +3182,12 @@ app.patch('/api/faltas/:id', auth, async (req, res) => {
 /** Atribuir o aviso pendente a um utilizador (responsável por resolver). Qualquer auth. */
 app.patch('/api/faltas/:id/atribuir', auth, async (req, res) => {
   try {
+    const chkF = await queryEmpresa(
+      `SELECT 1 FROM produto_faltas WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM produto_faltas WHERE id=$1`, [req.params.id]
+    );
+    if (!chkF.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado' });
+
     await ensureProdutoFaltas();
     const uid = req.body?.utilizador_id ? String(req.body.utilizador_id).trim() : null;
     if (uid) {
@@ -2739,6 +3217,12 @@ app.patch('/api/faltas/:id/atribuir', auth, async (req, res) => {
 /** Devolve a foto base64 de um aviso resolvido (lazy — não inclui na lista). */
 app.get('/api/faltas/:id/foto', auth, async (req, res) => {
   try {
+    const chkF = await queryEmpresa(
+      `SELECT 1 FROM produto_faltas WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM produto_faltas WHERE id=$1`, [req.params.id]
+    );
+    if (!chkF.rows.length) return res.status(404).json({ erro: 'Aviso não encontrado' });
+
     await ensureProdutoFaltas();
     const r = await query(`SELECT resolvido_foto_base64 FROM produto_faltas WHERE id=$1`, [req.params.id]);
     if (!r.rows.length || !r.rows[0].resolvido_foto_base64) return res.status(404).json({ erro: 'Sem foto.' });
@@ -2896,8 +3380,12 @@ app.get('/api/fornecedores', auth, requireRole('admin', 'gestor', 'compras'), as
   try {
     await ensureFornecedores();
     const todos = req.query.todos === '1';
-    const r = await query(
-      `SELECT * FROM fornecedores ${todos ? '' : 'WHERE ativo = true'} ORDER BY LOWER(nome)`
+    const emp = empresaDe(req);
+    const r = await queryEmpresa(
+      `SELECT * FROM fornecedores WHERE empresa_id=$1 ${todos ? '' : 'AND ativo = true'} ORDER BY LOWER(nome)`,
+      [emp],
+      `SELECT * FROM fornecedores ${todos ? '' : 'WHERE ativo = true'} ORDER BY LOWER(nome)`,
+      []
     );
     res.json(r.rows);
   } catch (e) {
@@ -2911,12 +3399,16 @@ app.post('/api/fornecedores', auth, requireRole('admin', 'gestor', 'compras'), a
     const { nome, notas, telefone, email, morada, nif } = req.body || {};
     const n = String(nome || '').trim();
     if (!n) return res.status(400).json({ erro: 'Nome é obrigatório' });
-    const r = await query(
+    const paramsForn = [n, String(notas || '').trim(), String(req.user.id || ''),
+       String(telefone || '').trim(), String(email || '').trim(),
+       String(morada || '').trim(), String(nif || '').trim()];
+    const r = await queryEmpresa(
+      `INSERT INTO fornecedores (nome, notas, criado_por, telefone, email, morada, nif, empresa_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [...paramsForn, empresaDe(req)],
       `INSERT INTO fornecedores (nome, notas, criado_por, telefone, email, morada, nif)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [n, String(notas || '').trim(), String(req.user.id || ''),
-       String(telefone || '').trim(), String(email || '').trim(),
-       String(morada || '').trim(), String(nif || '').trim()]
+      paramsForn
     );
     res.json(r.rows[0]);
   } catch (e) {
@@ -2930,7 +3422,10 @@ app.put('/api/fornecedores/:id', auth, requireRole('admin', 'gestor', 'compras')
     const id = parseInt(req.params.id, 10);
     if (Number.isNaN(id)) return res.status(400).json({ erro: 'ID inválido' });
     const { nome, notas, ativo, telefone, email, morada, nif } = req.body || {};
-    const row = await query('SELECT * FROM fornecedores WHERE id=$1', [id]);
+    const row = await queryEmpresa(
+      'SELECT * FROM fornecedores WHERE id=$1 AND empresa_id=$2', [id, empresaDe(req)],
+      'SELECT * FROM fornecedores WHERE id=$1', [id]
+    );
     if (!row.rows.length) return res.status(404).json({ erro: 'Fornecedor não encontrado' });
     const nomeF = nome != null ? String(nome).trim() : row.rows[0].nome;
     if (!nomeF) return res.status(400).json({ erro: 'Nome é obrigatório' });
@@ -3061,14 +3556,22 @@ app.get('/api/armazem/saldo', auth, requireRole('admin','gestor','compras'), asy
   try {
     await ensureArmazemTables();
     const data = req.query.data || new Date().toISOString().split('T')[0];
-    const lib = await query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [data]);
-    const fat = await query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [data]);
-    const lis = await query(
-      `SELECT l.*, u.nome as criado_por_nome FROM armazem_libertacoes l
-       LEFT JOIN utilizadores u ON u.id::text = l.criado_por::text
-       WHERE l.data=$1 ORDER BY l.criado_em DESC`,
-      [data]
-    );
+    const emp = empresaDe(req);
+    const lojaAmz = lojaDe(req);
+    const lib = await queryEmpresa(
+      `SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND loja_id=$2`, [data, lojaAmz],
+      `SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND empresa_id=$2`, [data, emp]
+    ).catch(() => query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [data]));
+    const fat = await queryEmpresa(
+      `SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND loja_id=$2`, [data, lojaAmz],
+      `SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND empresa_id=$2`, [data, emp]
+    ).catch(() => query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [data]));
+    const lisSel = `SELECT l.*, u.nome as criado_por_nome FROM armazem_libertacoes l
+       LEFT JOIN utilizadores u ON u.id::text = l.criado_por::text`;
+    const lis = await queryEmpresa(
+      `${lisSel} WHERE l.data=$1 AND l.loja_id=$2 ORDER BY l.criado_em DESC`, [data, lojaAmz],
+      `${lisSel} WHERE l.data=$1 AND l.empresa_id=$2 ORDER BY l.criado_em DESC`, [data, emp]
+    ).catch(() => query(`${lisSel} WHERE l.data=$1 ORDER BY l.criado_em DESC`, [data]));
     const totalLib = parseFloat(lib.rows[0].t) || 0;
     const totalFat = parseFloat(fat.rows[0].t) || 0;
     res.json({
@@ -3085,12 +3588,13 @@ app.get('/api/armazem/saidas-dia', auth, requireRole('admin','gestor','compras')
   try {
     await ensureTurnoSaidas();
     const data = req.query.data || new Date().toISOString().split('T')[0];
-    const r = await query(
-      `SELECT s.id, s.turno_id, s.descricao, s.valor, s.notas, s.criado_em, t.nome as turno_nome
+    const selSd = `SELECT s.id, s.turno_id, s.descricao, s.valor, s.notas, s.criado_em, t.nome as turno_nome
        FROM turno_saidas s
-       JOIN turnos t ON t.id = s.turno_id
-       WHERE t.data = $1
-       ORDER BY s.criado_em DESC`,
+       JOIN turnos t ON t.id = s.turno_id`;
+    const r = await queryEmpresa(
+      `${selSd} WHERE t.data = $1 AND t.loja_id = $2 ORDER BY s.criado_em DESC`,
+      [data, lojaDe(req)],
+      `${selSd} WHERE t.data = $1 ORDER BY s.criado_em DESC`,
       [data]
     );
     res.json(r.rows);
@@ -3104,10 +3608,18 @@ app.post('/api/armazem/libertacoes', auth, requireRole('admin','gestor','compras
     const d = (data || new Date().toISOString().split('T')[0]).trim();
     const v = parseFloat(valor);
     if (!v || v <= 0) return res.status(400).json({ erro: 'Indique um valor positivo para a libertação.' });
-    const r = await query(
+    const pLib = [d, v, String(notas || '').trim(), String(req.user.id || '')];
+    const r = await queryEmpresa(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por, empresa_id, loja_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [...pLib, empresaDe(req), lojaDe(req)],
       `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [d, v, String(notas || '').trim(), String(req.user.id || '')]
-    );
+      pLib
+    ).catch(() => queryEmpresa(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por, empresa_id) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [...pLib, empresaDe(req)],
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      pLib
+    ));
     res.json(r.rows[0]);
   } catch(e) { res.status(400).json({ erro: e.message }); }
 });
@@ -3115,10 +3627,195 @@ app.post('/api/armazem/libertacoes', auth, requireRole('admin','gestor','compras
 app.delete('/api/armazem/libertacoes/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
-    const r = await query('DELETE FROM armazem_libertacoes WHERE id=$1 RETURNING id', [req.params.id]);
+    const r = await queryEmpresa(
+      'DELETE FROM armazem_libertacoes WHERE id=$1 AND empresa_id=$2 RETURNING id', [req.params.id, empresaDe(req)],
+      'DELETE FROM armazem_libertacoes WHERE id=$1 RETURNING id', [req.params.id]
+    );
     if (!r.rows.length) return res.status(404).json({ erro: 'Libertação não encontrada' });
     res.json({ ok: true });
   } catch(e) { res.status(400).json({ erro: e.message }); }
+});
+
+// ── Faturas PROFORMA: lista de produtos a comprar, criada ANTES do dinheiro
+//    ser libertado. Fluxo: pendente → libertada (cria a libertação do dia)
+//    → comprada (ligada à fatura de compra real). ──
+let armazemProformasReady = false;
+async function ensureArmazemProformas() {
+  if (armazemProformasReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='armazem_proformas_ddl_v2'`);
+    if (r.rows.length) { armazemProformasReady = true; return; }
+  } catch (_) {}
+  try {
+    const t = await query(
+      `SELECT data_type FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
+    );
+    const dt = String((t.rows[0] && t.rows[0].data_type) || '').toLowerCase();
+    const pidCol = dt === 'uuid' ? 'UUID' : dt === 'bigint' ? 'BIGINT' : 'INTEGER';
+    await query(`CREATE TABLE IF NOT EXISTS armazem_proformas (
+      id SERIAL PRIMARY KEY,
+      fornecedor TEXT NOT NULL DEFAULT '',
+      notas TEXT NOT NULL DEFAULT '',
+      total_valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+      estado VARCHAR(12) NOT NULL DEFAULT 'pendente',
+      libertacao_id INTEGER,
+      fatura_id INTEGER,
+      criado_por TEXT NOT NULL DEFAULT '',
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await query(`CREATE TABLE IF NOT EXISTS armazem_proforma_linhas (
+      id SERIAL PRIMARY KEY,
+      proforma_id INTEGER NOT NULL REFERENCES armazem_proformas(id) ON DELETE CASCADE,
+      produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+      quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+      caixas NUMERIC(12,3) NOT NULL DEFAULT 0,
+      qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0,
+      preco_unitario NUMERIC(15,2) NOT NULL DEFAULT 0,
+      valor_total NUMERIC(15,2) NOT NULL DEFAULT 0
+    )`);
+    await query(`ALTER TABLE armazem_proforma_linhas ADD COLUMN IF NOT EXISTS caixas NUMERIC(12,3) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`ALTER TABLE armazem_proforma_linhas ADD COLUMN IF NOT EXISTS qtd_por_caixa NUMERIC(12,3) NOT NULL DEFAULT 0`).catch(() => {});
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ('armazem_proformas_ddl_v2','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+    armazemProformasReady = true;
+  } catch (e) {
+    console.warn('[ensureArmazemProformas]', e && e.message);
+  }
+}
+
+app.get('/api/armazem/proformas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemProformas();
+    const selPf = `SELECT pf.*, u.nome AS criado_por_nome
+       FROM armazem_proformas pf
+       LEFT JOIN utilizadores u ON u.id::text = pf.criado_por::text`;
+    const r = await queryEmpresa(
+      `${selPf} WHERE pf.loja_id=$1 ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC LIMIT 100`,
+      [lojaDe(req)],
+      `${selPf} WHERE pf.empresa_id=$1 ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC LIMIT 100`,
+      [empresaDe(req)]
+    ).catch(() => query(`${selPf} ORDER BY (pf.estado = 'comprada') ASC, pf.criado_em DESC LIMIT 100`, []));
+    const ids = r.rows.map((x) => x.id);
+    const byId = {};
+    r.rows.forEach((pf) => { byId[pf.id] = { ...pf, linhas: [] }; });
+    if (ids.length) {
+      const lr = await query(
+        `SELECT l.*, p.nome AS produto_nome, p.tipo_medicao
+         FROM armazem_proforma_linhas l
+         JOIN produtos p ON p.id = l.produto_id
+         WHERE l.proforma_id = ANY($1::int[])
+         ORDER BY l.id`,
+        [ids]
+      );
+      lr.rows.forEach((l) => { if (byId[l.proforma_id]) byId[l.proforma_id].linhas.push(l); });
+    }
+    res.json(r.rows.map((pf) => byId[pf.id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/armazem/proformas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemProformas();
+    const { fornecedor, notas, linhas } = req.body || {};
+    if (!Array.isArray(linhas) || !linhas.length) {
+      return res.status(400).json({ erro: 'Adiciona pelo menos uma linha (produto, quantidade e preço).' });
+    }
+    let total = 0;
+    const norm = [];
+    for (const ln of linhas) {
+      if (!ln.produto_id) return res.status(400).json({ erro: 'Cada linha precisa de um produto.' });
+      const caixas = parseFloat(ln.caixas) || 0;
+      const qtdPor = parseFloat(ln.qtd_por_caixa) || 0;
+      const precoCaixa = parseFloat(ln.preco_caixa) || 0;
+      let q, pu, vt;
+      if (caixas > 0) {
+        // Compra em CAIXA: quantidade = caixas × qtd/caixa; preço unitário
+        // derivado; total = caixas × preço da caixa.
+        if (qtdPor <= 0 || precoCaixa <= 0) {
+          return res.status(400).json({ erro: 'Nas linhas em caixa indica nº de caixas, qtd por caixa e preço da caixa.' });
+        }
+        q = Math.round(caixas * qtdPor * 1000) / 1000;
+        pu = Math.round((precoCaixa / qtdPor) * 100) / 100;
+        vt = Math.round(caixas * precoCaixa * 100) / 100;
+      } else {
+        q = parseFloat(ln.quantidade);
+        pu = parseFloat(ln.preco_unitario);
+        if (!Number.isFinite(q) || q <= 0 || !Number.isFinite(pu) || pu <= 0) {
+          return res.status(400).json({ erro: 'Cada linha precisa de quantidade e preço unitário válidos.' });
+        }
+        vt = Math.round(q * pu * 100) / 100;
+      }
+      total += vt;
+      norm.push({ produto_id: ln.produto_id, quantidade: q, caixas, qtd_por_caixa: qtdPor, preco_unitario: pu, valor_total: vt });
+    }
+    const pPf = [String(fornecedor || '').trim(), String(notas || '').trim(), Math.round(total * 100) / 100, String(req.user.id || '')];
+    const ins = await queryEmpresa(
+      `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por, empresa_id, loja_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [...pPf, empresaDe(req), lojaDe(req)],
+      `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      pPf
+    ).catch(() => queryEmpresa(
+      `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por, empresa_id) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [...pPf, empresaDe(req)],
+      `INSERT INTO armazem_proformas (fornecedor, notas, total_valor, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      pPf
+    ));
+    const pf = ins.rows[0];
+    for (const ln of norm) {
+      await query(
+        `INSERT INTO armazem_proforma_linhas (proforma_id, produto_id, quantidade, caixas, qtd_por_caixa, preco_unitario, valor_total)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [pf.id, ln.produto_id, ln.quantidade, ln.caixas, ln.qtd_por_caixa, ln.preco_unitario, ln.valor_total]
+      );
+    }
+    res.json(pf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+/** Liberta o valor total da proforma: cria uma libertação no dia indicado
+ *  e marca a proforma como «libertada». */
+app.post('/api/armazem/proformas/:id/libertar', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemProformas();
+    await ensureArmazemTables();
+    const pfr = await queryEmpresa(
+      `SELECT * FROM armazem_proformas WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT * FROM armazem_proformas WHERE id=$1`, [req.params.id]
+    );
+    if (!pfr.rows.length) return res.status(404).json({ erro: 'Proforma não encontrada' });
+    const pf = pfr.rows[0];
+    if (pf.estado !== 'pendente') return res.status(400).json({ erro: `Esta proforma já está ${pf.estado}.` });
+    const d = String((req.body && req.body.data) || new Date().toISOString().split('T')[0]).slice(0, 10);
+    const pLibPf = [d, parseFloat(pf.total_valor) || 0, `Proforma #${pf.id}${pf.fornecedor ? ' — ' + pf.fornecedor : ''}`, String(req.user.id || '')];
+    const lib = await queryEmpresa(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por, empresa_id, loja_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [...pLibPf, parseInt(pf.empresa_id, 10) || empresaDe(req), parseInt(pf.loja_id, 10) || lojaDe(req)],
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      pLibPf
+    ).catch(() => queryEmpresa(
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por, empresa_id) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [...pLibPf, parseInt(pf.empresa_id, 10) || empresaDe(req)],
+      `INSERT INTO armazem_libertacoes (data, valor, notas, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      pLibPf
+    ));
+    const upd = await query(
+      `UPDATE armazem_proformas SET estado='libertada', libertacao_id=$1 WHERE id=$2 RETURNING *`,
+      [lib.rows[0].id, pf.id]
+    );
+    res.json(upd.rows[0]);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+app.delete('/api/armazem/proformas/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
+  try {
+    await ensureArmazemProformas();
+    const r = await queryEmpresa(
+      `DELETE FROM armazem_proformas WHERE id=$1 AND estado='pendente' AND empresa_id=$2 RETURNING id`, [req.params.id, empresaDe(req)],
+      `DELETE FROM armazem_proformas WHERE id=$1 AND estado='pendente' RETURNING id`, [req.params.id]
+    );
+    if (!r.rows.length) return res.status(400).json({ erro: 'Só proformas pendentes podem ser eliminadas.' });
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
 app.get('/api/armazem/inventario', auth, requireRole('admin','gestor','compras'), async (req, res) => {
@@ -3137,22 +3834,56 @@ app.get('/api/armazem/inventario', auth, requireRole('admin','gestor','compras')
                 d.atualizado_em as armazem_diario_atualizado_em
          FROM produtos p
          LEFT JOIN armazem_stock a ON a.produto_id = p.id
-         LEFT JOIN armazem_inventario_diario d ON d.produto_id = p.id AND d.data = $1::date
-         WHERE p.ativo=true
+         LEFT JOIN armazem_inventario_diario d ON d.produto_id = p.id AND d.data = $1::date AND d.loja_id = $3
+         WHERE p.ativo=true AND p.empresa_id=$2
          ORDER BY p.ordem, p.nome`,
-        [dataDia]
-      );
+        [dataDia, empresaDe(req), lojaDe(req)]
+      ).catch((eInv) => {
+        if (!/loja_id/.test(String(eInv.message || ''))) throw eInv;
+        return query(
+          `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
+                  COALESCE(a.quantidade, 0) as quantidade,
+                  COALESCE(a.custo_medio, 0) as custo_medio,
+                  a.atualizado_em,
+                  COALESCE(d.encontrado, 0) as armazem_encontrado,
+                  COALESCE(d.deixado, 0) as armazem_deixado,
+                  d.atualizado_em as armazem_diario_atualizado_em
+           FROM produtos p
+           LEFT JOIN armazem_stock a ON a.produto_id = p.id
+           LEFT JOIN armazem_inventario_diario d ON d.produto_id = p.id AND d.data = $1::date
+           WHERE p.ativo=true AND p.empresa_id=$2
+           ORDER BY p.ordem, p.nome`,
+          [dataDia, empresaDe(req)]
+        );
+      }).catch(async (e) => {
+        if (!/empresa_id/.test(String(e.message || ''))) throw e;
+        return query(
+          `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
+                  COALESCE(a.quantidade, 0) as quantidade,
+                  COALESCE(a.custo_medio, 0) as custo_medio,
+                  a.atualizado_em,
+                  COALESCE(d.encontrado, 0) as armazem_encontrado,
+                  COALESCE(d.deixado, 0) as armazem_deixado,
+                  d.atualizado_em as armazem_diario_atualizado_em
+           FROM produtos p
+           LEFT JOIN armazem_stock a ON a.produto_id = p.id
+           LEFT JOIN armazem_inventario_diario d ON d.produto_id = p.id AND d.data = $1::date
+           WHERE p.ativo=true
+           ORDER BY p.ordem, p.nome`,
+          [dataDia]
+        );
+      });
       return res.json(r.rows);
     }
-    const r = await query(
-      `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
+    const selInv = `SELECT p.id as produto_id, p.nome as produto_nome, p.categoria, p.tipo_medicao, p.ativo,
               COALESCE(a.quantidade, 0) as quantidade,
               COALESCE(a.custo_medio, 0) as custo_medio,
               a.atualizado_em
        FROM produtos p
-       LEFT JOIN armazem_stock a ON a.produto_id = p.id
-       WHERE p.ativo=true
-       ORDER BY p.ordem, p.nome`
+       LEFT JOIN armazem_stock a ON a.produto_id = p.id`;
+    const r = await queryEmpresa(
+      `${selInv} WHERE p.ativo=true AND p.empresa_id=$1 ORDER BY p.ordem, p.nome`, [empresaDe(req)],
+      `${selInv} WHERE p.ativo=true ORDER BY p.ordem, p.nome`, []
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -3170,15 +3901,28 @@ app.put('/api/armazem/inventario-diario', auth, requireRole('admin','gestor','co
     if (!Number.isFinite(enc) || enc < 0) return res.status(400).json({ erro: '«Encontrado» inválido.' });
     if (!Number.isFinite(deix) || deix < 0) return res.status(400).json({ erro: '«Deixado» inválido.' });
     const r = await query(
-      `INSERT INTO armazem_inventario_diario (data, produto_id, encontrado, deixado)
-       VALUES ($1::date, $2, $3, $4)
-       ON CONFLICT (data, produto_id) DO UPDATE SET
+      `INSERT INTO armazem_inventario_diario (data, produto_id, encontrado, deixado, loja_id)
+       VALUES ($1::date, $2, $3, $4, $5)
+       ON CONFLICT (loja_id, data, produto_id) DO UPDATE SET
          encontrado = EXCLUDED.encontrado,
          deixado = EXCLUDED.deixado,
          atualizado_em = NOW()
        RETURNING *`,
-      [d, produto_id, enc, deix]
-    );
+      [d, produto_id, enc, deix, lojaDe(req)]
+    ).catch((eInv) => {
+      // BD antiga: sem loja_id ou ainda com a unicidade antiga (data, produto).
+      if (!/loja_id|ON CONFLICT/i.test(String(eInv.message || ''))) throw eInv;
+      return query(
+        `INSERT INTO armazem_inventario_diario (data, produto_id, encontrado, deixado)
+         VALUES ($1::date, $2, $3, $4)
+         ON CONFLICT (data, produto_id) DO UPDATE SET
+           encontrado = EXCLUDED.encontrado,
+           deixado = EXCLUDED.deixado,
+           atualizado_em = NOW()
+         RETURNING *`,
+        [d, produto_id, enc, deix]
+      );
+    });
     res.json(r.rows[0]);
   } catch (e) {
     res.status(400).json({ erro: e.message });
@@ -3188,31 +3932,45 @@ app.put('/api/armazem/inventario-diario', auth, requireRole('admin','gestor','co
 app.get('/api/armazem/compras', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '80', 10)));
     const dataDia = (req.query.data || '').trim();
-    const filtroDia = /^\d{4}-\d{2}-\d{2}$/.test(dataDia);
-    const r = filtroDia
-      ? await query(
-          `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero
-           FROM armazem_compras c
-           JOIN produtos p ON p.id = c.produto_id
-           LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
-           LEFT JOIN armazem_faturas f ON f.id = c.fatura_id
-           WHERE (c.fatura_id IS NOT NULL AND f.data_emissao = $1::date)
-              OR (c.fatura_id IS NULL AND c.criado_em::date = $1::date)
-           ORDER BY c.criado_em DESC
-           LIMIT ${limit}`,
-          [dataDia]
-        )
-      : await query(
-          `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, u.nome as criado_por_nome, f.numero_fatura as fatura_numero
-           FROM armazem_compras c
-           JOIN produtos p ON p.id = c.produto_id
-           LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
-           LEFT JOIN armazem_faturas f ON f.id = c.fatura_id
-           ORDER BY c.criado_em DESC
-           LIMIT ${limit}`
-        );
+    const dataIni = (req.query.data_inicio || '').trim();
+    const dataFim = (req.query.data_fim || '').trim();
+    const categoria = (req.query.categoria || '').trim();
+    const isYmd = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+    const wh = [];
+    const params = [];
+    let i = 0;
+    const eff = (sql) => `(c.fatura_id IS NOT NULL AND f.data_emissao ${sql}) OR (c.fatura_id IS NULL AND c.criado_em::date ${sql})`;
+    if (isYmd(dataDia)) {
+      params.push(dataDia); i++;
+      wh.push(`(${eff(`= $${i}::date`)})`);
+    }
+    if (isYmd(dataIni)) {
+      params.push(dataIni); i++;
+      wh.push(`(${eff(`>= $${i}::date`)})`);
+    }
+    if (isYmd(dataFim)) {
+      params.push(dataFim); i++;
+      wh.push(`(${eff(`<= $${i}::date`)})`);
+    }
+    if (categoria && ['menu','ingredientes','bebida'].includes(categoria)) {
+      params.push(categoria); i++;
+      wh.push(`p.categoria = $${i}`);
+    }
+    const baseCompras = `SELECT c.*, p.nome as produto_nome, p.tipo_medicao, p.categoria as produto_categoria, u.nome as criado_por_nome, f.numero_fatura as fatura_numero, f.data_emissao as fatura_data_emissao
+       FROM armazem_compras c
+       JOIN produtos p ON p.id = c.produto_id
+       LEFT JOIN utilizadores u ON u.id::text = c.criado_por::text
+       LEFT JOIN armazem_faturas f ON f.id = c.fatura_id`;
+    params.push(empresaDe(req)); i++;
+    const whEmp = wh.concat([`p.empresa_id = $${i}`]);
+    const r = await queryEmpresa(
+      `${baseCompras} WHERE ${whEmp.join(' AND ')} ORDER BY c.criado_em DESC LIMIT ${limit}`,
+      params,
+      `${baseCompras} ${wh.length ? 'WHERE ' + wh.join(' AND ') : ''} ORDER BY c.criado_em DESC LIMIT ${limit}`,
+      params.slice(0, -1)
+    );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -3246,6 +4004,12 @@ app.delete('/api/armazem/compras/:id', auth, requireRole('admin'), async (req, r
   await ensureArmazemTables();
   const id = parseInt(String(req.params.id || ''), 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ erro: 'ID inválido' });
+  const chkC = await queryEmpresa(
+    `SELECT 1 FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id WHERE c.id=$1 AND p.empresa_id=$2`,
+    [id, empresaDe(req)],
+    `SELECT 1 FROM armazem_compras WHERE id=$1`, [id]
+  );
+  if (!chkC.rows.length) return res.status(404).json({ erro: 'Linha de compra não encontrada' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -3278,6 +4042,12 @@ app.put('/api/armazem/compras/:id', auth, requireRole('admin'), async (req, res)
   await ensureArmazemTables();
   const id = parseInt(String(req.params.id || ''), 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ erro: 'ID inválido' });
+  const chkC = await queryEmpresa(
+    `SELECT 1 FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id WHERE c.id=$1 AND p.empresa_id=$2`,
+    [id, empresaDe(req)],
+    `SELECT 1 FROM armazem_compras WHERE id=$1`, [id]
+  );
+  if (!chkC.rows.length) return res.status(404).json({ erro: 'Linha de compra não encontrada' });
   const body = req.body || {};
   const caixasNum = parseFloat(body.caixas) || 0;
   const qtdPorCaixaNum = parseFloat(body.qtd_por_caixa) || 0;
@@ -3332,25 +4102,69 @@ app.put('/api/armazem/compras/:id', auth, requireRole('admin'), async (req, res)
 app.get('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '40', 10)));
+    const limit = Math.min(300, Math.max(1, parseInt(req.query.limit || '40', 10)));
     const dataDia = (req.query.data || '').trim();
-    const filtroDia = /^\d{4}-\d{2}-\d{2}$/.test(dataDia);
-    const r = filtroDia
-      ? await query(
-          `SELECT * FROM armazem_faturas WHERE data_emissao = $1::date ORDER BY criado_em DESC LIMIT ${limit}`,
-          [dataDia]
-        )
-      : await query(
-          `SELECT * FROM armazem_faturas ORDER BY data_emissao DESC, criado_em DESC LIMIT ${limit}`
+    const dataIni = (req.query.data_inicio || '').trim();
+    const dataFim = (req.query.data_fim || '').trim();
+    const categoria = (req.query.categoria || '').trim();
+    const isYmd = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+    const wh = [];
+    const params = [];
+    let i = 0;
+    if (isYmd(dataDia)) {
+      params.push(dataDia); i++;
+      wh.push(`data_emissao = $${i}::date`);
+    }
+    if (isYmd(dataIni)) {
+      params.push(dataIni); i++;
+      wh.push(`data_emissao >= $${i}::date`);
+    }
+    if (isYmd(dataFim)) {
+      params.push(dataFim); i++;
+      wh.push(`data_emissao <= $${i}::date`);
+    }
+    if (categoria && ['menu','ingredientes','bebida'].includes(categoria)) {
+      params.push(categoria); i++;
+      wh.push(`id IN (SELECT DISTINCT c.fatura_id FROM armazem_compras c JOIN produtos p ON p.id=c.produto_id WHERE p.categoria = $${i})`);
+    }
+    const paramsSem = params.slice();
+    params.push(lojaDe(req)); i++;
+    const whLojaF = wh.concat([`loja_id = $${i}`]);
+    const whEmpF = wh.concat([`empresa_id = $${i}`]);
+    const paramsEmp = [...paramsSem, empresaDe(req)];
+    const ordF = ` ORDER BY data_emissao DESC, criado_em DESC LIMIT ${limit}`;
+    const r = await queryEmpresa(
+      `SELECT * FROM armazem_faturas WHERE ${whLojaF.join(' AND ')}${ordF}`, params,
+      `SELECT * FROM armazem_faturas WHERE ${whEmpF.join(' AND ')}${ordF}`, paramsEmp
+    ).catch(() => query(
+      `SELECT * FROM armazem_faturas ${wh.length ? 'WHERE ' + wh.join(' AND ') : ''}${ordF}`, paramsSem
+    ));
+    let rows = r.rows;
+    // Nº de fotos adicionais por fatura (multi-foto) — melhor esforço.
+    try {
+      if (rows.length) {
+        await ensureFotosAnexos();
+        const chaves = rows.map((x) => 'fatura:' + x.id);
+        const c = await query(
+          `SELECT chave, COUNT(*)::int AS n FROM fotos_anexos WHERE chave = ANY($1) GROUP BY chave`,
+          [chaves]
         );
-    res.json(r.rows);
+        const porChave = {};
+        c.rows.forEach((x) => { porChave[x.chave] = x.n; });
+        rows = rows.map((x) => ({ ...x, fotos_extra: porChave['fatura:' + x.id] || 0 }));
+      }
+    } catch (_) {}
+    res.json(rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 app.get('/api/armazem/faturas/:id', auth, requireRole('admin','gestor','compras'), async (req, res) => {
   try {
     await ensureArmazemTables();
-    const f = await query('SELECT * FROM armazem_faturas WHERE id=$1', [req.params.id]);
+    const f = await queryEmpresa(
+      'SELECT * FROM armazem_faturas WHERE id=$1 AND empresa_id=$2', [req.params.id, empresaDe(req)],
+      'SELECT * FROM armazem_faturas WHERE id=$1', [req.params.id]
+    );
     if (!f.rows.length) return res.status(404).json({ erro: 'Fatura não encontrada' });
     const linhas = await query(
       `SELECT c.*, p.nome as produto_nome, p.tipo_medicao
@@ -3747,7 +4561,8 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
       turno_saida_id,
       foto_fatura_base64,
       fornecedor_id: fornecedorIdBody,
-      novo_fornecedor
+      novo_fornecedor,
+      proforma_id
     } = req.body || {};
     if (!Array.isArray(linhas) || !linhas.length) throw new Error('Adicione pelo menos uma linha à fatura');
     const dataFat = (data_emissao || new Date().toISOString().split('T')[0]).trim();
@@ -3797,8 +4612,22 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
         fornecedorNome = ins.rows[0].nome;
       }
     }
-    const libRow = await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);
-    const fatRow = await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [dataFat]);
+    const empFat = empresaDe(req);
+    const lojaFat = lojaDe(req);
+    const temEmpLib = await colunaEmpresaDisponivel('armazem_libertacoes');
+    const temEmpFatCol = await colunaEmpresaDisponivel('armazem_faturas');
+    const temLojaLib = await colunaDisponivel('armazem_libertacoes', 'loja_id');
+    const temLojaFat = await colunaDisponivel('armazem_faturas', 'loja_id');
+    const libRow = temLojaLib
+      ? await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND loja_id=$2`, [dataFat, lojaFat])
+      : temEmpLib
+        ? await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1 AND empresa_id=$2`, [dataFat, empFat])
+        : await client.query(`SELECT COALESCE(SUM(valor),0) as t FROM armazem_libertacoes WHERE data=$1`, [dataFat]);
+    const fatRow = temLojaFat
+      ? await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND loja_id=$2`, [dataFat, lojaFat])
+      : temEmpFatCol
+        ? await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1 AND empresa_id=$2`, [dataFat, empFat])
+        : await client.query(`SELECT COALESCE(SUM(total_valor),0) as t FROM armazem_faturas WHERE data_emissao=$1`, [dataFat]);
     const totalLib = parseFloat(libRow.rows[0].t) || 0;
     const totalFatExistente = parseFloat(fatRow.rows[0].t) || 0;
     const saldoDisponivel = totalLib - totalFatExistente;
@@ -3841,20 +4670,33 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
       tsid = null;
     }
 
-    const ins = await client.query(
-      `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id, fornecedor_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [
-        (numero_fatura || '').trim(),
-        fornecedorNome,
-        dataFat,
-        (notas || '').trim(),
-        String(req.user.id || ''),
-        just,
-        tsid,
-        fornecedorId
-      ]
-    );
+    const pFat = [
+      (numero_fatura || '').trim(),
+      fornecedorNome,
+      dataFat,
+      (notas || '').trim(),
+      String(req.user.id || ''),
+      just,
+      tsid,
+      fornecedorId
+    ];
+    const ins = temLojaFat && temEmpFatCol
+      ? await client.query(
+          `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id, fornecedor_id, empresa_id, loja_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+          [...pFat, empFat, lojaFat]
+        )
+      : temEmpFatCol
+      ? await client.query(
+          `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id, fornecedor_id, empresa_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+          [...pFat, empFat]
+        )
+      : await client.query(
+          `INSERT INTO armazem_faturas (numero_fatura, fornecedor, data_emissao, notas, criado_por, justificacao_excesso, turno_saida_id, fornecedor_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+          pFat
+        );
     fid = ins.rows[0].id;
     const forn = fornecedorNome;
     sumTotal = 0;
@@ -3865,6 +4707,17 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
     await client.query('UPDATE armazem_faturas SET total_valor=$1 WHERE id=$2', [sumTotal, fid]);
     const fotoRaw = String(foto_fatura_base64 || '').trim();
     if (fotoRaw) await applyFaturaFotoUrl(client, fid, fotoRaw);
+    // Fatura criada a partir de uma proforma → marca-a como comprada.
+    if (proforma_id != null && String(proforma_id).trim() !== '') {
+      const pfid = parseInt(proforma_id, 10);
+      if (!Number.isNaN(pfid)) {
+        await ensureArmazemProformas();
+        await client.query(
+          `UPDATE armazem_proformas SET estado='comprada', fatura_id=$1 WHERE id=$2 AND estado <> 'comprada'`,
+          [fid, pfid]
+        ).catch(() => {});
+      }
+    }
     await client.query('COMMIT');
   } catch(e) {
     await client.query('ROLLBACK').catch(() => {});
@@ -3879,7 +4732,274 @@ app.post('/api/armazem/faturas', auth, requireRole('admin','gestor','compras'), 
      WHERE c.fatura_id=$1 ORDER BY c.id`,
     [fid]
   );
+  // Fotos adicionais da fatura (multi-foto) — fora da transacção; falhar
+  // aqui não perde a fatura.
+  try {
+    const extras = Array.isArray(req.body?.fotos_extra_base64) ? req.body.fotos_extra_base64 : [];
+    if (extras.length) {
+      await ensureFotosAnexos();
+      for (const f of extras.slice(0, 12)) {
+        if (typeof f === 'string' && f.startsWith('data:image')) {
+          await query(
+            `INSERT INTO fotos_anexos (chave, foto, criado_por) VALUES ($1,$2,$3)`,
+            ['fatura:' + fid, f, String(req.user.id || '')]
+          ).catch(() => {});
+        }
+      }
+    }
+  } catch (_) {}
   res.json({ ...fat.rows[0], linhas: linhasOut.rows });
+});
+
+// ── FOTOS ANEXAS (multi-foto por contexto) ────────────────────
+// Vários recibos/páginas por registo: chave identifica o contexto —
+// 'tpa:<turno_id>', 'bordero:<data>', 'fatura:<id>'. A primeira foto de
+// cada contexto continua também no campo antigo (validações e miniaturas
+// existentes não mudam); estas são as adicionais.
+let fotosAnexosReady = false;
+async function ensureFotosAnexos() {
+  if (fotosAnexosReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='fotos_anexos_v1'`);
+    if (r.rows.length) { fotosAnexosReady = true; return; }
+  } catch (_) {}
+  await qry(
+    `CREATE TABLE IF NOT EXISTS fotos_anexos (
+      id SERIAL PRIMARY KEY,
+      chave TEXT NOT NULL,
+      foto TEXT NOT NULL,
+      criado_por TEXT,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    [],
+    'fotos-anexos'
+  );
+  await qry(`CREATE INDEX IF NOT EXISTS idx_fotos_anexos_chave ON fotos_anexos (chave)`, [], 'idx-fotos-anexos');
+  try {
+    const chk = await query(
+      `SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='fotos_anexos'`
+    );
+    if (chk.rows.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('fotos_anexos_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      fotosAnexosReady = true;
+    }
+  } catch (_) {}
+}
+
+function fotosAnexosChaveValida(chave) {
+  return /^(tpa:\d+|bordero:\d{4}-\d{2}-\d{2}|fatura:\d+)$/.test(String(chave || ''));
+}
+
+app.get('/api/fotos', auth, async (req, res) => {
+  try {
+    const chave = String(req.query.chave || '').trim();
+    if (!fotosAnexosChaveValida(chave)) return res.status(400).json({ erro: 'Chave inválida' });
+    const mTpaF = chave.match(/^tpa:(\d+)$/);
+    if (mTpaF && !(await turnoNoContexto(req, parseInt(mTpaF[1], 10)).catch(() => true))) {
+      return res.status(404).json({ erro: 'Turno não encontrado' });
+    }
+    await ensureFotosAnexos();
+    const r = await query(
+      `SELECT id, chave, foto, criado_por, criado_em FROM fotos_anexos WHERE chave=$1 ORDER BY criado_em, id`,
+      [chave]
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/fotos', auth, async (req, res) => {
+  try {
+    const { chave, foto_base64 } = req.body || {};
+    if (!fotosAnexosChaveValida(chave)) return res.status(400).json({ erro: 'Chave inválida' });
+    if (typeof foto_base64 !== 'string' || !foto_base64.startsWith('data:image')) {
+      return res.status(400).json({ erro: 'Envia a foto (data URL de imagem)' });
+    }
+    const mTpaP = String(chave).match(/^tpa:(\d+)$/);
+    if (mTpaP && !(await turnoNoContexto(req, parseInt(mTpaP[1], 10)).catch(() => true))) {
+      return res.status(404).json({ erro: 'Turno não encontrado' });
+    }
+    await ensureFotosAnexos();
+    const r = await query(
+      `INSERT INTO fotos_anexos (chave, foto, criado_por) VALUES ($1,$2,$3) RETURNING id, criado_em`,
+      [chave, foto_base64, String(req.user.id || '')]
+    );
+    // Rede de segurança: se o campo antigo do contexto está vazio, esta
+    // foto passa a ser também a principal (validações continuam a bater).
+    try {
+      const mTpa = chave.match(/^tpa:(\d+)$/);
+      if (mTpa) {
+        await query(
+          `UPDATE turno_caixa SET tpa_foto_url=$1 WHERE turno_id=$2 AND COALESCE(tpa_foto_url,'')=''`,
+          [foto_base64, parseInt(mTpa[1], 10)]
+        ).catch(() => {});
+      }
+      const mBor = chave.match(/^bordero:(\d{4}-\d{2}-\d{2})$/);
+      if (mBor) {
+        await query(
+          `UPDATE depositos_banco SET bordero_foto_url=$1
+           WHERE COALESCE(bordero_foto_url,'')='' AND turno_id IN (SELECT id FROM turnos WHERE data=$2)`,
+          [foto_base64, mBor[1]]
+        ).catch(() => {});
+      }
+      const mFat = chave.match(/^fatura:(\d+)$/);
+      if (mFat) {
+        await query(
+          `UPDATE armazem_faturas SET foto_fatura_url=$1 WHERE id=$2 AND COALESCE(foto_fatura_url,'')=''`,
+          [foto_base64, parseInt(mFat[1], 10)]
+        ).catch(() => {});
+      }
+    } catch (_) {}
+    res.json({ ok: true, id: r.rows[0].id, criado_em: r.rows[0].criado_em });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/fotos/:id', auth, async (req, res) => {
+  try {
+    await ensureFotosAnexos();
+    await query(`DELETE FROM fotos_anexos WHERE id=$1`, [parseInt(req.params.id, 10) || 0]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── LOJAS (pontos de venda da empresa) ────────────────────────
+const LOJA_PERFIL_CAMPOS = ['morada', 'telefone', 'email', 'nif', 'responsavel', 'notas'];
+
+app.get('/api/lojas', auth, async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const empresaId = empresaDe(req);
+    const todos = req.query.todos === '1';
+    const r = await query(
+      `SELECT * FROM lojas WHERE empresa_id=$1 ${todos ? '' : 'AND ativo IS TRUE'} ORDER BY id`,
+      [empresaId]
+    );
+    res.json(r.rows.length ? r.rows : [{ id: 1, nome: 'Loja 1', ativo: true }]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/lojas', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const empresaId = empresaDe(req);
+    const b = req.body || {};
+    const nome = String(b.nome || '').trim();
+    if (!nome) return res.status(400).json({ erro: 'Indica o nome da loja / ponto de venda' });
+    const perfil = LOJA_PERFIL_CAMPOS.map((c) => String(b[c] || '').trim());
+    const r = await query(
+      `INSERT INTO lojas (empresa_id, nome, ${LOJA_PERFIL_CAMPOS.join(', ')})
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [empresaId, nome, ...perfil]
+    );
+    __lojaEmpresaCache.at = 0; // nova loja → refresca o mapa loja→empresa
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/lojas/:id', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const empresaId = empresaDe(req);
+    const b = req.body || {};
+    const sets = [];
+    const params = [];
+    if (typeof b.nome === 'string' && b.nome.trim()) {
+      params.push(b.nome.trim());
+      sets.push(`nome=$${params.length}`);
+    }
+    for (const c of LOJA_PERFIL_CAMPOS) {
+      if (b[c] !== undefined) {
+        params.push(String(b[c] || '').trim());
+        sets.push(`${c}=$${params.length}`);
+      }
+    }
+    if (b.ativo !== undefined) {
+      params.push(!!b.ativo);
+      sets.push(`ativo=$${params.length}`);
+    }
+    if (!sets.length) return res.status(400).json({ erro: 'Nada para alterar' });
+    params.push(parseInt(req.params.id, 10) || 0);
+    params.push(empresaId);
+    const r = await query(
+      `UPDATE lojas SET ${sets.join(', ')} WHERE id=$${params.length - 1} AND empresa_id=$${params.length} RETURNING *`,
+      params
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Loja não encontrada' });
+    __lojaEmpresaCache.at = 0;
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── EMPRESAS (só admin — pode migrar entre todas) ─────────────
+const EMPRESA_PERFIL_CAMPOS = ['nif', 'morada', 'telefone', 'email', 'responsavel', 'notas'];
+
+app.get('/api/empresas', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    let r;
+    try {
+      r = await query(
+        `SELECT e.*, (SELECT COUNT(*)::int FROM lojas l WHERE l.empresa_id = e.id AND l.ativo IS TRUE) AS lojas_n
+         FROM empresas e WHERE e.ativo IS TRUE ORDER BY e.id`
+      );
+    } catch (_) {
+      r = await query(`SELECT id, nome, ativo, criado_em FROM empresas WHERE ativo IS TRUE ORDER BY id`);
+    }
+    res.json(r.rows.length ? r.rows : [{ id: 1, nome: 'Empresa 1', ativo: true, lojas_n: 1 }]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/empresas', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const b = req.body || {};
+    const nome = String(b.nome || '').trim();
+    if (!nome) return res.status(400).json({ erro: 'Indica o nome da empresa' });
+    const perfil = EMPRESA_PERFIL_CAMPOS.map((c) => String(b[c] || '').trim());
+    let r;
+    try {
+      r = await query(
+        `INSERT INTO empresas (nome, ${EMPRESA_PERFIL_CAMPOS.join(', ')})
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [nome, ...perfil]
+      );
+    } catch (_) {
+      r = await query(`INSERT INTO empresas (nome) VALUES ($1) RETURNING *`, [nome]);
+    }
+    const empresa = r.rows[0];
+    // Cada empresa nasce com a primeira loja — sem loja não há turnos.
+    const lojaNome = String(b.loja_nome || '').trim() || 'Loja 1';
+    let loja = null;
+    try {
+      const lr = await query(`INSERT INTO lojas (empresa_id, nome) VALUES ($1,$2) RETURNING id, nome`, [empresa.id, lojaNome]);
+      loja = lr.rows[0];
+      __lojaEmpresaCache.at = 0;
+    } catch (_) {}
+    res.json({ ...empresa, loja });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/empresas/:id', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureEmpresasLojas();
+    const b = req.body || {};
+    const sets = [];
+    const params = [];
+    if (typeof b.nome === 'string' && b.nome.trim()) {
+      params.push(b.nome.trim());
+      sets.push(`nome=$${params.length}`);
+    }
+    for (const c of EMPRESA_PERFIL_CAMPOS) {
+      if (b[c] !== undefined) {
+        params.push(String(b[c] || '').trim());
+        sets.push(`${c}=$${params.length}`);
+      }
+    }
+    if (!sets.length) return res.status(400).json({ erro: 'Nada para alterar' });
+    params.push(parseInt(req.params.id, 10) || 0);
+    const r = await query(`UPDATE empresas SET ${sets.join(', ')} WHERE id=$${params.length} RETURNING *`, params);
+    if (!r.rows.length) return res.status(404).json({ erro: 'Empresa não encontrada' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // ── TURNOS ────────────────────────────────────────────────────
@@ -3897,17 +5017,39 @@ app.get('/api/dia', auth, async (req, res) => {
         : NaN;
     const turnoOnlyFilter = Number.isFinite(turnoOnlyId) && turnoOnlyId > 0 ? turnoOnlyId : null;
 
-    const turnos = await query(
-      turnoOnlyFilter
-        ? `SELECT t.*, u.nome as utilizador_nome FROM turnos t
-           LEFT JOIN utilizadores u ON t.utilizador_id=u.id
-           WHERE t.data=$1 AND t.id=$2`
-        : `SELECT t.*, u.nome as utilizador_nome FROM turnos t
-           LEFT JOIN utilizadores u ON t.utilizador_id=u.id
-           WHERE t.data=$1
-           ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
-      turnoOnlyFilter ? [data, turnoOnlyFilter] : [data]
-    );
+    // Multi-loja: cada ponto de venda vê apenas os seus turnos. BD antiga
+    // (sem turnos.loja_id) → fallback sem filtro (comporta-se como antes).
+    await ensureEmpresasLojas().catch(() => {});
+    const lojaId = lojaDe(req);
+    let temLojaCol = true;
+    let turnos;
+    try {
+      turnos = await query(
+        turnoOnlyFilter
+          ? `SELECT t.*, u.nome as utilizador_nome FROM turnos t
+             LEFT JOIN utilizadores u ON t.utilizador_id=u.id
+             WHERE t.data=$1 AND t.id=$2 AND t.loja_id=$3`
+          : `SELECT t.*, u.nome as utilizador_nome FROM turnos t
+             LEFT JOIN utilizadores u ON t.utilizador_id=u.id
+             WHERE t.data=$1 AND t.loja_id=$2
+             ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
+        turnoOnlyFilter ? [data, turnoOnlyFilter, lojaId] : [data, lojaId]
+      );
+    } catch (e) {
+      if (!/loja_id/.test(String(e.message || ''))) throw e;
+      temLojaCol = false;
+      turnos = await query(
+        turnoOnlyFilter
+          ? `SELECT t.*, u.nome as utilizador_nome FROM turnos t
+             LEFT JOIN utilizadores u ON t.utilizador_id=u.id
+             WHERE t.data=$1 AND t.id=$2`
+          : `SELECT t.*, u.nome as utilizador_nome FROM turnos t
+             LEFT JOIN utilizadores u ON t.utilizador_id=u.id
+             WHERE t.data=$1
+             ORDER BY CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
+        turnoOnlyFilter ? [data, turnoOnlyFilter] : [data]
+      );
+    }
 
     if (!turnos.rows.length) {
       return res.json([]);
@@ -3917,9 +5059,17 @@ app.get('/api/dia', auth, async (req, res) => {
 
     /** Vista lista (página Dia, depósitos): sem linhas de stock nem comparação com turno anterior — muito mais rápido. */
     if (resumo) {
-      const [caixaAll, vendasAgg] = await Promise.all([
+      const [caixaAll, vendasAgg, pedidosAgg] = await Promise.all([
         query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids]),
-        query(
+        queryEmpresa(
+          `SELECT ts.turno_id,
+             COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS total_vendas
+           FROM turno_stock ts
+           INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+           INNER JOIN turnos t ON t.id = ts.turno_id
+           WHERE ts.turno_id = ANY($1::int[]) AND p.empresa_id = $2
+           GROUP BY ts.turno_id`,
+          [ids, empresaDe(req)],
           `SELECT ts.turno_id,
              COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS total_vendas
            FROM turno_stock ts
@@ -3928,7 +5078,33 @@ app.get('/api/dia', auth, async (req, res) => {
            WHERE ts.turno_id = ANY($1::int[])
            GROUP BY ts.turno_id`,
           [ids]
-        )
+        ),
+        // Total geral dos «Produtos vendidos» (pedidos ao balcão) por turno —
+        // mesma valorização do GET /turnos/:id/pedidos: preço actual do
+        // produto, com preço de pacote para bebidas por copo. Se as tabelas
+        // de pedidos ainda não existirem, devolve vazio (cartão mostra 0).
+        query(
+          `SELECT tp.turno_id,
+             COALESCE(SUM(
+               CASE
+                 WHEN p.venda_por_copo IS TRUE AND COALESCE(p.kg_por_copo,0) > 0 THEN
+                   CASE
+                     WHEN COALESCE(p.qtd_copos_pacote,0) >= 2 AND COALESCE(p.preco_copos_pacote,0) > 0 THEN
+                       FLOOR(FLOOR(tpl.quantidade)::int / p.qtd_copos_pacote) * p.preco_copos_pacote
+                       + (FLOOR(tpl.quantidade)::int % p.qtd_copos_pacote) * COALESCE(p.preco,0)
+                     ELSE FLOOR(tpl.quantidade) * COALESCE(p.preco,0)
+                   END
+                 ELSE tpl.quantidade * COALESCE(p.preco,0)
+               END
+             ), 0)::numeric AS total_kz,
+             COALESCE(SUM(tpl.quantidade), 0)::numeric AS total_itens
+           FROM turno_pedidos tp
+           JOIN turno_pedido_linhas tpl ON tpl.pedido_id = tp.id
+           JOIN produtos p ON p.id = tpl.produto_id
+           WHERE tp.turno_id = ANY($1::int[])
+           GROUP BY tp.turno_id`,
+          [ids]
+        ).catch(() => ({ rows: [] }))
       ]);
       const caixaByTurno = {};
       for (const row of caixaAll.rows) {
@@ -3938,34 +5114,45 @@ app.get('/api/dia', auth, async (req, res) => {
       for (const row of vendasAgg.rows) {
         vendasByTurno[row.turno_id] = parseFloat(row.total_vendas) || 0;
       }
+      const pedidosByTurno = {};
+      for (const row of pedidosAgg.rows) {
+        pedidosByTurno[row.turno_id] = {
+          total_kz: parseFloat(row.total_kz) || 0,
+          total_itens: parseFloat(row.total_itens) || 0
+        };
+      }
       const result = [];
       for (const turno of turnos.rows) {
         const c = caixaByTurno[turno.id] || { tpa: null, transferencia: null, dinheiro: null, saida: 0 };
         const totalGerado = sumCaixaGeradoRow(c);
         const totalFinal =
           totalGerado === null ? null : totalGerado - parseFloat(c.saida || 0);
+        const ped = pedidosByTurno[turno.id] || { total_kz: 0, total_itens: 0 };
         result.push({
           ...turno,
           stock: [],
           caixa: { ...c, total_gerado: totalGerado, total_final: totalFinal },
-          total_vendas: vendasByTurno[turno.id] || 0
+          total_vendas: vendasByTurno[turno.id] || 0,
+          pedidos_total_kz: ped.total_kz,
+          pedidos_total_itens: ped.total_itens
         });
       }
       return res.json(result);
     }
 
-    const [stockAll, caixaAll] = await Promise.all([
-      query(
-        `SELECT ts.*, p.nome as produto_nome,
+    const selStockDia = `SELECT ts.*, p.nome as produto_nome,
                 ${sqlPPrecoNaData()} AS preco,
                 p.categoria, p.ordem, p.tipo_medicao,
                 COALESCE(p.peso_tara_kg, 0)::numeric AS peso_tara_kg
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
          JOIN turnos t ON t.id = ts.turno_id
-         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
-         ORDER BY ts.turno_id, p.ordem, p.nome`,
-        [ids]
+         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}`;
+    const ordStockDia = ` ORDER BY ts.turno_id, p.ordem, p.nome`;
+    const [stockAll, caixaAll] = await Promise.all([
+      queryEmpresa(
+        `${selStockDia} AND p.empresa_id = $2${ordStockDia}`, [ids, empresaDe(req)],
+        `${selStockDia}${ordStockDia}`, [ids]
       ),
       query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids])
     ]);
@@ -3982,6 +5169,8 @@ app.get('/api/dia', auth, async (req, res) => {
 
     const prevMapByTurnoId = {};
     const prevCaixaMapByTurnoId = {};
+    const nextMapByTurnoId = {};
+    const nextCaixaMapByTurnoId = {};
     if (ids.length) {
       // Para cada turno actual, encontra o ÚLTIMO turno anterior que foi
       // registado (tem stock com deixado) e usa o `deixado` desse turno para
@@ -3989,9 +5178,12 @@ app.get('/api/dia', auth, async (req, res) => {
       // turno imediato não foi aberto, recua até ao último turno com registos.
       const slotCase = `CASE nome WHEN 'manha' THEN 0 WHEN 'tarde' THEN 1 WHEN 'noite' THEN 2 END`;
       const slotCaseT = `CASE t.nome WHEN 'manha' THEN 0 WHEN 'tarde' THEN 1 WHEN 'noite' THEN 2 END`;
+      // Comparações anterior/próximo sempre dentro da MESMA loja.
+      const lojaSel = temLojaCol ? ', loja_id' : '';
+      const lojaCond = temLojaCol ? 'AND t.loja_id = c.loja_id' : '';
       const prevStock = await query(
         `WITH cur AS (
-           SELECT id AS turno_id, data, ${slotCase} AS slot
+           SELECT id AS turno_id, data, ${slotCase} AS slot${lojaSel}
            FROM turnos WHERE id = ANY($1::int[])
          ),
          prev AS (
@@ -4001,6 +5193,7 @@ app.get('/api/dia', auth, async (req, res) => {
              SELECT t.id AS prev_turno_id
              FROM turnos t
              WHERE (t.data < c.data OR (t.data = c.data AND ${slotCaseT} < c.slot))
+               ${lojaCond}
                AND EXISTS (
                  SELECT 1 FROM turno_stock ts
                  JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
@@ -4027,6 +5220,48 @@ app.get('/api/dia', auth, async (req, res) => {
           prevCaixaMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.deixado_caixa);
         }
       }
+      // ── Mesma lógica, ao contrário: encontra o PRÓXIMO turno (já com
+      // encontrado registado) para podermos comparar Deixado(actual) vs
+      // Encontrado(próximo) — útil para detectar erros de contagem. ──
+      const nextStock = await query(
+        `WITH cur AS (
+           SELECT id AS turno_id, data, ${slotCase} AS slot${lojaSel}
+           FROM turnos WHERE id = ANY($1::int[])
+         ),
+         nxt AS (
+           SELECT c.turno_id, p.next_turno_id
+           FROM cur c
+           LEFT JOIN LATERAL (
+             SELECT t.id AS next_turno_id
+             FROM turnos t
+             WHERE (t.data > c.data OR (t.data = c.data AND ${slotCaseT} > c.slot))
+               ${lojaCond}
+               AND EXISTS (
+                 SELECT 1 FROM turno_stock ts
+                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+                 WHERE ts.turno_id = t.id AND ts.encontrado IS NOT NULL
+               )
+             ORDER BY t.data ASC, ${slotCaseT} ASC
+             LIMIT 1
+           ) p ON TRUE
+         )
+         SELECT nx.turno_id, ts.produto_id, ts.encontrado, ts.encontrado_caixa
+         FROM nxt nx
+         JOIN turno_stock ts ON ts.turno_id = nx.next_turno_id
+         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+         WHERE ts.encontrado IS NOT NULL OR ts.encontrado_caixa IS NOT NULL`,
+        [ids]
+      );
+      for (const r of nextStock.rows) {
+        if (r.encontrado !== null) {
+          if (!nextMapByTurnoId[r.turno_id]) nextMapByTurnoId[r.turno_id] = {};
+          nextMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.encontrado);
+        }
+        if (r.encontrado_caixa !== null) {
+          if (!nextCaixaMapByTurnoId[r.turno_id]) nextCaixaMapByTurnoId[r.turno_id] = {};
+          nextCaixaMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.encontrado_caixa);
+        }
+      }
     }
 
     const result = [];
@@ -4034,6 +5269,8 @@ app.get('/api/dia', auth, async (req, res) => {
       const stock = stockByTurno[turno.id] || [];
       const prevMap = prevMapByTurnoId[turno.id] || {};
       const prevCaixaMap = prevCaixaMapByTurnoId[turno.id] || {};
+      const nextMap = nextMapByTurnoId[turno.id] || {};
+      const nextCaixaMap = nextCaixaMapByTurnoId[turno.id] || {};
 
       const stockFinal = stock.map((s) => {
         const enc =
@@ -4074,6 +5311,8 @@ app.get('/api/dia', auth, async (req, res) => {
         const prevDeixadoCaixa =
           prevCaixaMap[s.produto_id] !== undefined ? prevCaixaMap[s.produto_id] : null;
 
+        const nextEncontrado = nextMap[s.produto_id] !== undefined ? nextMap[s.produto_id] : null;
+        const nextEncontradoCaixa = nextCaixaMap[s.produto_id] !== undefined ? nextCaixaMap[s.produto_id] : null;
         return {
           ...s,
           vendido: vend,
@@ -4081,7 +5320,9 @@ app.get('/api/dia', auth, async (req, res) => {
           comparacao,
           prev_deixado: prevDeixado,
           comparacao_caixa: comparacaoCaixa,
-          prev_deixado_caixa: prevDeixadoCaixa
+          prev_deixado_caixa: prevDeixadoCaixa,
+          next_encontrado: nextEncontrado,
+          next_encontrado_caixa: nextEncontradoCaixa
         };
       });
 
@@ -4120,8 +5361,7 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
     const dataIni = `${y}-${pad(m)}-01`;
     const lastDay = new Date(y, m, 0).getDate();
     const dataFim = `${y}-${pad(m)}-${pad(lastDay)}`;
-    const r = await query(
-      `SELECT t.id, t.data, t.nome, t.estado,
+    const sqlCal = `SELECT t.id, t.data, t.nome, t.estado,
               COALESCE(c.dinheiro, 0)      AS caixa_dinheiro,
               COALESCE(c.transferencia, 0) AS caixa_transferencia,
               COALESCE(c.tpa, 0)           AS caixa_tpa,
@@ -4133,9 +5373,11 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
        FROM turnos t
        LEFT JOIN turno_caixa c     ON c.turno_id = t.id
        LEFT JOIN depositos_banco d ON d.turno_id = t.id
-       WHERE t.data >= $1::date AND t.data <= $2::date
-       ORDER BY t.data, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`,
-      [dataIni, dataFim]
+       WHERE t.data >= $1::date AND t.data <= $2::date {LOJA_FILTRO}
+       ORDER BY t.data, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`;
+    const r = await queryEmpresa(
+      sqlCal.replace('{LOJA_FILTRO}', 'AND t.loja_id = $3'), [dataIni, dataFim, lojaDe(req)],
+      sqlCal.replace('{LOJA_FILTRO}', ''), [dataIni, dataFim]
     );
     const rows = r.rows.map((row) => ({
       id: row.id,
@@ -4157,27 +5399,118 @@ app.get('/api/calendario-turnos', auth, async (req, res) => {
   }
 });
 
+// ── Configuração POR EMPRESA ──────────────────────────────────
+// Cada empresa tem a sua própria configuração, guardada em stockos_meta
+// com a chave «cfg:e<empresaId>:<nome>». A Empresa 1 herda o valor da
+// chave global antiga na primeira leitura (migração suave).
+async function getConfigEmpresa(empresaId, chave, chaveLegada) {
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k=$1`, [`cfg:e${empresaId}:${chave}`]);
+    if (r.rows.length) return r.rows[0].v;
+    if (parseInt(empresaId, 10) === 1 && chaveLegada) {
+      const l = await query(`SELECT v FROM stockos_meta WHERE k=$1`, [chaveLegada]);
+      if (l.rows.length) return l.rows[0].v;
+    }
+  } catch (_) {}
+  return null;
+}
+async function setConfigEmpresa(empresaId, chave, valor) {
+  await query(
+    `INSERT INTO stockos_meta (k,v) VALUES ($1,$2) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [`cfg:e${empresaId}:${chave}`, valor]
+  );
+}
+
+// ── Config: turnos bloqueados (não permitir abrir NOVOS turnos) ──
+// POR EMPRESA — cada empresa bloqueia os seus períodos. Turnos já
+// abertos não são afectados.
+const TURNOS_NOMES_VALIDOS = ['manha', 'tarde', 'noite'];
+async function getTurnosBloqueados(empresaId) {
+  try {
+    const v = await getConfigEmpresa(empresaId || 1, 'turnos_bloqueados', 'turnos_bloqueados');
+    if (v == null) return [];
+    const arr = JSON.parse(v);
+    return Array.isArray(arr) ? arr.filter((n) => TURNOS_NOMES_VALIDOS.includes(n)) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+app.get('/api/config/turnos-bloqueados', auth, async (req, res) => {
+  res.json({ bloqueados: await getTurnosBloqueados(empresaDe(req)) });
+});
+
+app.put('/api/config/turnos-bloqueados', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body && req.body.bloqueados) ? req.body.bloqueados : [];
+    const bloq = [...new Set(raw.map(String))].filter((n) => TURNOS_NOMES_VALIDOS.includes(n));
+    await setConfigEmpresa(empresaDe(req), 'turnos_bloqueados', JSON.stringify(bloq));
+    res.json({ bloqueados: bloq });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 app.post('/api/turnos/abrir', auth, async (req, res) => {
+  // Antes da transacção: a folha de stock do turno usa SÓ produtos da
+  // empresa (verificação prévia da coluna — nunca aborta o BEGIN).
+  const temEmpProd = await colunaEmpresaDisponivel('produtos').catch(() => false);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const { data, nome } = req.body;
     if (!data || !nome) throw new Error('Data e nome obrigatórios');
     assertPodeAbrirTurno(data, nome);
+    const bloqueados = await getTurnosBloqueados(empresaDe(req));
+    if (bloqueados.includes(nome)) {
+      throw new Error(`O turno ${nome} está bloqueado — a abertura de novos turnos foi desactivada pelo administrador (Configurações).`);
+    }
 
-    const exists = await client.query('SELECT id FROM turnos WHERE data=$1 AND nome=$2', [data, nome]);
-    if (exists.rows.length) throw new Error(`Turno ${nome} já existe para ${data}`);
+    await ensureEmpresasLojas().catch(() => {});
+    const lojaId = lojaDe(req);
+    let temLojaCol = true;
+    let exists;
+    try {
+      exists = await client.query('SELECT id FROM turnos WHERE data=$1 AND nome=$2 AND loja_id=$3', [data, nome, lojaId]);
+    } catch (eL) {
+      if (!/loja_id/.test(String(eL.message || ''))) throw eL;
+      temLojaCol = false;
+      await client.query('ROLLBACK');
+      await client.query('BEGIN');
+      exists = await client.query('SELECT id FROM turnos WHERE data=$1 AND nome=$2', [data, nome]);
+    }
+    if (exists.rows.length) {
+      // Sincronização offline (client_ref): outro dispositivo pode já ter
+      // aberto o mesmo turno — devolve o existente em vez de falhar, para
+      // as escritas em fila se aplicarem a esse turno.
+      if (String((req.body && req.body.client_ref) || '').trim()) {
+        const ex = await client.query('SELECT * FROM turnos WHERE id=$1', [exists.rows[0].id]);
+        await client.query('COMMIT');
+        return res.json({ ...ex.rows[0], ja_existia: true });
+      }
+      throw new Error(`Turno ${nome} já existe para ${data}`);
+    }
 
-    const turno = await client.query(
-      'INSERT INTO turnos (data, nome, utilizador_id) VALUES ($1,$2,$3) RETURNING *',
-      [data, nome, req.user.id]
-    );
+    const turno = temLojaCol
+      ? await client.query(
+          'INSERT INTO turnos (data, nome, utilizador_id, loja_id) VALUES ($1,$2,$3,$4) RETURNING *',
+          [data, nome, req.user.id, lojaId]
+        )
+      : await client.query(
+          'INSERT INTO turnos (data, nome, utilizador_id) VALUES ($1,$2,$3) RETURNING *',
+          [data, nome, req.user.id]
+        );
     const turnoId = turno.rows[0].id;
 
-    // Stock do turno: só produtos activos marcados para a folha de stock
-    const produtos = await client.query(
-      `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`
-    );
+    // Stock do turno: só produtos activos DA EMPRESA marcados para a folha
+    const produtos = temEmpProd
+      ? await client.query(
+          `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND empresa_id=$1 AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`,
+          [empresaDe(req)]
+        )
+      : await client.query(
+          `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`
+        );
     for (const p of produtos.rows) {
       await client.query(
         'INSERT INTO turno_stock (turno_id, produto_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
@@ -4206,6 +5539,12 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
     );
     if (!r.rows.length) {
       await client.query('ROLLBACK');
+      // Sincronização offline (client_ref): se o turno já está fechado
+      // (fechado por outro dispositivo/tentativa), trata como sucesso.
+      if (String((req.body && req.body.client_ref) || '').trim()) {
+        const ja = await query(`SELECT * FROM turnos WHERE id=$1 AND estado='fechado'`, [req.params.id]).catch(() => ({ rows: [] }));
+        if (ja.rows.length) return res.json({ ...ja.rows[0], ja_fechado: true });
+      }
       return res.status(400).json({ erro: 'Turno não encontrado ou já fechado' });
     }
     const turnoId = parseInt(req.params.id, 10);
@@ -4219,6 +5558,21 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
         erro:
           'Regista pelo menos uma pessoa em «Quem realmente trabalhou» (separador Escala) antes de fechar o turno.'
       });
+    }
+    // TPA > 0 exige a foto do recibo de fecho do TPA. (Verifica a coluna
+    // ANTES do SELECT — um SELECT falhado abortaria a transacção.)
+    if (await tpaFotoDisponivel()) {
+      const cx = await client.query(
+        `SELECT tpa, COALESCE(tpa_foto_url,'') AS tpa_foto_url FROM turno_caixa WHERE turno_id=$1`,
+        [turnoId]
+      );
+      const tpaV = cx.rows.length ? parseFloat(cx.rows[0].tpa) : NaN;
+      if (Number.isFinite(tpaV) && tpaV > 0 && !cx.rows[0].tpa_foto_url) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          erro: 'Registaste valor no TPA — anexa a foto do recibo de fecho do TPA (aba 💰 Caixa) antes de fechar o turno.'
+        });
+      }
     }
     await client.query(
       `UPDATE turno_stock ts
@@ -4306,20 +5660,102 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
         erro: 'Este produto não está incluído na folha de stock do turno. Activa «Stock no turno» em Produtos.'
       });
     }
+    // Registos fechados → nas linhas existentes ignora actualizações às
+    // colunas bloqueadas (preserva o valor original):
+    //  - encontrados fechados: bloqueia encontrado/encontrado_caixa;
+    //  - deixados fechados:    bloqueia deixado/deixado_caixa.
+    // Fallback sem a coluna deixados_fechados_em (BD ainda por migrar).
+    let encontradosFechados = false;
+    let deixadosFechados = false;
+    try {
+      const turnoRow = await query(`SELECT encontrados_fechados_em, deixados_fechados_em FROM turnos WHERE id=$1`, [req.params.id]);
+      encontradosFechados = turnoRow.rows.length && turnoRow.rows[0].encontrados_fechados_em != null;
+      deixadosFechados = turnoRow.rows.length && turnoRow.rows[0].deixados_fechados_em != null;
+    } catch (_) {
+      const turnoRow = await query(`SELECT encontrados_fechados_em FROM turnos WHERE id=$1`, [req.params.id]);
+      encontradosFechados = turnoRow.rows.length && turnoRow.rows[0].encontrados_fechados_em != null;
+    }
     const enc = parseOptionalNumericBody(encontrado);
     const deix = parseOptionalNumericBody(deixado);
     const encG = parseOptionalNumericBody(encontrado_caixa);
     const deixG = parseOptionalNumericBody(deixado_caixa);
+    const sets = ['fechados=$5'];
+    if (!encontradosFechados) sets.push('encontrado=$3', 'encontrado_caixa=$6');
+    if (!deixadosFechados) sets.push('deixado=$4', 'deixado_caixa=$7');
+    const updateSet = sets.join(', ');
     const r = await query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados, encontrado_caixa, deixado_caixa)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (turno_id, produto_id)
-       DO UPDATE SET encontrado=$3, deixado=$4, fechados=$5, encontrado_caixa=$6, deixado_caixa=$7
+       DO UPDATE SET ${updateSet}
        RETURNING *`,
       [req.params.id, produto_id, enc, deix, fechados || 0, encG, deixG]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Fecha o registo inicial de encontrados — bloqueia futuras alterações
+ *  às colunas Encontrado e Enc. caixa no PUT /api/turnos/:id/stock. */
+app.post('/api/turnos/:id/encontrados/fechar', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `UPDATE turnos SET encontrados_fechados_em = COALESCE(encontrados_fechados_em, NOW())
+       WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** Reabre o registo de encontrados — só admin/gestor. */
+app.post('/api/turnos/:id/encontrados/reabrir', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const r = await query(
+      `UPDATE turnos SET encontrados_fechados_em = NULL WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/** Fecha o registo dos deixados — bloqueia futuras alterações às colunas
+ *  Deixado e Deix. caixa no PUT /api/turnos/:id/stock. */
+app.post('/api/turnos/:id/deixados/fechar', auth, async (req, res) => {
+  try {
+    const r = await query(
+      `UPDATE turnos SET deixados_fechados_em = COALESCE(deixados_fechados_em, NOW())
+       WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    const msg = /deixados_fechados_em/.test(e.message || '')
+      ? 'A coluna turnos.deixados_fechados_em ainda não existe nesta BD. Corre o workflow «Reparar schema develop» no GitHub Actions.'
+      : e.message;
+    res.status(500).json({ erro: msg });
+  }
+});
+
+/** Reabre o registo dos deixados — só admin/gestor. */
+app.post('/api/turnos/:id/deixados/reabrir', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const r = await query(
+      `UPDATE turnos SET deixados_fechados_em = NULL WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 // ── TURNO: entradas de stock + saídas de caixa (caixa.saida = despesas + compras stock) ──
@@ -4347,14 +5783,37 @@ async function ensureTurnoEntradas() {
   turnoEntradasReady = true;
 }
 
+// Produto NÃO registado numa entrada/saída: produto_id fica NULL e o nome
+// escrito à mão vai para produto_nome_livre (não entra na folha de stock,
+// mas a compra conta na caixa).
+let entradaLivreReady = false;
+async function ensureEntradaLivre() {
+  if (entradaLivreReady) return;
+  await query(`ALTER TABLE turno_entradas ALTER COLUMN produto_id DROP NOT NULL`).catch(() => {});
+  await query(`ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS produto_nome_livre TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  entradaLivreReady = true;
+}
+
 app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
   try {
-    const r = await query(
-      `SELECT te.*, p.nome as produto_nome, p.tipo_medicao
-       FROM turno_entradas te JOIN produtos p ON te.produto_id=p.id
-       WHERE te.turno_id=$1 ORDER BY te.criado_em DESC`,
-      [req.params.id]
-    );
+    let r;
+    try {
+      r = await query(
+        `SELECT te.*, COALESCE(p.nome, NULLIF(te.produto_nome_livre,''), 'Produto') as produto_nome, p.tipo_medicao
+         FROM turno_entradas te LEFT JOIN produtos p ON te.produto_id=p.id
+         WHERE te.turno_id=$1 ORDER BY te.criado_em DESC`,
+        [req.params.id]
+      );
+    } catch (e1) {
+      // BD ainda sem a coluna produto_nome_livre — SQL antigo (só registados)
+      if (!/produto_nome_livre/.test(e1.message)) throw e1;
+      r = await query(
+        `SELECT te.*, p.nome as produto_nome, p.tipo_medicao
+         FROM turno_entradas te JOIN produtos p ON te.produto_id=p.id
+         WHERE te.turno_id=$1 ORDER BY te.criado_em DESC`,
+        [req.params.id]
+      );
+    }
     res.json(r.rows);
   } catch(e) {
     if (e.message.includes('does not exist')) {
@@ -4364,41 +5823,55 @@ app.get('/api/turnos/:id/entradas', auth, async (req, res) => {
 });
 
 app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
+  const produtoLivre = String(req.body.produto_livre || '').trim();
+  // DDL do produto livre fora da transacção (um catch dentro de BEGIN aborta-a)
+  if (!req.body.produto_id && produtoLivre) { try { await ensureEntradaLivre(); } catch (_) {} }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const turnoId = req.params.id;
     const { produto_id, tipo, origem, preco, quantidade, notas } = req.body;
-    if (!produto_id || !quantidade || parseFloat(quantidade) <= 0)
-      throw new Error('produto_id e quantidade (> 0) são obrigatórios');
+    if ((!produto_id && !produtoLivre) || !quantidade || parseFloat(quantidade) <= 0)
+      throw new Error('produto (registado ou nome livre) e quantidade (> 0) são obrigatórios');
     const notasVal = String(notas != null ? notas : '').trim();
     const tipoVal   = tipo   === 'tirar'  ? 'tirar'  : 'entrada';
     const origemVal = origem === 'compra' ? 'compra' : 'armazem';
     const precoVal  = origemVal === 'compra' ? (parseFloat(preco) || 0) : 0;
 
-    const emStock = await client.query(
-      `SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS}`,
-      [produto_id]
-    );
-    if (!emStock.rows.length) {
-      throw new Error(
-        'Este produto não está na folha de stock do turno. Activa «Stock no turno» em Produtos ou regista no armazém.'
+    let registo;
+    if (produto_id) {
+      const emStock = await client.query(
+        `SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS}`,
+        [produto_id]
       );
+      if (!emStock.rows.length) {
+        throw new Error(
+          'Este produto não está na folha de stock do turno. Activa «Stock no turno» em Produtos ou regista no armazém.'
+        );
+      }
+
+      registo = await client.query(
+        'INSERT INTO turno_entradas (turno_id, produto_id, tipo, origem, preco, quantidade, notas) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+        [turnoId, produto_id, tipoVal, origemVal, precoVal, quantidade, notasVal]
+      );
+
+      // entrada = soma das entradas - soma das saídas
+      await client.query(
+        `UPDATE turno_stock SET entrada=(
+           SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE -quantidade END),0)
+           FROM turno_entradas WHERE turno_id=$1 AND produto_id=$2
+         ) WHERE turno_id=$1 AND produto_id=$2`,
+        [turnoId, produto_id]
+      );
+    } else {
+      // Produto NÃO registado: sem folha de stock a actualizar — fica o
+      // registo do movimento (e a compra conta na caixa, abaixo).
+      registo = await client.query(
+        'INSERT INTO turno_entradas (turno_id, produto_id, produto_nome_livre, tipo, origem, preco, quantidade, notas) VALUES ($1,NULL,$2,$3,$4,$5,$6,$7) RETURNING *',
+        [turnoId, produtoLivre, tipoVal, origemVal, precoVal, quantidade, notasVal]
+      );
+      registo.rows[0].produto_nome = produtoLivre;
     }
-
-    const registo = await client.query(
-      'INSERT INTO turno_entradas (turno_id, produto_id, tipo, origem, preco, quantidade, notas) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
-      [turnoId, produto_id, tipoVal, origemVal, precoVal, quantidade, notasVal]
-    );
-
-    // entrada = soma das entradas - soma das saídas
-    await client.query(
-      `UPDATE turno_stock SET entrada=(
-         SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE -quantidade END),0)
-         FROM turno_entradas WHERE turno_id=$1 AND produto_id=$2
-       ) WHERE turno_id=$1 AND produto_id=$2`,
-      [turnoId, produto_id]
-    );
 
     // Se for compra, recalcular saida da caixa
     if (origemVal === 'compra') {
@@ -4420,7 +5893,9 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
 // saida = despesas directas + compras de stock
 async function calcSaidaTotal(turnoId, client) {
   const q = client ? (s, p) => client.query(s, p) : query;
-  const despesas = await q(`SELECT COALESCE(SUM(valor),0) as t FROM turno_saidas WHERE turno_id=$1`, [turnoId]).catch(() => ({ rows: [{ t: 0 }] }));
+  // Exclui entradas de caixa guardadas em turno_saidas (notas começa por
+  // 'ENTRADA::') — essas são dinheiro que ENTROU, não saídas.
+  const despesas = await q(`SELECT COALESCE(SUM(valor),0) as t FROM turno_saidas WHERE turno_id=$1 AND COALESCE(notas,'') NOT LIKE 'ENTRADA::%'`, [turnoId]).catch(() => ({ rows: [{ t: 0 }] }));
   const compras  = await q(`SELECT COALESCE(SUM(preco),0) as t FROM turno_entradas WHERE turno_id=$1 AND origem='compra' AND tipo='entrada'`, [turnoId]).catch(() => ({ rows: [{ t: 0 }] }));
   return parseFloat(despesas.rows[0].t) + parseFloat(compras.rows[0].t);
 }
@@ -4435,6 +5910,67 @@ app.put('/api/turnos/:id/notas', auth, async (req, res) => {
     if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Foto do recibo de fecho do TPA (obrigatória para fechar turno com TPA > 0) ──
+let turnoCaixaTpaFotoReady = false;
+async function ensureTurnoCaixaTpaFoto() {
+  if (turnoCaixaTpaFotoReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_caixa_tpa_foto_v1'`);
+    if (r.rows.length) { turnoCaixaTpaFotoReady = true; return; }
+  } catch (_) {}
+  await qry(`ALTER TABLE turno_caixa ADD COLUMN IF NOT EXISTS tpa_foto_url TEXT NOT NULL DEFAULT ''`, [], 'turno_caixa-tpa-foto');
+  try {
+    const chk = await query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='turno_caixa' AND column_name='tpa_foto_url'`
+    );
+    if (chk.rows.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('turno_caixa_tpa_foto_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      turnoCaixaTpaFotoReady = true;
+    }
+  } catch (_) {}
+}
+
+/** Verifica se a coluna existe mesmo (o ALTER falha em silêncio sem owner). */
+async function tpaFotoDisponivel() {
+  await ensureTurnoCaixaTpaFoto();
+  return turnoCaixaTpaFotoReady;
+}
+
+app.post('/api/turnos/:id/caixa/tpa-foto', auth, async (req, res) => {
+  try {
+    if (!(await tpaFotoDisponivel())) {
+      return res.status(400).json({ erro: 'A coluna turno_caixa.tpa_foto_url ainda não existe nesta BD. Corre o workflow «Reparar schema develop».' });
+    }
+    const remover = !!(req.body && req.body.remover);
+    let finalUrl = '';
+    if (!remover) {
+      const fotoRaw = String((req.body && req.body.foto_base64) || '').trim();
+      const parsed = parseDataUrlFoto(fotoRaw);
+      if (!parsed) return res.status(400).json({ erro: 'Envia uma imagem (JPEG, PNG ou WebP) em base64 (data URL).' });
+      const { url: sbUrl, key: sbKey } = getSupabaseEnv();
+      if (sbUrl && sbKey) {
+        const fileKey = `tpa-fecho/${req.params.id}-${crypto.randomBytes(6).toString('hex')}.${parsed.ext}`;
+        finalUrl = await uploadBorderoToSupabase(parsed.buffer, fileKey, parsed.contentType);
+      } else {
+        if (fotoRaw.length > 4 * 1024 * 1024) {
+          return res.status(400).json({ erro: 'Imagem demasiado grande. Define SUPABASE_SERVICE_ROLE_KEY no servidor para usar Storage.' });
+        }
+        finalUrl = fotoRaw;
+      }
+    }
+    const r = await query(
+      `INSERT INTO turno_caixa (turno_id, tpa_foto_url) VALUES ($1,$2)
+       ON CONFLICT (turno_id) DO UPDATE SET tpa_foto_url=$2
+       RETURNING tpa_foto_url`,
+      [req.params.id, finalUrl]
+    );
+    res.json({ tpa_foto_url: r.rows[0].tpa_foto_url || '' });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
@@ -4518,6 +6054,69 @@ app.post('/api/turnos/:id/saidas', auth, async (req, res) => {
   } finally { client.release(); }
 });
 
+// ── Entradas extras de caixa (dinheiro que entrou — sangria reversa,
+// devoluções, fundo de caixa, etc). Tabela própria, formato análogo a
+// turno_saidas. Resiliente: se a tabela não existir e a app não puder
+// criar (sem owner), GET devolve [] e POST falha com mensagem clara. ──
+let _turnoCaixaEntradasAvail = null;
+async function ensureTurnoCaixaEntradas() {
+  if (_turnoCaixaEntradasAvail === true) return true;
+  try {
+    const r = await query(
+      `SELECT 1 FROM information_schema.tables
+       WHERE table_schema='public' AND table_name='turno_caixa_entradas' LIMIT 1`
+    );
+    if (r.rows.length) { _turnoCaixaEntradasAvail = true; return true; }
+  } catch (_) {}
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS turno_caixa_entradas (
+      id SERIAL PRIMARY KEY,
+      turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
+      descricao TEXT NOT NULL DEFAULT '',
+      valor NUMERIC(15,2) NOT NULL DEFAULT 0,
+      notas TEXT NOT NULL DEFAULT '',
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    _turnoCaixaEntradasAvail = true;
+  } catch (e) {
+    console.warn('[ensureTurnoCaixaEntradas]', e && e.message);
+    _turnoCaixaEntradasAvail = false;
+  }
+  return _turnoCaixaEntradasAvail;
+}
+
+app.get('/api/turnos/:id/caixa-entradas', auth, async (req, res) => {
+  try {
+    const ok = await ensureTurnoCaixaEntradas();
+    if (!ok) return res.json([]);
+    const r = await query(
+      `SELECT * FROM turno_caixa_entradas WHERE turno_id=$1 ORDER BY criado_em DESC`,
+      [req.params.id]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    if (e.message && e.message.includes('does not exist')) { res.json([]); return; }
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.post('/api/turnos/:id/caixa-entradas', auth, async (req, res) => {
+  try {
+    const ok = await ensureTurnoCaixaEntradas();
+    if (!ok) return res.status(503).json({
+      erro: 'Tabela turno_caixa_entradas em falta e sem permissão para a criar. Pede ao admin para a criar no SQL Editor do Supabase.'
+    });
+    const { descricao, valor, notas } = req.body;
+    if (!descricao || !descricao.trim()) return res.status(400).json({ erro: 'Descrição é obrigatória' });
+    if (!valor || parseFloat(valor) <= 0) return res.status(400).json({ erro: 'Valor deve ser maior que 0' });
+    const r = await query(
+      'INSERT INTO turno_caixa_entradas (turno_id, descricao, valor, notas) VALUES ($1,$2,$3,$4) RETURNING *',
+      [req.params.id, descricao.trim(), valor, String(notas || '').trim()]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 /** Resposta de /escala/semana (template muda raramente). */
 const _escalaSemanaCache = new Map();
 const ESCALA_SEMANA_CACHE_MS = Math.max(
@@ -4533,17 +6132,29 @@ app.get('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), async
     await ensureDepositosBanco();
     const data = (req.query.data || '').trim();
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '80', 10)));
-    let sql = `SELECT d.*, u.nome AS criado_por_nome, t.nome AS turno_nome, t.data AS turno_data
+    const lojaId = lojaDe(req);
+    const montarSql = (comLoja) => {
+      let s = `SELECT d.*, u.nome AS criado_por_nome, t.nome AS turno_nome, t.data AS turno_data
                FROM depositos_banco d
                JOIN turnos t ON t.id = d.turno_id
                LEFT JOIN utilizadores u ON u.id::text = d.criado_por::text`;
-    const params = [];
-    if (data) {
-      sql += ` WHERE t.data = $1`;
-      params.push(data);
+      const w = [];
+      const p = [];
+      if (data) { p.push(data); w.push(`t.data = $${p.length}`); }
+      if (comLoja) { p.push(lojaId); w.push(`t.loja_id = $${p.length}`); }
+      if (w.length) s += ` WHERE ` + w.join(' AND ');
+      s += ` ORDER BY t.data DESC, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 ELSE 3 END, d.criado_em DESC LIMIT ${limit}`;
+      return { s, p };
+    };
+    let r;
+    try {
+      const q1 = montarSql(true);
+      r = await query(q1.s, q1.p);
+    } catch (eL) {
+      if (!/loja_id/.test(String(eL.message || ''))) throw eL;
+      const q2 = montarSql(false);
+      r = await query(q2.s, q2.p);
     }
-    sql += ` ORDER BY t.data DESC, CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 ELSE 3 END, d.criado_em DESC LIMIT ${limit}`;
-    const r = await query(sql, params);
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -4570,6 +6181,9 @@ app.post('/api/depositos', auth, requireRole('admin', 'gestor', 'compras'), asyn
     const vtransfRaw = parseFloat(req.body?.valor_transferencia);
     const vtransf = Number.isNaN(vtransfRaw) ? 0 : Math.max(0, vtransfRaw);
     await assertTurnoFechado(turno_id);
+    if (!(await turnoNoContexto(req, parseInt(turno_id, 10)).catch(() => true))) {
+      return res.status(404).json({ erro: 'Turno não encontrado' });
+    }
     // Bloqueia alterações se já registado e fechado — só admin reabre.
     const ex = await query(`SELECT fechado FROM depositos_banco WHERE turno_id=$1`, [parseInt(turno_id, 10)]);
     if (ex.rows.length && ex.rows[0].fechado === true && req.user.role !== 'admin') {
@@ -4651,6 +6265,9 @@ app.post('/api/depositos/lote', auth, requireRole('admin', 'gestor', 'compras'),
       const vtransfRaw = parseFloat(raw.valor_transferencia);
       const vtransf = Number.isNaN(vtransfRaw) ? 0 : Math.max(0, vtransfRaw);
       await assertTurnoFechado(tid);
+      if (!(await turnoNoContexto(req, tid).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
       valid.push({
         turno_id: tid,
         data_deposito: (raw.data_deposito || new Date().toISOString().split('T')[0]).trim(),
@@ -4752,7 +6369,10 @@ app.patch('/api/depositos/abrir', auth, requireRole('admin'), async (req, res) =
     await ensureDepositosBanco();
     const data = String(req.query.data || req.body?.data || '').trim();
     if (!data) return res.status(400).json({ erro: 'Indica a data (?data=YYYY-MM-DD).' });
-    const r = await query(
+    const r = await queryEmpresa(
+      `UPDATE depositos_banco d SET fechado = FALSE
+       FROM turnos t WHERE t.id = d.turno_id AND t.data = $1::date AND t.loja_id = $2 AND d.fechado = TRUE`,
+      [data, lojaDe(req)],
       `UPDATE depositos_banco d SET fechado = FALSE
        FROM turnos t WHERE t.id = d.turno_id AND t.data = $1::date AND d.fechado = TRUE`,
       [data]
@@ -4846,6 +6466,13 @@ async function ensureIrregularidadeDecisoes() {
 /** GET decisões por turno(s). Aceita ?turno_id=1,2,3 ou ?turno_id=1 */
 app.get('/api/irregularidades/decisoes', auth, async (req, res) => {
   try {
+    {
+      const tIrr = parseInt((req.query && req.query.turno_id) || '', 10);
+      if (Number.isFinite(tIrr) && tIrr > 0 && !(await turnoNoContexto(req, tIrr).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
+    }
+
     await ensureIrregularidadeDecisoes();
     const raw = String(req.query.turno_id || '').trim();
     if (!raw) return res.json([]);
@@ -4867,6 +6494,13 @@ app.get('/api/irregularidades/decisoes', auth, async (req, res) => {
 /** POST decidir (upsert). { turno_id, categoria, aceite=true, justificacao='' } */
 app.post('/api/irregularidades/decisao', auth, requireRole('admin'), async (req, res) => {
   try {
+    {
+      const tIrr = parseInt((req.body && req.body.turno_id) || '', 10);
+      if (Number.isFinite(tIrr) && tIrr > 0 && !(await turnoNoContexto(req, tIrr).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
+    }
+
     await ensureIrregularidadeDecisoes();
     const tid = parseInt(req.body?.turno_id, 10);
     const cat = String(req.body?.categoria || '').trim().toLowerCase();
@@ -4897,6 +6531,13 @@ app.post('/api/irregularidades/decisao', auth, requireRole('admin'), async (req,
 /** DELETE — remover decisão (volta a pendente). */
 app.delete('/api/irregularidades/decisao', auth, requireRole('admin'), async (req, res) => {
   try {
+    {
+      const tIrr = parseInt((req.query && req.query.turno_id) || '', 10);
+      if (Number.isFinite(tIrr) && tIrr > 0 && !(await turnoNoContexto(req, tIrr).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
+    }
+
     await ensureIrregularidadeDecisoes();
     const tid = parseInt(req.query.turno_id, 10);
     const cat = String(req.query.categoria || '').trim().toLowerCase();
@@ -4941,6 +6582,13 @@ async function ensureIrregularidadeComentarios() {
 /** GET comentários por turno(s). ?turno_id=1,2,3 — devolve todos ordenados por criado_em ASC. */
 app.get('/api/irregularidades/comentarios', auth, async (req, res) => {
   try {
+    {
+      const tIrr = parseInt((req.query && req.query.turno_id) || '', 10);
+      if (Number.isFinite(tIrr) && tIrr > 0 && !(await turnoNoContexto(req, tIrr).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
+    }
+
     await ensureIrregularidadeComentarios();
     const raw = String(req.query.turno_id || '').trim();
     if (!raw) return res.json([]);
@@ -4962,6 +6610,13 @@ app.get('/api/irregularidades/comentarios', auth, async (req, res) => {
 /** POST adicionar comentário. { turno_id, categoria, comentario } — qualquer utilizador autenticado. */
 app.post('/api/irregularidades/comentario', auth, async (req, res) => {
   try {
+    {
+      const tIrr = parseInt((req.body && req.body.turno_id) || '', 10);
+      if (Number.isFinite(tIrr) && tIrr > 0 && !(await turnoNoContexto(req, tIrr).catch(() => true))) {
+        return res.status(404).json({ erro: 'Turno não encontrado' });
+      }
+    }
+
     await ensureIrregularidadeComentarios();
     const tid = parseInt(req.body?.turno_id, 10);
     const cat = String(req.body?.categoria || '').trim().toLowerCase();
@@ -5146,13 +6801,31 @@ app.delete('/api/presencas/justificacao', auth, async (req, res) => {
 
 // ── HISTÓRICO ─────────────────────────────────────────────────
 /** Uma linha por turno: total_vendas (stock×preço), total_gerado e total_final (caixa), como em GET /dia. */
+/** Filtro opcional por HORA no Histórico. `inicio`/`fim` aceitam
+ *  'YYYY-MM-DD' ou 'YYYY-MM-DDTHH:MM'. Sem hora (ou dia inteiro
+ *  00:00–23:59) fica só o filtro por data, como antes. Com hora, filtra
+ *  pelos turnos ABERTOS dentro do intervalo (criado_em em hora local de
+ *  Angola). Os valores passam por regex antes de irem inline no SQL. */
+function filtroHoraTurnos(inicio, fim, defD1, defD2) {
+  const m1 = String(inicio || '').match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2}))?$/);
+  const m2 = String(fim || '').match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2}))?$/);
+  const d1 = m1 ? m1[1] : defD1;
+  const d2 = m2 ? m2[1] : defD2;
+  const h1 = m1 && m1[2] != null ? `${m1[2]}:${m1[3]}` : null;
+  const h2 = m2 && m2[2] != null ? `${m2[2]}:${m2[3]}` : null;
+  const diaInteiro = (!h1 || h1 === '00:00') && (!h2 || h2 === '23:59');
+  if (diaInteiro) return { d1, d2, horaSql: '' };
+  const horaSql = ` AND COALESCE(t.criado_em AT TIME ZONE 'Africa/Luanda', t.data::timestamp) BETWEEN '${d1} ${h1 || '00:00'}'::timestamp AND '${d2} ${h2 || '23:59'}:59.999'::timestamp`;
+  return { d1, d2, horaSql };
+}
+
 app.get('/api/historico', auth, async (req, res) => {
   try {
     const { inicio, fim } = req.query;
-    const d1 = inicio || '2020-01-01';
-    const d2 = fim || new Date().toISOString().split('T')[0];
-    const r = await query(
-      `SELECT
+    const { d1, d2, horaSql } = filtroHoraTurnos(
+      inicio, fim, '2020-01-01', new Date().toISOString().split('T')[0]
+    );
+    const sqlHist = `SELECT
          t.id AS turno_id,
          t.data,
          t.nome,
@@ -5174,10 +6847,13 @@ app.get('/api/historico', auth, async (req, res) => {
          INNER JOIN turnos t ON t.id = ts.turno_id
          GROUP BY ts.turno_id
        ) v ON v.turno_id = t.id
-       WHERE t.data BETWEEN $1::date AND $2::date
+       WHERE t.data BETWEEN $1::date AND $2::date{HORA_FILTRO} {LOJA_FILTRO}
        ORDER BY t.data DESC,
-         CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`,
-      [d1, d2]
+         CASE t.nome WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 9 END`;
+    const sqlHistH = sqlHist.replace('{HORA_FILTRO}', horaSql);
+    const r = await queryEmpresa(
+      sqlHistH.replace('{LOJA_FILTRO}', 'AND t.loja_id = $3'), [d1, d2, lojaDe(req)],
+      sqlHistH.replace('{LOJA_FILTRO}', ''), [d1, d2]
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -5192,8 +6868,9 @@ app.get('/api/historico', auth, async (req, res) => {
 app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
   try {
     const { inicio, fim } = req.query;
-    const d1 = inicio || '2020-01-01';
-    const d2 = fim || new Date().toISOString().split('T')[0];
+    const { d1, d2, horaSql } = filtroHoraTurnos(
+      inicio, fim, '2020-01-01', new Date().toISOString().split('T')[0]
+    );
     const precoUnitDirecto = _sqlUsePrecoHistorico
       ? `COALESCE(tv.preco_unit_snapshot, (SELECT h.preco FROM produto_preco_historico h WHERE h.produto_id = p.id AND ${sqlWhereHistLteTurno('t')} ORDER BY h.valid_from DESC, ${SQL_ORD_H} DESC LIMIT 1), p.preco)::numeric`
       : `COALESCE(tv.preco_unit_snapshot, p.preco)::numeric`;
@@ -5210,8 +6887,7 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
         ELSE
           tv.quantidade * (${precoUnitDirecto})
       END`;
-    const r = await query(
-      `WITH preco_compra_atual AS (
+    const sqlVp = `WITH preco_compra_atual AS (
          SELECT DISTINCT ON (produto_id) produto_id,
            CASE WHEN quantidade > 0 AND valor_total > 0
                 THEN (valor_total / quantidade)
@@ -5238,7 +6914,7 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
          INNER JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
          INNER JOIN turnos t ON t.id = ts.turno_id
          LEFT JOIN preco_compra_atual pc ON pc.produto_id = p.id
-         WHERE t.data BETWEEN $1::date AND $2::date
+         WHERE t.data BETWEEN $1::date AND $2::date{HORA_FILTRO} {LOJA_FILTRO}
          GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.preco, pc.preco_unitario, p.ordem
        ),
        direct_sales AS (
@@ -5258,14 +6934,17 @@ app.get('/api/historico/vendas-produtos', auth, async (req, res) => {
          INNER JOIN produtos p ON p.id = tv.produto_id AND p.em_stock_turno IS FALSE AND ${"p.categoria IN ('menu','ingredientes','bebida')"}
          INNER JOIN turnos t ON t.id = tv.turno_id
          LEFT JOIN preco_compra_atual pc ON pc.produto_id = p.id
-         WHERE t.data BETWEEN $1::date AND $2::date
+         WHERE t.data BETWEEN $1::date AND $2::date{HORA_FILTRO} {LOJA_FILTRO}
          GROUP BY p.id, p.nome, p.categoria, p.tipo_medicao, p.venda_por_copo, p.preco, pc.preco_unitario, p.ordem
        )
        SELECT * FROM stock_sales WHERE qtd_vendida > 0 OR valor_vendas > 0
        UNION ALL
        SELECT * FROM direct_sales WHERE qtd_vendida > 0 OR valor_vendas > 0
-       ORDER BY categoria, ordem NULLS LAST, produto_nome`,
-      [d1, d2]
+       ORDER BY categoria, ordem NULLS LAST, produto_nome`;
+    const sqlVpH = sqlVp.split('{HORA_FILTRO}').join(horaSql);
+    const r = await queryEmpresa(
+      sqlVpH.split('{LOJA_FILTRO}').join('AND t.loja_id = $3'), [d1, d2, lojaDe(req)],
+      sqlVpH.split('{LOJA_FILTRO}').join(''), [d1, d2]
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -5356,10 +7035,35 @@ async function produtoPermitePedidoVenda(client, produto_id) {
 
 const TIPOS_PAGAMENTO_PEDIDO = ['dinheiro', 'tpa', 'transferencia', 'mbway', 'outro'];
 
+/** Popularidade dos produtos: total pedido (soma de quantidades) por
+ *  produto em TODOS os turnos. Usado para ordenar os tiles em Pedidos
+ *  ao balcão pelos mais solicitados. */
+app.get('/api/pedidos/popularidade', auth, async (req, res) => {
+  try {
+    await ensureTurnoPedidos();
+    const r = await query(
+      `SELECT tpl.produto_id::text AS produto_id,
+              COALESCE(SUM(tpl.quantidade),0) AS total_qtd,
+              COUNT(*) AS n_linhas
+       FROM turno_pedido_linhas tpl
+       GROUP BY tpl.produto_id`
+    );
+    res.json(r.rows.map((row) => ({
+      produto_id: row.produto_id,
+      total_qtd: parseFloat(row.total_qtd) || 0,
+      n_linhas: parseInt(row.n_linhas, 10) || 0
+    })));
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
   try {
     await ensureTurnoPedidos();
     await ensureTurnoPedidosEntrega();
+    const hasDev = await qtdDevolvidaAvailable();
+    const devSel = hasDev ? 'COALESCE(tpl.qtd_devolvida,0)' : '0';
     const turnoId = req.params.id;
     const r = await query(
       `SELECT tp.id, tp.turno_id, tp.cliente_nome, tp.tipo_pagamento, tp.com_entrega, tp.criado_em,
@@ -5368,10 +7072,23 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
               COALESCE(tp.comissao_valor,0) AS comissao_valor,
               COALESCE(tp.comissao_valor_potencial,0) AS comissao_valor_potencial,
               u.nome AS promotor_nome,
+              t.data AS turno_data, t.nome AS turno_nome,
+              EXISTS (
+                SELECT 1 FROM escala e
+                WHERE e.data = t.data AND e.turno = t.nome
+                  AND e.utilizador_id = tp.promotor_id::text
+              ) AS promotor_tem_escala,
+              EXISTS (
+                SELECT 1 FROM turno_equipa_real er
+                WHERE er.turno_id = tp.turno_id
+                  AND er.utilizador_id = tp.promotor_id::text
+              ) AS promotor_clocked_in,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
+              ${devSel} AS quantidade_devolvida,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
-              p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct
+              p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct, p.categoria AS produto_categoria
        FROM turno_pedidos tp
+       JOIN turnos t ON t.id = tp.turno_id
        LEFT JOIN utilizadores u ON u.id = tp.promotor_id
        LEFT JOIN turno_pedido_linhas tpl ON tpl.pedido_id = tp.id
        LEFT JOIN produtos p ON p.id = tpl.produto_id
@@ -5397,20 +7114,28 @@ app.get('/api/turnos/:id/pedidos', auth, async (req, res) => {
           operador_id: row.operador_id || null,
           comissao_valor: parseFloat(row.comissao_valor) || 0,
           comissao_valor_potencial: parseFloat(row.comissao_valor_potencial) || 0,
+          promotor_tem_escala: row.promotor_tem_escala === true,
+          promotor_clocked_in: row.promotor_clocked_in === true,
+          // "A trabalhar" = consta na equipa real do turno (quem realmente
+          // trabalhou). Não exige escala (cobre quem cobriu turnos).
+          promotor_a_trabalhar: row.promotor_clocked_in === true,
           linhas: []
         });
       }
       if (row.linha_id != null && row.produto_id != null) {
         map.get(row.id).linhas.push({
           produto_id: row.produto_id,
+          linha_id: row.linha_id,
           quantidade: parseFloat(row.quantidade),
+          quantidade_devolvida: parseFloat(row.quantidade_devolvida) || 0,
           produto_nome: row.produto_nome,
           preco: parseFloat(row.preco) || 0,
           venda_por_copo: row.venda_por_copo,
           kg_por_copo: parseFloat(row.kg_por_copo) || 0,
           preco_copos_pacote: parseFloat(row.preco_copos_pacote) || 0,
           qtd_copos_pacote: parseInt(row.qtd_copos_pacote, 10) || 0,
-          comissao_pct: parseFloat(row.comissao_pct) || 0
+          comissao_pct: parseFloat(row.comissao_pct) || 0,
+          produto_categoria: row.produto_categoria || null
         });
       }
     }
@@ -5443,6 +7168,8 @@ app.get('/api/pedidos', auth, async (req, res) => {
   try {
     await ensureTurnoPedidos();
     await ensureTurnoPedidosEntrega();
+    const hasDev = await qtdDevolvidaAvailable();
+    const devSel = hasDev ? 'COALESCE(tpl.qtd_devolvida,0)' : '0';
     const data = String(req.query.data || '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) {
       return res.status(400).json({ erro: 'Indica ?data=YYYY-MM-DD' });
@@ -5456,8 +7183,9 @@ app.get('/api/pedidos', auth, async (req, res) => {
               COALESCE(tp.comissao_valor_potencial,0) AS comissao_valor_potencial,
               u.nome AS promotor_nome,
               tpl.id AS linha_id, tpl.produto_id, tpl.quantidade,
+              ${devSel} AS quantidade_devolvida,
               p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
-              p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct
+              p.preco_copos_pacote, p.qtd_copos_pacote, COALESCE(p.comissao_pct,0) AS comissao_pct, p.categoria AS produto_categoria
        FROM turno_pedidos tp
        JOIN turnos t ON t.id = tp.turno_id
        LEFT JOIN utilizadores u ON u.id = tp.promotor_id
@@ -5491,14 +7219,17 @@ app.get('/api/pedidos', auth, async (req, res) => {
       if (row.linha_id != null && row.produto_id != null) {
         map.get(row.id).linhas.push({
           produto_id: row.produto_id,
+          linha_id: row.linha_id,
           quantidade: parseFloat(row.quantidade),
+          quantidade_devolvida: parseFloat(row.quantidade_devolvida) || 0,
           produto_nome: row.produto_nome,
           preco: parseFloat(row.preco) || 0,
           venda_por_copo: row.venda_por_copo,
           kg_por_copo: parseFloat(row.kg_por_copo) || 0,
           preco_copos_pacote: parseFloat(row.preco_copos_pacote) || 0,
           qtd_copos_pacote: parseInt(row.qtd_copos_pacote, 10) || 0,
-          comissao_pct: parseFloat(row.comissao_pct) || 0
+          comissao_pct: parseFloat(row.comissao_pct) || 0,
+          produto_categoria: row.produto_categoria || null
         });
       }
     }
@@ -5538,11 +7269,204 @@ function calcLinhaSubtotal(preco, quantidade, vendaPorCopo, kgPorCopo, qtdCoposP
   return (parseFloat(quantidade) || 0) * (parseFloat(preco) || 0);
 }
 
+/** Devolve 1 unidade de uma linha de pedido. Acumula em qtd_devolvida,
+ *  ajusta turno_vendas (subtrai 1), recalcula comissão proporcional ao
+ *  total líquido e cria uma saída de caixa com a etiqueta "Devolução —
+ *  pedido #N (Produto)". Requer a coluna turno_pedido_linhas.qtd_devolvida. */
+app.post('/api/turnos/:turnoId/pedidos/:pedidoId/devolver', auth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const hasDev = await qtdDevolvidaAvailable();
+    if (!hasDev) {
+      return res.status(503).json({
+        erro: 'Devoluções indisponíveis: a coluna turno_pedido_linhas.qtd_devolvida não existe. Pede ao admin para a criar no SQL Editor do Supabase: ALTER TABLE turno_pedido_linhas ADD COLUMN qtd_devolvida NUMERIC(10,3) NOT NULL DEFAULT 0;'
+      });
+    }
+    await client.query('BEGIN');
+    const turnoId = req.params.turnoId;
+    const pedidoId = parseInt(req.params.pedidoId, 10);
+    const linhaIdRaw = req.body && req.body.linha_id;
+    const linhaId = parseInt(linhaIdRaw, 10);
+    if (!Number.isFinite(linhaId)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ erro: 'linha_id obrigatório.' });
+    }
+    // Garante que a linha pertence ao pedido e ao turno.
+    const lr = await client.query(
+      `SELECT tpl.id, tpl.pedido_id, tpl.produto_id, tpl.quantidade,
+              COALESCE(tpl.qtd_devolvida,0) AS qtd_devolvida,
+              tp.turno_id, tp.tipo_pagamento, tp.promotor_id,
+              tp.promotor_modo, COALESCE(tp.promotor_pct_total,0) AS promotor_pct_total,
+              p.nome AS produto_nome, p.preco, p.venda_por_copo, p.kg_por_copo,
+              COALESCE(p.qtd_copos_pacote,0) AS qtd_copos_pacote,
+              COALESCE(p.preco_copos_pacote,0) AS preco_copos_pacote,
+              COALESCE(p.comissao_pct,0) AS comissao_pct
+       FROM turno_pedido_linhas tpl
+       JOIN turno_pedidos tp ON tp.id = tpl.pedido_id
+       JOIN produtos p ON p.id = tpl.produto_id
+       WHERE tpl.id = $1 AND tpl.pedido_id = $2 AND tp.turno_id = $3
+       FOR UPDATE`,
+      [linhaId, pedidoId, turnoId]
+    );
+    if (!lr.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ erro: 'Linha de pedido não encontrada neste turno.' });
+    }
+    const ln = lr.rows[0];
+    const qtdTotal = parseFloat(ln.quantidade) || 0;
+    const qtdDevAntes = parseFloat(ln.qtd_devolvida) || 0;
+    const restante = qtdTotal - qtdDevAntes;
+    if (restante <= 0.0001) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ erro: 'Nada para devolver — todas as unidades desta linha já foram devolvidas.' });
+    }
+    const passo = 1;
+    const qtdDevNova = Math.min(qtdTotal, qtdDevAntes + passo);
+    const realmenteDevolvido = qtdDevNova - qtdDevAntes; // pode ser < 1 só na última
+    // Calcula o valor estornado: comparando o subtotal da linha ANTES vs
+    // DEPOIS (respeitando regra de pacote para copos).
+    const calcSub = (qtd) => {
+      const isCopo = ln.venda_por_copo === true && parseFloat(ln.kg_por_copo) > 0;
+      const u = parseFloat(ln.preco) || 0;
+      const n = parseInt(ln.qtd_copos_pacote, 10) || 0;
+      const pp = parseFloat(ln.preco_copos_pacote) || 0;
+      if (isCopo) {
+        const c = Math.floor(qtd);
+        return (n >= 2 && pp > 0) ? Math.floor(c / n) * pp + (c % n) * u : c * u;
+      }
+      return qtd * u;
+    };
+    const subAntes = calcSub(qtdTotal - qtdDevAntes);
+    const subDepois = calcSub(qtdTotal - qtdDevNova);
+    const valorDevolvido = Math.max(0, subAntes - subDepois);
+    // 1) Actualiza a linha (qtd_devolvida).
+    await client.query(
+      `UPDATE turno_pedido_linhas SET qtd_devolvida=$1 WHERE id=$2`,
+      [qtdDevNova, linhaId]
+    );
+    // 2) Subtrai a quantidade de turno_vendas.
+    const oldRow = await client.query(
+      `SELECT quantidade FROM turno_vendas WHERE turno_id=$1 AND produto_id=$2`,
+      [turnoId, ln.produto_id]
+    );
+    const oldQ = oldRow.rows.length ? parseFloat(oldRow.rows[0].quantidade) : 0;
+    const novoTotal = Math.max(0, oldQ - realmenteDevolvido);
+    await applyTurnoVendaQuantity(client, turnoId, ln.produto_id, novoTotal);
+    // 3) Recalcula comissão do pedido com os totais novos (líquidos).
+    const linhasPedido = await client.query(
+      `SELECT tpl.quantidade, COALESCE(tpl.qtd_devolvida,0) AS qtd_devolvida,
+              p.preco, p.venda_por_copo, p.kg_por_copo,
+              COALESCE(p.qtd_copos_pacote,0) AS qtd_copos_pacote,
+              COALESCE(p.preco_copos_pacote,0) AS preco_copos_pacote,
+              COALESCE(p.comissao_pct,0) AS comissao_pct
+       FROM turno_pedido_linhas tpl JOIN produtos p ON p.id=tpl.produto_id
+       WHERE tpl.pedido_id=$1`,
+      [pedidoId]
+    );
+    let totalPedido = 0;
+    let comissaoPotencial = 0;
+    for (const l of linhasPedido.rows) {
+      const isCopo2 = l.venda_por_copo === true && parseFloat(l.kg_por_copo) > 0;
+      const u = parseFloat(l.preco) || 0;
+      const n = parseInt(l.qtd_copos_pacote, 10) || 0;
+      const pp = parseFloat(l.preco_copos_pacote) || 0;
+      const qLiq = Math.max(0, parseFloat(l.quantidade) - parseFloat(l.qtd_devolvida));
+      let sub;
+      if (isCopo2) {
+        const c = Math.floor(qLiq);
+        sub = (n >= 2 && pp > 0) ? Math.floor(c / n) * pp + (c % n) * u : c * u;
+      } else {
+        sub = qLiq * u;
+      }
+      totalPedido += sub;
+      comissaoPotencial += sub * (parseFloat(l.comissao_pct) || 0) / 100;
+    }
+    let comissaoValor = 0;
+    if (ln.promotor_id) {
+      const modo = ln.promotor_modo === 'total' ? 'total' : 'produto';
+      if (modo === 'total') {
+        comissaoValor = totalPedido * (parseFloat(ln.promotor_pct_total) || 0) / 100;
+      } else {
+        comissaoValor = comissaoPotencial;
+      }
+    }
+    await client.query(
+      `UPDATE turno_pedidos SET comissao_valor=$1, comissao_valor_potencial=$2 WHERE id=$3`,
+      [Math.round(comissaoValor * 100) / 100, Math.round(comissaoPotencial * 100) / 100, pedidoId]
+    );
+    // 4) Cria saída de caixa pelo valor devolvido (se > 0).
+    if (valorDevolvido > 0.0001) {
+      const descricao = `Devolução — pedido #${pedidoId} (${ln.produto_nome})`;
+      await client.query(
+        `INSERT INTO turno_saidas (turno_id, descricao, valor, notas)
+         VALUES ($1,$2,$3,$4)`,
+        [turnoId, descricao, Math.round(valorDevolvido * 100) / 100, `Devolução de ${fmtNumPlain(realmenteDevolvido)} unidade(s) ao cliente.`]
+      );
+      const novasSaida = await calcSaidaTotal(turnoId, client);
+      await client.query(`UPDATE turno_caixa SET saida=$1 WHERE turno_id=$2`, [novasSaida, turnoId]);
+    }
+    await client.query('COMMIT');
+    res.json({
+      sucesso: true,
+      pedido_id: pedidoId,
+      linha_id: linhaId,
+      qtd_devolvida_total: qtdDevNova,
+      qtd_devolvida_agora: realmenteDevolvido,
+      valor_devolvido: Math.round(valorDevolvido * 100) / 100,
+      comissao_valor: Math.round(comissaoValor * 100) / 100
+    });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ erro: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+function fmtNumPlain(n) {
+  const v = parseFloat(n);
+  if (!Number.isFinite(v)) return '0';
+  return v.toLocaleString('pt-AO', { maximumFractionDigits: 3 });
+}
+
+/** Idempotência dos pedidos (fila offline): client_ref único por pedido —
+ *  reenviar o mesmo pedido devolve o já gravado em vez de duplicar. */
+let turnoPedidosClientRefReady = false;
+async function ensureTurnoPedidosClientRef() {
+  if (turnoPedidosClientRefReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='turno_pedidos_client_ref_v1'`);
+    if (r.rows.length) { turnoPedidosClientRefReady = true; return; }
+  } catch (_) {}
+  await qry(`ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS client_ref TEXT`, [], 'turno_pedidos-client-ref');
+  await qry(`CREATE UNIQUE INDEX IF NOT EXISTS idx_turno_pedidos_client_ref ON turno_pedidos(client_ref) WHERE client_ref IS NOT NULL AND client_ref <> ''`, [], 'idx-turno-pedidos-client-ref');
+  try {
+    const chk = await query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='turno_pedidos' AND column_name='client_ref'`
+    );
+    if (chk.rows.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('turno_pedidos_client_ref_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      turnoPedidosClientRefReady = true;
+    }
+  } catch (_) {}
+}
+
 app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
   const client = await pool.connect();
   try {
     await ensureTurnoPedidos();
     await ensureTurnoPedidosEntrega();
+    await ensureTurnoPedidosClientRef();
+    const clientRef = String((req.body && req.body.client_ref) || '').trim().slice(0, 64);
+    // Já processado (retry da fila offline)? Devolve o existente.
+    if (clientRef && turnoPedidosClientRefReady) {
+      const dup = await query(`SELECT id, criado_em FROM turno_pedidos WHERE client_ref=$1 LIMIT 1`, [clientRef]);
+      if (dup.rows.length) {
+        // O finally liberta a ligação — aqui só devolvemos o existente.
+        return res.json({ ...dup.rows[0], duplicado: true });
+      }
+    }
     await client.query('BEGIN');
     const turnoId = parseInt(req.params.id, 10);
     const { cliente_nome, linhas, tipo_pagamento, com_entrega, promotor_id, valor_entrega } = req.body;
@@ -5597,26 +7521,38 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
     let promotor = null;
     if (promotor_id) {
       const pr = await client.query(
-        `SELECT id, nome, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total
-         FROM utilizadores WHERE id=$1 AND ativo=true AND promotor=true`,
+        `SELECT id, nome, COALESCE(comissao_modo,'produto') AS comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total
+         FROM utilizadores WHERE id=$1 AND ativo=true`,
         [promotor_id]
       );
       if (!pr.rows.length) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ erro: 'Promotor inválido ou inactivo.' });
+        return res.status(400).json({ erro: 'Utilizador inválido ou inactivo.' });
       }
       promotor = pr.rows[0];
     }
 
+    const fpOn = await forcaPacoteAvailable();
     let totalPedido = 0;
     let comissaoPotencial = 0;
     for (const line of normalized) {
       const pr = await client.query(
-        `SELECT preco, venda_por_copo, kg_por_copo, qtd_copos_pacote, preco_copos_pacote, COALESCE(comissao_pct,0) AS comissao_pct
+        `SELECT nome, preco, venda_por_copo, kg_por_copo, qtd_copos_pacote, preco_copos_pacote, ${fpOn ? 'COALESCE(forca_pacote,false)' : 'false'} AS forca_pacote, COALESCE(comissao_pct,0) AS comissao_pct
          FROM produtos WHERE id=$1`,
         [line.produto_id]
       );
       const p = pr.rows[0];
+      // Produtos com "Só em lote" exigem quantidade múltipla de qtd_copos_pacote.
+      if (p && p.forca_pacote && parseInt(p.qtd_copos_pacote, 10) >= 2) {
+        const lote = parseInt(p.qtd_copos_pacote, 10);
+        const q = Math.floor(parseFloat(line.quantidade) || 0);
+        if (q <= 0 || q % lote !== 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            erro: `«${p.nome}» só pode ser vendido em lotes de ${lote} copos (recebido: ${q}).`
+          });
+        }
+      }
       const sub = calcLinhaSubtotal(p.preco, line.quantidade, p.venda_por_copo, p.kg_por_copo, p.qtd_copos_pacote, p.preco_copos_pacote);
       totalPedido += sub;
       comissaoPotencial += sub * (parseFloat(p.comissao_pct) || 0) / 100;
@@ -5637,23 +7573,35 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
       }
     }
 
-    const pedidoIns = await client.query(
-      `INSERT INTO turno_pedidos (turno_id, cliente_nome, tipo_pagamento, com_entrega, valor_entrega, promotor_id, promotor_modo, promotor_pct_total, comissao_valor, comissao_valor_potencial, operador_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id, criado_em`,
-      [
-        turnoId,
-        String(cliente_nome || '').trim().slice(0, 200),
-        tpag,
-        comEntrega,
-        Math.round(vEntrega * 100) / 100,
-        promotor ? promotor.id : null,
-        promotorModo,
-        promotorPct,
-        Math.round(comissaoValor * 100) / 100,
-        Math.round(comissaoPotencial * 100) / 100,
-        req.user && req.user.id ? req.user.id : null
-      ]
-    );
+    let pedidoIns;
+    try {
+      pedidoIns = await client.query(
+        `INSERT INTO turno_pedidos (turno_id, cliente_nome, tipo_pagamento, com_entrega, valor_entrega, promotor_id, promotor_modo, promotor_pct_total, comissao_valor, comissao_valor_potencial, operador_id${turnoPedidosClientRefReady && clientRef ? ', client_ref' : ''})
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11${turnoPedidosClientRefReady && clientRef ? ',$12' : ''}) RETURNING id, criado_em`,
+        [
+          turnoId,
+          String(cliente_nome || '').trim().slice(0, 200),
+          tpag,
+          comEntrega,
+          Math.round(vEntrega * 100) / 100,
+          promotor ? promotor.id : null,
+          promotorModo,
+          promotorPct,
+          Math.round(comissaoValor * 100) / 100,
+          Math.round(comissaoPotencial * 100) / 100,
+          req.user && req.user.id ? req.user.id : null,
+          ...(turnoPedidosClientRefReady && clientRef ? [clientRef] : [])
+        ]
+      );
+    } catch (eIns) {
+      // Corrida entre retries: outro pedido com o mesmo client_ref ganhou.
+      if (clientRef && /idx_turno_pedidos_client_ref|client_ref/.test(eIns.message || '')) {
+        await client.query('ROLLBACK');
+        const dup2 = await query(`SELECT id, criado_em FROM turno_pedidos WHERE client_ref=$1 LIMIT 1`, [clientRef]);
+        if (dup2.rows.length) return res.json({ ...dup2.rows[0], duplicado: true });
+      }
+      throw eIns;
+    }
     const pedidoId = pedidoIns.rows[0].id;
     for (const line of normalized) {
       await client.query(
@@ -5701,6 +7649,12 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
     await ensureTurnoPedidos();
     const params = [];
     const where = ['tp.promotor_id IS NOT NULL'];
+    let whereLojaCom = '';
+    try {
+      params.push(lojaDe(req));
+      whereLojaCom = `t.loja_id = $${params.length}`;
+      where.push(whereLojaCom);
+    } catch (_) {}
     if (req.query.turno_id) {
       params.push(parseInt(req.query.turno_id, 10));
       where.push(`tp.turno_id = $${params.length}`);
@@ -5731,13 +7685,12 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
                WHERE e.data = t.data AND e.turno = t.nome
                  AND e.utilizador_id = tp.promotor_id::text
              ) AS promotor_tem_escala,
-             (
-               SELECT pr.tipo FROM presencas pr
+             EXISTS (
+               SELECT 1 FROM presencas pr
                WHERE pr.utilizador_id = tp.promotor_id
-                 AND pr.criado_em <= tp.criado_em
-               ORDER BY pr.criado_em DESC
-               LIMIT 1
-             ) = 'entrada' AS promotor_clocked_in,
+                 AND pr.tipo = 'entrada'
+                 AND pr.criado_em::date = t.data
+             ) AS promotor_clocked_in,
              (SELECT COALESCE(SUM(
                 CASE WHEN p.venda_por_copo = TRUE AND p.kg_por_copo > 0 THEN
                   CASE WHEN COALESCE(p.qtd_copos_pacote,0) >= 2 AND COALESCE(p.preco_copos_pacote,0) > 0
@@ -5756,12 +7709,23 @@ app.get('/api/comissoes', auth, requireRole('admin','gestor'), async (req, res) 
       WHERE ${where.join(' AND ')}
       ORDER BY tp.criado_em DESC
     `;
-    const r = await query(sql, params);
+    let r;
+    try {
+      r = await query(sql, params);
+    } catch (eL) {
+      // BD sem turnos.loja_id (por migrar) — repete sem o filtro de loja
+      // (a condição vira sempre-verdadeira mantendo o parâmetro referenciado).
+      if (!/loja_id/.test(String(eL.message || '')) || !whereLojaCom) throw eL;
+      const semLoja = whereLojaCom.replace('t.loja_id = ', '') + '::int IS NOT NULL';
+      r = await query(sql.replace(whereLojaCom, semLoja), params);
+    }
     const linhas = r.rows.map(row => {
       const auto = row.promotor_id && row.operador_id && row.promotor_id === row.operador_id;
       const temEscala = row.promotor_tem_escala === true;
       const clockedIn = row.promotor_clocked_in === true;
-      const aTrabalhar = temEscala && clockedIn;
+      // "A trabalhar" = consta na equipa real do turno (quem realmente
+      // trabalhou); não exige escala.
+      const aTrabalhar = clockedIn;
       return {
         pedido_id: row.pedido_id,
         turno_id: row.turno_id,
@@ -5852,11 +7816,18 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
     const oldQty = old.rows.length ? parseFloat(old.rows[0].quantidade) : 0;
     const delta = qtyCopos - oldQty;
 
-    await client.query(
-      `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)
-       ON CONFLICT (turno_id,produto_id) DO UPDATE SET quantidade=$3`,
-      [turnoId, produto_id, qtyCopos]
-    );
+    // Upsert sem ON CONFLICT (ver applyTurnoVendaQuantity).
+    if (old.rows.length) {
+      await client.query(
+        `UPDATE turno_vendas SET quantidade=$3 WHERE turno_id=$1 AND produto_id=$2`,
+        [turnoId, produto_id, qtyCopos]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO turno_vendas (turno_id,produto_id,quantidade) VALUES ($1,$2,$3)`,
+        [turnoId, produto_id, qtyCopos]
+      );
+    }
 
     if (delta !== 0) {
       if (vendeCopo) {
@@ -5911,7 +7882,23 @@ app.post('/api/turnos/:id/vendas', auth, async (req, res) => {
 app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total FROM utilizadores ORDER BY nome");
+    await ensureUtilizadoresFicha();
+    const base = "id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total";
+    // Dados financeiros (salário base, IBAN) só para administradores.
+    const isAdminReq = req.user && req.user.role === 'admin';
+    const fin = isAdminReq ? ", salario_base, COALESCE(iban,'') AS iban" : "";
+    const ficha = ", COALESCE(telefone,'') AS telefone, COALESCE(bi,'') AS bi, COALESCE(morada,'') AS morada, data_nascimento::text AS data_nascimento, data_admissao::text AS data_admissao" + fin + ", COALESCE(contacto_emergencia,'') AS contacto_emergencia, COALESCE(notas_funcionario,'') AS notas_funcionario, loja_id, empresa_id";
+    const emp = empresaDe(req);
+    const todosDaEmpresa = req.query.todos === '1';
+    let r;
+    try {
+      r = todosDaEmpresa
+        ? await query(`SELECT ${base}${ficha} FROM utilizadores WHERE empresa_id=$1 ORDER BY nome`, [emp])
+        : await query(`SELECT ${base}${ficha} FROM utilizadores WHERE empresa_id=$1 AND (loja_id IS NULL OR loja_id=$2) ORDER BY nome`, [emp, lojaDe(req)]);
+    } catch (_) {
+      // BD sem as colunas da ficha/empresa (por migrar) — lista na mesma.
+      r = await query(`SELECT ${base} FROM utilizadores ORDER BY nome`);
+    }
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -5920,7 +7907,12 @@ app.get('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
 app.get('/api/equipa', auth, requireRole('admin','gestor','operador','compras'), async (req, res) => {
   try {
     await ensureUsernameColumn();
-    const r = await query("SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor FROM utilizadores ORDER BY nome");
+    const selEq = "SELECT id,email,nome,username,role,ativo, face_descriptor IS NOT NULL AS has_face, COALESCE(face_foto_url,'') AS face_foto_url, COALESCE(promotor,false) AS promotor, loja_id FROM utilizadores";
+    const selEqSem = selEq.replace(', loja_id FROM', ' FROM');
+    const r = await queryEmpresa(
+      `${selEq} WHERE empresa_id=$1 AND (loja_id IS NULL OR loja_id=$2) ORDER BY nome`, [empresaDe(req), lojaDe(req)],
+      `${selEqSem} WHERE empresa_id=$1 ORDER BY nome`, [empresaDe(req)]
+    ).catch(() => query(`${selEqSem} ORDER BY nome`, []));
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -5928,37 +7920,156 @@ app.get('/api/equipa', auth, requireRole('admin','gestor','operador','compras'),
 /** Promotores activos — usado no dropdown de pedido balcão. */
 app.get('/api/promotores', auth, async (req, res) => {
   try {
-    const r = await query(
-      "SELECT id, nome, username, comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total FROM utilizadores WHERE ativo=true AND promotor=true ORDER BY nome"
+    const selProm = "SELECT id, nome, username, COALESCE(comissao_modo,'produto') AS comissao_modo, COALESCE(comissao_pct_total,0) AS comissao_pct_total FROM utilizadores WHERE ativo=true";
+    const r = await queryEmpresa(
+      `${selProm} AND empresa_id=$1 ORDER BY nome`, [empresaDe(req)],
+      `${selProm} ORDER BY nome`, []
     );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── Ficha do funcionário: dados pessoais/contratuais em utilizadores ──
+let utilizadoresFichaReady = false;
+const UTILIZADORES_FICHA_COLS = ['telefone', 'bi', 'morada', 'data_nascimento', 'data_admissao', 'salario_base', 'iban', 'contacto_emergencia', 'notas_funcionario'];
+async function ensureUtilizadoresFicha() {
+  if (utilizadoresFichaReady) return;
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k='utilizadores_ficha_ddl_v1'`);
+    if (r.rows.length) { utilizadoresFichaReady = true; return; }
+  } catch (_) {}
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS telefone TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-telefone');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS bi TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-bi');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS morada TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-morada');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS data_nascimento DATE`, [], 'utilizadores-data-nascimento');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS data_admissao DATE`, [], 'utilizadores-data-admissao');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS salario_base NUMERIC(15,2)`, [], 'utilizadores-salario-base');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS iban TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-iban');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS contacto_emergencia TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-contacto-emergencia');
+  await qry(`ALTER TABLE utilizadores ADD COLUMN IF NOT EXISTS notas_funcionario TEXT NOT NULL DEFAULT ''`, [], 'utilizadores-notas-funcionario');
+  // Só marca como feito se as colunas existirem mesmo (o ALTER pode falhar
+  // em silêncio quando o role da app não é owner da tabela).
+  try {
+    const chk = await query(
+      `SELECT COUNT(*)::int AS n FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='utilizadores' AND column_name = ANY($1::text[])`,
+      [UTILIZADORES_FICHA_COLS]
+    );
+    if ((chk.rows[0] && chk.rows[0].n) === UTILIZADORES_FICHA_COLS.length) {
+      await query(`INSERT INTO stockos_meta (k,v) VALUES ('utilizadores_ficha_ddl_v1','done') ON CONFLICT (k) DO NOTHING`).catch(() => {});
+      utilizadoresFichaReady = true;
+    }
+  } catch (_) {}
+}
+
+/** Actualiza os campos da ficha (se as colunas existirem). Devolve aviso em
+ *  vez de rebentar quando a BD ainda não foi migrada.
+ *  Dados FINANCEIROS (salário base e IBAN) só podem ser alterados por
+ *  administradores — para outros roles são ignorados. */
+async function updateFichaFuncionario(userId, body, role) {
+  if (role !== 'admin') {
+    body = { ...body };
+    delete body.salario_base;
+    delete body.iban;
+  }
+  const vals = {
+    telefone: body.telefone != null ? String(body.telefone).trim() : null,
+    bi: body.bi != null ? String(body.bi).trim() : null,
+    morada: body.morada != null ? String(body.morada).trim() : null,
+    data_nascimento: body.data_nascimento ? String(body.data_nascimento).slice(0, 10) : null,
+    data_admissao: body.data_admissao ? String(body.data_admissao).slice(0, 10) : null,
+    salario_base: body.salario_base != null && body.salario_base !== '' ? (parseFloat(body.salario_base) || 0) : null,
+    iban: body.iban != null ? String(body.iban).trim() : null,
+    contacto_emergencia: body.contacto_emergencia != null ? String(body.contacto_emergencia).trim() : null,
+    notas_funcionario: body.notas_funcionario != null ? String(body.notas_funcionario).trim() : null
+  };
+  const temAlgum = UTILIZADORES_FICHA_COLS.some((c) => body[c] !== undefined);
+  if (!temAlgum) return null;
+  await ensureUtilizadoresFicha();
+  try {
+    await query(
+      `UPDATE utilizadores SET
+         telefone = COALESCE($1, telefone),
+         bi = COALESCE($2, bi),
+         morada = COALESCE($3, morada),
+         data_nascimento = CASE WHEN $4::text IS NOT NULL THEN NULLIF($4,'')::date ELSE data_nascimento END,
+         data_admissao = CASE WHEN $5::text IS NOT NULL THEN NULLIF($5,'')::date ELSE data_admissao END,
+         salario_base = COALESCE($6, salario_base),
+         iban = COALESCE($7, iban),
+         contacto_emergencia = COALESCE($8, contacto_emergencia),
+         notas_funcionario = COALESCE($9, notas_funcionario)
+       WHERE id = $10`,
+      [vals.telefone, vals.bi, vals.morada,
+       body.data_nascimento !== undefined ? String(body.data_nascimento || '') : null,
+       body.data_admissao !== undefined ? String(body.data_admissao || '') : null,
+       vals.salario_base, vals.iban, vals.contacto_emergencia, vals.notas_funcionario, userId]
+    );
+    return null;
+  } catch (e) {
+    if (/column .* does not exist/i.test(e.message || '')) {
+      return 'A ficha do funcionário não foi gravada: colunas em falta na BD. Corre o workflow «Reparar schema develop» no GitHub Actions.';
+    }
+    throw e;
+  }
+}
+
 app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureUsernameColumn();
     const { email, nome, role, username } = req.body;
-    const un = normalizeUsername(username);
-    if (!email || !String(email).trim()) return res.status(400).json({ erro: 'Email é obrigatório' });
-    if (!isValidUsername(un)) {
-      return res.status(400).json({ erro: 'Nome de utilizador: 3 a 50 caracteres (letras minúsculas, números, . _ -)' });
+    if (!nome || !String(nome).trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
+    // Password inicial OBRIGATÓRIA — não existe password padrão.
+    const passRaw = String((req.body && req.body.password) || '').trim();
+    if (!passRaw) return res.status(400).json({ erro: 'Define a password inicial (não existe password padrão).' });
+    if (passRaw.length < 6) {
+      return res.status(400).json({ erro: 'A password inicial deve ter pelo menos 6 caracteres.' });
     }
-    const dup = await query(
-      'SELECT id FROM utilizadores WHERE LOWER(username)=LOWER($1)',
-      [un]
-    );
-    if (dup.rows.length) return res.status(400).json({ erro: 'Nome de utilizador já em uso' });
+    // Nome de utilizador OPCIONAL — validado só quando indicado.
+    const un = normalizeUsername(username);
+    if (un) {
+      if (!isValidUsername(un)) {
+        return res.status(400).json({ erro: 'Nome de utilizador: 3 a 50 caracteres (letras minúsculas, números, . _ -)' });
+      }
+      const dup = await query('SELECT id FROM utilizadores WHERE LOWER(username)=LOWER($1)', [un]);
+      if (dup.rows.length) return res.status(400).json({ erro: 'Nome de utilizador já em uso' });
+    }
+    // Email OPCIONAL. A coluna é NOT NULL UNIQUE, por isso sem email
+    // guarda-se um placeholder único @stockos.local (escondido na UI).
+    let emailFinal = String(email || '').trim();
+    if (emailFinal) {
+      const dupE = await query('SELECT id FROM utilizadores WHERE LOWER(email)=LOWER($1)', [emailFinal]);
+      if (dupE.rows.length) return res.status(400).json({ erro: 'Email já em uso' });
+    } else {
+      emailFinal = `sem-email-${crypto.randomBytes(4).toString('hex')}@stockos.local`;
+    }
     const r = await query(
       'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
-      [String(email).trim(), nome, un, role || 'operador', hashPassword('StockOS2025!')]
+      [emailFinal, String(nome).trim(), un || null, role || 'operador', hashPassword(passRaw)]
     );
-    res.json(r.rows[0]);
+    // Empresa do criador (admin migrado cria na empresa efectiva) + loja
+    // fixa (obrigatória na prática para operador / operador de sistema).
+    try {
+      const lojaFixa = req.body.loja_id != null && String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null;
+      await query(`UPDATE utilizadores SET empresa_id=$1, loja_id=$2 WHERE id=$3`, [empresaDe(req), lojaFixa, r.rows[0].id]);
+    } catch (_) { /* BD antiga sem colunas */ }
+    const aviso = await updateFichaFuncionario(r.rows[0].id, req.body || {}, req.user && req.user.role);
+    const semLogin = !un && emailFinal.endsWith('@stockos.local');
+    res.json({
+      ...r.rows[0],
+      ...(semLogin ? { aviso_login: 'Sem nome de utilizador nem email — este funcionário não consegue iniciar sessão até definires um deles.' } : {}),
+      ...(aviso ? { aviso } : {})
+    });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) => {
   try {
+    const chkU = await queryEmpresa(
+      `SELECT 1 FROM utilizadores WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM utilizadores WHERE id=$1`, [req.params.id]
+    );
+    if (!chkU.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
+
     await ensureUsernameColumn();
     const { nome, role, ativo, password, username, promotor, comissao_modo, comissao_pct_total } = req.body;
     const un = normalizeUsername(username);
@@ -5990,7 +8101,15 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
           'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,promotor=$4,comissao_modo=$5,comissao_pct_total=$6 WHERE id=$7 RETURNING id,email,nome,username,role,ativo,promotor,comissao_modo,comissao_pct_total',
           [nome, role, ativo, isPromotor, modo, pctTotal, req.params.id]
         );
-    res.json(r.rows[0]);
+    // Loja fixa: '' → NULL (admin/gestor, sem loja fixa).
+    if (req.body.loja_id !== undefined) {
+      try {
+        const lojaFixa = String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null;
+        await query(`UPDATE utilizadores SET loja_id=$1 WHERE id=$2`, [lojaFixa, req.params.id]);
+      } catch (_) { /* BD antiga sem coluna */ }
+    }
+    const aviso = await updateFichaFuncionario(req.params.id, req.body || {}, req.user && req.user.role);
+    res.json(aviso ? { ...r.rows[0], aviso } : r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -6026,11 +8145,26 @@ async function ensurePresencas() {
   }
 }
 
-/** Descritores faciais de todos os utilizadores activos (sem auth — necessário no ecrã de presença). */
+/** Descritores faciais dos utilizadores activos (sem auth — necessário no
+ *  ecrã de presença). Isolado por empresa: o quiosque envia ?loja= e a
+ *  empresa deriva do mapa loja→empresa. */
 app.get('/api/face-descriptors', async (req, res) => {
   try {
     await dbReady;
-    const r = await query(`SELECT id, nome, face_descriptor FROM utilizadores WHERE ativo=true AND face_descriptor IS NOT NULL`);
+    let emp = null;
+    try {
+      const qL = parseInt(req.query && req.query.loja, 10);
+      if (Number.isFinite(qL) && qL > 0) {
+        const mapa = await mapaLojaEmpresa();
+        if (mapa && mapa[String(qL)] != null) emp = mapa[String(qL)];
+      }
+    } catch (_) {}
+    const r = emp != null
+      ? await queryEmpresa(
+          `SELECT id, nome, face_descriptor FROM utilizadores WHERE ativo=true AND face_descriptor IS NOT NULL AND empresa_id=$1`, [emp],
+          `SELECT id, nome, face_descriptor FROM utilizadores WHERE ativo=true AND face_descriptor IS NOT NULL`, []
+        )
+      : await query(`SELECT id, nome, face_descriptor FROM utilizadores WHERE ativo=true AND face_descriptor IS NOT NULL`);
     res.json(r.rows.map(u => ({ id: u.id, nome: u.nome, descriptor: u.face_descriptor })));
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -6038,6 +8172,12 @@ app.get('/api/face-descriptors', async (req, res) => {
 /** Guardar descritor facial — qualquer utilizador autenticado pode registar (próprio ou de outro). */
 app.put('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
   try {
+    const chkU = await queryEmpresa(
+      `SELECT 1 FROM utilizadores WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM utilizadores WHERE id=$1`, [req.params.id]
+    );
+    if (!chkU.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
+
     const { descriptor, foto_base64 } = req.body;
     if (!Array.isArray(descriptor) || descriptor.length !== 128) {
       return res.status(400).json({ erro: 'Descritor inválido (array de 128 números)' });
@@ -6059,6 +8199,12 @@ app.put('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
 /** Remover descritor facial — qualquer utilizador autenticado pode remover. */
 app.delete('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
   try {
+    const chkU = await queryEmpresa(
+      `SELECT 1 FROM utilizadores WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM utilizadores WHERE id=$1`, [req.params.id]
+    );
+    if (!chkU.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
+
     const r = await query(`SELECT face_foto_url FROM utilizadores WHERE id=$1`, [req.params.id]);
     const oldUrl = r.rows[0]?.face_foto_url;
     await query(`UPDATE utilizadores SET face_descriptor=NULL, face_foto_url='' WHERE id=$1`, [req.params.id]);
@@ -6071,16 +8217,38 @@ app.delete('/api/utilizadores/:id/face-descriptor', auth, async (req, res) => {
 app.post('/api/presencas', async (req, res) => {
   try {
     await dbReady;
-    const { utilizador_id, tipo } = req.body;
+    const { utilizador_id, tipo, criado_em_cliente } = req.body;
     if (!utilizador_id || !['entrada','saida'].includes(tipo)) {
       return res.status(400).json({ erro: 'Parâmetros inválidos' });
     }
     const u = await query(`SELECT id, nome FROM utilizadores WHERE id=$1 AND ativo=true`, [utilizador_id]);
     if (!u.rows.length) return res.status(404).json({ erro: 'Utilizador não encontrado' });
-    const r = await query(
-      `INSERT INTO presencas (utilizador_id, tipo) VALUES ($1, $2) RETURNING id, criado_em`,
-      [utilizador_id, tipo]
-    );
+    // Presença registada offline: usa a hora do aparelho (o momento real do
+    // picar), não a hora da sincronização. Limites de sanidade: nunca no
+    // futuro (>5 min) nem com mais de 72 h — fora disso, NOW().
+    let quando = null;
+    if (criado_em_cliente) {
+      const ms = new Date(criado_em_cliente).getTime();
+      const agora = Date.now();
+      if (Number.isFinite(ms) && ms <= agora + 5 * 60 * 1000 && ms >= agora - 72 * 3600 * 1000) {
+        quando = new Date(ms).toISOString();
+      }
+    }
+    let r;
+    try {
+      r = await query(
+        `INSERT INTO presencas (utilizador_id, tipo, criado_em, loja_id)
+         VALUES ($1, $2, COALESCE($3::timestamptz, NOW()), $4) RETURNING id, criado_em`,
+        [utilizador_id, tipo, quando, lojaDe(req)]
+      );
+    } catch (eL) {
+      if (!/loja_id/.test(String(eL.message || ''))) throw eL;
+      r = await query(
+        `INSERT INTO presencas (utilizador_id, tipo, criado_em)
+         VALUES ($1, $2, COALESCE($3::timestamptz, NOW())) RETURNING id, criado_em`,
+        [utilizador_id, tipo, quando]
+      );
+    }
     res.json({ ok: true, id: r.rows[0].id, nome: u.rows[0].nome, tipo, criado_em: r.rows[0].criado_em });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -6094,8 +8262,11 @@ app.get('/api/presencas', auth, requireRole('admin','gestor'), async (req, res) 
     const params = [];
     if (data) { params.push(data); sql += ` AND p.criado_em::date = $${params.length}`; }
     if (utilizador_id) { params.push(utilizador_id); sql += ` AND p.utilizador_id = $${params.length}`; }
-    sql += ` ORDER BY p.criado_em DESC LIMIT 500`;
-    const r = await query(sql, params);
+    const ordP = ` ORDER BY p.criado_em DESC LIMIT 500`;
+    const r = await queryEmpresa(
+      `${sql} AND u.empresa_id = $${params.length + 1}${ordP}`, [...params, empresaDe(req)],
+      `${sql}${ordP}`, params
+    );
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -6182,28 +8353,33 @@ app.get('/api/escala/semana', auth, async (req, res) => {
   try {
     const { data_inicio, data_fim } = req.query;
     if (!data_inicio || !data_fim) return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios' });
-    const cacheKey = `${data_inicio}\t${data_fim}`;
+    const empEsc = empresaDe(req);
+    const lojaEsc = lojaDe(req);
+    const cacheKey = `${data_inicio}\t${data_fim}\te${empEsc}\tl${lojaEsc}`;
     const now = Date.now();
     const hit = _escalaSemanaCache.get(cacheKey);
     if (hit && now - hit.at < ESCALA_SEMANA_CACHE_MS) {
       return res.json(hit.body);
     }
-    const [sem, tpl] = await Promise.all([
-      query(
-        `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id, e.area_trabalho,
+    const selSem = `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id, e.area_trabalho,
                 u.nome as utilizador_nome, u.role as utilizador_role
          FROM escala e
          LEFT JOIN utilizadores u ON e.utilizador_id::text = u.id::text
-         WHERE e.data >= $1 AND e.data <= $2
-         ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
-        [data_inicio, data_fim]
-      ),
-      query(`
-        SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, et.notas, et.area_trabalho, u.nome as utilizador_nome
+         WHERE e.data >= $1 AND e.data <= $2`;
+    const ordSem = ` ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`;
+    const selTpl = `SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, et.notas, et.area_trabalho, u.nome as utilizador_nome
         FROM escala_template et
-        LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text
-        ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
-      `)
+        LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text`;
+    const ordTpl = ` ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome`;
+    const [sem, tpl] = await Promise.all([
+      queryEmpresa(
+        `${selSem} AND e.loja_id = $3${ordSem}`, [data_inicio, data_fim, lojaEsc],
+        `${selSem} AND u.empresa_id = $3${ordSem}`, [data_inicio, data_fim, empEsc]
+      ).catch(() => query(`${selSem}${ordSem}`, [data_inicio, data_fim])),
+      queryEmpresa(
+        `${selTpl} WHERE et.loja_id = $1${ordTpl}`, [lojaEsc],
+        `${selTpl} WHERE u.empresa_id = $1${ordTpl}`, [empEsc]
+      ).catch(() => query(`${selTpl}${ordTpl}`, []))
     ]);
     const body = { semana: sem.rows, template: tpl.rows };
     _escalaSemanaCache.set(cacheKey, { at: now, body });
@@ -6233,15 +8409,16 @@ app.get('/api/escala', auth, async (req, res) => {
   try {
     const { data_inicio, data_fim } = req.query;
     if (!data_inicio || !data_fim) return res.status(400).json({ erro: 'data_inicio e data_fim são obrigatórios' });
-    const r = await query(
-      `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id, e.area_trabalho,
+    const selE = `SELECT e.id, e.data, e.turno, e.notas, e.utilizador_id, e.area_trabalho,
               u.nome as utilizador_nome, u.role as utilizador_role
        FROM escala e
        LEFT JOIN utilizadores u ON e.utilizador_id::text = u.id::text
-       WHERE e.data >= $1 AND e.data <= $2
-       ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`,
-      [data_inicio, data_fim]
-    );
+       WHERE e.data >= $1 AND e.data <= $2`;
+    const ordE = ` ORDER BY e.data, CASE e.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END`;
+    const r = await queryEmpresa(
+      `${selE} AND e.loja_id = $3${ordE}`, [data_inicio, data_fim, lojaDe(req)],
+      `${selE} AND u.empresa_id = $3${ordE}`, [data_inicio, data_fim, empresaDe(req)]
+    ).catch(() => query(`${selE}${ordE}`, [data_inicio, data_fim]));
     res.json(r.rows);
   } catch(e) {
     if (e.message.includes('does not exist')) {
@@ -6264,7 +8441,12 @@ app.put('/api/escala', auth, requireRole('admin', 'gestor'), async (req, res) =>
     const area = parseAreaTrabalhoBody(area_trabalho);
     if (area === false) return res.status(400).json({ erro: 'area_trabalho deve ser 1, 2 ou 3' });
     if (utilizador_id) {
-      const r = await query(
+      const r = await queryEmpresa(
+        `INSERT INTO escala (data, turno, utilizador_id, notas, area_trabalho, loja_id)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (data, turno, utilizador_id) DO UPDATE SET notas = EXCLUDED.notas, area_trabalho = EXCLUDED.area_trabalho, loja_id = EXCLUDED.loja_id
+         RETURNING *`,
+        [data, turno, utilizador_id, notas || '', area, lojaDe(req)],
         `INSERT INTO escala (data, turno, utilizador_id, notas, area_trabalho)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (data, turno, utilizador_id) DO UPDATE SET notas = EXCLUDED.notas, area_trabalho = EXCLUDED.area_trabalho
@@ -6305,12 +8487,14 @@ async function ensureEscalaTemplate() {
 
 app.get('/api/escala/template', auth, async (req, res) => {
   try {
-    const r = await query(`
-      SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, et.notas, et.area_trabalho, u.nome as utilizador_nome
+    const selT = `SELECT et.id, et.dia_semana, et.turno, et.utilizador_id, et.notas, et.area_trabalho, u.nome as utilizador_nome
       FROM escala_template et
-      LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text
-      ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome
-    `);
+      LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text`;
+    const ordT = ` ORDER BY et.dia_semana, CASE et.turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 END, u.nome`;
+    const r = await queryEmpresa(
+      `${selT} WHERE et.loja_id = $1${ordT}`, [lojaDe(req)],
+      `${selT} WHERE u.empresa_id = $1${ordT}`, [empresaDe(req)]
+    ).catch(() => query(`${selT}${ordT}`, []));
     res.json(r.rows);
   } catch(e) {
     if (e.message.includes('does not exist')) {
@@ -6328,7 +8512,12 @@ app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (re
     const n = notas || '';
     const area = parseAreaTrabalhoBody(area_trabalho);
     if (area === false) return res.status(400).json({ erro: 'area_trabalho deve ser 1, 2 ou 3' });
-    const ins = await query(
+    const ins = await queryEmpresa(
+      `INSERT INTO escala_template (dia_semana, turno, utilizador_id, notas, area_trabalho, loja_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (dia_semana, turno, utilizador_id) DO UPDATE SET notas=EXCLUDED.notas, area_trabalho=EXCLUDED.area_trabalho, loja_id=EXCLUDED.loja_id
+       RETURNING *`,
+      [dia_semana, turno, u, n, area, lojaDe(req)],
       `INSERT INTO escala_template (dia_semana, turno, utilizador_id, notas, area_trabalho)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (dia_semana, turno, utilizador_id) DO UPDATE SET notas=EXCLUDED.notas, area_trabalho=EXCLUDED.area_trabalho
@@ -6346,6 +8535,13 @@ app.post('/api/escala/template', auth, requireRole('admin', 'gestor'), async (re
 
 app.delete('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
+    const chkT = await queryEmpresa(
+      `SELECT 1 FROM escala_template et LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text WHERE et.id=$1 AND u.empresa_id=$2`,
+      [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM escala_template WHERE id=$1`, [req.params.id]
+    );
+    if (!chkT.rows.length) return res.status(404).json({ erro: 'Registo de escala não encontrado' });
+
     await query(`DELETE FROM escala_template WHERE id=$1`, [req.params.id]);
     clearEscalaSemanaCache();
     res.json({ sucesso: true });
@@ -6354,6 +8550,13 @@ app.delete('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), asy
 
 app.patch('/api/escala/template/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
   try {
+    const chkT = await queryEmpresa(
+      `SELECT 1 FROM escala_template et LEFT JOIN utilizadores u ON et.utilizador_id::text = u.id::text WHERE et.id=$1 AND u.empresa_id=$2`,
+      [req.params.id, empresaDe(req)],
+      `SELECT 1 FROM escala_template WHERE id=$1`, [req.params.id]
+    );
+    if (!chkT.rows.length) return res.status(404).json({ erro: 'Registo de escala não encontrado' });
+
     const { area_trabalho } = req.body;
     const area = parseAreaTrabalhoBody(area_trabalho);
     if (area === false) return res.status(400).json({ erro: 'area_trabalho deve ser 1, 2 ou 3' });
@@ -6377,7 +8580,8 @@ app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
   const selectEquipa = async (id) => {
     const r = await query(
       `SELECT er.*,
-              u.nome AS utilizador_nome, u.role AS utilizador_role,
+              COALESCE(u.nome, CASE WHEN er.utilizador_id LIKE 'ext:%' THEN substring(er.utilizador_id from 5) END) AS utilizador_nome,
+              COALESCE(u.role::text, CASE WHEN er.utilizador_id LIKE 'ext:%' THEN 'externo' END) AS utilizador_role,
               uc.nome AS cobrindo_utilizador_nome
        FROM turno_equipa_real er
        LEFT JOIN utilizadores u ON er.utilizador_id::text = u.id::text
@@ -6416,14 +8620,49 @@ app.get('/api/turnos/:id/equipa-real', auth, async (req, res) => {
   }
 });
 
+/** Verifica se o turno já tem comissões pagas (saídas de caixa com
+ *  descrição "Comissão — ..."). Devolve { paga: boolean, total: number }. */
+async function comissoesJaPagasNoTurno(turnoId) {
+  try {
+    const r = await query(
+      `SELECT COALESCE(SUM(valor),0) AS total, COUNT(*) AS n
+       FROM turno_saidas
+       WHERE turno_id=$1 AND descricao ~* '^Comiss[aã]o\\s*[—-]'`,
+      [turnoId]
+    );
+    const total = parseFloat(r.rows[0].total) || 0;
+    const n = parseInt(r.rows[0].n, 10) || 0;
+    return { paga: n > 0, total, n };
+  } catch (_) {
+    return { paga: false, total: 0, n: 0 };
+  }
+}
+
 app.post('/api/turnos/:id/equipa-real', auth, async (req, res) => {
   try {
     const { utilizador_id, cobrindo_utilizador_id, hora_extra, motivo_falta, notas } = req.body || {};
     if (!utilizador_id) return res.status(400).json({ erro: 'utilizador_id é obrigatório' });
+    // Bloqueia alterações à equipa real depois de já haver comissão paga
+    // no turno — mudar quem trabalhou recalcula a regra "metade" e
+    // tornaria os pagamentos já feitos inconsistentes.
+    const pago = await comissoesJaPagasNoTurno(req.params.id);
+    if (pago.paga) {
+      // Permite UPDATE de quem já está registado (notas/hora_extra), mas
+      // bloqueia INSERT de um novo nome.
+      const ja = await query(
+        'SELECT 1 FROM turno_equipa_real WHERE turno_id=$1 AND utilizador_id=$2 LIMIT 1',
+        [req.params.id, String(utilizador_id)]
+      );
+      if (!ja.rows.length) {
+        return res.status(409).json({
+          erro: `Já há ${pago.n} pagamento${pago.n === 1 ? '' : 's'} de comissão neste turno (total ${pago.total.toLocaleString('pt-AO')} Kz). Para adicionar alguém a «Quem realmente trabalhou», anula primeiro as saídas de caixa de comissão.`
+        });
+      }
+    }
     const cobre = cobrindo_utilizador_id ? String(cobrindo_utilizador_id) : null;
     const he = !!hora_extra;
     const motivo = (motivo_falta || '').trim();
-    if (cobre && !motivo) return res.status(400).json({ erro: 'motivo_falta é obrigatório quando há cobertura' });
+    // "Motivo" deixou de ser obrigatório quando há cobertura.
     const r = await query(
       `INSERT INTO turno_equipa_real (turno_id, utilizador_id, cobrindo_utilizador_id, hora_extra, motivo_falta, notas)
        VALUES ($1,$2,$3,$4,$5,$6)
@@ -6441,6 +8680,14 @@ app.post('/api/turnos/:id/equipa-real', auth, async (req, res) => {
 
 app.delete('/api/turnos/:id/equipa-real/:utilizador_id', auth, async (req, res) => {
   try {
+    // Mesma protecção: não permitir remover alguém depois de pagamentos
+    // de comissão no turno.
+    const pago = await comissoesJaPagasNoTurno(req.params.id);
+    if (pago.paga) {
+      return res.status(409).json({
+        erro: `Já há ${pago.n} pagamento${pago.n === 1 ? '' : 's'} de comissão neste turno. Para remover de «Quem realmente trabalhou», anula primeiro as saídas de caixa de comissão.`
+      });
+    }
     await query('DELETE FROM turno_equipa_real WHERE turno_id=$1 AND utilizador_id=$2', [req.params.id, req.params.utilizador_id]);
     res.json({ sucesso: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -6538,12 +8785,12 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
       esperados AS (
         SELECT e.utilizador_id::text AS utilizador_id, e.data::date AS d, e.turno
         FROM escala e
-        WHERE e.data BETWEEN $1::date AND $2::date AND e.utilizador_id IS NOT NULL
+        WHERE e.data BETWEEN $1::date AND $2::date AND e.utilizador_id IS NOT NULL {LOJA_ESC}
         UNION
         SELECT et.utilizador_id::text AS utilizador_id, dias.d, et.turno
         FROM dias
         JOIN escala_template et ON et.dia_semana = ((EXTRACT(ISODOW FROM dias.d)::int) - 1)
-        WHERE et.utilizador_id IS NOT NULL
+        WHERE et.utilizador_id IS NOT NULL {LOJA_TPL}
           AND NOT EXISTS (SELECT 1 FROM dias_com_escala_dia x WHERE x.d = dias.d)
       ),
       trabalhados AS (
@@ -6553,7 +8800,7 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
                COALESCE(er.hora_extra, FALSE) AS hora_extra
         FROM turno_equipa_real er
         JOIN turnos t ON t.id = er.turno_id
-        WHERE t.data BETWEEN $1::date AND $2::date
+        WHERE t.data BETWEEN $1::date AND $2::date {LOJA_TRB}
       )
       SELECT u.id::text AS utilizador_id,
              u.nome AS utilizador_nome,
@@ -6606,6 +8853,12 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
              COALESCE((
                SELECT json_agg(json_build_object('data', to_char(x.d, 'YYYY-MM-DD'), 'turno', x.turno) ORDER BY x.d, x.turno)
                FROM (
+                 SELECT DISTINCT t.d, t.turno FROM trabalhados t WHERE t.utilizador_id = u.id::text
+               ) x
+             ), '[]'::json) AS trabalhados_detalhe,
+             COALESCE((
+               SELECT json_agg(json_build_object('data', to_char(x.d, 'YYYY-MM-DD'), 'turno', x.turno) ORDER BY x.d, x.turno)
+               FROM (
                  SELECT DISTINCT t.d, t.turno
                  FROM trabalhados t
                  WHERE t.utilizador_id = u.id::text
@@ -6617,10 +8870,22 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
                ) x
              ), '[]'::json) AS horas_extra_detalhe
       FROM utilizadores u
-      WHERE u.ativo = TRUE
+      WHERE u.ativo = TRUE {EMPRESA_FILTRO}
       ORDER BY u.nome ASC
     `;
-    const r = await query(sql, [inicio, fim]);
+    const montarAssiduidade = (comLoja, comEmpresa) => sql
+      .replace('{LOJA_ESC}', comLoja ? 'AND e.loja_id = $4' : '')
+      .replace('{LOJA_TPL}', comLoja ? 'AND et.loja_id = $4' : '')
+      .replace('{LOJA_TRB}', comLoja ? 'AND t.loja_id = $4' : '')
+      .replace('{EMPRESA_FILTRO}', comEmpresa ? 'AND u.empresa_id = $3' : '');
+    const r = await query(montarAssiduidade(true, true), [inicio, fim, empresaDe(req), lojaDe(req)])
+      .catch((eA) => {
+        if (!/loja_id/.test(String(eA.message || ''))) throw eA;
+        return queryEmpresa(
+          montarAssiduidade(false, true), [inicio, fim, empresaDe(req)],
+          montarAssiduidade(false, false), [inicio, fim]
+        );
+      });
     const rows = r.rows.map((row) => {
       const esp = parseInt(row.turnos_esperados, 10) || 0;
       const espPassados = parseInt(row.turnos_esperados_passados, 10) || 0;
@@ -6637,6 +8902,7 @@ app.get('/api/assiduidade', auth, requireRole('admin','gestor','compras'), async
         faltas: falt,
         horas_extra: he,
         faltas_detalhe: Array.isArray(row.faltas_detalhe) ? row.faltas_detalhe : [],
+        trabalhados_detalhe: Array.isArray(row.trabalhados_detalhe) ? row.trabalhados_detalhe : [],
         horas_extra_detalhe: Array.isArray(row.horas_extra_detalhe) ? row.horas_extra_detalhe : [],
         // Aliases para compat com clientes antigos que tinham o JS em cache.
         dias_esperados: esp,

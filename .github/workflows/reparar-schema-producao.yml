@@ -1,0 +1,130 @@
+# Actualiza o schema da BD de PRODUÇÃO para o que o código novo precisa,
+# SEM partir o código antigo que ainda está no ar. Duas fases:
+#
+#   FASE 1 (aditiva) — supabase/reparar_schema_aditivo.sql
+#     Só ADD COLUMN/CREATE IF NOT EXISTS com defaults. Segura com o código
+#     ANTIGO em produção. É isto que faz o ambiente qualidade (código novo,
+#     BD prod) deixar de tropeçar em «column … does not exist».
+#
+#   FASE 2 (constraints) — supabase/reparar_schema_constraints.sql
+#     Troca as unicidades antigas pelas versões por loja. O código antigo
+#     usa ON CONFLICT nessas constraints — correr a fase 2 com o código
+#     antigo no ar PARTE produção. Só activar «trocar_constraints» DEPOIS
+#     de o código novo estar em main/produção.
+#
+# Ordem recomendada: fase 1 → promover develop→qualidade→main → fase 2.
+#
+# Idempotente: pode correr-se as vezes que forem precisas.
+# Ligação: usa o secret DATABASE_URL_PROD_ADMIN se existir; caso contrário
+# cai na ligação directa actual (mesma password já exposta em db-query.yml).
+# QUANDO rodares a password no Supabase: cria o secret com a URL nova
+# (directa, :5432 — não o pooler :6543) e remove este fallback.
+
+name: Reparar schema produção
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmar:
+        description: 'Escreve PRODUCAO para confirmar que sabes que isto altera a BD de produção'
+        required: true
+        type: string
+      trocar_constraints:
+        description: 'FASE 2: trocar constraints (SÓ depois do código novo estar em main)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  fix:
+    name: DDL idempotente em produção
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validar confirmação
+        run: |
+          if [ "${{ github.event.inputs.confirmar }}" != "PRODUCAO" ]; then
+            echo "::error::Confirmação errada. Escreve exactamente PRODUCAO no campo de confirmação."
+            exit 1
+          fi
+
+      - name: Avisar se está a usar a password em texto simples
+        env:
+          TEM_SECRET: ${{ secrets.DATABASE_URL_PROD_ADMIN != '' }}
+        run: |
+          if [ "$TEM_SECRET" != "true" ]; then
+            echo "::warning::A usar a ligação com a password ANTIGA em texto simples (fallback). Quando puderes: roda a password no Supabase e cria o secret DATABASE_URL_PROD_ADMIN com a URL directa (:5432)."
+          fi
+
+      - name: Instalar cliente PostgreSQL
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common
+          # Repositório oficial PGDG: garante um pg_dump igual ou mais recente
+          # que o servidor (o pg_dump recusa servidores mais novos que ele).
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
+          sudo apt-get install -y -qq postgresql-client-17
+
+      - uses: actions/checkout@v4
+
+      - name: Backup de produção (antes de qualquer alteração)
+        env:
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
+          NOME="backup-producao-$(date -u +%Y%m%d-%H%M%S).sql.gz"
+          /usr/lib/postgresql/17/bin/pg_dump --no-owner --no-privileges | gzip > "$NOME"
+          ls -lh "$NOME"
+          # Falha cedo se o dump vier vazio (ligação errada, permissões…)
+          [ "$(stat -c%s "$NOME")" -gt 1024 ] || { echo "::error::Backup suspeito (menos de 1 KB) — abortar antes de alterar seja o que for."; exit 1; }
+
+      - name: Guardar backup como artefacto (30 dias)
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-producao
+          path: backup-producao-*.sql.gz
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: 'FASE 1: DDL aditivo (seguro com código antigo)'
+        env:
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
+          # Sem ON_ERROR_STOP: cada statement é independente.
+          psql -f supabase/reparar_schema_aditivo.sql
+
+      - name: 'FASE 2: troca de constraints (só com código novo em main)'
+        if: ${{ github.event.inputs.trocar_constraints == 'true' }}
+        env:
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
+          psql -f supabase/reparar_schema_constraints.sql
+
+      - name: Validar colunas críticas
+        env:
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT
+            (SELECT COUNT(*) FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='turnos'
+                AND column_name='loja_id') AS turnos_loja_id,
+            (SELECT COUNT(*) FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='utilizadores'
+                AND column_name='empresa_id') AS utilizadores_empresa_id,
+            (SELECT COUNT(*) FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='turno_entradas'
+                AND column_name='produto_nome_livre') AS entradas_produto_nome_livre,
+            (SELECT COUNT(*) FROM information_schema.tables
+              WHERE table_schema='public' AND table_name='ops_idempotencia') AS tabela_ops_idempotencia,
+            (SELECT COUNT(*) FROM information_schema.tables
+              WHERE table_schema='public' AND table_name='lojas') AS tabela_lojas;
+          SQL
+          echo "Se alguma contagem acima for 0, vê os ERRORs nos steps anteriores."

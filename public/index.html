@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-internet-real">
+<html lang="pt" data-stockos-ui="2026-07-31-instantaneo-sempre">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5721,6 +5721,38 @@ function renderOfflineBanner() {
 window.addEventListener('offline', () => renderOfflineBanner());
 window.addEventListener('online', () => renderOfflineBanner());
 setInterval(() => renderOfflineBanner(), 5000);
+
+// ── Modo INSTANTÂNEO SEMPRE: o service worker responde do cache e avisa
+//    aqui quando os dados frescos (diferentes) chegam por trás. A página
+//    Dia refresca-se sozinha; nas restantes aparece um chip para
+//    actualizar com um toque (nunca re-renderiza por baixo dos dedos). ──
+let __dadosFrescosTimer = null;
+if (navigator.serviceWorker) {
+  navigator.serviceWorker.addEventListener('message', (ev) => {
+    if (!ev.data || ev.data.tipo !== 'dados-frescos') return;
+    clearTimeout(__dadosFrescosTimer);
+    __dadosFrescosTimer = setTimeout(() => {
+      try {
+        const ae = document.activeElement;
+        if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) return;
+        if (S.page === 'dia') { loadDia().catch(() => {}); return; }
+        mostrarChipDadosNovos();
+      } catch (_) {}
+    }, 600);
+  });
+}
+function mostrarChipDadosNovos() {
+  if (document.getElementById('chip-dados-novos')) return;
+  if (!S.token) return;
+  const c = document.createElement('button');
+  c.id = 'chip-dados-novos';
+  c.type = 'button';
+  c.textContent = '🔄 Dados novos — toca para actualizar';
+  c.style.cssText = 'position:fixed;bottom:76px;left:50%;transform:translateX(-50%);z-index:1400;background:#1d4ed8;color:#fff;border:none;border-radius:999px;padding:8px 14px;font-size:12px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.4);cursor:pointer;white-space:nowrap';
+  c.onclick = () => { c.remove(); try { navigate(S.page); } catch (_) {} };
+  document.body.appendChild(c);
+  setTimeout(() => { try { c.remove(); } catch (_) {} }, 15000);
+}
 
 /** Compat: os pontos que actualizavam a antiga pastilha passam a
  *  actualizar a faixa de estado (a contagem vive agora no aviso). */

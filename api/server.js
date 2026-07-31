@@ -5809,8 +5809,33 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
 
 /** Fecha o registo inicial de encontrados — bloqueia futuras alterações
  *  às colunas Encontrado e Enc. caixa no PUT /api/turnos/:id/stock. */
+/** Tarefas por fazer de uma fase do checklist (portões dos registos). */
+async function checklistPendServidor(turnoId, fase, req) {
+  try {
+    await ensureChecklistCol();
+    const t = await query(`SELECT loja_id, checklist FROM turnos WHERE id=$1`, [turnoId]);
+    if (!t.rows.length) return [];
+    let empT = empresaDe(req);
+    if (t.rows[0].loja_id) {
+      const le = await query(`SELECT empresa_id FROM lojas WHERE id=$1`, [t.rows[0].loja_id]).catch(() => ({ rows: [] }));
+      if (le.rows.length) empT = le.rows[0].empresa_id || empT;
+    }
+    const cfg = parseChecklistCfg(await getConfigEmpresa(empT, 'checklist_turno'));
+    const marcado = (t.rows[0].checklist && typeof t.rows[0].checklist === 'object') ? t.rows[0].checklist : {};
+    return (cfg[fase] || []).filter((tarefa, i) =>
+      !(marcado[fase] && marcado[fase][String(i)] && marcado[fase][String(i)].feito));
+  } catch (_) { return []; }
+}
+
 app.post('/api/turnos/:id/encontrados/fechar', auth, async (req, res) => {
   try {
+    // PORTÃO: registo inicial exige o checklist de ABERTURA completo.
+    const pendA = await checklistPendServidor(req.params.id, 'abertura', req);
+    if (pendA.length) {
+      return res.status(400).json({
+        erro: `Antes de fechar o registo inicial, conclui o checklist de ABERTURA — falta${pendA.length === 1 ? '' : 'm'}:\n• ` + pendA.slice(0, 6).join('\n• ') + (pendA.length > 6 ? '\n…' : '')
+      });
+    }
     const r = await query(
       `UPDATE turnos SET encontrados_fechados_em = COALESCE(encontrados_fechados_em, NOW())
        WHERE id = $1 RETURNING *`,
@@ -5841,6 +5866,13 @@ app.post('/api/turnos/:id/encontrados/reabrir', auth, requireRole('admin', 'gest
  *  Deixado e Deix. caixa no PUT /api/turnos/:id/stock. */
 app.post('/api/turnos/:id/deixados/fechar', auth, async (req, res) => {
   try {
+    // PORTÃO: registo dos deixados exige o checklist de FECHO completo.
+    const pendF = await checklistPendServidor(req.params.id, 'fecho', req);
+    if (pendF.length) {
+      return res.status(400).json({
+        erro: `Antes de fechar o registo dos deixados, conclui o checklist de FECHO — falta${pendF.length === 1 ? '' : 'm'}:\n• ` + pendF.slice(0, 6).join('\n• ') + (pendF.length > 6 ? '\n…' : '')
+      });
+    }
     const r = await query(
       `UPDATE turnos SET deixados_fechados_em = COALESCE(deixados_fechados_em, NOW())
        WHERE id = $1 RETURNING *`,

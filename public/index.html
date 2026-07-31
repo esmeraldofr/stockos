@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-sem-scroll-tabelas">
+<html lang="pt" data-stockos-ui="2026-07-31-card-turno-totais">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2253,8 +2253,10 @@ function renderDiaCards(turnos, provisorio, diaSemCache) {
             </div>
           </div>`;
       }
-      const totalVendas = t.total_vendas || 0;
       const totalCaixa  = t.caixa?.total_final || 0;
+      const totalGerado = t.caixa?.total_gerado;
+      const entradasKz  = parseFloat(t.caixa?.entradas_total) || 0;
+      const saidaKz     = parseFloat(t.caixa?.saida) || 0;
       const cls = t.estado === 'aberto' ? 'aberto' : 'fechado';
       const antecipado = t.estado === 'aberto' && turnoAbertoAntesDoHorarioOficial(S.date, nome);
       const startM = TURNO_INICIO_MINUTES[nome];
@@ -2272,9 +2274,13 @@ function renderDiaCards(turnos, provisorio, diaSemCache) {
           <div class="turno-card-nome">${turnoLabel(nome)}</div>
           <div class="turno-card-status">${badge}</div>
           <div class="turno-card-value">${fmt(totalCaixa)}</div>
-          <div class="turno-card-label">Total Caixa</div>
-          <div style="font-size:12px;color:#64748b;margin-top:4px">Vendas: ${fmt(totalVendas)}</div>
-          <div style="font-size:12px;color:#94a3b8;margin-top:2px">Produtos vendidos: <strong style="color:#4ade80">${fmt(t.pedidos_total_kz || 0)}</strong></div>
+          <div class="turno-card-label">Total Final</div>
+          <div style="font-size:12px;margin-top:6px;display:flex;flex-direction:column;gap:2px">
+            <div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#64748b">Total pedidos</span><strong style="color:#e2e8f0">${fmt(t.pedidos_total_kz || 0)}</strong></div>
+            <div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#64748b">Total gerado</span><strong style="color:#e2e8f0">${totalGerado == null ? '—' : fmt(totalGerado)}</strong></div>
+            <div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#64748b">Total entradas</span><strong style="color:#4ade80">+ ${fmt(entradasKz)}</strong></div>
+            <div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#64748b">Total saídas</span><strong style="color:#f87171">− ${fmt(saidaKz)}</strong></div>
+          </div>
           ${avisoAnt}
         </div>`;
     }).join('');
@@ -6180,6 +6186,8 @@ function aplicarEscritasAoTurno(t, fila) {
     } else if (it.method === 'POST' && p.endsWith('/saidas')) {
       if (!String(b.notas || '').startsWith('ENTRADA::')) {
         out.caixa.saida = (parseFloat(out.caixa.saida) || 0) + (parseFloat(b.valor) || 0);
+      } else {
+        out.caixa.entradas_total = (parseFloat(out.caixa.entradas_total) || 0) + (parseFloat(b.valor) || 0);
       }
     }
   }
@@ -6187,7 +6195,7 @@ function aplicarEscritasAoTurno(t, fila) {
   if (partes.every((v) => Number.isFinite(v))) {
     const tg = partes[0] + partes[1] + partes[2];
     out.caixa.total_gerado = tg;
-    out.caixa.total_final = tg - (parseFloat(out.caixa.saida) || 0);
+    out.caixa.total_final = tg - (parseFloat(out.caixa.saida) || 0) + (parseFloat(out.caixa.entradas_total) || 0);
   }
   return out;
 }

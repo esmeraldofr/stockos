@@ -5065,7 +5065,7 @@ app.get('/api/dia', auth, async (req, res) => {
 
     /** Vista lista (página Dia, depósitos): sem linhas de stock nem comparação com turno anterior — muito mais rápido. */
     if (resumo) {
-      const [caixaAll, vendasAgg, pedidosAgg] = await Promise.all([
+      const [caixaAll, vendasAgg, pedidosAgg, entradasMarcadas, entradasTabela] = await Promise.all([
         query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids]),
         queryEmpresa(
           `SELECT ts.turno_id,
@@ -5110,6 +5110,22 @@ app.get('/api/dia', auth, async (req, res) => {
            WHERE tp.turno_id = ANY($1::int[])
            GROUP BY tp.turno_id`,
           [ids]
+        ).catch(() => ({ rows: [] })),
+        // Dinheiro que ENTROU na caixa: registos marcados em turno_saidas
+        // (ENTRADA::) + tabela dedicada, quando existe.
+        query(
+          `SELECT turno_id, COALESCE(SUM(valor),0)::numeric AS t
+           FROM turno_saidas
+           WHERE turno_id = ANY($1::int[]) AND COALESCE(notas,'') LIKE 'ENTRADA::%'
+           GROUP BY turno_id`,
+          [ids]
+        ).catch(() => ({ rows: [] })),
+        query(
+          `SELECT turno_id, COALESCE(SUM(valor),0)::numeric AS t
+           FROM turno_caixa_entradas
+           WHERE turno_id = ANY($1::int[])
+           GROUP BY turno_id`,
+          [ids]
         ).catch(() => ({ rows: [] }))
       ]);
       const caixaByTurno = {};
@@ -5127,17 +5143,22 @@ app.get('/api/dia', auth, async (req, res) => {
           total_itens: parseFloat(row.total_itens) || 0
         };
       }
+      const entradasByTurno = {};
+      for (const row of [...entradasMarcadas.rows, ...entradasTabela.rows]) {
+        entradasByTurno[row.turno_id] = (entradasByTurno[row.turno_id] || 0) + (parseFloat(row.t) || 0);
+      }
       const result = [];
       for (const turno of turnos.rows) {
         const c = caixaByTurno[turno.id] || { tpa: null, transferencia: null, dinheiro: null, saida: 0 };
         const totalGerado = sumCaixaGeradoRow(c);
+        const entradasTot = entradasByTurno[turno.id] || 0;
         const totalFinal =
-          totalGerado === null ? null : totalGerado - parseFloat(c.saida || 0);
+          totalGerado === null ? null : totalGerado - parseFloat(c.saida || 0) + entradasTot;
         const ped = pedidosByTurno[turno.id] || { total_kz: 0, total_itens: 0 };
         result.push({
           ...turno,
           stock: [],
-          caixa: { ...c, total_gerado: totalGerado, total_final: totalFinal },
+          caixa: { ...c, total_gerado: totalGerado, total_final: totalFinal, entradas_total: entradasTot },
           total_vendas: vendasByTurno[turno.id] || 0,
           pedidos_total_kz: ped.total_kz,
           pedidos_total_itens: ped.total_itens

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-avisos">
+<html lang="pt" data-stockos-ui="2026-07-31-avisos-validade">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2319,14 +2319,19 @@ async function carregarAvisosDia() {
     const podeGerir = ['admin', 'gestor'].includes(S.user?.role);
     if (!(avisos || []).length && !podeGerir) { slot.innerHTML = ''; return; }
     const btn = podeGerir ? `<button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, novoAviso)">+ Novo aviso</button>` : '';
-    const linhas = (avisos || []).slice(0, 10).map((a) => `
+    const agora = Date.now();
+    const linhas = (avisos || []).slice(0, 10).map((a) => {
+      const novo = a.criado_em && (agora - new Date(a.criado_em).getTime()) < 24 * 3600000;
+      const ate = a.valido_ate ? ` · visível até ${new Date(a.valido_ate).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })}` : '';
+      return `
       <div style="border-top:1px solid #1e293b;padding:8px 0;display:flex;gap:8px;align-items:flex-start">
         <div style="flex:1;min-width:0">
-          <div style="color:#e2e8f0;font-size:13px;line-height:1.45;white-space:pre-wrap">${escapeHtml(a.texto)}</div>
-          <div style="color:#64748b;font-size:11px;margin-top:3px">${escapeHtml(a.criado_por || '')} · ${new Date(a.criado_em).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${a.loja_id ? ' · só esta loja' : ''}</div>
+          <div style="color:#e2e8f0;font-size:13px;line-height:1.45;white-space:pre-wrap">${novo ? '<span style="background:#1d4ed8;color:#fff;border-radius:6px;padding:0 6px;font-size:10px;font-weight:700;margin-right:6px;vertical-align:2px">NOVO</span>' : ''}${escapeHtml(a.texto)}</div>
+          <div style="color:#64748b;font-size:11px;margin-top:3px">${escapeHtml(a.criado_por || '')} · ${new Date(a.criado_em).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${a.loja_id ? ' · só esta loja' : ''}${ate}</div>
         </div>
         ${podeGerir ? `<button type="button" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:14px;padding:0 2px" title="Remover aviso" onclick="runAction(event, () => removerAviso(${parseInt(a.id, 10) || 0}))">✕</button>` : ''}
-      </div>`).join('');
+      </div>`;
+    }).join('');
     slot.innerHTML = `<div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
         <div class="card-title" style="margin:0">📢 Avisos</div>${btn}
@@ -2345,7 +2350,17 @@ async function novoAviso() {
     botaoOk: 'Publicar'
   });
   if (texto === null || !String(texto).trim()) return;
-  await apiEscrita('POST', '/avisos', { texto: String(texto).trim() }, { desc: 'Novo aviso' });
+  const diasTxt = await dialogoTroca({
+    titulo: '⏳ Durante quantos dias?',
+    texto: 'O aviso fica SEMPRE visível a todos durante este período e depois desaparece sozinho.\n1 a 90 dias (vazio = 7).',
+    tipo: 'texto',
+    numero: true,
+    placeholder: '7',
+    botaoOk: 'Publicar'
+  });
+  if (diasTxt === null) return;
+  const dias = Math.min(90, Math.max(1, parseInt(String(diasTxt).trim(), 10) || 7));
+  await apiEscrita('POST', '/avisos', { texto: String(texto).trim(), dias }, { desc: 'Novo aviso' });
   await carregarAvisosDia();
 }
 

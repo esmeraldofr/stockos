@@ -5561,6 +5561,55 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
   } finally { client.release(); }
 });
 
+// ── CHECKLIST DO TURNO: tarefas obrigatórias de abertura e fecho ──────
+// A lista é configurada por empresa (admin/gestor); cada turno guarda o
+// estado das marcações em turnos.checklist (JSONB). NENHUM turno fecha
+// com tarefas por fazer — validado no /fechar.
+function parseChecklistCfg(raw) {
+  try {
+    const c = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const lista = (x) => (Array.isArray(x) ? x : [])
+      .map((t) => String(t).trim()).filter(Boolean).slice(0, 40).map((t) => t.slice(0, 200));
+    return { abertura: lista(c && c.abertura), fecho: lista(c && c.fecho) };
+  } catch (_) { return { abertura: [], fecho: [] }; }
+}
+app.get('/api/config/checklist-turno', auth, async (req, res) => {
+  try { res.json(parseChecklistCfg(await getConfigEmpresa(empresaDe(req), 'checklist_turno'))); }
+  catch (e) { res.status(500).json({ erro: e.message }); }
+});
+app.put('/api/config/checklist-turno', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const cfg = parseChecklistCfg(req.body || {});
+    await setConfigEmpresa(empresaDe(req), 'checklist_turno', JSON.stringify(cfg));
+    res.json(cfg);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+let checklistColReady = false;
+async function ensureChecklistCol() {
+  if (checklistColReady) return;
+  await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS checklist JSONB`).catch(() => {});
+  checklistColReady = true;
+}
+
+app.put('/api/turnos/:id/checklist', auth, async (req, res) => {
+  try {
+    await ensureChecklistCol();
+    const fase = req.body && req.body.fase === 'abertura' ? 'abertura' : 'fecho';
+    const idx = String(Math.max(0, parseInt((req.body && req.body.idx), 10) || 0));
+    const feito = !!(req.body && req.body.feito);
+    const t = await query(`SELECT estado, checklist FROM turnos WHERE id=$1`, [req.params.id]);
+    if (!t.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    if (t.rows[0].estado !== 'aberto') return res.status(400).json({ erro: 'O turno já está fechado.' });
+    const atual = (t.rows[0].checklist && typeof t.rows[0].checklist === 'object') ? t.rows[0].checklist : {};
+    atual[fase] = atual[fase] || {};
+    if (feito) atual[fase][idx] = { feito: true, por: (req.user && req.user.nome) || '', em: new Date().toISOString() };
+    else delete atual[fase][idx];
+    await query(`UPDATE turnos SET checklist=$1 WHERE id=$2`, [JSON.stringify(atual), req.params.id]);
+    res.json({ ok: true, checklist: atual });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -5604,6 +5653,37 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
         return res.status(400).json({
           erro: 'Registaste valor no TPA — anexa a foto do recibo de fecho do TPA (aba 💰 Caixa) antes de fechar o turno.'
         });
+      }
+    }
+    // CHECKLIST: nenhum turno fecha com tarefas de abertura/fecho por
+    // fazer. Config por empresa; sem config, não bloqueia nada.
+    {
+      let cfgChk = null;
+      try {
+        const lojaT = r.rows[0].loja_id;
+        let empT = empresaDe(req);
+        if (lojaT) {
+          const le = await client.query(`SELECT empresa_id FROM lojas WHERE id=$1`, [lojaT]).catch(() => ({ rows: [] }));
+          if (le.rows.length) empT = le.rows[0].empresa_id || empT;
+        }
+        cfgChk = parseChecklistCfg(await getConfigEmpresa(empT, 'checklist_turno'));
+      } catch (_) { cfgChk = null; }
+      if (cfgChk && (cfgChk.abertura.length || cfgChk.fecho.length)) {
+        const marcado = (r.rows[0].checklist && typeof r.rows[0].checklist === 'object') ? r.rows[0].checklist : {};
+        const pend = [];
+        for (const fase of ['abertura', 'fecho']) {
+          cfgChk[fase].forEach((tarefa, i) => {
+            const m = marcado[fase] && marcado[fase][String(i)];
+            if (!(m && m.feito)) pend.push(`${fase === 'abertura' ? 'Abertura' : 'Fecho'} — ${tarefa}`);
+          });
+        }
+        if (pend.length) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            erro: `Checklist do turno incompleto — falta${pend.length === 1 ? '' : 'm'} ${pend.length} tarefa${pend.length === 1 ? '' : 's'}:\n• ` +
+              pend.slice(0, 6).join('\n• ') + (pend.length > 6 ? '\n…' : '')
+          });
+        }
       }
     }
     await client.query(

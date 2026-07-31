@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-sem-card-bloqueado">
+<html lang="pt" data-stockos-ui="2026-07-31-internet-real">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5629,6 +5629,42 @@ function contarPendentesOffline() {
   return escritasOfflineLer().length + pedidosOfflineLer().length;
 }
 
+/** Ligação REAL à internet. navigator.onLine só diz se o Wi-Fi/dados
+ *  estão LIGADOS — pode não haver internet nenhuma (sem saldo, rede
+ *  presa…). Sonda: POST minúsculo ao servidor (não passa pelo service
+ *  worker, que só intercepta GET) com timeout curto; qualquer resposta
+ *  HTTP prova que há internet. */
+let __netReal = navigator.onLine !== false;
+let __netSondaEmCurso = false;
+async function sondarInternet() {
+  if (navigator.onLine === false) { __netReal = false; return false; }
+  if (__netSondaEmCurso) return __netReal;
+  __netSondaEmCurso = true;
+  const antes = __netReal;
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 4000);
+    await fetch('/api/ping?t=' + Date.now(), { method: 'POST', cache: 'no-store', signal: ctl.signal });
+    clearTimeout(t);
+    __netReal = true;
+  } catch (_) {
+    __netReal = false;
+  } finally {
+    __netSondaEmCurso = false;
+  }
+  if (__netReal !== antes) {
+    renderOfflineBanner();
+    // Voltou a internet a sério: despacha a fila já.
+    if (__netReal && contarPendentesOffline()) sincronizarEscritasOffline().catch(() => {});
+  }
+  return __netReal;
+}
+setInterval(() => { sondarInternet().catch(() => {}); }, 10000);
+setTimeout(() => { sondarInternet().catch(() => {}); }, 1500);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) sondarInternet().catch(() => {}); });
+window.addEventListener('online', () => { sondarInternet().catch(() => {}); });
+window.addEventListener('offline', () => { __netReal = false; renderOfflineBanner(); });
+
 /** Faixa de estado PERMANENTE no topo, em todas as páginas:
  *  🔴 sem internet (+ nº de registos guardados neste aparelho)
  *  🟠 com internet mas com registos a sincronizar
@@ -5636,7 +5672,7 @@ function contarPendentesOffline() {
  *  Tocar na faixa abre o gestor da fila. */
 function renderOfflineBanner() {
   try {
-    const semRede = navigator.onLine === false;
+    const semRede = navigator.onLine === false || __netReal === false;
     const n = contarPendentesOffline();
     let el = document.getElementById('offline-banner');
     if (!el) {

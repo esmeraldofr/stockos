@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-ultima-vez-logado">
+<html lang="pt" data-stockos-ui="2026-07-31-cirurgico-leitura">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5797,7 +5797,9 @@ function refrescarSeccaoComDadosFrescos(url) {
   try {
     const p = String(url || '').split('?')[0];
     const semTextoAMeio = (raiz) =>
-      ![...raiz.querySelectorAll('input')].some((i) => i.value && !['checkbox', 'radio', 'button'].includes(i.type));
+      ![...raiz.querySelectorAll('input,textarea')].some((i) => i.value && !['checkbox', 'radio', 'button', 'date', 'time', 'month'].includes(i.type));
+    // true = pode redesenhar estes contentores (nenhum input aberto com texto)
+    const livre = (ids) => ids.every((id) => { const e2 = document.getElementById(id); return !e2 || semTextoAMeio(e2); });
     if (S.page === 'monitor' && p.endsWith('/monitor')) {
       loadMonitor().catch(() => {});
       return true;
@@ -5809,6 +5811,28 @@ function refrescarSeccaoComDadosFrescos(url) {
         loadRegistosMovimentosSection(S.turnoId, S.turnoData?.stock || [], !!S.turnoCanEdit).catch(() => {});
         return true;
       }
+    }
+    // ── Secções de leitura: redesenha só o contentor da lista; os campos
+    //    de filtro/registo ficam intactos. Com texto a meio → fica quieto.
+    if (S.page === 'depositos' && (p.endsWith('/depositos') || p.endsWith('/dia'))) {
+      if (livre(['depositos-content'])) loadDepositos().catch(() => {});
+      return true;
+    }
+    if (S.page === 'historico' && p.includes('/historico')) {
+      if (S.histLastHtml && livre(['hist-content'])) loadHistorico().catch(() => {});
+      return true;
+    }
+    if (S.page === 'assiduidade' && p.includes('/assiduidade')) {
+      if (livre(['assiduidade-content'])) loadAssiduidade().catch(() => {});
+      return true;
+    }
+    if (S.page === 'irregularidades' && (p.includes('/historico') || p.includes('/irregularidades') || p.endsWith('/receitas'))) {
+      if (livre(['irreg-content'])) loadIrregularidadesLista().catch(() => {});
+      return true;
+    }
+    if (S.page === 'faltas' && p.endsWith('/faltas')) {
+      if (livre(['faltas-pendentes', 'faltas-historico'])) loadFaltas().catch(() => {});
+      return true;
     }
     return false;
   } catch (_) { return false; }

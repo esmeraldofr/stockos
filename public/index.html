@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-card-compacto">
+<html lang="pt" data-stockos-ui="2026-07-31-card-fecho-vendidos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2274,10 +2274,11 @@ function renderDiaCards(turnos, provisorio, diaSemCache) {
           <div class="turno-card-nome">${turnoLabel(nome)}</div>
           <div class="turno-card-status">${badge}</div>
           <div class="turno-card-value">${fmt(totalCaixa)}</div>
-          <div class="turno-card-label">Total Final</div>
+          <div class="turno-card-label">Fecho</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:12px;margin-top:6px">
             <div style="display:flex;justify-content:space-between;gap:6px"><span style="color:#64748b">Pedidos</span><strong style="color:#e2e8f0">${fmt(t.pedidos_total_kz || 0)}</strong></div>
-            <div style="display:flex;justify-content:space-between;gap:6px"><span style="color:#64748b">Gerado</span><strong style="color:#e2e8f0">${totalGerado == null ? '—' : fmt(totalGerado)}</strong></div>
+            <div style="display:flex;justify-content:space-between;gap:6px"><span style="color:#64748b">Vendidos</span><strong style="color:#e2e8f0">${fmt(t.total_vendas || 0)}</strong></div>
+            <div style="display:flex;justify-content:space-between;gap:6px"><span style="color:#64748b">Caixa</span><strong style="color:#e2e8f0">${totalGerado == null ? '—' : fmt(totalGerado)}</strong></div>
             <div style="display:flex;justify-content:space-between;gap:6px"><span style="color:#64748b">Entradas</span><strong style="color:#4ade80">+ ${fmt(entradasKz)}</strong></div>
             <div style="display:flex;justify-content:space-between;gap:6px"><span style="color:#64748b">Saídas</span><strong style="color:#f87171">− ${fmt(saidaKz)}</strong></div>
           </div>

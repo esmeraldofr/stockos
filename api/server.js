@@ -8175,6 +8175,56 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── AVISOS: orientações visíveis a todos os turnos/utilizadores ───────
+let avisosReady = false;
+async function ensureAvisos() {
+  if (avisosReady) return;
+  await query(`CREATE TABLE IF NOT EXISTS avisos (
+    id SERIAL PRIMARY KEY,
+    empresa_id INTEGER NOT NULL DEFAULT 1,
+    loja_id INTEGER,
+    texto TEXT NOT NULL,
+    criado_por TEXT NOT NULL DEFAULT '',
+    ativo BOOLEAN NOT NULL DEFAULT TRUE,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`).catch(() => {});
+  avisosReady = true;
+}
+
+app.get('/api/avisos', auth, async (req, res) => {
+  try {
+    await ensureAvisos();
+    const r = await query(
+      `SELECT * FROM avisos
+       WHERE ativo IS TRUE AND empresa_id=$1 AND (loja_id IS NULL OR loja_id=$2)
+       ORDER BY criado_em DESC LIMIT 30`,
+      [empresaDe(req), lojaDe(req)]
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/avisos', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureAvisos();
+    const texto = String((req.body && req.body.texto) || '').trim();
+    if (!texto) return res.status(400).json({ erro: 'Escreve o texto do aviso.' });
+    const r = await query(
+      `INSERT INTO avisos (empresa_id, loja_id, texto, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [empresaDe(req), req.body.so_esta_loja === true ? lojaDe(req) : null, texto.slice(0, 2000), (req.user && req.user.nome) || '']
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/avisos/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureAvisos();
+    await query(`UPDATE avisos SET ativo=FALSE WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ── MONITORAMENTO (admin): aparelhos, últimos logins, fila offline ────
 let monitorReady = false;
 async function ensureMonitorDispositivos() {

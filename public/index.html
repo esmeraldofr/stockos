@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-01-historico-turnos">
+<html lang="pt" data-stockos-ui="2026-08-01-pagina-avisos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -870,7 +870,7 @@ async function refrescarLojas() {
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
 const ALLOWED_TURNO_TABS = ['stock', 'caixas', 'vendas', 'pedidos', 'registos', 'escala'];
-const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria', 'configuracoes', 'empresas', 'monitor'];
+const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria', 'configuracoes', 'empresas', 'monitor', 'avisos'];
 
 function _storageGet(key) {
   try {
@@ -1515,6 +1515,7 @@ async function draw() {
       case 'produtos': await drawProdutos(); break;
       case 'escala':   await drawEscala(); break;
       case 'admin':    await drawAdmin(); break;
+      case 'avisos':   await drawAvisos(); break;
       case 'monitor':
         if (S.user?.role !== 'admin') { await navigate('dia'); break; }
         await drawMonitor();
@@ -1629,6 +1630,8 @@ function menuEntries() {
     { page: 'calendario', label: 'Calendário',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/><line x1="8" y1="18" x2="8" y2="18.01"/><line x1="12" y1="18" x2="12" y2="18.01"/><line x1="16" y1="18" x2="16" y2="18.01"/></svg>' }
   ];
+  entries.push({ page: 'avisos', label: 'Avisos',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l18-7-4 16-6.5-4.5L3 11z"/><path d="M10.5 15.5L9 21l3-3.5"/></svg>' });
   if (showDepositos) entries.push({ page: 'depositos', label: 'Banco',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h3l2-7h8l2 7h3"/><path d="M5 10v10a2 2 0 002 2h10a2 2 0 002-2V10"/><rect x="9" y="14" width="6" height="4" rx="1"/></svg>' });
   if (showHistorico) {
@@ -2318,7 +2321,7 @@ async function carregarAvisosDia() {
     const avisos = await api('GET', '/avisos').catch(() => []);
     const podeGerir = ['admin', 'gestor'].includes(S.user?.role);
     const btn = `<div style="display:flex;gap:6px">
-      <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, abrirTodosAvisos)">Ver todos</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => navigate('avisos'))">Ver todos</button>
       ${podeGerir ? `<button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, novoAviso)">+ Novo aviso</button>` : ''}
     </div>`;
     const agora = Date.now();
@@ -2343,41 +2346,62 @@ async function carregarAvisosDia() {
   } catch (_) {}
 }
 
-/** Painel com o HISTÓRICO completo de avisos: activos, expirados e
- *  (para admin/gestor) removidos — consultável por toda a gente. */
-async function abrirTodosAvisos() {
-  const avisos = await api('GET', '/avisos?todos=1').catch(() => []);
-  const agora = Date.now();
+/** Página AVISOS: activos em destaque + histórico completo (expirados;
+ *  removidos só para admin/gestor). Gestão no topo para quem pode. */
+async function drawAvisos() {
   const podeGerir = ['admin', 'gestor'].includes(S.user?.role);
-  const estado = (a) => {
-    if (a.ativo === false) return '<span style="background:#7f1d1d;color:#fecaca;border-radius:6px;padding:0 6px;font-size:10px">removido</span>';
-    if (a.valido_ate && new Date(a.valido_ate).getTime() <= agora) return '<span style="background:#374151;color:#d1d5db;border-radius:6px;padding:0 6px;font-size:10px">expirado</span>';
-    return '<span style="background:#14532d;color:#bbf7d0;border-radius:6px;padding:0 6px;font-size:10px">activo</span>';
-  };
-  const linhas = (avisos || []).map((a) => `
-    <div style="border-bottom:1px solid #1e293b;padding:10px 0">
-      <div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between">
-        <div style="color:#e2e8f0;font-size:13px;line-height:1.45;white-space:pre-wrap;flex:1;min-width:0">${escapeHtml(a.texto)}</div>
-        ${estado(a)}
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">📢 Avisos</div></div>
+      ${podeGerir ? `<button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, novoAviso)">+ Novo aviso</button>` : ''}
+    </div>
+    <div id="content">
+      <p style="font-size:12px;color:#64748b;margin:0 0 12px;line-height:1.45">Orientações para todos os turnos. Cada aviso fica <strong style="color:#94a3b8">sempre visível</strong> durante o prazo definido e depois passa para o histórico.</p>
+      <div id="avisos-page-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadAvisosPagina();
+}
+
+async function loadAvisosPagina() {
+  const cont = document.getElementById('avisos-page-content');
+  if (!cont) return;
+  try {
+    const avisos = await api('GET', '/avisos?todos=1').catch(() => []);
+    const agora = Date.now();
+    const podeGerir = ['admin', 'gestor'].includes(S.user?.role);
+    const ehActivo = (a) => a.ativo !== false && (!a.valido_ate || new Date(a.valido_ate).getTime() > agora);
+    const activos = (avisos || []).filter(ehActivo);
+    const historicos = (avisos || []).filter((a) => !ehActivo(a));
+    const linha = (a, comEstado) => {
+      const novo = !comEstado && a.criado_em && (agora - new Date(a.criado_em).getTime()) < 24 * 3600000;
+      const estado = a.ativo === false
+        ? '<span style="background:#7f1d1d;color:#fecaca;border-radius:6px;padding:0 6px;font-size:10px">removido</span>'
+        : (a.valido_ate && new Date(a.valido_ate).getTime() <= agora
+          ? '<span style="background:#374151;color:#d1d5db;border-radius:6px;padding:0 6px;font-size:10px">expirado</span>' : '');
+      return `
+      <div style="border-top:1px solid #1e293b;padding:10px 0;display:flex;gap:8px;align-items:flex-start">
+        <div style="flex:1;min-width:0">
+          <div style="color:${comEstado ? '#94a3b8' : '#e2e8f0'};font-size:13px;line-height:1.45;white-space:pre-wrap">${novo ? '<span style="background:#1d4ed8;color:#fff;border-radius:6px;padding:0 6px;font-size:10px;font-weight:700;margin-right:6px;vertical-align:2px">NOVO</span>' : ''}${escapeHtml(a.texto)}</div>
+          <div style="color:#64748b;font-size:11px;margin-top:3px">${escapeHtml(a.criado_por || '')} · ${new Date(a.criado_em).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}${a.valido_ate ? ` · ${comEstado ? 'era válido' : 'visível'} até ${new Date(a.valido_ate).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })}` : ''}${a.loja_id ? ' · só esta loja' : ''}</div>
+        </div>
+        ${comEstado ? estado : (podeGerir ? `<button type="button" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:14px;padding:0 2px" title="Remover aviso" onclick="runAction(event, () => removerAviso(${parseInt(a.id, 10) || 0}))">✕</button>` : '')}
+      </div>`;
+    };
+    cont.innerHTML = `
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-title">🟢 Activos (${activos.length})</div>
+        ${activos.map((a) => linha(a, false)).join('') || '<div style="color:#475569;font-size:12px;padding:6px 0">Sem avisos activos neste momento.</div>'}
       </div>
-      <div style="color:#64748b;font-size:11px;margin-top:3px">${escapeHtml(a.criado_por || '')} · ${new Date(a.criado_em).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}${a.valido_ate ? ` · válido até ${new Date(a.valido_ate).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })}` : ''}${a.loja_id ? ' · só esta loja' : ''}</div>
-    </div>`).join('');
-  const ov = document.createElement('div');
-  ov.id = 'todos-avisos-overlay';
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:1450;display:flex;align-items:flex-end;justify-content:center';
-  ov.innerHTML = `
-    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:560px;width:100%;max-height:80vh;display:flex;flex-direction:column;padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px))">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 8px">
-        <div style="font-size:15px;font-weight:700;color:#f1f5f9">📢 Todos os avisos</div>
-        <button type="button" aria-label="Fechar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1" onclick="document.getElementById('todos-avisos-overlay')?.remove()">✕</button>
-      </div>
-      <div style="overflow-y:auto;padding:0 16px;-webkit-overflow-scrolling:touch">
-        ${linhas || '<div style="color:#475569;font-size:13px;padding:14px 0">Ainda não há avisos registados.</div>'}
-      </div>
-      ${podeGerir ? '<div style="padding:8px 16px 0;color:#64748b;font-size:11px">Os removidos só aparecem a administradores e gestores.</div>' : ''}
-    </div>`;
-  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
-  document.body.appendChild(ov);
+      <div class="card">
+        <div class="card-title" style="color:#94a3b8">🗂 Histórico (${historicos.length})</div>
+        ${historicos.map((a) => linha(a, true)).join('') || '<div style="color:#475569;font-size:12px;padding:6px 0">Sem avisos antigos.</div>'}
+        ${podeGerir && historicos.some((a) => a.ativo === false) ? '<div style="color:#64748b;font-size:11px;margin-top:8px">Os removidos só aparecem a administradores e gestores.</div>' : ''}
+      </div>`;
+  } catch (e) {
+    cont.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
+  }
 }
 
 async function novoAviso() {
@@ -2389,6 +2413,7 @@ async function novoAviso() {
     botaoOk: 'Publicar'
   });
   if (texto === null || !String(texto).trim()) return;
+  const _refrescaAvisos = async () => { await carregarAvisosDia().catch(() => {}); await loadAvisosPagina().catch(() => {}); };
   const diasTxt = await dialogoTroca({
     titulo: '⏳ Durante quantos dias?',
     texto: 'O aviso fica SEMPRE visível a todos durante este período e depois desaparece sozinho.\n1 a 90 dias (vazio = 7).',
@@ -2400,14 +2425,15 @@ async function novoAviso() {
   if (diasTxt === null) return;
   const dias = Math.min(90, Math.max(1, parseInt(String(diasTxt).trim(), 10) || 7));
   await apiEscrita('POST', '/avisos', { texto: String(texto).trim(), dias }, { desc: 'Novo aviso' });
-  await carregarAvisosDia();
+  await _refrescaAvisos();
 }
 
 async function removerAviso(id) {
   const ok = await dialogoTroca({ titulo: 'Remover aviso', texto: 'O aviso deixa de aparecer a todos. Confirmas?', tipo: 'simnao' });
   if (ok !== true) return;
   await apiEscrita('DELETE', `/avisos/${id}`, {}, { desc: 'Remover aviso', chave: `aviso:${id}` });
-  await carregarAvisosDia();
+  await carregarAvisosDia().catch(() => {});
+  await loadAvisosPagina().catch(() => {});
 }
 
 async function loadDia() {
@@ -5937,6 +5963,10 @@ function refrescarSeccaoComDadosFrescos(url) {
     }
     if (S.page === 'faltas' && p.endsWith('/faltas')) {
       if (livre(['faltas-pendentes', 'faltas-historico'])) loadFaltas().catch(() => {});
+      return true;
+    }
+    if (S.page === 'avisos' && p.endsWith('/avisos')) {
+      loadAvisosPagina().catch(() => {});
       return true;
     }
     return false;

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-codigo-aparelho">
+<html lang="pt" data-stockos-ui="2026-07-31-aparelho-partilhado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -14122,6 +14122,12 @@ async function loadMonitor() {
   try {
     const rows = await api('GET', '/monitor');
     const por = {};
+    // Nº de utilizadores distintos por aparelho → selo «partilhado».
+    const usosPorAparelho = {};
+    (rows || []).forEach((r) => {
+      if (!r.dispositivo_id) return;
+      (usosPorAparelho[r.dispositivo_id] = usosPorAparelho[r.dispositivo_id] || new Set()).add(String(r.id));
+    });
     (rows || []).forEach((r) => {
       if (!por[r.id]) por[r.id] = { nome: r.nome, role: r.role, ativo: r.ativo, dispositivos: [] };
       if (r.dispositivo_id) por[r.id].dispositivos.push(r);
@@ -14147,7 +14153,7 @@ async function loadMonitor() {
             const pend = parseInt(d.pendentes, 10) || 0;
             return `<div style="border-top:1px solid #1e293b;padding:7px 0;font-size:12px;display:flex;flex-direction:column;gap:3px">
               <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
-                <span>${online ? '🟢 <strong style="color:#4ade80">online</strong>' : `⚪ <span style="color:#94a3b8">visto ${rel(d.visto_em)}</span>`} · 📱 <span style="color:#cbd5e1">${escapeHtml(d.descricao || 'Aparelho')}</span> <span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 6px;color:#93c5fd;font-family:monospace">#${escapeHtml(String(d.dispositivo_id).replace(/^d-/, '').slice(0, 4).toUpperCase())}</span></span>
+                <span>${online ? '🟢 <strong style="color:#4ade80">online</strong>' : `⚪ <span style="color:#94a3b8">visto ${rel(d.visto_em)}</span>`} · 📱 <span style="color:#cbd5e1">${escapeHtml(d.descricao || 'Aparelho')}</span> <span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 6px;color:#93c5fd;font-family:monospace">#${escapeHtml(String(d.dispositivo_id).replace(/^d-/, '').slice(0, 4).toUpperCase())}</span>${(usosPorAparelho[d.dispositivo_id] && usosPorAparelho[d.dispositivo_id].size > 1) ? ` <span style="background:#3f1d6a;color:#d8b4fe;border-radius:6px;padding:0 6px;font-size:10px">partilhado · ${usosPorAparelho[d.dispositivo_id].size} utilizadores</span>` : ''}</span>
                 <span>${pend > 0 ? `<strong style="background:#7f1d1d;color:#fecaca;border-radius:999px;padding:1px 8px">⏳ ${pend} por sincronizar</strong>` : '<span style="color:#4ade80">✓ 0 em fila</span>'}</span>
               </div>
               <div style="color:#64748b">Último login: <strong style="color:#cbd5e1">${fmtDt(d.ultimo_login)}</strong> · Última operação: <strong style="color:#cbd5e1">${fmtDt(d.ultima_operacao)}</strong></div>

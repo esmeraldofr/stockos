@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-01-pagina-avisos">
+<html lang="pt" data-stockos-ui="2026-08-01-avisos-no-turno">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2346,6 +2346,32 @@ async function carregarAvisosDia() {
   } catch (_) {}
 }
 
+/** Avisos ACTIVOS sempre visíveis no topo da página do turno. */
+async function carregarAvisosTurno() {
+  const cont = document.getElementById('turno-avisos');
+  if (!cont) return;
+  try {
+    const avisos = await api('GET', '/avisos').catch(() => []);
+    if (!(avisos || []).length) { cont.innerHTML = ''; return; }
+    const agora = Date.now();
+    const linhas = avisos.map((a) => {
+      const novo = a.criado_em && (agora - new Date(a.criado_em).getTime()) < 24 * 3600000;
+      return `<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0">
+        <span style="flex-shrink:0">📌</span>
+        <span style="font-size:12.5px;line-height:1.45;color:#e2e8f0;white-space:pre-wrap;min-width:0">${novo ? '<span style="background:#1d4ed8;color:#fff;border-radius:6px;padding:0 6px;font-size:10px;font-weight:700;margin-right:6px;vertical-align:1px">NOVO</span>' : ''}${escapeHtml(a.texto)} <span style="color:#64748b;font-size:11px">— ${escapeHtml(a.criado_por || '')}</span></span>
+      </div>`;
+    }).join('');
+    cont.innerHTML = `
+      <div style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid #1d4ed8;background:rgba(29,78,216,0.12)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:2px">
+          <span style="font-size:12px;font-weight:700;color:#93c5fd">📢 AVISOS EM VIGOR</span>
+          <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px" onclick="runAction(event, () => navigate('avisos'))">Ver todos</button>
+        </div>
+        ${linhas}
+      </div>`;
+  } catch (_) {}
+}
+
 /** Página AVISOS: activos em destaque + histórico completo (expirados;
  *  removidos só para admin/gestor). Gestão no topo para quem pode. */
 async function drawAvisos() {
@@ -3895,6 +3921,7 @@ async function loadTurno() {
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
     show('turno-content', `
+      <div id="turno-avisos"></div>
       <div id="turno-checklist-bar"></div>
       <div class="turno-tabs">
           <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
@@ -4112,6 +4139,7 @@ async function loadTurno() {
     fotosAnexosInit();
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
     atualizarChecklistBar().catch(() => {});
+    carregarAvisosTurno().catch(() => {});
     if (finoBarrilAjustadoRecipiente && turno.id) {
       try {
         await guardarStock(turno.id);
@@ -5967,6 +5995,10 @@ function refrescarSeccaoComDadosFrescos(url) {
     }
     if (S.page === 'avisos' && p.endsWith('/avisos')) {
       loadAvisosPagina().catch(() => {});
+      return true;
+    }
+    if (S.page === 'turno' && p.endsWith('/avisos')) {
+      carregarAvisosTurno().catch(() => {});
       return true;
     }
     return false;

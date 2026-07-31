@@ -130,3 +130,4 @@ CREATE INDEX IF NOT EXISTS idx_turnos_loja_data ON turnos (loja_id, data);
 CREATE TABLE IF NOT EXISTS monitor_dispositivos (id SERIAL PRIMARY KEY, utilizador_id UUID NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE, dispositivo_id TEXT NOT NULL, descricao TEXT NOT NULL DEFAULT '', ultimo_login TIMESTAMPTZ, ultima_operacao TIMESTAMPTZ, pendentes INTEGER NOT NULL DEFAULT 0, visto_em TIMESTAMPTZ NOT NULL DEFAULT NOW(), empresa_id INTEGER, loja_id INTEGER, UNIQUE (utilizador_id, dispositivo_id));
 ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS empresa_id INTEGER;
 ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS loja_id INTEGER;
+ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS nome TEXT NOT NULL DEFAULT '';

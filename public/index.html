@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-monitor-so-usados">
+<html lang="pt" data-stockos-ui="2026-07-31-nome-aparelho">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -14153,9 +14153,14 @@ async function loadMonitor() {
         : u.dispositivos.map((d) => {
             const online = d.visto_em && (agora - new Date(d.visto_em).getTime()) < 2 * 60000;
             const pend = parseInt(d.pendentes, 10) || 0;
+            window.__monitorNomes = window.__monitorNomes || {};
+            window.__monitorNomes[d.dispositivo_id] = d.dispositivo_nome || '';
+            const rotulo = d.dispositivo_nome
+              ? `<strong style="color:#f1f5f9">${escapeHtml(d.dispositivo_nome)}</strong> <span style="color:#64748b">(${escapeHtml(d.descricao || 'aparelho')})</span>`
+              : `<span style="color:#cbd5e1">${escapeHtml(d.descricao || 'Aparelho')}</span>`;
             return `<div style="border-top:1px solid #1e293b;padding:7px 0;font-size:12px;display:flex;flex-direction:column;gap:3px">
               <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
-                <span>${online ? '🟢 <strong style="color:#4ade80">online</strong>' : `⚪ <span style="color:#94a3b8">visto ${rel(d.visto_em)}</span>`} · 📱 <span style="color:#cbd5e1">${escapeHtml(d.descricao || 'Aparelho')}</span> <span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 6px;color:#93c5fd;font-family:monospace">#${escapeHtml(String(d.dispositivo_id).replace(/^d-/, '').slice(0, 4).toUpperCase())}</span>${(usosPorAparelho[d.dispositivo_id] && usosPorAparelho[d.dispositivo_id].size > 1) ? ` <span style="background:#3f1d6a;color:#d8b4fe;border-radius:6px;padding:0 6px;font-size:10px">partilhado · ${usosPorAparelho[d.dispositivo_id].size} utilizadores</span>` : ''}</span>
+                <span>${online ? '🟢 <strong style="color:#4ade80">online</strong>' : `⚪ <span style="color:#94a3b8">visto ${rel(d.visto_em)}</span>`} · 📱 ${rotulo} <span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 6px;color:#93c5fd;font-family:monospace">#${escapeHtml(String(d.dispositivo_id).replace(/^d-/, '').slice(0, 4).toUpperCase())}</span>${(usosPorAparelho[d.dispositivo_id] && usosPorAparelho[d.dispositivo_id].size > 1) ? ` <span style="background:#3f1d6a;color:#d8b4fe;border-radius:6px;padding:0 6px;font-size:10px">partilhado · ${usosPorAparelho[d.dispositivo_id].size} utilizadores</span>` : ''} <button type="button" title="Dar nome ao aparelho" style="background:none;border:none;cursor:pointer;color:#64748b;padding:0 2px" onclick="runAction(event, () => renomearDispositivo('${escapeHtml(d.dispositivo_id)}'))">✏️</button></span>
                 <span>${pend > 0 ? `<strong style="background:#7f1d1d;color:#fecaca;border-radius:999px;padding:1px 8px">⏳ ${pend} por sincronizar</strong>` : '<span style="color:#4ade80">✓ 0 em fila</span>'}</span>
               </div>
               <div style="color:#64748b">${d.empresa_nome || d.loja_nome ? `🏢 <span style="color:#cbd5e1">${escapeHtml(d.empresa_nome || '—')}</span> · 🏪 <span style="color:#cbd5e1">${escapeHtml(d.loja_nome || '—')}</span> · ` : ''}Último login: <strong style="color:#cbd5e1">${fmtDt(d.ultimo_login)}</strong> · Última operação: <strong style="color:#cbd5e1">${fmtDt(d.ultima_operacao)}</strong></div>
@@ -14172,6 +14177,27 @@ async function loadMonitor() {
     show('monitor-content', cards || '<div class="card"><p style="color:#94a3b8;margin:0">Ainda ninguém esteve online nesta empresa — as linhas aparecem quando os aparelhos entrarem na app.</p></div>');
   } catch (e) {
     show('monitor-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
+  }
+}
+
+/** Admin dá um nome ao aparelho (ex.: «Balcão 1») — vale para o aparelho
+ *  inteiro, em todas as contas que o usam. Vazio remove o nome. */
+async function renomearDispositivo(dispId) {
+  const atual = (window.__monitorNomes || {})[dispId] || '';
+  const nome = await dialogoTroca({
+    titulo: '📱 Nome do aparelho',
+    texto: 'Dá um nome a este aparelho (ex.: Balcão 1, Telemóvel do gestor).\nDeixa vazio para remover o nome.',
+    tipo: 'texto',
+    valor: atual,
+    placeholder: 'Nome do aparelho',
+    botaoOk: 'Guardar'
+  });
+  if (nome === null) return;
+  try {
+    await api('PUT', '/monitor/dispositivo', { dispositivo_id: dispId, nome: String(nome).trim() });
+    await loadMonitor();
+  } catch (e) {
+    alert('Não foi possível guardar o nome (precisa de internet): ' + (e && e.message || e));
   }
 }
 

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-monitor-empresa-loja">
+<html lang="pt" data-stockos-ui="2026-07-31-monitor-so-usados">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -14145,7 +14145,7 @@ async function loadMonitor() {
       if (h < 24) return `há ${h} h`;
       return `há ${Math.floor(h / 24)} dia${Math.floor(h / 24) === 1 ? '' : 's'}`;
     };
-    const cards = Object.values(por).map((u) => {
+    const cards = Object.values(por).filter((u) => u.dispositivos.length > 0).map((u) => {
       const roleLabel = u.role === 'compras' ? 'operador de sistema' : u.role;
       const algumOnline = u.dispositivos.some((d) => d.visto_em && (agora - new Date(d.visto_em).getTime()) < 2 * 60000);
       const disps = u.dispositivos.length === 0
@@ -14169,7 +14169,7 @@ async function loadMonitor() {
         ${disps}
       </div>`;
     }).join('');
-    show('monitor-content', cards || '<div class="card"><p style="color:#94a3b8;margin:0">Sem utilizadores nesta empresa.</p></div>');
+    show('monitor-content', cards || '<div class="card"><p style="color:#94a3b8;margin:0">Ainda ninguém esteve online nesta empresa — as linhas aparecem quando os aparelhos entrarem na app.</p></div>');
   } catch (e) {
     show('monitor-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
   }

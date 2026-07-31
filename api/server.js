@@ -8194,8 +8194,28 @@ async function ensureMonitorDispositivos() {
   )`).catch(() => {});
   await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS empresa_id INTEGER`).catch(() => {});
   await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS loja_id INTEGER`).catch(() => {});
+  await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS nome TEXT NOT NULL DEFAULT ''`).catch(() => {});
   monitorReady = true;
 }
+
+/** Nome dado pelo admin ao aparelho (ex.: «Balcão 1») — aplica-se ao
+ *  aparelho inteiro, em todas as contas que o usam. */
+app.put('/api/monitor/dispositivo', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureMonitorDispositivos();
+    const disp = String((req.body && req.body.dispositivo_id) || '').slice(0, 64);
+    if (!disp) return res.status(400).json({ erro: 'dispositivo_id em falta' });
+    const nome = String((req.body && req.body.nome) || '').trim().slice(0, 60);
+    const r = await queryEmpresa(
+      `UPDATE monitor_dispositivos SET nome=$1 WHERE dispositivo_id=$2
+         AND utilizador_id IN (SELECT id FROM utilizadores WHERE empresa_id=$3) RETURNING id`,
+      [nome, disp, empresaDe(req)],
+      `UPDATE monitor_dispositivos SET nome=$1 WHERE dispositivo_id=$2 RETURNING id`,
+      [nome, disp]
+    );
+    res.json({ ok: true, linhas: r.rows.length, nome });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
 
 /** Sinal de vida de cada aparelho (a fila offline vive no aparelho — só o
  *  próprio cliente sabe quantos registos tem por sincronizar). */
@@ -8234,7 +8254,7 @@ app.get('/api/monitor', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureMonitorDispositivos();
     const sel = `SELECT u.id, u.nome, u.role, u.ativo,
-            m.dispositivo_id, m.descricao, m.ultimo_login, m.ultima_operacao, m.pendentes, m.visto_em,
+            m.dispositivo_id, m.descricao, COALESCE(m.nome,'') AS dispositivo_nome, m.ultimo_login, m.ultima_operacao, m.pendentes, m.visto_em,
             m.empresa_id AS hb_empresa_id, m.loja_id AS hb_loja_id,
             e.nome AS empresa_nome, l.nome AS loja_nome
        FROM utilizadores u

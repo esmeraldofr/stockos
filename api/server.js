@@ -8186,8 +8186,10 @@ async function ensureAvisos() {
     texto TEXT NOT NULL,
     criado_por TEXT NOT NULL DEFAULT '',
     ativo BOOLEAN NOT NULL DEFAULT TRUE,
-    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    valido_ate TIMESTAMPTZ
   )`).catch(() => {});
+  await query(`ALTER TABLE avisos ADD COLUMN IF NOT EXISTS valido_ate TIMESTAMPTZ`).catch(() => {});
   avisosReady = true;
 }
 
@@ -8197,6 +8199,7 @@ app.get('/api/avisos', auth, async (req, res) => {
     const r = await query(
       `SELECT * FROM avisos
        WHERE ativo IS TRUE AND empresa_id=$1 AND (loja_id IS NULL OR loja_id=$2)
+         AND (valido_ate IS NULL OR valido_ate > NOW())
        ORDER BY criado_em DESC LIMIT 30`,
       [empresaDe(req), lojaDe(req)]
     );
@@ -8209,9 +8212,13 @@ app.post('/api/avisos', auth, requireRole('admin', 'gestor'), async (req, res) =
     await ensureAvisos();
     const texto = String((req.body && req.body.texto) || '').trim();
     if (!texto) return res.status(400).json({ erro: 'Escreve o texto do aviso.' });
+    // Validade: o aviso fica SEMPRE visível durante N dias (1–90; 7 por
+    // defeito) e depois desaparece sozinho.
+    const dias = Math.min(90, Math.max(1, parseInt(req.body.dias, 10) || 7));
     const r = await query(
-      `INSERT INTO avisos (empresa_id, loja_id, texto, criado_por) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [empresaDe(req), req.body.so_esta_loja === true ? lojaDe(req) : null, texto.slice(0, 2000), (req.user && req.user.nome) || '']
+      `INSERT INTO avisos (empresa_id, loja_id, texto, criado_por, valido_ate)
+       VALUES ($1,$2,$3,$4, NOW() + ($5 || ' days')::interval) RETURNING *`,
+      [empresaDe(req), req.body.so_esta_loja === true ? lojaDe(req) : null, texto.slice(0, 2000), (req.user && req.user.nome) || '', String(dias)]
     );
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ erro: e.message }); }

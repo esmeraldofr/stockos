@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-01-checklist-portoes">
+<html lang="pt" data-stockos-ui="2026-08-01-pagina-checklist">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -870,7 +870,7 @@ async function refrescarLojas() {
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
 const ALLOWED_TURNO_TABS = ['stock', 'caixas', 'vendas', 'pedidos', 'registos', 'escala'];
-const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria', 'configuracoes', 'empresas', 'monitor', 'avisos'];
+const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria', 'configuracoes', 'empresas', 'monitor', 'avisos', 'checklist'];
 
 function _storageGet(key) {
   try {
@@ -1516,6 +1516,10 @@ async function draw() {
       case 'escala':   await drawEscala(); break;
       case 'admin':    await drawAdmin(); break;
       case 'avisos':   await drawAvisos(); break;
+      case 'checklist':
+        if (!['admin', 'gestor'].includes(S.user?.role)) { await navigate('dia'); break; }
+        await drawChecklistPage();
+        break;
       case 'monitor':
         if (S.user?.role !== 'admin') { await navigate('dia'); break; }
         await drawMonitor();
@@ -1669,6 +1673,8 @@ function menuEntries() {
     entries.push({ page: 'armazem', label: 'Armazém',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>' });
   }
+  if (showEscala) entries.push({ page: 'checklist', label: 'Checklist',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M21 12v6a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/><path d="M3 12h4"/></svg>' });
   if (showEscala) entries.push({ page: 'escala', label: 'Escala',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>' });
   if (isAdmin) entries.push({ page: 'admin', label: 'Admin',
@@ -14126,18 +14132,8 @@ async function drawConfiguracoes() {
       ${['admin', 'gestor'].includes(S.user?.role) ? `
       <div class="card mb-12" id="cfg-checklist-card">
         <div class="card-title">📋 Checklist do turno</div>
-        <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
-          Tarefas obrigatórias da <strong style="color:#cbd5e1">abertura</strong> e do <strong style="color:#cbd5e1">fecho</strong> — uma por linha.
-          <strong style="color:#fbbf24">O turno não fecha</strong> enquanto todas não estiverem marcadas. Vale para toda a empresa.
-        </p>
-        <div class="field"><label>🌅 Tarefas de ABERTURA</label>
-          <textarea id="cfg-chk-abertura" rows="5" placeholder="Ex.:&#10;Contar o fundo de caixa&#10;Ligar as arcas e conferir temperaturas&#10;Conferir o stock encontrado" style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:13px;padding:10px 12px;box-sizing:border-box;resize:vertical"></textarea>
-        </div>
-        <div class="field"><label>🌙 Tarefas de FECHO</label>
-          <textarea id="cfg-chk-fecho" rows="5" placeholder="Ex.:&#10;Fechar o TPA e anexar a foto&#10;Contar e registar o dinheiro&#10;Desligar equipamentos e trancar" style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:13px;padding:10px 12px;box-sizing:border-box;resize:vertical"></textarea>
-        </div>
-        <button type="button" class="btn btn-success" onclick="runAction(event, guardarChecklistCfg)">Guardar checklist</button>
-        <div id="cfg-chk-msg" style="margin-top:8px"></div>
+        <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">As tarefas obrigatórias de abertura e fecho gerem-se agora na página própria.</p>
+        <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, () => navigate('checklist'))">Abrir página Checklist</button>
       </div>` : ''}
 
       <div class="card mb-12">
@@ -14227,6 +14223,90 @@ async function drawConfiguracoes() {
   void configTurnosBloqueadosLoad();
   void configLojasLoad();
   void carregarChecklistCfgForm();
+}
+
+// ── PÁGINA CHECKLIST (admin/gestor): editor das tarefas do turno ──────
+async function drawChecklistPage() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">📋 Checklist do turno</div></div>
+    </div>
+    <div id="content">
+      <p style="font-size:12px;color:#64748b;margin:0 0 12px;line-height:1.45">Tarefas obrigatórias por empresa. A <strong style="color:#cbd5e1">abertura</strong> valida-se ao fechar o registo inicial; o <strong style="color:#cbd5e1">fecho</strong> valida-se ao fechar o registo dos deixados. <strong style="color:#fbbf24">Nenhum turno fecha com tarefas por fazer.</strong></p>
+      <div id="checklist-page-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadChecklistPage();
+}
+
+async function loadChecklistPage() {
+  const cont = document.getElementById('checklist-page-content');
+  if (!cont) return;
+  try {
+    const cfg = await api('GET', '/config/checklist-turno').catch(() => null) || { abertura: [], fecho: [] };
+    S.checklistCfgEdit = { abertura: [...(cfg.abertura || [])], fecho: [...(cfg.fecho || [])] };
+    S.checklistCfg = null; // as barras/portões recarregam a versão nova
+    renderChecklistPage();
+  } catch (e) {
+    cont.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+/** Desenha o editor a partir de S.checklistCfgEdit (estado local). */
+function renderChecklistPage() {
+  const cont = document.getElementById('checklist-page-content');
+  if (!cont) return;
+  {
+    const seccao = (fase, titulo, exemplo) => {
+      const lista = S.checklistCfgEdit[fase];
+      const linhas = lista.map((t, i) => `
+        <div style="display:flex;gap:8px;align-items:flex-start;border-top:1px solid #1e293b;padding:8px 0">
+          <span style="color:#64748b;font-size:12px;flex-shrink:0;min-width:20px;text-align:right">${i + 1}.</span>
+          <span style="flex:1;font-size:13px;color:#e2e8f0;line-height:1.4;min-width:0">${escapeHtml(t)}</span>
+          <button type="button" title="Remover tarefa" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:14px;padding:0 2px" onclick="runAction(event, () => checklistCfgRemover('${fase}', ${i}))">✕</button>
+        </div>`).join('');
+      return `
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-title">${titulo} (${lista.length})</div>
+        ${linhas || `<div style="color:#475569;font-size:12px;padding:6px 0">Sem tarefas. Ex.: ${exemplo}</div>`}
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <input id="chk-nova-${fase}" type="text" maxlength="200" placeholder="Nova tarefa…" style="flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:13px;padding:9px 12px" onkeydown="if(event.key==='Enter'){event.preventDefault();checklistCfgAdicionar('${fase}');}"/>
+          <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, () => checklistCfgAdicionar('${fase}'))">+ Adicionar</button>
+        </div>
+      </div>`;
+    };
+    cont.innerHTML =
+      seccao('abertura', '🌅 Tarefas de ABERTURA', '«Contar o fundo de caixa», «Ligar as arcas»') +
+      seccao('fecho', '🌙 Tarefas de FECHO', '«Fechar o TPA e anexar a foto», «Trancar a porta»') +
+      `<div id="checklist-page-msg"></div>`;
+  }
+}
+
+async function checklistCfgAdicionar(fase) {
+  const inp = document.getElementById(`chk-nova-${fase}`);
+  const t = String(inp?.value || '').trim();
+  if (!t) return;
+  S.checklistCfgEdit[fase].push(t.slice(0, 200));
+  await checklistCfgGravar();
+}
+
+async function checklistCfgRemover(fase, idx) {
+  const ok = await dialogoTroca({ titulo: 'Remover tarefa', texto: `«${S.checklistCfgEdit[fase][idx]}»\nDeixa de ser exigida nos turnos. Confirmas?`, tipo: 'simnao' });
+  if (ok !== true) return;
+  S.checklistCfgEdit[fase].splice(idx, 1);
+  await checklistCfgGravar();
+}
+
+async function checklistCfgGravar() {
+  try {
+    const resp = await apiEscrita('PUT', '/config/checklist-turno',
+      { abertura: S.checklistCfgEdit.abertura, fecho: S.checklistCfgEdit.fecho },
+      { desc: 'Checklist do turno', chave: 'cfg:checklist' });
+    S.checklistCfg = null;
+    renderChecklistPage(); // redesenha já a partir do estado local
+    if (resp && resp._offline) suc('checklist-page-msg', 'Guardado neste aparelho — sincroniza quando a rede voltar.');
+  } catch (e) { err('checklist-page-msg', e && e.message || String(e)); }
 }
 
 /** Preenche os textareas do checklist com a config actual da empresa. */

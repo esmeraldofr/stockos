@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-historico-hora">
+<html lang="pt" data-stockos-ui="2026-07-31-empresa-no-utilizador">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -14052,6 +14052,13 @@ function showUserForm(u) {
           <option value="admin"    ${u?.role==='admin'?'selected':''}>Admin</option>
         </select>
       </div>
+      ${S.user?.role === 'admin' ? `
+      <div class="field"><label>Empresa</label>
+        <select id="u-empresa" onchange="userFormEmpresaChange()">
+          ${(S.empresas || []).map((e) => `<option value="${e.id}" ${String(u?.empresa_id ?? empresaAtivaId()) === String(e.id) ? 'selected' : ''}>🏢 ${escapeHtml(e.nome)}</option>`).join('')}
+        </select>
+        <div style="font-size:11px;color:#64748b;margin-top:3px">O utilizador pertence a esta empresa; a loja fixa vem das lojas dela.</div>
+      </div>` : ''}
       <div class="field" id="u-loja-wrap">
         <label>Loja fixa <span style="font-weight:400;color:#64748b">(operador / operador de sistema trabalham numa só loja)</span></label>
         <select id="u-loja">
@@ -14119,6 +14126,38 @@ function showUserForm(u) {
       wrap.style.display = modoSel.value === 'total' ? 'block' : 'none';
     });
   }
+  if (S.user?.role === 'admin') userFormPrepararEmpresas(u).catch(() => {});
+}
+
+/** Admin: garante a lista de empresas no formulário do utilizador e
+ *  sincroniza as lojas com a empresa seleccionada (em edição, a do próprio
+ *  utilizador; em criação, a empresa activa). */
+async function userFormPrepararEmpresas(u) {
+  const sel = document.getElementById('u-empresa');
+  if (!sel) return;
+  if (!sel.options.length) {
+    S.empresas = await api('GET', '/empresas').catch(() => []) || [];
+    sel.innerHTML = S.empresas.map((e) => `<option value="${e.id}">🏢 ${escapeHtml(e.nome)}</option>`).join('');
+  }
+  const alvo = u && u.empresa_id != null ? String(u.empresa_id) : String(empresaAtivaId());
+  if ([...sel.options].some((o) => o.value === alvo)) sel.value = alvo;
+  await userFormEmpresaChange(u && u.loja_id != null ? u.loja_id : undefined);
+}
+
+/** Recarrega as opções da loja fixa com as lojas da empresa escolhida. */
+async function userFormEmpresaChange(lojaPre) {
+  const selLoja = document.getElementById('u-loja');
+  const empId = val('u-empresa');
+  if (!selLoja || !empId) return;
+  let lojas = [];
+  try {
+    lojas = String(empId) === String(empresaAtivaId())
+      ? (S.lojas || [])
+      : await api('GET', `/lojas?empresa=${empId}`);
+  } catch (_) { lojas = []; }
+  const atual = lojaPre !== undefined ? String(lojaPre ?? '') : String(selLoja.value || '');
+  selLoja.innerHTML = '<option value="">— Sem loja fixa —</option>' +
+    (lojas || []).map((l) => `<option value="${l.id}" ${String(l.id) === atual ? 'selected' : ''}>🏪 ${escapeHtml(l.nome)}</option>`).join('');
 }
 
 /** Campos da ficha do funcionário lidos do formulário. Os campos
@@ -14153,6 +14192,7 @@ async function createUser() {
       return;
     }
     const body = {nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role'),password:passInicial,loja_id:val('u-loja'),...fichaFuncionarioBody()};
+    if (document.getElementById('u-empresa')) body.empresa_id = val('u-empresa');
     if (['operador','compras'].includes(body.role) && !body.loja_id) {
       err('user-form-msg', 'Operador e operador de sistema trabalham numa loja fixa — escolhe a loja.');
       return;
@@ -14170,6 +14210,7 @@ async function createUser() {
 async function saveUser(id) {
   try {
     const body = {nome:val('u-nome'),username:val('u-username'),role:val('u-role'),ativo:val('u-ativo')==='true',loja_id:val('u-loja'),...fichaFuncionarioBody()};
+    if (document.getElementById('u-empresa')) body.empresa_id = val('u-empresa');
     if (['operador','compras'].includes(body.role) && !body.loja_id) {
       err('user-form-msg', 'Operador e operador de sistema trabalham numa loja fixa — escolhe a loja.');
       return;

@@ -8042,15 +8042,24 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
     } else {
       emailFinal = `sem-email-${crypto.randomBytes(4).toString('hex')}@stockos.local`;
     }
+    // Empresa de DESTINO: o admin escolhe-a no formulário (por defeito, a
+    // empresa efectiva). A loja fixa tem de pertencer a essa empresa —
+    // validado ANTES de criar a conta.
+    const empBody = parseInt((req.body && req.body.empresa_id) || '', 10);
+    const empresaDestino = Number.isFinite(empBody) && empBody > 0 ? empBody : empresaDe(req);
+    const lojaFixa = req.body.loja_id != null && String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null;
+    if (lojaFixa) {
+      const lv = await query('SELECT 1 FROM lojas WHERE id=$1 AND empresa_id=$2', [lojaFixa, empresaDestino]).catch(() => null);
+      if (lv && !lv.rows.length) {
+        return res.status(400).json({ erro: 'A loja fixa escolhida não pertence à empresa seleccionada.' });
+      }
+    }
     const r = await query(
       'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
       [emailFinal, String(nome).trim(), un || null, role || 'operador', hashPassword(passRaw)]
     );
-    // Empresa do criador (admin migrado cria na empresa efectiva) + loja
-    // fixa (obrigatória na prática para operador / operador de sistema).
     try {
-      const lojaFixa = req.body.loja_id != null && String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null;
-      await query(`UPDATE utilizadores SET empresa_id=$1, loja_id=$2 WHERE id=$3`, [empresaDe(req), lojaFixa, r.rows[0].id]);
+      await query(`UPDATE utilizadores SET empresa_id=$1, loja_id=$2 WHERE id=$3`, [empresaDestino, lojaFixa, r.rows[0].id]);
     } catch (_) { /* BD antiga sem colunas */ }
     const aviso = await updateFichaFuncionario(r.rows[0].id, req.body || {}, req.user && req.user.role);
     const semLogin = !un && emailFinal.endsWith('@stockos.local');
@@ -8101,12 +8110,29 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
           'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,promotor=$4,comissao_modo=$5,comissao_pct_total=$6 WHERE id=$7 RETURNING id,email,nome,username,role,ativo,promotor,comissao_modo,comissao_pct_total',
           [nome, role, ativo, isPromotor, modo, pctTotal, req.params.id]
         );
-    // Loja fixa: '' → NULL (admin/gestor, sem loja fixa).
-    if (req.body.loja_id !== undefined) {
+    // Empresa (o admin pode movê-la) + loja fixa ('' → NULL). A loja tem
+    // de pertencer à empresa de destino.
+    if (req.body.loja_id !== undefined || req.body.empresa_id !== undefined) {
       try {
-        const lojaFixa = String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null;
-        await query(`UPDATE utilizadores SET loja_id=$1 WHERE id=$2`, [lojaFixa, req.params.id]);
-      } catch (_) { /* BD antiga sem coluna */ }
+        const atual = await query('SELECT empresa_id, loja_id FROM utilizadores WHERE id=$1', [req.params.id]);
+        const empBody = parseInt((req.body && req.body.empresa_id) || '', 10);
+        const empresaDestino = Number.isFinite(empBody) && empBody > 0
+          ? empBody
+          : ((atual.rows[0] && atual.rows[0].empresa_id) || empresaDe(req));
+        let lojaFixa = req.body.loja_id !== undefined
+          ? (String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null)
+          : (atual.rows[0] ? atual.rows[0].loja_id : null);
+        if (lojaFixa) {
+          const lv = await query('SELECT 1 FROM lojas WHERE id=$1 AND empresa_id=$2', [lojaFixa, empresaDestino]).catch(() => null);
+          if (lv && !lv.rows.length) {
+            if (req.body.loja_id !== undefined) {
+              return res.status(400).json({ erro: 'A loja fixa escolhida não pertence à empresa seleccionada.' });
+            }
+            lojaFixa = null; // loja herdada da empresa antiga — limpa
+          }
+        }
+        await query(`UPDATE utilizadores SET empresa_id=$1, loja_id=$2 WHERE id=$3`, [empresaDestino, lojaFixa, req.params.id]);
+      } catch (_) { /* BD antiga sem colunas */ }
     }
     const aviso = await updateFichaFuncionario(req.params.id, req.body || {}, req.user && req.user.role);
     res.json(aviso ? { ...r.rows[0], aviso } : r.rows[0]);

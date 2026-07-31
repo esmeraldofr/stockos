@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-nome-aparelho">
+<html lang="pt" data-stockos-ui="2026-07-31-actualizacao-cirurgica">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5769,19 +5769,49 @@ setInterval(() => renderOfflineBanner(), 5000);
 //    Dia refresca-se sozinha; nas restantes aparece um chip para
 //    actualizar com um toque (nunca re-renderiza por baixo dos dedos). ──
 let __dadosFrescosTimer = null;
+let __dadosFrescosUrls = [];
 if (navigator.serviceWorker) {
   navigator.serviceWorker.addEventListener('message', (ev) => {
     if (!ev.data || ev.data.tipo !== 'dados-frescos') return;
+    __dadosFrescosUrls.push(String(ev.data.url || ''));
     clearTimeout(__dadosFrescosTimer);
     __dadosFrescosTimer = setTimeout(() => {
+      const urls = __dadosFrescosUrls.splice(0);
       try {
         const ae = document.activeElement;
         if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) return;
         if (S.page === 'dia') { loadDia().catch(() => {}); return; }
-        mostrarChipDadosNovos();
+        // Actualização CIRÚRGICA: o aviso diz qual endpoint mudou — se
+        // houver uma secção correspondente e for seguro, redesenha só essa.
+        const cirurgico = urls.some((u) => refrescarSeccaoComDadosFrescos(u));
+        if (!cirurgico) mostrarChipDadosNovos();
       } catch (_) {}
     }, 600);
   });
+}
+
+/** Redesenha SÓ a secção ligada ao endpoint que mudou (nunca a página
+ *  inteira). Devolve true quando tratou; false → cai no chip. Nunca toca
+ *  numa secção com texto escrito a meio. */
+function refrescarSeccaoComDadosFrescos(url) {
+  try {
+    const p = String(url || '').split('?')[0];
+    const semTextoAMeio = (raiz) =>
+      ![...raiz.querySelectorAll('input')].some((i) => i.value && !['checkbox', 'radio', 'button'].includes(i.type));
+    if (S.page === 'monitor' && p.endsWith('/monitor')) {
+      loadMonitor().catch(() => {});
+      return true;
+    }
+    if (S.page === 'turno' && S.turnoId && p.includes(`/turnos/${S.turnoId}/`)) {
+      const secMov = document.getElementById('movimentos-section');
+      if (secMov && (p.endsWith('/entradas') || p.endsWith('/saidas') || p.endsWith('/caixa-entradas'))) {
+        if (!semTextoAMeio(secMov)) return true; // há escrita a meio — não mexe, sem chip
+        loadRegistosMovimentosSection(S.turnoId, S.turnoData?.stock || [], !!S.turnoCanEdit).catch(() => {});
+        return true;
+      }
+    }
+    return false;
+  } catch (_) { return false; }
 }
 function mostrarChipDadosNovos() {
   if (document.getElementById('chip-dados-novos')) return;

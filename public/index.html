@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-01-pagina-checklist">
+<html lang="pt" data-stockos-ui="2026-08-01-avisos-limpos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2330,19 +2330,14 @@ async function carregarAvisosDia() {
       <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => navigate('avisos'))">Ver todos</button>
       ${podeGerir ? `<button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, novoAviso)">+ Novo aviso</button>` : ''}
     </div>`;
-    const agora = Date.now();
-    const linhas = (avisos || []).slice(0, 10).map((a) => {
-      const novo = a.criado_em && (agora - new Date(a.criado_em).getTime()) < 24 * 3600000;
-      const ate = a.valido_ate ? ` · visível até ${new Date(a.valido_ate).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })}` : '';
-      return `
+    // Só o texto do aviso — os detalhes (autor, datas, validade) ficam na
+    // página «Avisos».
+    const linhas = (avisos || []).slice(0, 10).map((a) => `
       <div style="border-top:1px solid #1e293b;padding:8px 0;display:flex;gap:8px;align-items:flex-start">
-        <div style="flex:1;min-width:0">
-          <div style="color:#e2e8f0;font-size:13px;line-height:1.45;white-space:pre-wrap">${novo ? '<span style="background:#1d4ed8;color:#fff;border-radius:6px;padding:0 6px;font-size:10px;font-weight:700;margin-right:6px;vertical-align:2px">NOVO</span>' : ''}${escapeHtml(a.texto)}</div>
-          <div style="color:#64748b;font-size:11px;margin-top:3px">${escapeHtml(a.criado_por || '')} · ${new Date(a.criado_em).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${a.loja_id ? ' · só esta loja' : ''}${ate}</div>
-        </div>
+        <span style="flex-shrink:0">📌</span>
+        <div style="flex:1;min-width:0;color:#e2e8f0;font-size:13px;line-height:1.45;white-space:pre-wrap">${escapeHtml(a.texto)}</div>
         ${podeGerir ? `<button type="button" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:14px;padding:0 2px" title="Remover aviso" onclick="runAction(event, () => removerAviso(${parseInt(a.id, 10) || 0}))">✕</button>` : ''}
-      </div>`;
-    }).join('');
+      </div>`).join('');
     slot.innerHTML = `<div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
         <div class="card-title" style="margin:0">📢 Avisos</div>${btn}
@@ -2359,14 +2354,10 @@ async function carregarAvisosTurno() {
   try {
     const avisos = await api('GET', '/avisos').catch(() => []);
     if (!(avisos || []).length) { cont.innerHTML = ''; return; }
-    const agora = Date.now();
-    const linhas = avisos.map((a) => {
-      const novo = a.criado_em && (agora - new Date(a.criado_em).getTime()) < 24 * 3600000;
-      return `<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0">
+    const linhas = avisos.map((a) => `<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0">
         <span style="flex-shrink:0">📌</span>
-        <span style="font-size:12.5px;line-height:1.45;color:#e2e8f0;white-space:pre-wrap;min-width:0">${novo ? '<span style="background:#1d4ed8;color:#fff;border-radius:6px;padding:0 6px;font-size:10px;font-weight:700;margin-right:6px;vertical-align:1px">NOVO</span>' : ''}${escapeHtml(a.texto)} <span style="color:#64748b;font-size:11px">— ${escapeHtml(a.criado_por || '')}</span></span>
-      </div>`;
-    }).join('');
+        <span style="font-size:12.5px;line-height:1.45;color:#e2e8f0;white-space:pre-wrap;min-width:0">${escapeHtml(a.texto)}</span>
+      </div>`).join('');
     cont.innerHTML = `
       <div style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid #1d4ed8;background:rgba(29,78,216,0.12)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:2px">

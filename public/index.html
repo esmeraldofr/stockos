@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-01-avisos-limpos">
+<html lang="pt" data-stockos-ui="2026-08-01-aviso-nova-versao">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5928,6 +5928,7 @@ let __dadosFrescosTimer = null;
 let __dadosFrescosUrls = [];
 if (navigator.serviceWorker) {
   navigator.serviceWorker.addEventListener('message', (ev) => {
+    if (ev.data && ev.data.tipo === 'nova-versao') { mostrarChipNovaVersao(ev.data.versao); return; }
     if (!ev.data || ev.data.tipo !== 'dados-frescos') return;
     __dadosFrescosUrls.push(String(ev.data.url || ''));
     clearTimeout(__dadosFrescosTimer);
@@ -6001,6 +6002,19 @@ function refrescarSeccaoComDadosFrescos(url) {
     return false;
   } catch (_) { return false; }
 }
+/** Nova VERSÃO da app já descarregada — chip persistente até tocar. */
+function mostrarChipNovaVersao(versao) {
+  if (document.getElementById('chip-nova-versao')) return;
+  document.getElementById('chip-dados-novos')?.remove();
+  const c = document.createElement('button');
+  c.id = 'chip-nova-versao';
+  c.type = 'button';
+  c.textContent = `🔄 Nova versão da app — toca para actualizar${versao ? ` (${String(versao).toUpperCase()})` : ''}`;
+  c.style.cssText = 'position:fixed;bottom:76px;left:50%;transform:translateX(-50%);z-index:1420;background:#166534;color:#fff;border:1px solid #22c55e;border-radius:999px;padding:9px 16px;font-size:12px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.45);cursor:pointer;white-space:nowrap;max-width:92vw;overflow:hidden;text-overflow:ellipsis';
+  c.onclick = () => { try { location.reload(); } catch (_) {} };
+  document.body.appendChild(c);
+}
+
 function mostrarChipDadosNovos() {
   if (document.getElementById('chip-dados-novos')) return;
   if (!S.token) return;

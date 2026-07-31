@@ -8196,11 +8196,17 @@ async function ensureAvisos() {
 app.get('/api/avisos', auth, async (req, res) => {
   try {
     await ensureAvisos();
+    // todos=1 → histórico completo (expirados incluídos; removidos só
+    // para admin/gestor). Sem o parâmetro → só os activos dentro do prazo.
+    const todos = req.query.todos === '1';
+    const gerir = ['admin', 'gestor'].includes(req.user && req.user.role);
+    const filtro = todos
+      ? (gerir ? '' : 'AND ativo IS TRUE')
+      : `AND ativo IS TRUE AND (valido_ate IS NULL OR valido_ate > NOW())`;
     const r = await query(
       `SELECT * FROM avisos
-       WHERE ativo IS TRUE AND empresa_id=$1 AND (loja_id IS NULL OR loja_id=$2)
-         AND (valido_ate IS NULL OR valido_ate > NOW())
-       ORDER BY criado_em DESC LIMIT 30`,
+       WHERE empresa_id=$1 AND (loja_id IS NULL OR loja_id=$2) ${filtro}
+       ORDER BY criado_em DESC LIMIT ${todos ? 200 : 30}`,
       [empresaDe(req), lojaDe(req)]
     );
     res.json(r.rows);

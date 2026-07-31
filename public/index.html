@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-avisos-validade">
+<html lang="pt" data-stockos-ui="2026-07-31-todos-avisos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2317,8 +2317,10 @@ async function carregarAvisosDia() {
   try {
     const avisos = await api('GET', '/avisos').catch(() => []);
     const podeGerir = ['admin', 'gestor'].includes(S.user?.role);
-    if (!(avisos || []).length && !podeGerir) { slot.innerHTML = ''; return; }
-    const btn = podeGerir ? `<button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, novoAviso)">+ Novo aviso</button>` : '';
+    const btn = `<div style="display:flex;gap:6px">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, abrirTodosAvisos)">Ver todos</button>
+      ${podeGerir ? `<button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, novoAviso)">+ Novo aviso</button>` : ''}
+    </div>`;
     const agora = Date.now();
     const linhas = (avisos || []).slice(0, 10).map((a) => {
       const novo = a.criado_em && (agora - new Date(a.criado_em).getTime()) < 24 * 3600000;
@@ -2336,9 +2338,46 @@ async function carregarAvisosDia() {
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
         <div class="card-title" style="margin:0">📢 Avisos</div>${btn}
       </div>
-      ${linhas || '<div style="color:#475569;font-size:12px;padding:6px 0">Sem avisos. Publica orientações aqui — todos os turnos as vêem ao abrir o Dia.</div>'}
+      ${linhas || `<div style="color:#475569;font-size:12px;padding:6px 0">${podeGerir ? 'Sem avisos activos. Publica orientações aqui — todos os turnos as vêem ao abrir o Dia.' : 'Sem avisos activos. Consulta os anteriores em «Ver todos».'}</div>`}
     </div>`;
   } catch (_) {}
+}
+
+/** Painel com o HISTÓRICO completo de avisos: activos, expirados e
+ *  (para admin/gestor) removidos — consultável por toda a gente. */
+async function abrirTodosAvisos() {
+  const avisos = await api('GET', '/avisos?todos=1').catch(() => []);
+  const agora = Date.now();
+  const podeGerir = ['admin', 'gestor'].includes(S.user?.role);
+  const estado = (a) => {
+    if (a.ativo === false) return '<span style="background:#7f1d1d;color:#fecaca;border-radius:6px;padding:0 6px;font-size:10px">removido</span>';
+    if (a.valido_ate && new Date(a.valido_ate).getTime() <= agora) return '<span style="background:#374151;color:#d1d5db;border-radius:6px;padding:0 6px;font-size:10px">expirado</span>';
+    return '<span style="background:#14532d;color:#bbf7d0;border-radius:6px;padding:0 6px;font-size:10px">activo</span>';
+  };
+  const linhas = (avisos || []).map((a) => `
+    <div style="border-bottom:1px solid #1e293b;padding:10px 0">
+      <div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between">
+        <div style="color:#e2e8f0;font-size:13px;line-height:1.45;white-space:pre-wrap;flex:1;min-width:0">${escapeHtml(a.texto)}</div>
+        ${estado(a)}
+      </div>
+      <div style="color:#64748b;font-size:11px;margin-top:3px">${escapeHtml(a.criado_por || '')} · ${new Date(a.criado_em).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}${a.valido_ate ? ` · válido até ${new Date(a.valido_ate).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })}` : ''}${a.loja_id ? ' · só esta loja' : ''}</div>
+    </div>`).join('');
+  const ov = document.createElement('div');
+  ov.id = 'todos-avisos-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:1450;display:flex;align-items:flex-end;justify-content:center';
+  ov.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:560px;width:100%;max-height:80vh;display:flex;flex-direction:column;padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px))">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 8px">
+        <div style="font-size:15px;font-weight:700;color:#f1f5f9">📢 Todos os avisos</div>
+        <button type="button" aria-label="Fechar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1" onclick="document.getElementById('todos-avisos-overlay')?.remove()">✕</button>
+      </div>
+      <div style="overflow-y:auto;padding:0 16px;-webkit-overflow-scrolling:touch">
+        ${linhas || '<div style="color:#475569;font-size:13px;padding:14px 0">Ainda não há avisos registados.</div>'}
+      </div>
+      ${podeGerir ? '<div style="padding:8px 16px 0;color:#64748b;font-size:11px">Os removidos só aparecem a administradores e gestores.</div>' : ''}
+    </div>`;
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
 }
 
 async function novoAviso() {

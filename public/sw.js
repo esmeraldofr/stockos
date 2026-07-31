@@ -107,19 +107,34 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // App shell/estáticos: cache primeiro, actualiza em fundo.
-  e.respondWith(
-    caches.match(req).then((hit) => {
-      const fresh = fetch(req)
-        .then((resp) => {
-          if (resp && resp.ok) {
-            const clone = resp.clone();
-            caches.open(CACHE).then((c) => c.put(req, clone)).catch(() => {});
-          }
-          return resp;
-        })
-        .catch(() => hit);
-      return hit || fresh;
-    })
-  );
+  // App shell/estáticos: cache primeiro, actualiza em fundo. Quando a
+  // versão nova do shell chega (marcador data-stockos-ui diferente),
+  // avisa a app para mostrar «Nova versão — toca para actualizar».
+  e.respondWith((async () => {
+    const hit = await caches.match(req);
+    const hitCopia = hit ? hit.clone() : null;
+    const ehShell = url.pathname === '/' || url.pathname === '/index.html';
+    const fresh = fetch(req)
+      .then(async (resp) => {
+        if (resp && resp.ok) {
+          try {
+            const c = await caches.open(CACHE);
+            await c.put(req, resp.clone());
+            if (hitCopia && ehShell) {
+              const marca = (s) => (String(s).match(/data-stockos-ui="([^"]*)"/) || [])[1] || '';
+              const nova = marca(await resp.clone().text());
+              const antiga = marca(await hitCopia.text());
+              if (nova && antiga && nova !== antiga) {
+                const clientes = await self.clients.matchAll();
+                clientes.forEach((cl) => cl.postMessage({ tipo: 'nova-versao', versao: nova }));
+              }
+            }
+          } catch (_) {}
+        }
+        return resp;
+      })
+      .catch(() => hit);
+    e.waitUntil(fresh.then(() => {}, () => {}));
+    return hit || fresh;
+  })());
 });

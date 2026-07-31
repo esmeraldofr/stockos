@@ -5641,16 +5641,21 @@ async function sondarInternet() {
   if (__netSondaEmCurso) return __netReal;
   __netSondaEmCurso = true;
   const antes = __netReal;
-  try {
+  // 2s por tentativa, 2 tentativas: rede presa cai nos timeouts (~4s no
+  // total); um servidor só lento a acordar apanha a 2ª tentativa e não
+  // gera falso «sem internet».
+  const tenta = async () => {
     const ctl = new AbortController();
-    // 8s: folga para o arranque frio do servidor (Vercel) sem perder a
-    // detecção de rede presa — essa fica pendurada e cai no timeout.
-    const t = setTimeout(() => ctl.abort(), 8000);
-    await fetch('/api/ping?t=' + Date.now(), { method: 'POST', cache: 'no-store', signal: ctl.signal });
-    clearTimeout(t);
-    __netReal = true;
-  } catch (_) {
-    __netReal = false;
+    const t = setTimeout(() => ctl.abort(), 2000);
+    try {
+      await fetch('/api/ping?t=' + Date.now(), { method: 'POST', cache: 'no-store', signal: ctl.signal });
+      return true;
+    } catch (_) {
+      return false;
+    } finally { clearTimeout(t); }
+  };
+  try {
+    __netReal = (await tenta()) || (await tenta());
   } finally {
     __netSondaEmCurso = false;
   }

@@ -5643,7 +5643,9 @@ async function sondarInternet() {
   const antes = __netReal;
   try {
     const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 4000);
+    // 8s: folga para o arranque frio do servidor (Vercel) sem perder a
+    // detecção de rede presa — essa fica pendurada e cai no timeout.
+    const t = setTimeout(() => ctl.abort(), 8000);
     await fetch('/api/ping?t=' + Date.now(), { method: 'POST', cache: 'no-store', signal: ctl.signal });
     clearTimeout(t);
     __netReal = true;

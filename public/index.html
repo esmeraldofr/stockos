@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-01-checklist-visivel">
+<html lang="pt" data-stockos-ui="2026-08-01-checklist-portoes">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9465,6 +9465,13 @@ function deixadosBannerHtml(turno, fechado, canEdit, isAdmin, encontradosFechado
 }
 
 async function fecharDeixados(turnoId) {
+  // PORTÃO: o registo dos deixados só fecha com o checklist de FECHO feito.
+  const pendF = (await checklistPendentes(turnoId).catch(() => [])).filter((t) => t.fase === 'fecho');
+  if (pendF.length) {
+    turnoMsgErr(`📋 Conclui o checklist de FECHO antes de fechar o registo dos deixados — falta${pendF.length === 1 ? '' : 'm'} ${pendF.length} tarefa${pendF.length === 1 ? '' : 's'}.`, true);
+    await abrirChecklistTurno();
+    return;
+  }
   if (!confirm('Fechar o registo dos deixados? Os campos Deixado e Deix. caixa ficam bloqueados a partir daqui.')) return;
   try {
     turnoMsgPending('A fechar registo…');
@@ -9491,6 +9498,13 @@ async function reabrirDeixados(turnoId) {
 }
 
 async function fecharEncontrados(turnoId) {
+  // PORTÃO: o registo inicial só fecha com o checklist de ABERTURA feito.
+  const pendA = (await checklistPendentes(turnoId).catch(() => [])).filter((t) => t.fase === 'abertura');
+  if (pendA.length) {
+    turnoMsgErr(`📋 Conclui o checklist de ABERTURA antes de fechar o registo inicial — falta${pendA.length === 1 ? '' : 'm'} ${pendA.length} tarefa${pendA.length === 1 ? '' : 's'}.`, true);
+    await abrirChecklistTurno();
+    return;
+  }
   if (!confirm('Fechar o registo inicial de encontrados? Os campos Encontrado e Enc. caixa ficam bloqueados a partir daqui.')) return;
   try {
     turnoMsgPending('A fechar registo…');
@@ -9763,9 +9777,10 @@ async function checklistPendentes(tid) {
   return pend;
 }
 
-/** Checklist SEMPRE visível no turno: as tarefas pendentes aparecem na
- *  página com as caixas para marcar ali mesmo; as concluídas recolhem
- *  (contam no x/y e consultam-se no painel completo). */
+/** Barra compacta «📋 Tarefas do turno x/y» — toca para abrir o painel.
+ *  A validação a sério acontece nos momentos certos: o registo inicial
+ *  exige o checklist de ABERTURA; o registo dos deixados exige o de
+ *  FECHO; e o fecho do turno exige tudo. */
 async function atualizarChecklistBar() {
   const bar = document.getElementById('turno-checklist-bar');
   if (!bar || !S.turnoData) return;
@@ -9776,37 +9791,12 @@ async function atualizarChecklistBar() {
   const feitas = total - pend.length;
   const completo = pend.length === 0;
   const fechado = S.turnoData.estado === 'fechado';
-  if (completo) {
-    bar.innerHTML = `
-      <button type="button" onclick="runAction(event, abrirChecklistTurno)"
-        style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 0 10px;padding:9px 12px;border-radius:10px;cursor:pointer;font-size:13px;font-weight:600;border:1px solid #166534;background:rgba(22,101,52,0.18);color:#4ade80">
-        <span>✅ Tarefas do turno: ${feitas}/${total} — tudo feito</span>
-        <span style="font-weight:400;font-size:11px;opacity:.85">${fechado ? 'consultar' : 'ver'}</span>
-      </button>`;
-    return;
-  }
-  const rotuloFase = { abertura: '🌅 Abertura', fecho: '🌙 Fecho' };
-  let faseAnterior = null;
-  const itens = pend.map((t) => {
-    const cab = t.fase !== faseAnterior
-      ? `<div style="font-size:0.68rem;font-weight:700;color:#92600e;color:#b45309;text-transform:uppercase;letter-spacing:.06em;margin:6px 0 1px">${rotuloFase[t.fase]}</div>`
-      : '';
-    faseAnterior = t.fase;
-    return `${cab}<label style="display:flex;gap:9px;align-items:flex-start;padding:5px 0;cursor:${fechado ? 'default' : 'pointer'};user-select:none">
-      <input type="checkbox" ${fechado ? 'disabled' : ''} style="width:18px;height:18px;accent-color:#22c55e;margin-top:1px;flex-shrink:0"
-        onchange="alternarTarefaChecklist('${t.fase}', ${t.i}, this.checked)"/>
-      <span style="font-size:12.5px;line-height:1.4;color:#e2e8f0">${escapeHtml(t.tarefa)}</span>
-    </label>`;
-  }).join('');
   bar.innerHTML = `
-    <div style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid #92400e;background:rgba(146,64,14,0.14)">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-        <span style="font-size:13px;font-weight:700;color:#fbbf24">📋 Tarefas do turno: ${feitas}/${total}</span>
-        <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px" onclick="runAction(event, abrirChecklistTurno)">${feitas ? `✓ ${feitas} concluída${feitas === 1 ? '' : 's'} — ver` : 'ver tudo'}</button>
-      </div>
-      ${itens}
-      <div style="font-size:11px;color:#b45309;color:#d97706;margin-top:6px">O turno não fecha enquanto houver tarefas por marcar.</div>
-    </div>`;
+    <button type="button" onclick="runAction(event, abrirChecklistTurno)"
+      style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 0 10px;padding:9px 12px;border-radius:10px;cursor:pointer;font-size:13px;font-weight:600;border:1px solid ${completo ? '#166534' : '#92400e'};background:${completo ? 'rgba(22,101,52,0.18)' : 'rgba(146,64,14,0.16)'};color:${completo ? '#4ade80' : '#fbbf24'}">
+      <span>${completo ? '✅' : '📋'} Tarefas do turno: ${feitas}/${total}${completo ? ' — tudo feito' : ''}</span>
+      <span style="font-weight:400;font-size:11px;opacity:.85">${fechado ? 'consultar' : (completo ? 'ver' : 'abertura valida no registo inicial · fecho valida nos deixados')}</span>
+    </button>`;
 }
 
 /** Painel com as duas listas (abertura e fecho) e caixas de marcação. */

@@ -127,4 +127,6 @@ ALTER TABLE produtos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAUL
 ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_turnos_loja_data_nome ON turnos (loja_id, data, nome);
 CREATE INDEX IF NOT EXISTS idx_turnos_loja_data ON turnos (loja_id, data);
-CREATE TABLE IF NOT EXISTS monitor_dispositivos (id SERIAL PRIMARY KEY, utilizador_id UUID NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE, dispositivo_id TEXT NOT NULL, descricao TEXT NOT NULL DEFAULT '', ultimo_login TIMESTAMPTZ, ultima_operacao TIMESTAMPTZ, pendentes INTEGER NOT NULL DEFAULT 0, visto_em TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (utilizador_id, dispositivo_id));
+CREATE TABLE IF NOT EXISTS monitor_dispositivos (id SERIAL PRIMARY KEY, utilizador_id UUID NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE, dispositivo_id TEXT NOT NULL, descricao TEXT NOT NULL DEFAULT '', ultimo_login TIMESTAMPTZ, ultima_operacao TIMESTAMPTZ, pendentes INTEGER NOT NULL DEFAULT 0, visto_em TIMESTAMPTZ NOT NULL DEFAULT NOW(), empresa_id INTEGER, loja_id INTEGER, UNIQUE (utilizador_id, dispositivo_id));
+ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS empresa_id INTEGER;
+ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS loja_id INTEGER;

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-aparelho-partilhado">
+<html lang="pt" data-stockos-ui="2026-07-31-monitor-empresa-loja">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5705,6 +5705,8 @@ async function enviarHeartbeat(ehLogin) {
       descricao: dispositivoDescricao(),
       pendentes: contarPendentesOffline(),
       ultima_operacao: localStorage.getItem('stockos.ultimaOperacao') || null,
+      empresa_id: empresaAtivaId(),
+      loja_id: lojaAtivaId(),
       login: ehLogin === true
     });
   } catch (_) { /* sem rede — o próximo heartbeat trata */ }
@@ -14156,7 +14158,7 @@ async function loadMonitor() {
                 <span>${online ? '🟢 <strong style="color:#4ade80">online</strong>' : `⚪ <span style="color:#94a3b8">visto ${rel(d.visto_em)}</span>`} · 📱 <span style="color:#cbd5e1">${escapeHtml(d.descricao || 'Aparelho')}</span> <span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 6px;color:#93c5fd;font-family:monospace">#${escapeHtml(String(d.dispositivo_id).replace(/^d-/, '').slice(0, 4).toUpperCase())}</span>${(usosPorAparelho[d.dispositivo_id] && usosPorAparelho[d.dispositivo_id].size > 1) ? ` <span style="background:#3f1d6a;color:#d8b4fe;border-radius:6px;padding:0 6px;font-size:10px">partilhado · ${usosPorAparelho[d.dispositivo_id].size} utilizadores</span>` : ''}</span>
                 <span>${pend > 0 ? `<strong style="background:#7f1d1d;color:#fecaca;border-radius:999px;padding:1px 8px">⏳ ${pend} por sincronizar</strong>` : '<span style="color:#4ade80">✓ 0 em fila</span>'}</span>
               </div>
-              <div style="color:#64748b">Último login: <strong style="color:#cbd5e1">${fmtDt(d.ultimo_login)}</strong> · Última operação: <strong style="color:#cbd5e1">${fmtDt(d.ultima_operacao)}</strong></div>
+              <div style="color:#64748b">${d.empresa_nome || d.loja_nome ? `🏢 <span style="color:#cbd5e1">${escapeHtml(d.empresa_nome || '—')}</span> · 🏪 <span style="color:#cbd5e1">${escapeHtml(d.loja_nome || '—')}</span> · ` : ''}Último login: <strong style="color:#cbd5e1">${fmtDt(d.ultimo_login)}</strong> · Última operação: <strong style="color:#cbd5e1">${fmtDt(d.ultima_operacao)}</strong></div>
             </div>`;
           }).join('');
       return `<div class="card" style="margin-bottom:10px;padding:12px 14px">

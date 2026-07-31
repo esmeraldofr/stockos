@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-instantaneo-sempre">
+<html lang="pt" data-stockos-ui="2026-07-31-monitoramento">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -870,7 +870,7 @@ async function refrescarLojas() {
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
 const ALLOWED_TURNO_TABS = ['stock', 'caixas', 'vendas', 'pedidos', 'registos', 'escala'];
-const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria', 'configuracoes', 'empresas'];
+const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria', 'configuracoes', 'empresas', 'monitor'];
 
 function _storageGet(key) {
   try {
@@ -1515,6 +1515,10 @@ async function draw() {
       case 'produtos': await drawProdutos(); break;
       case 'escala':   await drawEscala(); break;
       case 'admin':    await drawAdmin(); break;
+      case 'monitor':
+        if (S.user?.role !== 'admin') { await navigate('dia'); break; }
+        await drawMonitor();
+        break;
       case 'configuracoes':
         if (S.user?.role !== 'admin') { await navigate('dia'); return; }
         await drawConfiguracoes();
@@ -1596,6 +1600,7 @@ async function doLogin() {
       err('login-msg', sanitizeLoginErr(e && e.message != null ? e.message : String(e)))
     );
     refreshFaltasBadge();
+    enviarHeartbeat(true).catch(() => {});
   } catch (e) { err('login-msg', sanitizeLoginErr(e && e.message != null ? e.message : String(e))); }
 }
 
@@ -1645,6 +1650,8 @@ function menuEntries() {
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>' });
   }
   if (isAdmin) {
+    entries.push({ page: 'monitor', label: 'Monitoramento',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/><polyline points="6 12 9 9 13 13 18 8"/></svg>' });
     entries.push({ page: 'empresas', label: 'Empresas',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 9h1"/><path d="M14 9h1"/><path d="M9 13h1"/><path d="M14 13h1"/><path d="M10 21v-4h4v4"/></svg>' });
   }
@@ -5672,6 +5679,39 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) sond
 window.addEventListener('online', () => { sondarInternet().catch(() => {}); });
 window.addEventListener('offline', () => { __netReal = false; renderOfflineBanner(); });
 
+// ── Monitoramento: identidade do aparelho + sinal de vida ─────────────
+// Só este aparelho sabe quantos registos tem por sincronizar; envia ao
+// servidor um heartbeat leve (60s) para a página Monitoramento do admin.
+function dispositivoId() {
+  let id = localStorage.getItem('stockos.dispositivoId');
+  if (!id) {
+    id = 'd-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
+    localStorage.setItem('stockos.dispositivoId', id);
+  }
+  return id;
+}
+function dispositivoDescricao() {
+  const ua = navigator.userAgent || '';
+  const so = /iPhone|iPad/.test(ua) ? 'iPhone/iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac/.test(ua) ? 'Mac' : 'Outro';
+  const nav2 = /CriOS|Chrome/.test(ua) ? 'Chrome' : /FxiOS|Firefox/.test(ua) ? 'Firefox' : /Safari/.test(ua) ? 'Safari' : 'Browser';
+  const pwa = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches ? ' · app instalada' : '';
+  return `${so} · ${nav2}${pwa}`;
+}
+async function enviarHeartbeat(ehLogin) {
+  if (!S.token) return;
+  try {
+    await api('POST', '/monitor/heartbeat', {
+      dispositivo_id: dispositivoId(),
+      descricao: dispositivoDescricao(),
+      pendentes: contarPendentesOffline(),
+      ultima_operacao: localStorage.getItem('stockos.ultimaOperacao') || null,
+      login: ehLogin === true
+    });
+  } catch (_) { /* sem rede — o próximo heartbeat trata */ }
+}
+setInterval(() => { enviarHeartbeat().catch(() => {}); }, 60000);
+setTimeout(() => { enviarHeartbeat().catch(() => {}); }, 3000);
+
 /** Faixa de estado PERMANENTE no topo, em todas as páginas:
  *  🔴 sem internet (+ nº de registos guardados neste aparelho)
  *  🟠 com internet mas com registos a sincronizar
@@ -5865,6 +5905,8 @@ async function limparRegistosPresos() {
  */
 async function apiEscrita(method, path, body, opts) {
   opts = opts || {};
+  // Marca da última operação deste aparelho (página Monitoramento).
+  try { localStorage.setItem('stockos.ultimaOperacao', new Date().toISOString()); } catch (_) {}
   // Loja fixada JÁ no caminho: se o utilizador mudar de loja antes de a
   // fila sincronizar, o registo vai para a loja certa.
   path = comLojaNoPath(path);
@@ -14056,6 +14098,73 @@ function configPedidoKeypadChange(el) {
   pedidoBalcaoSetKeypad(!!el.checked);
   const msg = document.getElementById('cfg-pedido-keypad-msg');
   if (msg) msg.textContent = el.checked ? 'Visível neste dispositivo.' : 'Escondido neste dispositivo.';
+}
+
+/** Monitoramento (só admin): por utilizador e por aparelho — online agora,
+ *  último login, dispositivo, última operação e registos por sincronizar
+ *  (contagem enviada pelo próprio aparelho via heartbeat de 60s). */
+async function drawMonitor() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Monitoramento</div></div>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, loadMonitor)">↻ Actualizar</button>
+    </div>
+    <div id="content">
+      <p style="font-size:12px;color:#64748b;margin:0 0 12px;line-height:1.45">🟢 online = aparelho com a app aberta nos últimos 2 minutos. A contagem «por sincronizar» é reportada pelo próprio aparelho a cada minuto.</p>
+      <div id="monitor-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadMonitor();
+}
+
+async function loadMonitor() {
+  try {
+    const rows = await api('GET', '/monitor');
+    const por = {};
+    (rows || []).forEach((r) => {
+      if (!por[r.id]) por[r.id] = { nome: r.nome, role: r.role, ativo: r.ativo, dispositivos: [] };
+      if (r.dispositivo_id) por[r.id].dispositivos.push(r);
+    });
+    const agora = Date.now();
+    const fmtDt = (d) => d ? new Date(d).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+    const rel = (d) => {
+      if (!d) return '—';
+      const m = Math.round((agora - new Date(d).getTime()) / 60000);
+      if (m < 1) return 'agora mesmo';
+      if (m < 60) return `há ${m} min`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `há ${h} h`;
+      return `há ${Math.floor(h / 24)} dia${Math.floor(h / 24) === 1 ? '' : 's'}`;
+    };
+    const cards = Object.values(por).map((u) => {
+      const roleLabel = u.role === 'compras' ? 'operador de sistema' : u.role;
+      const algumOnline = u.dispositivos.some((d) => d.visto_em && (agora - new Date(d.visto_em).getTime()) < 2 * 60000);
+      const disps = u.dispositivos.length === 0
+        ? '<div style="color:#475569;font-size:12px;padding:6px 0">Nunca usou a app (ou ainda sem heartbeat registado).</div>'
+        : u.dispositivos.map((d) => {
+            const online = d.visto_em && (agora - new Date(d.visto_em).getTime()) < 2 * 60000;
+            const pend = parseInt(d.pendentes, 10) || 0;
+            return `<div style="border-top:1px solid #1e293b;padding:7px 0;font-size:12px;display:flex;flex-direction:column;gap:3px">
+              <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+                <span>${online ? '🟢 <strong style="color:#4ade80">online</strong>' : `⚪ <span style="color:#94a3b8">visto ${rel(d.visto_em)}</span>`} · 📱 <span style="color:#cbd5e1">${escapeHtml(d.descricao || d.dispositivo_id)}</span></span>
+                <span>${pend > 0 ? `<strong style="background:#7f1d1d;color:#fecaca;border-radius:999px;padding:1px 8px">⏳ ${pend} por sincronizar</strong>` : '<span style="color:#4ade80">✓ 0 em fila</span>'}</span>
+              </div>
+              <div style="color:#64748b">Último login: <strong style="color:#cbd5e1">${fmtDt(d.ultimo_login)}</strong> · Última operação: <strong style="color:#cbd5e1">${fmtDt(d.ultima_operacao)}</strong></div>
+            </div>`;
+          }).join('');
+      return `<div class="card" style="margin-bottom:10px;padding:12px 14px">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+          <div><strong style="color:#f1f5f9">${escapeHtml(u.nome)}</strong> <span style="color:#64748b;font-size:12px">· ${escapeHtml(roleLabel)}${u.ativo === false ? ' · inactivo' : ''}</span></div>
+          ${algumOnline ? '<span style="font-size:11px;color:#4ade80">● ligado</span>' : ''}
+        </div>
+        ${disps}
+      </div>`;
+    }).join('');
+    show('monitor-content', cards || '<div class="card"><p style="color:#94a3b8;margin:0">Sem utilizadores nesta empresa.</p></div>');
+  } catch (e) {
+    show('monitor-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
+  }
 }
 
 async function drawAdmin() {

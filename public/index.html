@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-31-card-2-colunas">
+<html lang="pt" data-stockos-ui="2026-07-31-sem-card-bloqueado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2224,14 +2224,9 @@ function renderDiaCards(turnos, provisorio, diaSemCache) {
     const cards = ['manha','tarde','noite'].map(nome => {
       const t = turnoMap[nome];
       if (!t) {
-        if ((S.turnosBloqueados || []).includes(nome)) {
-          return `
-          <div class="turno-card turno-card--locked">
-            <div class="turno-card-nome">${turnoLabel(nome)}</div>
-            <div class="badge badge-grey" style="margin-bottom:8px">⛔ Bloqueado</div>
-            <div style="font-size:11px;color:#94a3b8;line-height:1.35">Abertura de novos turnos desactivada pelo administrador (Configurações).</div>
-          </div>`;
-        }
+        // Turno bloqueado que nunca chegou a abrir: não há nada para ver
+        // nem para fazer — não ocupa espaço na página.
+        if ((S.turnosBloqueados || []).includes(nome)) return '';
         const pr = podeAbrirTurnoAgora(S.date, nome);
         if (!pr.ok) {
           return `

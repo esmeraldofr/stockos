@@ -2516,6 +2516,11 @@ async function handleDbCheck(req, res) {
 app.get('/api/db-check', handleDbCheck);
 app.get('/db-check', handleDbCheck);
 
+// Sonda de ligação REAL do frontend (a faixa de estado usa isto — o
+// navigator.onLine só diz se o Wi-Fi/dados estão ligados). Sem auth, sem BD.
+app.post('/api/ping', (req, res) => res.json({ ok: true }));
+app.get('/api/ping', (req, res) => res.json({ ok: true }));
+
 app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   const results = [];
   async function run(sql, label) {

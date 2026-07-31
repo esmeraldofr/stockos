@@ -836,6 +836,12 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ erro: 'Credenciais inválidas' });
     }
     const user = r.rows[0];
+    // Conta registada SEM password (funcionário sem acesso ao sistema):
+    // nunca autentica — não existe password padrão.
+    if (!user.senha_hash) {
+      auditLoginAttempt(req, res, 401, login, user);
+      return res.status(401).json({ erro: 'Esta conta não tem password definida — pede ao administrador para definir uma.' });
+    }
     if (user.senha_hash !== hashPassword(password)) {
       auditLoginAttempt(req, res, 401, login, user);
       return res.status(401).json({ erro: 'Credenciais inválidas' });
@@ -8018,10 +8024,11 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
     await ensureUsernameColumn();
     const { email, nome, role, username } = req.body;
     if (!nome || !String(nome).trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
-    // Password inicial OBRIGATÓRIA — não existe password padrão.
+    // Password inicial OPCIONAL — funcionários sem acesso ao sistema ficam
+    // registados sem password e NUNCA conseguem iniciar sessão (não existe
+    // password padrão). Quando indicada, tem de ter pelo menos 6 caracteres.
     const passRaw = String((req.body && req.body.password) || '').trim();
-    if (!passRaw) return res.status(400).json({ erro: 'Define a password inicial (não existe password padrão).' });
-    if (passRaw.length < 6) {
+    if (passRaw && passRaw.length < 6) {
       return res.status(400).json({ erro: 'A password inicial deve ter pelo menos 6 caracteres.' });
     }
     // Nome de utilizador OPCIONAL — validado só quando indicado.
@@ -8056,16 +8063,19 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
     }
     const r = await query(
       'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
-      [emailFinal, String(nome).trim(), un || null, role || 'operador', hashPassword(passRaw)]
+      [emailFinal, String(nome).trim(), un || null, role || 'operador', passRaw ? hashPassword(passRaw) : '']
     );
     try {
       await query(`UPDATE utilizadores SET empresa_id=$1, loja_id=$2 WHERE id=$3`, [empresaDestino, lojaFixa, r.rows[0].id]);
     } catch (_) { /* BD antiga sem colunas */ }
     const aviso = await updateFichaFuncionario(r.rows[0].id, req.body || {}, req.user && req.user.role);
-    const semLogin = !un && emailFinal.endsWith('@stockos.local');
+    const semCredenciais = !un && emailFinal.endsWith('@stockos.local');
+    const avisoLogin = semCredenciais
+      ? 'Sem nome de utilizador nem email — este funcionário não consegue iniciar sessão até definires um deles.'
+      : (!passRaw ? 'Sem password definida — este funcionário não consegue iniciar sessão até lhe definires uma (Editar → Nova Password).' : '');
     res.json({
       ...r.rows[0],
-      ...(semLogin ? { aviso_login: 'Sem nome de utilizador nem email — este funcionário não consegue iniciar sessão até definires um deles.' } : {}),
+      ...(avisoLogin ? { aviso_login: avisoLogin } : {}),
       ...(aviso ? { aviso } : {})
     });
   } catch(e) { res.status(500).json({ erro: e.message }); }

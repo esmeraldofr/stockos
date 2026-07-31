@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-01-checklist-turno">
+<html lang="pt" data-stockos-ui="2026-08-01-historico-turnos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -11294,10 +11294,26 @@ async function loadHistorico() {
       })
       .join('');
 
+    // Turnos que PARTICIPARAM neste histórico (respeita o filtro de hora)
+    const cont = { manha: 0, tarde: 0, noite: 0 };
+    let abertos = 0;
+    rows.forEach((t) => {
+      if (cont[t.nome] !== undefined) cont[t.nome]++;
+      if (t.estado === 'aberto') abertos++;
+    });
+    const participantes = `
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 12px">
+        <span style="background:#1e293b;border:1px solid #334155;border-radius:999px;padding:3px 10px;font-size:12px;color:#e2e8f0"><strong>${rows.length}</strong> turno${rows.length === 1 ? '' : 's'} no período</span>
+        ${cont.manha ? `<span style="background:#1e293b;border-radius:999px;padding:3px 10px;font-size:12px;color:#fbbf24">🌅 ${cont.manha} manhã</span>` : ''}
+        ${cont.tarde ? `<span style="background:#1e293b;border-radius:999px;padding:3px 10px;font-size:12px;color:#60a5fa">🌤️ ${cont.tarde} tarde</span>` : ''}
+        ${cont.noite ? `<span style="background:#1e293b;border-radius:999px;padding:3px 10px;font-size:12px;color:#a78bfa">🌙 ${cont.noite} noite</span>` : ''}
+        ${abertos ? `<span style="background:rgba(22,101,52,0.25);border:1px solid #166534;border-radius:999px;padding:3px 10px;font-size:12px;color:#4ade80">${abertos} ainda aberto${abertos === 1 ? '' : 's'}</span>` : ''}
+      </div>`;
     const histHtml = `
       ${histVendasChartCardHtml(days)}
       <div class="card" style="margin-bottom:16px">
         <div class="card-title" style="margin-bottom:12px">Somatório do período (todos os turnos)</div>
+        ${participantes}
         <div style="display:grid;grid-template-columns:1fr;gap:10px;font-size:15px">
           <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#1e293b;border-radius:8px">
             <span style="color:#94a3b8">Total vendas</span>

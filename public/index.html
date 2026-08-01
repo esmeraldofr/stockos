@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-01-versao-no-monitor">
+<html lang="pt" data-stockos-ui="2026-08-01-fila-schema">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6390,6 +6390,16 @@ async function sincronizarEscritasOffline() {
         removeDaFila();
       } catch (e) {
         if (ehErroDeRede(e)) break; // sem rede — tenta mais tarde
+        // Schema da BD atrasado (coluna/tabela por criar — o workflow de
+        // reparo resolve): NÃO é culpa do registo. Fica na fila e tenta
+        // mais tarde, em vez de ser rejeitado e perdido.
+        if (/does not exist|não existe/i.test(String(e && e.message || ''))) {
+          if (!window.__avisoSchemaAtrasado) {
+            window.__avisoSchemaAtrasado = true;
+            alert(`⚠ O servidor ainda não tem a estrutura para «${item.desc}» (${e.message}).\n\nO registo FICA GUARDADO na fila e sincroniza assim que o admin correr o workflow «Reparar schema».`);
+          }
+          break; // pára a ronda; a próxima sincronização volta a tentar
+        }
         removeDaFila();
         if (item.tipo === 'abrir' && item.localId) limparTurnoLocal(item.localId);
         alert(`⚠ Um registo offline (${item.desc}, de ${item.quando || '—'}) foi REJEITADO ao sincronizar: ${e.message}`);

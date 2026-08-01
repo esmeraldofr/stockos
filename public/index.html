@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-01-aviso-nova-versao">
+<html lang="pt" data-stockos-ui="2026-08-01-versao-no-monitor">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5863,6 +5863,7 @@ async function enviarHeartbeat(ehLogin) {
       ultima_operacao: localStorage.getItem('stockos.ultimaOperacao') || null,
       empresa_id: empresaAtivaId(),
       loja_id: lojaAtivaId(),
+      versao: document.documentElement.getAttribute('data-stockos-ui') || '',
       login: ehLogin === true
     });
   } catch (_) { /* sem rede — o próximo heartbeat trata */ }
@@ -14684,6 +14685,7 @@ async function loadMonitor() {
                 <span>${pend > 0 ? `<strong style="background:#7f1d1d;color:#fecaca;border-radius:999px;padding:1px 8px">⏳ ${pend} por sincronizar</strong>` : '<span style="color:#4ade80">✓ 0 em fila</span>'}</span>
               </div>
               <div style="color:#64748b">${d.empresa_nome || d.loja_nome ? `🏢 <span style="color:#cbd5e1">${escapeHtml(d.empresa_nome || '—')}</span> · 🏪 <span style="color:#cbd5e1">${escapeHtml(d.loja_nome || '—')}</span> · ` : ''}Última vez logado: <strong style="color:#cbd5e1">${fmtDt(d.visto_em)}</strong> · Última operação: <strong style="color:#cbd5e1">${fmtDt(d.ultima_operacao)}</strong></div>
+              ${d.versao ? `<div style="color:#64748b">Versão da app: ${d.versao === (document.documentElement.getAttribute('data-stockos-ui') || '') ? `<span style="color:#4ade80">✓ ${escapeHtml(String(d.versao).toUpperCase())}</span>` : `<span style="color:#fbbf24">⚠ ${escapeHtml(String(d.versao).toUpperCase())} — desactualizada</span>`}</div>` : ''}
             </div>`;
           }).join('');
       return `<div class="card" style="margin-bottom:10px;padding:12px 14px">

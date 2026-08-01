@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-01-fila-schema">
+<html lang="pt" data-stockos-ui="2026-08-01-fila-resiliente">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6390,13 +6390,15 @@ async function sincronizarEscritasOffline() {
         removeDaFila();
       } catch (e) {
         if (ehErroDeRede(e)) break; // sem rede — tenta mais tarde
-        // Schema da BD atrasado (coluna/tabela por criar — o workflow de
-        // reparo resolve): NÃO é culpa do registo. Fica na fila e tenta
+        // Erros TRANSITÓRIOS que não são culpa do registo: schema da BD
+        // atrasado (falta correr o «Reparar schema») ou o SERVIDOR sem
+        // conseguir falar com a BD (DNS/ligação). Fica na fila e tenta
         // mais tarde, em vez de ser rejeitado e perdido.
-        if (/does not exist|não existe/i.test(String(e && e.message || ''))) {
-          if (!window.__avisoSchemaAtrasado) {
-            window.__avisoSchemaAtrasado = true;
-            alert(`⚠ O servidor ainda não tem a estrutura para «${item.desc}» (${e.message}).\n\nO registo FICA GUARDADO na fila e sincroniza assim que o admin correr o workflow «Reparar schema».`);
+        const msgErr = String(e && e.message || '');
+        if (/does not exist|não existe|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|connect timeout/i.test(msgErr)) {
+          if (!window.__avisoSyncTransitorio) {
+            window.__avisoSyncTransitorio = true;
+            alert(`⚠ O servidor não conseguiu processar «${item.desc}» (${msgErr}).\n\nO registo FICA GUARDADO na fila e volta a sincronizar sozinho.`);
           }
           break; // pára a ronda; a próxima sincronização volta a tentar
         }

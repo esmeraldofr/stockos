@@ -8370,6 +8370,7 @@ async function ensureMonitorDispositivos() {
   await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS empresa_id INTEGER`).catch(() => {});
   await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS loja_id INTEGER`).catch(() => {});
   await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS nome TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS versao TEXT NOT NULL DEFAULT ''`).catch(() => {});
   monitorReady = true;
 }
 
@@ -8407,9 +8408,10 @@ app.post('/api/monitor/heartbeat', auth, async (req, res) => {
     const ehLogin = b.login === true;
     const empHb = parseInt(b.empresa_id, 10) || empresaDe(req);
     const lojaHb = parseInt(b.loja_id, 10) || lojaDe(req);
+    const versaoHb = String(b.versao || '').slice(0, 80);
     await query(
-      `INSERT INTO monitor_dispositivos (utilizador_id, dispositivo_id, descricao, ultimo_login, ultima_operacao, pendentes, visto_em, empresa_id, loja_id)
-       VALUES ($1,$2,$3, CASE WHEN $4 THEN NOW() END, $5, $6, NOW(), $7, $8)
+      `INSERT INTO monitor_dispositivos (utilizador_id, dispositivo_id, descricao, ultimo_login, ultima_operacao, pendentes, visto_em, empresa_id, loja_id, versao)
+       VALUES ($1,$2,$3, CASE WHEN $4 THEN NOW() END, $5, $6, NOW(), $7, $8, $9)
        ON CONFLICT (utilizador_id, dispositivo_id) DO UPDATE SET
          descricao = EXCLUDED.descricao,
          ultimo_login = CASE WHEN $4 THEN NOW() ELSE monitor_dispositivos.ultimo_login END,
@@ -8417,8 +8419,9 @@ app.post('/api/monitor/heartbeat', auth, async (req, res) => {
          pendentes = EXCLUDED.pendentes,
          visto_em = NOW(),
          empresa_id = EXCLUDED.empresa_id,
-         loja_id = EXCLUDED.loja_id`,
-      [req.user.id, disp, desc, ehLogin, ultOp, pend, empHb, lojaHb]
+         loja_id = EXCLUDED.loja_id,
+         versao = CASE WHEN EXCLUDED.versao <> '' THEN EXCLUDED.versao ELSE monitor_dispositivos.versao END`,
+      [req.user.id, disp, desc, ehLogin, ultOp, pend, empHb, lojaHb, versaoHb]
     );
     res.json({ ok: true });
   } catch (e) { res.json({ ok: false }); }
@@ -8429,7 +8432,7 @@ app.get('/api/monitor', auth, requireRole('admin'), async (req, res) => {
   try {
     await ensureMonitorDispositivos();
     const sel = `SELECT u.id, u.nome, u.role, u.ativo,
-            m.dispositivo_id, m.descricao, COALESCE(m.nome,'') AS dispositivo_nome, m.ultimo_login, m.ultima_operacao, m.pendentes, m.visto_em,
+            m.dispositivo_id, m.descricao, COALESCE(m.nome,'') AS dispositivo_nome, COALESCE(m.versao,'') AS versao, m.ultimo_login, m.ultima_operacao, m.pendentes, m.visto_em,
             m.empresa_id AS hb_empresa_id, m.loja_id AS hb_loja_id,
             e.nome AS empresa_nome, l.nome AS loja_nome
        FROM utilizadores u

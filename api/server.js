@@ -1054,6 +1054,10 @@ async function limparAuditoriaAntiga() {
        ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`, [hoje]);
     const r = await query(`DELETE FROM auditoria WHERE criado_em < NOW() - INTERVAL '30 days'`);
     if (r.rowCount) console.log(`[auditoria] limpeza diária: ${r.rowCount} registos com mais de 30 dias removidos`);
+    // Idempotência: só é útil durante a janela de re-tentativas da fila
+    // offline — 14 dias de retenção chegam e sobram.
+    const r2 = await query(`DELETE FROM ops_idempotencia WHERE criado_em < NOW() - INTERVAL '14 days'`).catch(() => ({ rowCount: 0 }));
+    if (r2.rowCount) console.log(`[idempotencia] limpeza diária: ${r2.rowCount} registos removidos`);
   } catch (_) { /* melhor esforço — tenta de novo no dia seguinte */ }
 }
 

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-02-chip-inteligente">
+<html lang="pt" data-stockos-ui="2026-08-02-pedido-pos-sync">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5724,7 +5724,22 @@ async function sincronizarPedidosOffline() {
         if (i >= 0) { f.splice(i, 1); pedidosOfflineGravar(f); }
       };
       try {
-        await apiPedidoComTimeout(item.tid, item.payload, 20000);
+        const resp = await apiPedidoComTimeout(item.tid, item.payload, 20000);
+        // Memória de recém-sincronizado: o cache do GET /pedidos ainda não
+        // tem este pedido — guarda a forma local (com o id oficial) para a
+        // lista não «perder» o pedido no redesenho a seguir ao sync.
+        try {
+          if (resp && resp.id) {
+            const shaped = pedidosOfflineComoPedidos(item.tid).find((p) => String(p.id) === String(item.ref));
+            if (shaped) {
+              shaped.id = resp.id;
+              delete shaped._offline;
+              window.__pedidosRecemSync = (window.__pedidosRecemSync || [])
+                .filter((r) => Date.now() - r.ts < 120000 && String(r.id) !== String(resp.id));
+              window.__pedidosRecemSync.push({ tid: item.tid, id: resp.id, ts: Date.now(), pedido: shaped });
+            }
+          }
+        } catch (_) {}
         remover();
       } catch (e) {
         if (ehErroDeRede(e)) break; // ainda offline — tenta mais tarde
@@ -5935,32 +5950,41 @@ setInterval(() => renderOfflineBanner(), 5000);
 //    actualizar com um toque (nunca re-renderiza por baixo dos dedos). ──
 let __dadosFrescosTimer = null;
 let __dadosFrescosUrls = [];
+function processarDadosFrescos() {
+  const urls = __dadosFrescosUrls.splice(0);
+  try {
+    const ae = document.activeElement;
+    if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) {
+      // Campo com foco: NÃO descarta — volta a tentar quando largar; sem
+      // isto, a lista ficava desactualizada (ex.: um pedido a menos) até
+      // à próxima navegação.
+      __dadosFrescosUrls.push(...urls);
+      clearTimeout(__dadosFrescosTimer);
+      __dadosFrescosTimer = setTimeout(processarDadosFrescos, 2000);
+      return;
+    }
+    if (S.page === 'dia') { loadDia().catch(() => {}); return; }
+    // Só interessa o que a PÁGINA ACTUAL mostra — mudanças de outros
+    // ecrãs ficam no cache e aparecem quando lá fores.
+    const relevantes = urls.filter(urlRelevanteParaPagina);
+    if (!relevantes.length) return;
+    // Actualização CIRÚRGICA: o aviso diz qual endpoint mudou — se
+    // houver uma secção correspondente e for seguro, redesenha só essa.
+    const cirurgico = relevantes.some((u) => refrescarSeccaoComDadosFrescos(u));
+    if (cirurgico) return;
+    // A mudança veio DESTE aparelho há segundos (registaste algo) —
+    // o ecrã já a reflecte; o chip seria só ruído.
+    if (Date.now() - (window.__escritaLocalTs || 0) < 15000) return;
+    mostrarChipDadosNovos();
+  } catch (_) {}
+}
 if (navigator.serviceWorker) {
   navigator.serviceWorker.addEventListener('message', (ev) => {
     if (ev.data && ev.data.tipo === 'nova-versao') { mostrarChipNovaVersao(ev.data.versao); return; }
     if (!ev.data || ev.data.tipo !== 'dados-frescos') return;
     __dadosFrescosUrls.push(String(ev.data.url || ''));
     clearTimeout(__dadosFrescosTimer);
-    __dadosFrescosTimer = setTimeout(() => {
-      const urls = __dadosFrescosUrls.splice(0);
-      try {
-        const ae = document.activeElement;
-        if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) return;
-        if (S.page === 'dia') { loadDia().catch(() => {}); return; }
-        // Só interessa o que a PÁGINA ACTUAL mostra — mudanças de outros
-        // ecrãs ficam no cache e aparecem quando lá fores.
-        const relevantes = urls.filter(urlRelevanteParaPagina);
-        if (!relevantes.length) return;
-        // Actualização CIRÚRGICA: o aviso diz qual endpoint mudou — se
-        // houver uma secção correspondente e for seguro, redesenha só essa.
-        const cirurgico = relevantes.some((u) => refrescarSeccaoComDadosFrescos(u));
-        if (cirurgico) return;
-        // A mudança veio DESTE aparelho há segundos (registaste algo) —
-        // o ecrã já a reflecte; o chip seria só ruído.
-        if (Date.now() - (window.__escritaLocalTs || 0) < 15000) return;
-        mostrarChipDadosNovos();
-      } catch (_) {}
-    }, 600);
+    __dadosFrescosTimer = setTimeout(processarDadosFrescos, 600);
   });
 }
 
@@ -7062,6 +7086,14 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   // Pedidos da fila local entram como pedidos normais — reflectem em
   // todas as abas até serem substituídos pelos oficiais na sincronização.
   pedidos = pedidosOfflineComoPedidos(turnoId).concat(Array.isArray(pedidos) ? pedidos : []);
+  // Recém-sincronizados que o cache do GET ainda não traz: mantém-nos na
+  // lista (com o id oficial) até a resposta fresca os incluir — sem isto,
+  // o redesenho a seguir ao sync mostrava um pedido a menos.
+  window.__pedidosRecemSync = (window.__pedidosRecemSync || []).filter((r) => Date.now() - r.ts < 120000);
+  const recem = window.__pedidosRecemSync.filter(
+    (r) => String(r.tid) === String(turnoId) && !pedidos.some((p) => String(p.id) === String(r.id))
+  );
+  if (recem.length) pedidos = recem.map((r) => r.pedido).concat(pedidos);
   window.__stockosPedidosBalcao = pedidos;
   // Pedidos mudaram → recalcular o painel "Esperado" na aba Caixa.
   setTimeout(() => { try { renderCaixaEsperadoPedidos(); renderIrregularidadesTurno(); } catch (_) {} }, 0);

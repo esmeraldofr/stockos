@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-02-pedido-pos-sync">
+<html lang="pt" data-stockos-ui="2026-08-02-checklist-fase">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -9877,25 +9877,41 @@ async function checklistPendentes(tid) {
   return pend;
 }
 
-/** Barra compacta «📋 Tarefas do turno x/y» — toca para abrir o painel.
- *  A validação a sério acontece nos momentos certos: o registo inicial
- *  exige o checklist de ABERTURA; o registo dos deixados exige o de
- *  FECHO; e o fecho do turno exige tudo. */
+/** Fase do MOMENTO: abertura enquanto o registo inicial estiver aberto;
+ *  fechado esse registo, o que interessa passa a ser o fecho. */
+function faseChecklistAtual() {
+  return S.turnoData && S.turnoData.encontrados_fechados_em ? 'fecho' : 'abertura';
+}
+/** Barra compacta com as tarefas da FASE ACTUAL — toca para abrir o
+ *  painel. As fases nunca aparecem misturadas: abertura valida no registo
+ *  inicial, fecho valida nos deixados; o fecho do turno exige tudo. */
 async function atualizarChecklistBar() {
   const bar = document.getElementById('turno-checklist-bar');
   if (!bar || !S.turnoData) return;
   const cfg = await obterChecklistCfg();
-  const total = (cfg.abertura || []).length + (cfg.fecho || []).length;
-  if (!total) { bar.innerHTML = ''; return; }
-  const pend = await checklistPendentes(S.turnoData.id);
-  const feitas = total - pend.length;
-  const completo = pend.length === 0;
   const fechado = S.turnoData.estado === 'fechado';
+  const fase = faseChecklistAtual();
+  const pendTodas = await checklistPendentes(S.turnoData.id);
+  let total, feitas, rotulo;
+  if (fechado) {
+    // Turno fechado: consulta do registo completo (as duas fases).
+    total = (cfg.abertura || []).length + (cfg.fecho || []).length;
+    feitas = total - pendTodas.length;
+    rotulo = '📋 Tarefas do turno';
+  } else {
+    total = (cfg[fase] || []).length;
+    feitas = total - pendTodas.filter((t) => t.fase === fase).length;
+    rotulo = fase === 'abertura' ? '🌅 Tarefas de abertura' : '🌙 Tarefas de fecho';
+  }
+  if (!total) { bar.innerHTML = ''; return; }
+  const completo = feitas >= total;
+  const dica = fechado ? 'consultar'
+    : (completo ? 'ver' : (fase === 'abertura' ? 'valida no registo inicial' : 'valida no registo dos deixados'));
   bar.innerHTML = `
     <button type="button" onclick="runAction(event, abrirChecklistTurno)"
       style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 0 10px;padding:9px 12px;border-radius:10px;cursor:pointer;font-size:13px;font-weight:600;border:1px solid ${completo ? '#166534' : '#92400e'};background:${completo ? 'rgba(22,101,52,0.18)' : 'rgba(146,64,14,0.16)'};color:${completo ? '#4ade80' : '#fbbf24'}">
-      <span>${completo ? '✅' : '📋'} Tarefas do turno: ${feitas}/${total}${completo ? ' — tudo feito' : ''}</span>
-      <span style="font-weight:400;font-size:11px;opacity:.85">${fechado ? 'consultar' : (completo ? 'ver' : 'abertura valida no registo inicial · fecho valida nos deixados')}</span>
+      <span>${completo ? '✅' : rotulo.split(' ')[0]} ${rotulo.replace(/^\S+ /, '')}: ${feitas}/${total}${completo ? ' — tudo feito' : ''}</span>
+      <span style="font-weight:400;font-size:11px;opacity:.85">${dica}</span>
     </button>`;
 }
 
@@ -9922,6 +9938,18 @@ async function abrirChecklistTurno() {
     }).join('');
     return `<div style="font-size:0.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 2px">${titulo}</div>${itens}`;
   };
+  // Fase do momento: só ela aparece (nunca misturadas). Turno fechado →
+  // consulta do registo completo. Salvaguarda: já na fase de fecho mas com
+  // ABERTURA pendente (ex.: tarefa adicionada depois do registo inicial
+  // fechar) → mostra as duas, senão o fecho do turno bloqueava em tarefas
+  // invisíveis. (Fecho pendente durante a abertura é o normal — não conta.)
+  const fase = faseChecklistAtual();
+  const aberturaPend = (cfg.abertura || []).some((_, i) => !(estado.abertura && estado.abertura[String(i)] && estado.abertura[String(i)].feito));
+  const mostrarAmbas = S.turnoData.estado === 'fechado' || (fase === 'fecho' && aberturaPend);
+  const tituloFase = { abertura: '🌅 Abertura', fecho: '🌙 Fecho' };
+  const corpo = mostrarAmbas
+    ? (seccao('abertura', tituloFase.abertura) || '') + (seccao('fecho', tituloFase.fecho) || '')
+    : (seccao(fase, tituloFase[fase]) || '');
   document.getElementById('checklist-overlay')?.remove();
   const ov = document.createElement('div');
   ov.id = 'checklist-overlay';
@@ -9929,14 +9957,13 @@ async function abrirChecklistTurno() {
   ov.innerHTML = `
     <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:560px;width:100%;max-height:82vh;display:flex;flex-direction:column;padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px))">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 6px">
-        <div style="font-size:15px;font-weight:700;color:#f1f5f9">📋 Tarefas do turno</div>
+        <div style="font-size:15px;font-weight:700;color:#f1f5f9">${mostrarAmbas ? '📋 Tarefas do turno' : `${tituloFase[fase]} — tarefas`}</div>
         <button type="button" aria-label="Fechar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1" onclick="document.getElementById('checklist-overlay')?.remove()">✕</button>
       </div>
-      <div style="padding:0 16px;color:#94a3b8;font-size:12px">O turno <strong style="color:#fbbf24">não fecha</strong> enquanto houver tarefas por marcar. As marcações ficam registadas com quem as fez.</div>
+      <div style="padding:0 16px;color:#94a3b8;font-size:12px">${fase === 'abertura' && !mostrarAmbas ? 'O registo inicial <strong style="color:#fbbf24">não fecha</strong> com tarefas de abertura por marcar.' : 'O turno <strong style="color:#fbbf24">não fecha</strong> enquanto houver tarefas por marcar.'} As marcações ficam registadas com quem as fez.</div>
       <div style="overflow-y:auto;padding:0 16px 6px;-webkit-overflow-scrolling:touch">
-        ${seccao('abertura', '🌅 Abertura') || ''}
-        ${seccao('fecho', '🌙 Fecho') || ''}
-        ${!((cfg.abertura || []).length + (cfg.fecho || []).length) ? '<div style="color:#475569;font-size:13px;padding:14px 0">Sem tarefas configuradas. O admin/gestor define-as em Configurações → Checklist do turno.</div>' : ''}
+        ${corpo}
+        ${!corpo ? '<div style="color:#475569;font-size:13px;padding:14px 0">Sem tarefas configuradas para esta fase. O admin/gestor define-as na página Checklist.</div>' : ''}
       </div>
     </div>`;
   ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });

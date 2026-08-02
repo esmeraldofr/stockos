@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-02-refresco-auto">
+<html lang="pt" data-stockos-ui="2026-08-02-aviso-texto">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2331,8 +2331,9 @@ async function carregarAvisosDia() {
       ${podeGerir ? `<button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, novoAviso)">+ Novo aviso</button>` : ''}
     </div>`;
     // Só o texto do aviso — os detalhes (autor, datas, validade) ficam na
-    // página «Avisos».
-    const linhas = (avisos || []).slice(0, 10).map((a) => `
+    // página «Avisos». Linhas sem texto (cache antigo com outra forma)
+    // ficam de fora — nunca mostrar «undefined».
+    const linhas = (Array.isArray(avisos) ? avisos : []).filter((a) => a && typeof a.texto === 'string' && a.texto).slice(0, 10).map((a) => `
       <div style="border-top:1px solid #1e293b;padding:8px 0;display:flex;gap:8px;align-items:flex-start">
         <span style="flex-shrink:0">📌</span>
         <div style="flex:1;min-width:0;color:#e2e8f0;font-size:13px;line-height:1.45;white-space:pre-wrap">${escapeHtml(a.texto)}</div>
@@ -2352,8 +2353,10 @@ async function carregarAvisosTurno() {
   const cont = document.getElementById('turno-avisos');
   if (!cont) return;
   try {
-    const avisos = await api('GET', '/avisos').catch(() => []);
-    if (!(avisos || []).length) { cont.innerHTML = ''; return; }
+    const resposta = await api('GET', '/avisos').catch(() => []);
+    // Linhas sem texto (cache antigo com outra forma) ficam de fora.
+    const avisos = (Array.isArray(resposta) ? resposta : []).filter((a) => a && typeof a.texto === 'string' && a.texto);
+    if (!avisos.length) { cont.innerHTML = ''; return; }
     const linhas = avisos.map((a) => `<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0">
         <span style="flex-shrink:0">📌</span>
         <span style="font-size:12.5px;line-height:1.45;color:#e2e8f0;white-space:pre-wrap;min-width:0">${escapeHtml(a.texto)}</span>
@@ -2391,12 +2394,13 @@ async function loadAvisosPagina() {
   const cont = document.getElementById('avisos-page-content');
   if (!cont) return;
   try {
-    const avisos = await api('GET', '/avisos?todos=1').catch(() => []);
+    const resposta = await api('GET', '/avisos?todos=1').catch(() => []);
+    const avisos = (Array.isArray(resposta) ? resposta : []).filter((a) => a && typeof a.texto === 'string' && a.texto);
     const agora = Date.now();
     const podeGerir = ['admin', 'gestor'].includes(S.user?.role);
     const ehActivo = (a) => a.ativo !== false && (!a.valido_ate || new Date(a.valido_ate).getTime() > agora);
-    const activos = (avisos || []).filter(ehActivo);
-    const historicos = (avisos || []).filter((a) => !ehActivo(a));
+    const activos = avisos.filter(ehActivo);
+    const historicos = avisos.filter((a) => !ehActivo(a));
     const linha = (a, comEstado) => {
       const novo = !comEstado && a.criado_em && (agora - new Date(a.criado_em).getTime()) < 24 * 3600000;
       const estado = a.ativo === false
@@ -6019,7 +6023,8 @@ function refrescoAutomatico(forcar) {
             `/turnos/${S.turnoId}/entradas`,
             `/turnos/${S.turnoId}/saidas`,
             `/turnos/${S.turnoId}/caixa-entradas`,
-            `/turnos/${S.turnoId}/vendas`
+            `/turnos/${S.turnoId}/vendas`,
+            '/avisos'
           );
         }
         break;
@@ -6110,7 +6115,7 @@ function refrescarSeccaoComDadosFrescos(url) {
 function urlRelevanteParaPagina(u) {
   const p = String(u || '').split('?')[0];
   switch (S.page) {
-    case 'turno': return !!S.turnoId && (p.includes(`/turnos/${S.turnoId}/`) || p.endsWith('/dia'));
+    case 'turno': return !!S.turnoId && (p.includes(`/turnos/${S.turnoId}/`) || p.endsWith('/dia') || p.endsWith('/avisos'));
     case 'depositos': return p.endsWith('/depositos') || p.endsWith('/dia');
     case 'historico': return p.includes('/historico');
     case 'assiduidade': return p.includes('/assiduidade');

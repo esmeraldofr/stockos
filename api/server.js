@@ -1037,12 +1037,37 @@ function auditSanitizeBody(body) {
 }
 
 /** Middleware: regista POST/PUT/DELETE /api/* depois da resposta. Não bloqueia o pedido. */
+// ── Limpeza automática da auditoria: retém só os últimos 90 dias ──────
+// Corre no máximo 1×/dia (marcador em stockos_meta partilhado entre
+// instâncias; trinco em memória evita bater na meta a cada pedido).
+let __auditoriaLimpezaTs = 0;
+async function limparAuditoriaAntiga() {
+  const agora = Date.now();
+  if (agora - __auditoriaLimpezaTs < 6 * 3600000) return;
+  __auditoriaLimpezaTs = agora;
+  try {
+    const hoje = new Date().toISOString().slice(0, 10);
+    const m = await query(`SELECT v FROM stockos_meta WHERE k='auditoria_limpeza'`);
+    if (m.rows.length && m.rows[0].v >= hoje) return;
+    await query(
+      `INSERT INTO stockos_meta (k,v) VALUES ('auditoria_limpeza',$1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`, [hoje]);
+    const r = await query(`DELETE FROM auditoria WHERE criado_em < NOW() - INTERVAL '90 days'`);
+    if (r.rowCount) console.log(`[auditoria] limpeza diária: ${r.rowCount} registos com mais de 90 dias removidos`);
+  } catch (_) { /* melhor esforço — tenta de novo no dia seguinte */ }
+}
+
 app.use(function auditMiddleware(req, res, next) {
   const m = String(req.method || '').toUpperCase();
   if (m !== 'POST' && m !== 'PUT' && m !== 'DELETE') return next();
   const p = (req.path || req.url || '').split('?')[0];
   if (!p.startsWith('/api/')) return next();
   if (p === '/api/auditoria') return next(); // não regista as próprias leituras
+  // RUÍDO de alta frequência fora da auditoria (98% do tamanho da tabela):
+  // auto-guardar da folha de stock (um PUT por célula tocada), sonda de
+  // internet (10 s) e heartbeat do monitoramento (60 s).
+  if (p === '/api/ping' || p === '/api/monitor/heartbeat') return next();
+  if (m === 'PUT' && /^\/api\/turnos\/[^/]+\/stock$/.test(p)) return next();
   res.on('finish', () => {
     /** await assíncrono — não bloqueamos a resposta. */
     (async () => {
@@ -1072,6 +1097,7 @@ app.use(function auditMiddleware(req, res, next) {
       } catch (e) {
         console.warn('[auditoria] insert:', e && e.message);
       }
+      limparAuditoriaAntiga().catch(() => {});
     })();
   });
   next();

@@ -1037,7 +1037,7 @@ function auditSanitizeBody(body) {
 }
 
 /** Middleware: regista POST/PUT/DELETE /api/* depois da resposta. Não bloqueia o pedido. */
-// ── Limpeza automática da auditoria: retém só os últimos 90 dias ──────
+// ── Limpeza automática da auditoria: retém só os últimos 30 dias ──────
 // Corre no máximo 1×/dia (marcador em stockos_meta partilhado entre
 // instâncias; trinco em memória evita bater na meta a cada pedido).
 let __auditoriaLimpezaTs = 0;
@@ -1052,8 +1052,8 @@ async function limparAuditoriaAntiga() {
     await query(
       `INSERT INTO stockos_meta (k,v) VALUES ('auditoria_limpeza',$1)
        ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`, [hoje]);
-    const r = await query(`DELETE FROM auditoria WHERE criado_em < NOW() - INTERVAL '90 days'`);
-    if (r.rowCount) console.log(`[auditoria] limpeza diária: ${r.rowCount} registos com mais de 90 dias removidos`);
+    const r = await query(`DELETE FROM auditoria WHERE criado_em < NOW() - INTERVAL '30 days'`);
+    if (r.rowCount) console.log(`[auditoria] limpeza diária: ${r.rowCount} registos com mais de 30 dias removidos`);
   } catch (_) { /* melhor esforço — tenta de novo no dia seguinte */ }
 }
 

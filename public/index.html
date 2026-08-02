@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-02-pedidos-frescos">
+<html lang="pt" data-stockos-ui="2026-08-02-chip-inteligente">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5947,10 +5947,18 @@ if (navigator.serviceWorker) {
         const ae = document.activeElement;
         if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) return;
         if (S.page === 'dia') { loadDia().catch(() => {}); return; }
+        // Só interessa o que a PÁGINA ACTUAL mostra — mudanças de outros
+        // ecrãs ficam no cache e aparecem quando lá fores.
+        const relevantes = urls.filter(urlRelevanteParaPagina);
+        if (!relevantes.length) return;
         // Actualização CIRÚRGICA: o aviso diz qual endpoint mudou — se
         // houver uma secção correspondente e for seguro, redesenha só essa.
-        const cirurgico = urls.some((u) => refrescarSeccaoComDadosFrescos(u));
-        if (!cirurgico) mostrarChipDadosNovos();
+        const cirurgico = relevantes.some((u) => refrescarSeccaoComDadosFrescos(u));
+        if (cirurgico) return;
+        // A mudança veio DESTE aparelho há segundos (registaste algo) —
+        // o ecrã já a reflecte; o chip seria só ruído.
+        if (Date.now() - (window.__escritaLocalTs || 0) < 15000) return;
+        mostrarChipDadosNovos();
       } catch (_) {}
     }, 600);
   });
@@ -6019,6 +6027,22 @@ function refrescarSeccaoComDadosFrescos(url) {
     return false;
   } catch (_) { return false; }
 }
+/** O URL fresco pertence ao que a página ACTUAL está a mostrar? */
+function urlRelevanteParaPagina(u) {
+  const p = String(u || '').split('?')[0];
+  switch (S.page) {
+    case 'turno': return !!S.turnoId && (p.includes(`/turnos/${S.turnoId}/`) || p.endsWith('/dia'));
+    case 'depositos': return p.endsWith('/depositos') || p.endsWith('/dia');
+    case 'historico': return p.includes('/historico');
+    case 'assiduidade': return p.includes('/assiduidade');
+    case 'irregularidades': return p.includes('/historico') || p.includes('/irregularidades') || p.endsWith('/receitas');
+    case 'faltas': return p.endsWith('/faltas');
+    case 'avisos': return p.endsWith('/avisos');
+    case 'monitor': return p.endsWith('/monitor');
+    default: return false;
+  }
+}
+
 /** Nova VERSÃO da app já descarregada — chip persistente até tocar. */
 function mostrarChipNovaVersao(versao) {
   if (document.getElementById('chip-nova-versao')) return;
@@ -6156,8 +6180,11 @@ async function limparRegistosPresos() {
  */
 async function apiEscrita(method, path, body, opts) {
   opts = opts || {};
-  // Marca da última operação deste aparelho (página Monitoramento).
+  // Marca da última operação deste aparelho (página Monitoramento) e da
+  // última escrita local (suprime o chip «dados novos» das nossas próprias
+  // mudanças — o ecrã já as reflecte).
   try { localStorage.setItem('stockos.ultimaOperacao', new Date().toISOString()); } catch (_) {}
+  window.__escritaLocalTs = Date.now();
   // Loja fixada JÁ no caminho: se o utilizador mudar de loja antes de a
   // fila sincronizar, o registo vai para a loja certa.
   path = comLojaNoPath(path);
@@ -6404,6 +6431,7 @@ async function sincronizarEscritasOffline() {
         }
         await apiEscritaComTimeout(item, 25000);
         removeDaFila();
+        window.__escritaLocalTs = Date.now();
       } catch (e) {
         if (ehErroDeRede(e)) break; // sem rede — tenta mais tarde
         // Erros TRANSITÓRIOS que não são culpa do registo: schema da BD

@@ -27,6 +27,18 @@ jobs:
         env:
           DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
 
+      # Testa a URI ANTES de publicar: se não liga, o deploy pára e o log
+      # mostra o motivo exacto (password errada, host/região do pooler,
+      # tenant not found…) — em vez de publicar uma app que não autentica.
+      - name: Testar ligação à BD de dev
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          echo "Host: $(python3 -c "import os,urllib.parse;u=urllib.parse.urlparse(os.environ['DATABASE_URL_DEV']);print(u.hostname, u.port, '· user:', u.username)")"
+          psql "$DATABASE_URL_DEV" -v ON_ERROR_STOP=1 -c "SELECT current_user AS utilizador, COUNT(*) AS utilizadores FROM utilizadores;"
+        env:
+          DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
+
       # Integração Git → Vercel não vê secrets do GitHub: Preview herdava DATABASE_URL de Production.
       - name: Sincronizar DATABASE_URL (Preview, branch develop) na Vercel
         run: |

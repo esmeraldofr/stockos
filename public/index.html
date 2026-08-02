@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-02-fila-permissoes">
+<html lang="pt" data-stockos-ui="2026-08-02-pedidos-frescos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5740,6 +5740,14 @@ async function sincronizarPedidosOffline() {
   } finally {
     __syncPedidosOfflineEmCurso = false;
     renderPedidosOfflineBanner();
+    // Pedido acabou de sincronizar: refresca a lista a partir do SERVIDOR
+    // já — sem isto, o cache antigo mostrava N-1 pedidos durante segundos
+    // (o overlay da fila desaparece antes de o cache apanhar o novo).
+    try {
+      if (S.page === 'turno' && S.turnoId && document.getElementById('pedidos-balcao-mount') && !document.getElementById('pedido-qtd-input')) {
+        renderPedidosBalcao(S.turnoId, !!S.turnoCanEdit, window.__pedidoProdutosOpts || []).catch(() => {});
+      }
+    } catch (_) {}
   }
 }
 window.addEventListener('online', () => {
@@ -5967,6 +5975,14 @@ function refrescarSeccaoComDadosFrescos(url) {
       if (secMov && (p.endsWith('/entradas') || p.endsWith('/saidas') || p.endsWith('/caixa-entradas'))) {
         if (!semTextoAMeio(secMov)) return true; // há escrita a meio — não mexe, sem chip
         loadRegistosMovimentosSection(S.turnoId, S.turnoData?.stock || [], !!S.turnoCanEdit).catch(() => {});
+        return true;
+      }
+      // Lista de pedidos ao balcão: outro aparelho registou → refresca a
+      // secção (o rascunho por enviar sobrevive; nunca com diálogo aberto).
+      const mountPed = document.getElementById('pedidos-balcao-mount');
+      if (mountPed && p.endsWith('/pedidos')) {
+        if (document.getElementById('pedido-qtd-input') || !semTextoAMeio(mountPed)) return true;
+        renderPedidosBalcao(S.turnoId, !!S.turnoCanEdit, window.__pedidoProdutosOpts || []).catch(() => {});
         return true;
       }
     }

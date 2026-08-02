@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-02-checklist-fase">
+<html lang="pt" data-stockos-ui="2026-08-02-refresco-auto">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5741,6 +5741,7 @@ async function sincronizarPedidosOffline() {
           }
         } catch (_) {}
         remover();
+        agendarRefrescoPosSync();
       } catch (e) {
         if (ehErroDeRede(e)) break; // ainda offline — tenta mais tarde
         // Erro de validação (ex.: turno fechado): não vale a pena repetir.
@@ -5986,6 +5987,60 @@ if (navigator.serviceWorker) {
     clearTimeout(__dadosFrescosTimer);
     __dadosFrescosTimer = setTimeout(processarDadosFrescos, 600);
   });
+}
+
+// ── REFRESCO AUTOMÁTICO ─ Com «instantâneo sempre», o SW só revalida
+// quando a app faz um GET — parado numa página, o ecrã nunca sabia das
+// mudanças de OUTROS aparelhos. Este laço revalida em fundo os endpoints
+// da página actual: o SW compara com o cache e, mudando algo, a
+// actualização cirúrgica/chip tratam do resto. Corre a cada 25s, ao
+// voltar a app à frente, quando a rede volta, e ~2,5s depois de cada
+// sincronização (o cache fica a par das escritas próprias ainda dentro
+// da janela dos 15s que suprime o chip).
+let __refrescoAutoTs = 0;
+let __refrescoPosSyncTimer = null;
+function refrescoAutomatico(forcar) {
+  try {
+    if (!S.token || document.hidden) return;
+    if (navigator.onLine === false || __netReal === false) return;
+    const agora = Date.now();
+    if (!forcar && agora - __refrescoAutoTs < 20000) return;
+    __refrescoAutoTs = agora;
+    const urls = [];
+    switch (S.page) {
+      case 'dia':
+        urls.push(`/dia?data=${S.date}&resumo=1`, '/avisos');
+        break;
+      case 'turno':
+        if (S.turnoId && !turnoIdEhLocal(S.turnoId)) {
+          urls.push(
+            `/dia?data=${encodeURIComponent(S.date)}&turno_id=${encodeURIComponent(S.turnoId)}`,
+            `/turnos/${encodeURIComponent(S.turnoId)}/pedidos`,
+            `/turnos/${S.turnoId}/entradas`,
+            `/turnos/${S.turnoId}/saidas`,
+            `/turnos/${S.turnoId}/caixa-entradas`,
+            `/turnos/${S.turnoId}/vendas`
+          );
+        }
+        break;
+      case 'depositos':
+        urls.push(`/depositos?data=${encodeURIComponent(S.date)}`, `/dia?data=${S.date}&resumo=1`);
+        break;
+      case 'monitor': urls.push('/monitor'); break;
+      case 'avisos': urls.push('/avisos?todos=1'); break;
+      default: return;
+    }
+    // Espaçados 400ms — não competem com o que o utilizador está a fazer.
+    urls.forEach((u, i) => setTimeout(() => { api('GET', u).catch(() => {}); }, i * 400));
+  } catch (_) {}
+}
+setInterval(() => refrescoAutomatico(false), 25000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refrescoAutomatico(true); });
+window.addEventListener('online', () => refrescoAutomatico(true));
+/** Debounce pós-sincronização: um refresco ~2,5s após o ÚLTIMO item. */
+function agendarRefrescoPosSync() {
+  clearTimeout(__refrescoPosSyncTimer);
+  __refrescoPosSyncTimer = setTimeout(() => refrescoAutomatico(true), 2500);
 }
 
 /** Redesenha SÓ a secção ligada ao endpoint que mudou (nunca a página
@@ -6456,6 +6511,7 @@ async function sincronizarEscritasOffline() {
         await apiEscritaComTimeout(item, 25000);
         removeDaFila();
         window.__escritaLocalTs = Date.now();
+        agendarRefrescoPosSync();
       } catch (e) {
         if (ehErroDeRede(e)) break; // sem rede — tenta mais tarde
         // Erros TRANSITÓRIOS que não são culpa do registo: schema da BD

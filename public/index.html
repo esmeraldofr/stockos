@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-03-linha-produtos">
+<html lang="pt" data-stockos-ui="2026-08-04-fila-quota">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5945,6 +5945,7 @@ function motivoSyncHumano(msg) {
   if (/load failed|failed to fetch|networkerror|network request failed/i.test(m)) return `O pedido não chegou ao servidor — a ligação caiu a meio; volta a tentar sozinho [${m}]`;
   if (/EMAXCONNSESSION|max clients|connection slots|too many clients/i.test(m)) return `Base de dados com as ligações esgotadas (pico de utilização) — volta a tentar sozinho [${m}]`;
   if (/query timeout|statement timeout|canceling statement/i.test(m)) return `A base de dados demorou demais e a operação foi cortada — volta a tentar sozinho [${m}]`;
+  if (/exceed_.*_quota|restricted due to|spend caps/i.test(m)) return `O projecto Supabase está RESTRINGIDO por quota esgotada (plano gratuito) — o registo fica na fila até o serviço voltar; é preciso upgrade do plano [${m.slice(0, 120)}]`;
   if (/ENOTFOUND|EAI_AGAIN/i.test(m)) return `O servidor não conseguiu encontrar a base de dados (DNS) — volta a tentar sozinho [${m}]`;
   if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|connect timeout/i.test(m)) return `A ligação do servidor à base de dados falhou — volta a tentar sozinho [${m}]`;
   if (/does not exist|não existe/i.test(m)) return `A base de dados ainda não tem esta estrutura (falta correr o «Reparar schema») — fica na fila [${m}]`;
@@ -6638,12 +6639,22 @@ async function sincronizarEscritasOffline() {
           registarSyncLog(item, 'sem-rede', String(e && e.message || 'sem rede'), Date.now() - t0);
           break; // sem rede — tenta mais tarde
         }
-        // Erros TRANSITÓRIOS que não são culpa do registo: schema da BD
-        // atrasado (falta correr o «Reparar schema») ou o SERVIDOR sem
-        // conseguir falar com a BD (DNS/ligação). Fica na fila e tenta
-        // mais tarde, em vez de ser rejeitado e perdido.
         const msgErr = String(e && e.message || '');
-        if (/does not exist|não existe|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|connect timeout|EMAXCONNSESSION|max clients|connection slots|too many clients|query timeout|statement timeout|canceling statement|permission denied/i.test(msgErr)) {
+        // «Já está feito» numa RE-TENTATIVA = a 1ª tentativa entrou e a
+        // resposta perdeu-se. É SUCESSO — sem alerta de rejeição.
+        if (/já está|já estão|já foi|já fechado|ja_fechado|duplicad/i.test(msgErr)) {
+          registarSyncLog(item, 'ok', 'Já tinha entrado — confirmado na re-tentativa', Date.now() - t0);
+          removeDaFila();
+          window.__escritaLocalTs = Date.now();
+          agendarRefrescoPosSync();
+          continue;
+        }
+        // Erros TRANSITÓRIOS que não são culpa do registo: schema da BD
+        // atrasado (falta correr o «Reparar schema»), o SERVIDOR sem
+        // conseguir falar com a BD (DNS/ligação), ou o projecto Supabase
+        // restringido por quota (armazenamento de fotos incluído). Fica
+        // na fila e tenta mais tarde, em vez de ser rejeitado e perdido.
+        if (/does not exist|não existe|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|connect timeout|EMAXCONNSESSION|max clients|connection slots|too many clients|query timeout|statement timeout|canceling statement|permission denied|exceed_egress_quota|exceed_.*_quota|restricted due to|Upload Storage falhou|spend caps/i.test(msgErr)) {
           registarSyncLog(item, 'transitorio', msgErr, Date.now() - t0);
           if (!window.__avisoSyncTransitorio) {
             window.__avisoSyncTransitorio = true;

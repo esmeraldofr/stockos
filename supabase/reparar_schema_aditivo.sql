@@ -139,3 +139,8 @@ CREATE TABLE IF NOT EXISTS monitor_sync_log (id SERIAL PRIMARY KEY, empresa_id I
 CREATE INDEX IF NOT EXISTS idx_sync_log_criado ON monitor_sync_log (criado_em);
 CREATE INDEX IF NOT EXISTS idx_sync_log_disp ON monitor_sync_log (dispositivo_id, criado_em DESC);
 ALTER TABLE monitor_sync_log ADD COLUMN IF NOT EXISTS ref TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_turno_pedidos_turno ON turno_pedidos (turno_id);
+CREATE INDEX IF NOT EXISTS idx_turno_entradas_turno ON turno_entradas (turno_id);
+CREATE INDEX IF NOT EXISTS idx_turno_saidas_turno ON turno_saidas (turno_id);
+CREATE INDEX IF NOT EXISTS idx_turno_caixa_entradas_turno ON turno_caixa_entradas (turno_id);
+CREATE INDEX IF NOT EXISTS idx_auditoria_criado ON auditoria (criado_em);

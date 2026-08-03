@@ -8528,6 +8528,7 @@ async function ensureMonitorSyncLog() {
     tentativa_em TIMESTAMPTZ,
     criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`).catch(() => {});
+  await query(`ALTER TABLE monitor_sync_log ADD COLUMN IF NOT EXISTS ref TEXT NOT NULL DEFAULT ''`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS idx_sync_log_criado ON monitor_sync_log (criado_em)`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS idx_sync_log_disp ON monitor_sync_log (dispositivo_id, criado_em DESC)`).catch(() => {});
   monitorSyncLogReady = true;
@@ -8548,11 +8549,12 @@ app.post('/api/monitor/sync-log', auth, async (req, res) => {
       const tRaw = it.tentativa_em ? new Date(it.tentativa_em) : null;
       await query(
         `INSERT INTO monitor_sync_log
-           (empresa_id, loja_id, utilizador_id, utilizador_nome, dispositivo_id, descricao, caminho, resultado, motivo, duracao_ms, espera_ms, tentativa_em)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+           (empresa_id, loja_id, utilizador_id, utilizador_nome, dispositivo_id, ref, descricao, caminho, resultado, motivo, duracao_ms, espera_ms, tentativa_em)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [
           empresaDe(req), lojaDe(req), req.user.id, req.user.nome || '',
           disp,
+          String(it.ref || '').slice(0, 64),
           String(it.descricao || '').slice(0, 160),
           String(it.caminho || '').slice(0, 160),
           SYNC_LOG_RESULTADOS.includes(it.resultado) ? it.resultado : 'ok',

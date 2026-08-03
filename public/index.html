@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-03-sync-filtros">
+<html lang="pt" data-stockos-ui="2026-08-03-sync-detalhe">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5727,7 +5727,13 @@ async function sincronizarPedidosOffline() {
         const i = f.findIndex((x) => x.ref === item.ref && x.criado_em === item.criado_em);
         if (i >= 0) { f.splice(i, 1); pedidosOfflineGravar(f); }
       };
-      const itemLog = { desc: `Pedido ao balcão (${item.ref})`, path: `/turnos/${item.tid}/pedidos`, method: 'POST', criado_em: item.criado_em };
+      const pl = item.payload || {};
+      const nArt = (pl.linhas || []).reduce((s, l) => s + (parseFloat(l.quantidade) || 0), 0);
+      const itemLog = {
+        ref: item.ref,
+        desc: `Pedido ao balcão${pl.cliente_nome ? ` — ${pl.cliente_nome}` : ''}${nArt ? ` (${nArt} artigo${nArt === 1 ? '' : 's'})` : ''}`,
+        path: `/turnos/${item.tid}/pedidos`, method: 'POST', criado_em: item.criado_em
+      };
       const t0 = Date.now();
       try {
         const resp = await apiPedidoComTimeout(item.tid, item.payload, 20000);
@@ -5917,15 +5923,30 @@ function syncLogLer() {
     return Array.isArray(v) ? v : [];
   } catch (_) { return []; }
 }
+/** Traduz os erros técnicos mais comuns para linguagem clara; o texto
+ *  original fica entre [ ] para rastreio. Mensagens do servidor (já em
+ *  português) passam intactas. */
+function motivoSyncHumano(msg) {
+  const m = String(msg || '').trim();
+  if (!m) return '';
+  if (/^timeout$/i.test(m)) return 'Sem resposta do servidor dentro do prazo — rede muito lenta ou servidor ocupado; volta a tentar sozinho [timeout]';
+  if (/load failed|failed to fetch|networkerror|network request failed/i.test(m)) return `O pedido não chegou ao servidor — a ligação caiu a meio; volta a tentar sozinho [${m}]`;
+  if (/EMAXCONNSESSION|max clients/i.test(m)) return `Base de dados com as ligações esgotadas — volta a tentar sozinho [${m}]`;
+  if (/ENOTFOUND|EAI_AGAIN/i.test(m)) return `O servidor não conseguiu encontrar a base de dados (DNS) — volta a tentar sozinho [${m}]`;
+  if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|connect timeout/i.test(m)) return `A ligação do servidor à base de dados falhou — volta a tentar sozinho [${m}]`;
+  if (/does not exist|não existe/i.test(m)) return `A base de dados ainda não tem esta estrutura (falta correr o «Reparar schema») — fica na fila [${m}]`;
+  return m;
+}
 function registarSyncLog(item, resultado, motivo, duracaoMs) {
   try {
     const fila = syncLogLer();
     const criado = item && item.criado_em ? new Date(item.criado_em).getTime() : NaN;
     fila.push({
+      ref: String((item && item.ref) || '').slice(0, 64),
       descricao: (item && item.desc) || `${item && item.method} ${item && item.path}`,
       caminho: String((item && item.path) || '').split('?')[0],
       resultado,
-      motivo: String(motivo || '').slice(0, 300),
+      motivo: motivoSyncHumano(motivo).slice(0, 300),
       duracao_ms: Math.round(duracaoMs || 0),
       espera_ms: isNaN(criado) ? 0 : Math.max(0, Date.now() - criado),
       tentativa_em: new Date().toISOString()
@@ -9785,6 +9806,21 @@ async function guardarStock(turnoId) {
   try {
     if (String(turnoId) !== String(S.turnoData?.id)) return;
     turnoMsgPending('A guardar…');
+    // Descrição RASTREÁVEL no diário de sincronizações: turno, produto e
+    // os valores enviados — «Stock do turno» sozinho não dizia nada.
+    const t = S.turnoData || {};
+    const rotTurno = [t.nome, String(t.data || '').slice(0, 10).split('-').reverse().slice(0, 2).join('/')].filter(Boolean).join(' ');
+    const descStock = (pid, v) => {
+      const row = (t.stock || []).find((s) => String(s.produto_id) === String(pid));
+      const nomeProd = (row && String(row.produto_nome || '').trim()) || `produto ${pid}`;
+      const partes = [];
+      if (v.encontrado != null && v.encontrado !== '') partes.push(`enc ${v.encontrado}`);
+      if (v.deixado != null && v.deixado !== '') partes.push(`deix ${v.deixado}`);
+      if (v.fechados != null && v.fechados !== '') partes.push(`fech ${v.fechados}`);
+      if (v.encontrado_caixa != null && v.encontrado_caixa !== '') partes.push(`enc.cx ${v.encontrado_caixa}`);
+      if (v.deixado_caixa != null && v.deixado_caixa !== '') partes.push(`deix.cx ${v.deixado_caixa}`);
+      return `Stock — ${nomeProd}${rotTurno ? ` (${rotTurno})` : ''}${partes.length ? ': ' + partes.join(' · ') : ''}`;
+    };
     const resultados = await Promise.all(Object.entries(stockBuf).map(([pid, v]) =>
       apiEscrita('PUT', `/turnos/${turnoId}/stock`, {
         produto_id: pid,
@@ -9793,7 +9829,7 @@ async function guardarStock(turnoId) {
         fechados: v.fechados,
         encontrado_caixa: v.encontrado_caixa,
         deixado_caixa: v.deixado_caixa
-      }, { tid: turnoId, chave: `stock:${turnoId}:${pid}`, desc: 'Stock do turno' })
+      }, { tid: turnoId, chave: `stock:${turnoId}:${pid}`, desc: descStock(pid, v) })
     ));
     const emFila = resultados.some((r) => r && r._offline);
     turnoMsgOk(emFila ? 'Guardado neste aparelho (sincroniza sozinho)' : 'Guardado');
@@ -15018,7 +15054,7 @@ async function abrirSyncLogDispositivo(dispId) {
     const selEstilo = 'background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:12px;padding:7px 8px';
     corpo().innerHTML = `
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 8px">
-        <input id="synclog-busca" type="text" placeholder="🔍 Procurar descrição, motivo, quem…" style="flex:1;min-width:150px;${selEstilo}" oninput="renderSyncLogLista()"/>
+        <input id="synclog-busca" type="text" placeholder="🔍 Procurar descrição, motivo, quem, ref…" style="flex:1;min-width:150px;${selEstilo}" oninput="renderSyncLogLista()"/>
         <select id="synclog-res" style="${selEstilo}" onchange="renderSyncLogLista()">
           <option value="">Tudo</option>
           <option value="ok">✓ entradas</option>
@@ -15053,7 +15089,7 @@ function renderSyncLogLista() {
     if (res && res !== 'adiado' && x.resultado !== res) return false;
     if (dispSel && String(x.dispositivo_id) !== dispSel) return false;
     if (txt) {
-      const palheiro = [x.descricao, x.motivo, x.utilizador_nome, x.caminho, x.dispositivo_id, nomeDe(x.dispositivo_id)]
+      const palheiro = [x.descricao, x.motivo, x.utilizador_nome, x.caminho, x.dispositivo_id, nomeDe(x.dispositivo_id), x.ref]
         .map((v) => String(v || '').toLowerCase()).join(' ');
       if (!palheiro.includes(txt)) return false;
     }
@@ -15094,8 +15130,8 @@ function renderSyncLogLista() {
         <span style="color:#e2e8f0;min-width:0">${geral ? chipDisp(x.dispositivo_id) + ' ' : ''}${escapeHtml(x.descricao || x.caminho || '')}</span>
         <span style="color:${cor};font-weight:600;white-space:nowrap">${rot}</span>
       </div>
-      <div style="color:#64748b;margin-top:2px">${fmtHora(x.tentativa_em || x.criado_em)} · ${escapeHtml(x.utilizador_nome || '')} · resposta <strong style="color:${corDur(dur)}">${ms(dur)}</strong>${esp > 3000 ? ` · esperou na fila <strong style="color:${corDur(esp)}">${ms(esp)}</strong>` : ''}</div>
-      ${x.motivo ? `<div style="color:#fca5a5;margin-top:2px;white-space:pre-wrap">${escapeHtml(String(x.motivo).slice(0, 200))}</div>` : ''}
+      <div style="color:#64748b;margin-top:2px">${fmtHora(x.tentativa_em || x.criado_em)} · ${escapeHtml(x.utilizador_nome || '')} · resposta <strong style="color:${corDur(dur)}">${ms(dur)}</strong>${esp > 3000 ? ` · esperou na fila <strong style="color:${corDur(esp)}">${ms(esp)}</strong>` : ''}${x.ref ? ` · <span style="font-family:monospace;font-size:10.5px;color:#7d8db1" title="Identificador do registo (client_ref) — pesquisável aqui e na idempotência do servidor">ref ${escapeHtml(String(x.ref))}</span>` : ''}</div>
+      ${x.motivo ? `<div style="color:#fca5a5;margin-top:2px;white-space:pre-wrap">${escapeHtml(String(x.motivo).slice(0, 300))}</div>` : ''}
     </div>`;
   }).join('');
   // Visão geral sem aparelho escolhido: resumo POR APARELHO (pior primeiro).

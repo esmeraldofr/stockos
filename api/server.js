@@ -227,6 +227,7 @@ async function ensurePgSingleton() {
         ]);
         _pgSingleton = sqlConn;
         _activeDbUrl = url;
+        verificarSeloDdl(sqlConn); // em fundo — não atrasa a 1ª resposta
         return _pgSingleton;
       } catch (e) {
         lastErr = e;
@@ -238,7 +239,32 @@ async function ensurePgSingleton() {
   throw lastErr;
 }
 
+// ── SELO DO SCHEMA ─ As dezenas de «ensure*» (CREATE TABLE/ALTER IF NOT
+// EXISTS) corriam TODAS em cada arranque frio: segundos de DDL inútil e
+// bloqueios (ACCESS EXCLUSIVE) atrás de leituras longas. Quando o selo
+// «ddl_ok» na stockos_meta coincide com a versão do código, o query()
+// salta esses DDL instantaneamente — o schema já está garantido.
+// REGRA: ao acrescentar schema novo, actualizar DDL_OK_VERSION AQUI e o
+// INSERT no fim de supabase/reparar_schema_aditivo.sql (mesmo valor);
+// correr o «Reparar schema» (ou fix-dev-schema) repõe o selo.
+const DDL_OK_VERSION = '2026-08-03-1';
+let __ddlSkip = false;
+let __ddlVerificado = false;
+const DDL_SALTAVEL = /^\s*(CREATE TABLE IF NOT EXISTS|CREATE (UNIQUE )?INDEX IF NOT EXISTS|ALTER TABLE [\s\S]*?ADD COLUMN IF NOT EXISTS|ALTER TABLE [\s\S]*?DROP NOT NULL)/i;
+function verificarSeloDdl(sqlConn) {
+  if (__ddlVerificado) return;
+  __ddlVerificado = true;
+  (async () => {
+    try {
+      const r = await sqlConn.unsafe(`SELECT v FROM stockos_meta WHERE k='ddl_ok'`, []);
+      __ddlSkip = !!(r && r[0] && r[0].v === DDL_OK_VERSION);
+      if (__ddlSkip) console.log(`[boot] selo ddl_ok=${DDL_OK_VERSION} — DDL dos ensure* saltado`);
+    } catch (_) { /* sem selo/tabela — ensures correm como sempre */ }
+  })();
+}
+
 const query = async (text, params) => {
+  if (__ddlSkip && DDL_SALTAVEL.test(text)) return { rows: [] };
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {

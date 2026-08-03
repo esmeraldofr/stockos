@@ -144,3 +144,7 @@ CREATE INDEX IF NOT EXISTS idx_turno_entradas_turno ON turno_entradas (turno_id)
 CREATE INDEX IF NOT EXISTS idx_turno_saidas_turno ON turno_saidas (turno_id);
 CREATE INDEX IF NOT EXISTS idx_turno_caixa_entradas_turno ON turno_caixa_entradas (turno_id);
 CREATE INDEX IF NOT EXISTS idx_auditoria_criado ON auditoria (criado_em);
+-- Selo do schema: com este valor igual ao DDL_OK_VERSION do código, o
+-- servidor salta os DDL dos ensure* no arranque frio (resposta rápida).
+-- Ao acrescentar schema novo: bump AQUI e no server.js (mesmo valor).
+INSERT INTO stockos_meta (k, v) VALUES ('ddl_ok', '2026-08-03-1') ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v;

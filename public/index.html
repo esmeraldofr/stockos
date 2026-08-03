@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-03-diagnostico-lento">
+<html lang="pt" data-stockos-ui="2026-08-03-grelha-protegida">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5787,8 +5787,10 @@ async function sincronizarPedidosOffline() {
     // já — sem isto, o cache antigo mostrava N-1 pedidos durante segundos
     // (o overlay da fila desaparece antes de o cache apanhar o novo).
     try {
-      if (S.page === 'turno' && S.turnoId && document.getElementById('pedidos-balcao-mount') && !document.getElementById('pedido-qtd-input')) {
-        renderPedidosBalcao(S.turnoId, !!S.turnoCanEdit, window.__pedidoProdutosOpts || []).catch(() => {});
+      // Só com o catálogo de produtos já carregado — redesenhar com []
+      // apagava a grelha («Sem artigos…») até o utilizador mudar de aba.
+      if (S.page === 'turno' && S.turnoId && document.getElementById('pedidos-balcao-mount') && !document.getElementById('pedido-qtd-input') && (window.__pedidoProdutosOpts || []).length) {
+        renderPedidosBalcao(S.turnoId, !!S.turnoCanEdit, window.__pedidoProdutosOpts).catch(() => {});
       }
     } catch (_) {}
   }
@@ -6176,7 +6178,10 @@ function refrescarSeccaoComDadosFrescos(url) {
       const mountPed = document.getElementById('pedidos-balcao-mount');
       if (mountPed && p.endsWith('/pedidos')) {
         if (document.getElementById('pedido-qtd-input') || !semTextoAMeio(mountPed)) return true;
-        renderPedidosBalcao(S.turnoId, !!S.turnoCanEdit, window.__pedidoProdutosOpts || []).catch(() => {});
+        // Sem o catálogo carregado, redesenhar apagava a grelha de
+        // produtos («Sem artigos…») — fica quieto e sem chip.
+        if (!(window.__pedidoProdutosOpts || []).length) return true;
+        renderPedidosBalcao(S.turnoId, !!S.turnoCanEdit, window.__pedidoProdutosOpts).catch(() => {});
         return true;
       }
     }

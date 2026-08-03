@@ -823,7 +823,24 @@ function isStockosApiReadOnly() {
   return false;
 }
 
-app.use(cors({ origin: '*' }));
+app.use(cors({ origin: '*', exposedHeaders: ['X-Srv-Ms', 'X-Srv-Boot-S'] }));
+// ── Auto-diagnóstico de latência ─ X-Srv-Ms: tempo DENTRO do servidor;
+// X-Srv-Boot-S: idade da instância (0–10s = este pedido pagou arranque
+// frio). O diário de sincronizações usa-os para dizer ONDE se perdeu o
+// tempo quando uma resposta é lenta.
+const __bootTs = Date.now();
+app.use((req, res, next) => {
+  const t0 = Date.now();
+  const wh = res.writeHead;
+  res.writeHead = function (...a) {
+    try {
+      res.setHeader('X-Srv-Ms', String(Date.now() - t0));
+      res.setHeader('X-Srv-Boot-S', String(Math.round((t0 - __bootTs) / 1000)));
+    } catch (_) {}
+    return wh.apply(this, a);
+  };
+  next();
+});
 app.use((req, res, next) => {
   res.setHeader('X-StockOS-Api-Build', STOCKOS_API_BUILD);
   res.setHeader('X-StockOS-Tier', stockosDeploymentTier());

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-03-diario-sync">
+<html lang="pt" data-stockos-ui="2026-08-03-tempo-segundos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -15004,7 +15004,12 @@ async function abrirSyncLogDispositivo(dispId) {
     const durs = ok24.map((x) => parseInt(x.duracao_ms, 10) || 0);
     const med = durs.length ? Math.round(durs.reduce((s, v) => s + v, 0) / durs.length) : 0;
     const max = durs.length ? Math.max(...durs) : 0;
-    const ms = (v) => v >= 1000 ? (v / 1000).toFixed(1).replace('.', ',') + 's' : v + 'ms';
+    // Tempos SEMPRE em segundos (0,4s · 6,2s · 45s); acima de 2 min, em minutos.
+    const ms = (v) => {
+      const s = (parseInt(v, 10) || 0) / 1000;
+      if (s >= 120) return Math.round(s / 60) + 'min';
+      return (s >= 10 ? String(Math.round(s)) : s.toFixed(1)).replace('.', ',') + 's';
+    };
     const corDur = (v) => v < 1500 ? '#4ade80' : v < 5000 ? '#fbbf24' : '#f87171';
     const rotRes = { ok: ['✓ entrou', '#4ade80'], rejeitado: ['✗ rejeitado', '#f87171'], transitorio: ['↻ adiado (servidor)', '#fbbf24'], 'sem-rede': ['↻ adiado (sem rede)', '#94a3b8'] };
     const fmtHora = (d) => new Date(d).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });

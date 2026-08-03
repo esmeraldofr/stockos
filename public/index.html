@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-03-sync-detalhe">
+<html lang="pt" data-stockos-ui="2026-08-03-stock-so-mudou">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3175,6 +3175,9 @@ async function drawTurno() {
 
 // Stock buffer for edits
 let stockBuf = {};
+// Produtos com alterações POR ENVIAR: o auto-guardar só envia estes —
+// mudar 1 célula não pode gerar um registo por cada produto da folha.
+let stockDirty = new Set();
 /** Evita aplicar resposta GET /dia antiga após mudar de turno rapidamente. */
 let loadTurnoSeq = 0;
 let autoSaveTimer = null;
@@ -3613,6 +3616,7 @@ async function loadTurno() {
       S.turnoComentarios = cMap;
     } catch (_) { S.turnoDecisoes = {}; S.turnoComentarios = {}; }
     stockBuf = {};
+    stockDirty = new Set();
     turno.stock.forEach((s) => {
       const sid = prodIdKey(s.produto_id);
       if (!sid) return;
@@ -8572,6 +8576,9 @@ function updateStock(pid, field, value) {
   } else {
     stockBuf[k][field] = parseRaw(value);
   }
+  // Campos que o guardarStock envia: marca o produto como alterado.
+  // («entrada» fica de fora — as entradas têm o seu próprio registo.)
+  if (['encontrado', 'deixado', 'fechados', 'encontrado_caixa', 'deixado_caixa'].includes(field)) stockDirty.add(k);
   const inp = document.querySelector(`input[type="number"][data-stock-pid="${k}"][data-stock-field="${field}"]`);
   if (inp && document.activeElement !== inp) {
     const n = stockBuf[k][field];
@@ -8791,6 +8798,7 @@ function aplicarFinoBarrilZeroParaRecipienteKg(turno, canEdit) {
     stockBuf[sid].deixado = kg;
     ch = true;
   }
+  if (ch) stockDirty.add(sid); // ajuste automático também tem de ser enviado
   return ch;
 }
 
@@ -9803,8 +9811,14 @@ function notifyEncontradosPendente() {
 }
 
 async function guardarStock(turnoId) {
+  // SÓ os produtos alterados: mudar 1 célula gera 1 registo na fila —
+  // não um por cada produto da folha.
+  let pids = [];
   try {
     if (String(turnoId) !== String(S.turnoData?.id)) return;
+    pids = [...stockDirty].filter((pid) => stockBuf[pid]);
+    if (!pids.length) return; // nada mudou — nada a enviar
+    stockDirty = new Set();
     turnoMsgPending('A guardar…');
     // Descrição RASTREÁVEL no diário de sincronizações: turno, produto e
     // os valores enviados — «Stock do turno» sozinho não dizia nada.
@@ -9821,20 +9835,24 @@ async function guardarStock(turnoId) {
       if (v.deixado_caixa != null && v.deixado_caixa !== '') partes.push(`deix.cx ${v.deixado_caixa}`);
       return `Stock — ${nomeProd}${rotTurno ? ` (${rotTurno})` : ''}${partes.length ? ': ' + partes.join(' · ') : ''}`;
     };
-    const resultados = await Promise.all(Object.entries(stockBuf).map(([pid, v]) =>
-      apiEscrita('PUT', `/turnos/${turnoId}/stock`, {
+    const resultados = await Promise.all(pids.map((pid) => {
+      const v = stockBuf[pid];
+      return apiEscrita('PUT', `/turnos/${turnoId}/stock`, {
         produto_id: pid,
         encontrado: v.encontrado,
         deixado: v.deixado,
         fechados: v.fechados,
         encontrado_caixa: v.encontrado_caixa,
         deixado_caixa: v.deixado_caixa
-      }, { tid: turnoId, chave: `stock:${turnoId}:${pid}`, desc: descStock(pid, v) })
-    ));
+      }, { tid: turnoId, chave: `stock:${turnoId}:${pid}`, desc: descStock(pid, v) });
+    }));
     const emFila = resultados.some((r) => r && r._offline);
     turnoMsgOk(emFila ? 'Guardado neste aparelho (sincroniza sozinho)' : 'Guardado');
     setTimeout(() => turnoMsgIdle(), 1600);
-  } catch(e) { turnoMsgErr(e.message); }
+  } catch(e) {
+    pids.forEach((pid) => stockDirty.add(pid)); // volta a marcar — tenta no próximo guardar
+    turnoMsgErr(e.message);
+  }
 }
 
 function calcCaixa() {

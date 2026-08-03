@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-03-grelha-protegida">
+<html lang="pt" data-stockos-ui="2026-08-03-linha-produtos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -12538,6 +12538,7 @@ async function drawArmazem() {
   window.__faturaProformaId = null;
   await refreshArmazemFundos();
   await loadArmazemData();
+  refrescarFaturaProdSelects(); // a 1ª linha nasceu antes dos produtos chegarem
   loadArmazemProformas().catch(() => {});
 }
 
@@ -13465,6 +13466,19 @@ function initFaturaLinha(line) {
 function removeFaturaLinha(btn) {
   const line = btn.closest('.fatura-linha');
   if (line) line.remove();
+}
+
+/** A 1ª linha do formulário de compras nasce ANTES de S.produtos chegar
+ *  — o select ficava vazio até se clicar «+ Linha». Depois de os produtos
+ *  carregarem, repõe as opções nos selects que ainda não as têm (nunca
+ *  mexe num select onde já há produtos/escolha feita). */
+function refrescarFaturaProdSelects() {
+  document.querySelectorAll('#fatura-linhas-body .fatura-linha .af-prod').forEach((sel) => {
+    const temProdutos = [...sel.options].some((o) => o.value && o.value !== '__novo__');
+    if (temProdutos) return;
+    renderArmazemProdutoOptions(sel, sel.value || '', sel._filterBuf || '', true);
+    toggleFaturaLinhaNovo(sel);
+  });
 }
 
 function addFaturaLinha() {

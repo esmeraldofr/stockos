@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-03-bd-transitorios">
+<html lang="pt" data-stockos-ui="2026-08-03-diagnostico-lento">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1056,6 +1056,12 @@ async function api(method, path, body) {
   };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(API + path, opts);
+  // Auto-diagnóstico: quanto tempo foi DENTRO do servidor e se a
+  // instância acabou de arrancar — o diário de sincronizações usa isto.
+  try {
+    const sm = parseInt(r.headers.get('X-Srv-Ms'), 10);
+    if (Number.isFinite(sm)) window.__srvInfoUltimo = { ms: sm, boot: parseInt(r.headers.get('X-Srv-Boot-S'), 10), t: Date.now() };
+  } catch (_) {}
   let data = {};
   try {
     data = await r.json();
@@ -5944,6 +5950,16 @@ function motivoSyncHumano(msg) {
 }
 function registarSyncLog(item, resultado, motivo, duracaoMs) {
   try {
+    // Resposta lenta mas SEM erro: junta o auto-diagnóstico — quanto foi
+    // dentro do servidor e se este pedido pagou um arranque frio.
+    if (resultado === 'ok' && (duracaoMs || 0) > 2500 && !motivo) {
+      const si = window.__srvInfoUltimo;
+      if (si && Date.now() - si.t < 2000) {
+        const sSrv = (si.ms / 1000).toFixed(1).replace('.', ',');
+        const frio = Number.isFinite(si.boot) && si.boot <= 10;
+        motivo = `Diagnóstico: ${sSrv}s dentro do servidor${frio ? ' · instância acabada de arrancar (arranque frio da plataforma)' : ''} · o resto foi rede/plataforma`;
+      }
+    }
     const fila = syncLogLer();
     const criado = item && item.criado_em ? new Date(item.criado_em).getTime() : NaN;
     fila.push({
@@ -15150,7 +15166,7 @@ function renderSyncLogLista() {
         <span style="color:${cor};font-weight:600;white-space:nowrap">${rot}</span>
       </div>
       <div style="color:#64748b;margin-top:2px">${fmtHora(x.tentativa_em || x.criado_em)} · ${escapeHtml(x.utilizador_nome || '')} · resposta <strong style="color:${corDur(dur)}">${ms(dur)}</strong>${esp > 3000 ? ` · esperou na fila <strong style="color:${corDur(esp)}">${ms(esp)}</strong>` : ''}${x.ref ? ` · <span style="font-family:monospace;font-size:10.5px;color:#7d8db1" title="Identificador do registo (client_ref) — pesquisável aqui e na idempotência do servidor">ref ${escapeHtml(String(x.ref))}</span>` : ''}</div>
-      ${x.motivo ? `<div style="color:#fca5a5;margin-top:2px;white-space:pre-wrap">${escapeHtml(String(x.motivo).slice(0, 300))}</div>` : ''}
+      ${x.motivo ? `<div style="color:${/^Diagnóstico:/.test(x.motivo) ? '#94a3b8' : '#fca5a5'};margin-top:2px;white-space:pre-wrap">${escapeHtml(String(x.motivo).slice(0, 300))}</div>` : ''}
     </div>`;
   }).join('');
   // Visão geral sem aparelho escolhido: resumo POR APARELHO (pior primeiro).

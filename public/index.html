@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-03-sync-geral">
+<html lang="pt" data-stockos-ui="2026-08-03-sync-filtros">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -15005,72 +15005,128 @@ async function abrirSyncLogDispositivo(dispId) {
       corpo().innerHTML = `<div style="color:#475569;font-size:13px;padding:14px 0">Ainda sem sincronizações registadas ${geral ? '' : 'deste aparelho '}(o diário começou com a versão actual da app). Guardado 30 dias.</div>`;
       return;
     }
-    // Resumo das últimas 24h: quantas entraram, rejeitadas, tempo médio/máximo.
-    const h24 = lista.filter((x) => Date.now() - new Date(x.criado_em).getTime() < 24 * 3600000);
-    const ok24 = h24.filter((x) => x.resultado === 'ok');
-    const rej24 = h24.filter((x) => x.resultado === 'rejeitado');
-    const durs = ok24.map((x) => parseInt(x.duracao_ms, 10) || 0);
-    const med = durs.length ? Math.round(durs.reduce((s, v) => s + v, 0) / durs.length) : 0;
-    const max = durs.length ? Math.max(...durs) : 0;
-    // Tempos SEMPRE em segundos (0,4s · 6,2s · 45s); acima de 2 min, em minutos.
-    const ms = (v) => {
-      const s = (parseInt(v, 10) || 0) / 1000;
-      if (s >= 120) return Math.round(s / 60) + 'min';
-      return (s >= 10 ? String(Math.round(s)) : s.toFixed(1)).replace('.', ',') + 's';
-    };
-    const corDur = (v) => v < 1500 ? '#4ade80' : v < 5000 ? '#fbbf24' : '#f87171';
-    const rotRes = { ok: ['✓ entrou', '#4ade80'], rejeitado: ['✗ rejeitado', '#f87171'], transitorio: ['↻ adiado (servidor)', '#fbbf24'], 'sem-rede': ['↻ adiado (sem rede)', '#94a3b8'] };
-    const fmtHora = (d) => new Date(d).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    const chipDisp = (id) => {
-      const cod = '#' + String(id || '').replace(/^d-/, '').slice(0, 4).toUpperCase();
+    window.__syncLogDados = lista;
+    window.__syncLogGeral = geral;
+    // Filtros: pesquisa, resultado e (na visão geral) aparelho. A escrita
+    // no campo só redesenha a LISTA (#synclog-lista) — o campo mantém o
+    // foco e o texto.
+    const dispsVistos = [...new Set(lista.map((x) => x.dispositivo_id).filter(Boolean))];
+    const nomeDisp = (id) => {
       const n = (window.__monitorNomes || {})[id] || '';
-      return `<span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 5px;color:#93c5fd;font-family:monospace;font-size:10.5px">${escapeHtml(cod)}</span>${n ? ` <span style="color:#94a3b8">${escapeHtml(n)}</span>` : ''}`;
+      return '#' + String(id).replace(/^d-/, '').slice(0, 4).toUpperCase() + (n ? ` · ${n}` : '');
     };
-    const itens = lista.map((x) => {
-      const [rot, cor] = rotRes[x.resultado] || ['—', '#94a3b8'];
-      const dur = parseInt(x.duracao_ms, 10) || 0;
-      const esp = parseInt(x.espera_ms, 10) || 0;
-      return `<div style="border-top:1px solid #1e293b;padding:8px 0;font-size:12.5px">
-        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
-          <span style="color:#e2e8f0;min-width:0">${geral ? chipDisp(x.dispositivo_id) + ' ' : ''}${escapeHtml(x.descricao || x.caminho || '')}</span>
-          <span style="color:${cor};font-weight:600;white-space:nowrap">${rot}</span>
-        </div>
-        <div style="color:#64748b;margin-top:2px">${fmtHora(x.tentativa_em || x.criado_em)} · ${escapeHtml(x.utilizador_nome || '')} · resposta <strong style="color:${corDur(dur)}">${ms(dur)}</strong>${esp > 3000 ? ` · esperou na fila <strong style="color:${corDur(esp)}">${ms(esp)}</strong>` : ''}</div>
-        ${x.motivo ? `<div style="color:#fca5a5;margin-top:2px;white-space:pre-wrap">${escapeHtml(String(x.motivo).slice(0, 200))}</div>` : ''}
-      </div>`;
-    }).join('');
-    // Visão geral: resumo das últimas 24h POR APARELHO (pior primeiro).
-    let porAparelho = '';
-    if (geral) {
-      const agg = {};
-      h24.forEach((x) => {
-        const a = (agg[x.dispositivo_id] = agg[x.dispositivo_id] || { ok: 0, rej: 0, durs: [] });
-        if (x.resultado === 'ok') { a.ok++; a.durs.push(parseInt(x.duracao_ms, 10) || 0); }
-        else if (x.resultado === 'rejeitado') a.rej++;
-      });
-      porAparelho = Object.entries(agg)
-        .sort((a, b) => (b[1].rej - a[1].rej) || (Math.max(0, ...b[1].durs) - Math.max(0, ...a[1].durs)))
-        .map(([id, a]) => {
-          const m2 = a.durs.length ? Math.round(a.durs.reduce((s, v) => s + v, 0) / a.durs.length) : 0;
-          return `<div style="display:flex;justify-content:space-between;gap:8px;border-top:1px solid #1e293b;padding:6px 0;font-size:12px;align-items:center">
-            <span>${chipDisp(id)}</span>
-            <span style="color:#cbd5e1;white-space:nowrap"><strong style="color:#4ade80">${a.ok} ✓</strong>${a.rej ? ` · <strong style="color:#f87171">${a.rej} ✗</strong>` : ''}${a.durs.length ? ` · média <strong style="color:${corDur(m2)}">${ms(m2)}</strong>` : ''}</span>
-          </div>`;
-        }).join('');
-      if (porAparelho) porAparelho = `<div style="margin:2px 0 8px"><div style="font-size:0.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:6px 0 2px">Últimas 24h por aparelho</div>${porAparelho}</div>`;
-    }
+    const selEstilo = 'background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:12px;padding:7px 8px';
     corpo().innerHTML = `
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px;font-size:11.5px">
-        <span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#cbd5e1">Últimas 24h: <strong style="color:#4ade80">${ok24.length} ✓</strong>${rej24.length ? ` · <strong style="color:#f87171">${rej24.length} ✗</strong>` : ''}</span>
-        ${durs.length ? `<span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#cbd5e1">resposta média <strong style="color:${corDur(med)}">${ms(med)}</strong> · máx <strong style="color:${corDur(max)}">${ms(max)}</strong></span>` : ''}
-        <span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#64748b">guardado 30 dias</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 8px">
+        <input id="synclog-busca" type="text" placeholder="🔍 Procurar descrição, motivo, quem…" style="flex:1;min-width:150px;${selEstilo}" oninput="renderSyncLogLista()"/>
+        <select id="synclog-res" style="${selEstilo}" onchange="renderSyncLogLista()">
+          <option value="">Tudo</option>
+          <option value="ok">✓ entradas</option>
+          <option value="rejeitado">✗ rejeitadas</option>
+          <option value="adiado">↻ adiadas</option>
+        </select>
+        ${geral && dispsVistos.length > 1 ? `<select id="synclog-disp" style="${selEstilo}" onchange="renderSyncLogLista()">
+          <option value="">Todos os aparelhos</option>
+          ${dispsVistos.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(nomeDisp(id))}</option>`).join('')}
+        </select>` : ''}
       </div>
-      ${porAparelho}
-      ${geral ? `<div style="font-size:0.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:6px 0 2px">Todas as tentativas</div>` : ''}
-      ${itens}`;
+      <div id="synclog-lista"></div>`;
+    renderSyncLogLista();
   } catch (e) {
     if (corpo()) corpo().innerHTML = `<div class="alert alert-error">${escapeHtml(e && e.message || String(e))}</div>`;
   }
+}
+
+/** Redesenha a lista do diário aplicando os filtros (o resumo acompanha
+ *  o que está filtrado). Nunca toca nos controlos — só em #synclog-lista. */
+function renderSyncLogLista() {
+  const alvo = document.getElementById('synclog-lista');
+  if (!alvo) return;
+  const geral = window.__syncLogGeral === true;
+  const todos = Array.isArray(window.__syncLogDados) ? window.__syncLogDados : [];
+  const txt = String(document.getElementById('synclog-busca')?.value || '').trim().toLowerCase();
+  const res = String(document.getElementById('synclog-res')?.value || '');
+  const dispSel = String(document.getElementById('synclog-disp')?.value || '');
+  const nomeDe = (id) => (window.__monitorNomes || {})[id] || '';
+  const lista = todos.filter((x) => {
+    if (res === 'adiado' && !['transitorio', 'sem-rede'].includes(x.resultado)) return false;
+    if (res && res !== 'adiado' && x.resultado !== res) return false;
+    if (dispSel && String(x.dispositivo_id) !== dispSel) return false;
+    if (txt) {
+      const palheiro = [x.descricao, x.motivo, x.utilizador_nome, x.caminho, x.dispositivo_id, nomeDe(x.dispositivo_id)]
+        .map((v) => String(v || '').toLowerCase()).join(' ');
+      if (!palheiro.includes(txt)) return false;
+    }
+    return true;
+  });
+  const filtrado = !!(txt || res || dispSel);
+  if (!lista.length) {
+    alvo.innerHTML = '<div style="color:#475569;font-size:13px;padding:14px 0">Nada corresponde aos filtros.</div>';
+    return;
+  }
+  // Resumo das últimas 24h (do conjunto filtrado).
+  const h24 = lista.filter((x) => Date.now() - new Date(x.criado_em).getTime() < 24 * 3600000);
+  const ok24 = h24.filter((x) => x.resultado === 'ok');
+  const rej24 = h24.filter((x) => x.resultado === 'rejeitado');
+  const durs = ok24.map((x) => parseInt(x.duracao_ms, 10) || 0);
+  const med = durs.length ? Math.round(durs.reduce((s, v) => s + v, 0) / durs.length) : 0;
+  const max = durs.length ? Math.max(...durs) : 0;
+  // Tempos SEMPRE em segundos (0,4s · 6,2s · 45s); acima de 2 min, em minutos.
+  const ms = (v) => {
+    const s = (parseInt(v, 10) || 0) / 1000;
+    if (s >= 120) return Math.round(s / 60) + 'min';
+    return (s >= 10 ? String(Math.round(s)) : s.toFixed(1)).replace('.', ',') + 's';
+  };
+  const corDur = (v) => v < 1500 ? '#4ade80' : v < 5000 ? '#fbbf24' : '#f87171';
+  const rotRes = { ok: ['✓ entrou', '#4ade80'], rejeitado: ['✗ rejeitado', '#f87171'], transitorio: ['↻ adiado (servidor)', '#fbbf24'], 'sem-rede': ['↻ adiado (sem rede)', '#94a3b8'] };
+  const fmtHora = (d) => new Date(d).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const chipDisp = (id) => {
+    const cod = '#' + String(id || '').replace(/^d-/, '').slice(0, 4).toUpperCase();
+    const n = nomeDe(id);
+    return `<span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 5px;color:#93c5fd;font-family:monospace;font-size:10.5px">${escapeHtml(cod)}</span>${n ? ` <span style="color:#94a3b8">${escapeHtml(n)}</span>` : ''}`;
+  };
+  const itens = lista.map((x) => {
+    const [rot, cor] = rotRes[x.resultado] || ['—', '#94a3b8'];
+    const dur = parseInt(x.duracao_ms, 10) || 0;
+    const esp = parseInt(x.espera_ms, 10) || 0;
+    return `<div style="border-top:1px solid #1e293b;padding:8px 0;font-size:12.5px">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <span style="color:#e2e8f0;min-width:0">${geral ? chipDisp(x.dispositivo_id) + ' ' : ''}${escapeHtml(x.descricao || x.caminho || '')}</span>
+        <span style="color:${cor};font-weight:600;white-space:nowrap">${rot}</span>
+      </div>
+      <div style="color:#64748b;margin-top:2px">${fmtHora(x.tentativa_em || x.criado_em)} · ${escapeHtml(x.utilizador_nome || '')} · resposta <strong style="color:${corDur(dur)}">${ms(dur)}</strong>${esp > 3000 ? ` · esperou na fila <strong style="color:${corDur(esp)}">${ms(esp)}</strong>` : ''}</div>
+      ${x.motivo ? `<div style="color:#fca5a5;margin-top:2px;white-space:pre-wrap">${escapeHtml(String(x.motivo).slice(0, 200))}</div>` : ''}
+    </div>`;
+  }).join('');
+  // Visão geral sem aparelho escolhido: resumo POR APARELHO (pior primeiro).
+  let porAparelho = '';
+  if (geral && !dispSel) {
+    const agg = {};
+    h24.forEach((x) => {
+      const a = (agg[x.dispositivo_id] = agg[x.dispositivo_id] || { ok: 0, rej: 0, durs: [] });
+      if (x.resultado === 'ok') { a.ok++; a.durs.push(parseInt(x.duracao_ms, 10) || 0); }
+      else if (x.resultado === 'rejeitado') a.rej++;
+    });
+    porAparelho = Object.entries(agg)
+      .sort((a, b) => (b[1].rej - a[1].rej) || (Math.max(0, ...b[1].durs) - Math.max(0, ...a[1].durs)))
+      .map(([id, a]) => {
+        const m2 = a.durs.length ? Math.round(a.durs.reduce((s, v) => s + v, 0) / a.durs.length) : 0;
+        return `<div style="display:flex;justify-content:space-between;gap:8px;border-top:1px solid #1e293b;padding:6px 0;font-size:12px;align-items:center">
+          <span>${chipDisp(id)}</span>
+          <span style="color:#cbd5e1;white-space:nowrap"><strong style="color:#4ade80">${a.ok} ✓</strong>${a.rej ? ` · <strong style="color:#f87171">${a.rej} ✗</strong>` : ''}${a.durs.length ? ` · média <strong style="color:${corDur(m2)}">${ms(m2)}</strong>` : ''}</span>
+        </div>`;
+      }).join('');
+    if (porAparelho) porAparelho = `<div style="margin:2px 0 8px"><div style="font-size:0.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:6px 0 2px">Últimas 24h por aparelho</div>${porAparelho}</div>`;
+  }
+  alvo.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px;font-size:11.5px">
+      <span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#cbd5e1">Últimas 24h${filtrado ? ' (filtrado)' : ''}: <strong style="color:#4ade80">${ok24.length} ✓</strong>${rej24.length ? ` · <strong style="color:#f87171">${rej24.length} ✗</strong>` : ''}</span>
+      ${durs.length ? `<span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#cbd5e1">resposta média <strong style="color:${corDur(med)}">${ms(med)}</strong> · máx <strong style="color:${corDur(max)}">${ms(max)}</strong></span>` : ''}
+      <span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#64748b">guardado 30 dias</span>
+    </div>
+    ${porAparelho}
+    ${geral ? `<div style="font-size:0.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:6px 0 2px">${filtrado ? 'Tentativas (filtradas)' : 'Todas as tentativas'} · ${lista.length}</div>` : ''}
+    ${itens}`;
 }
 
 /** Admin dá um nome ao aparelho (ex.: «Balcão 1») — vale para o aparelho

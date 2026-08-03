@@ -138,3 +138,4 @@ ALTER TABLE turnos ADD COLUMN IF NOT EXISTS checklist JSONB;
 CREATE TABLE IF NOT EXISTS monitor_sync_log (id SERIAL PRIMARY KEY, empresa_id INTEGER, loja_id INTEGER, utilizador_id UUID, utilizador_nome TEXT NOT NULL DEFAULT '', dispositivo_id TEXT NOT NULL, descricao TEXT NOT NULL DEFAULT '', caminho TEXT NOT NULL DEFAULT '', resultado TEXT NOT NULL DEFAULT 'ok', motivo TEXT NOT NULL DEFAULT '', duracao_ms INTEGER NOT NULL DEFAULT 0, espera_ms BIGINT NOT NULL DEFAULT 0, tentativa_em TIMESTAMPTZ, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE INDEX IF NOT EXISTS idx_sync_log_criado ON monitor_sync_log (criado_em);
 CREATE INDEX IF NOT EXISTS idx_sync_log_disp ON monitor_sync_log (dispositivo_id, criado_em DESC);
+ALTER TABLE monitor_sync_log ADD COLUMN IF NOT EXISTS ref TEXT NOT NULL DEFAULT '';

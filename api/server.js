@@ -5628,15 +5628,36 @@ app.put('/api/turnos/:id/checklist', auth, async (req, res) => {
     const fase = req.body && req.body.fase === 'abertura' ? 'abertura' : 'fecho';
     const idx = String(Math.max(0, parseInt((req.body && req.body.idx), 10) || 0));
     const feito = !!(req.body && req.body.feito);
-    const t = await query(`SELECT estado, checklist FROM turnos WHERE id=$1`, [req.params.id]);
+    const t = await query(`SELECT estado FROM turnos WHERE id=$1`, [req.params.id]);
     if (!t.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
     if (t.rows[0].estado !== 'aberto') return res.status(400).json({ erro: 'O turno já está fechado.' });
-    const atual = (t.rows[0].checklist && typeof t.rows[0].checklist === 'object') ? t.rows[0].checklist : {};
-    atual[fase] = atual[fase] || {};
-    if (feito) atual[fase][idx] = { feito: true, por: (req.user && req.user.nome) || '', em: new Date().toISOString() };
-    else delete atual[fase][idx];
-    await query(`UPDATE turnos SET checklist=$1 WHERE id=$2`, [JSON.stringify(atual), req.params.id]);
-    res.json({ ok: true, checklist: atual });
+    // Marcação ATÓMICA em SQL — o ler-alterar-gravar em JS perdia marcações:
+    // o driver gravava o parâmetro string como ESCALAR JSON e a leitura
+    // seguinte, não vendo um objecto, recomeçava de {} (apagava tudo). O
+    // CASE normaliza também linhas antigas nesse formato (desembrulha).
+    const norm = `CASE WHEN jsonb_typeof(checklist)='object' THEN checklist
+                       WHEN jsonb_typeof(checklist)='string' THEN (checklist #>> '{}')::jsonb
+                       ELSE '{}'::jsonb END`;
+    let r;
+    if (feito) {
+      r = await query(
+        `UPDATE turnos SET checklist =
+           jsonb_set(
+             jsonb_set(${norm}, ARRAY[$2::text], COALESCE(${norm} -> $2::text, '{}'::jsonb), true),
+             ARRAY[$2::text, $3::text],
+             jsonb_build_object('feito', true, 'por', $4::text, 'em', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
+             true)
+         WHERE id=$1 RETURNING checklist`,
+        [req.params.id, fase, idx, (req.user && req.user.nome) || '']
+      );
+    } else {
+      r = await query(
+        `UPDATE turnos SET checklist = (${norm}) #- ARRAY[$2::text, $3::text]
+         WHERE id=$1 RETURNING checklist`,
+        [req.params.id, fase, idx]
+      );
+    }
+    res.json({ ok: true, checklist: (r.rows[0] && r.rows[0].checklist) || {} });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -5851,7 +5872,11 @@ async function checklistPendServidor(turnoId, fase, req) {
       if (le.rows.length) empT = le.rows[0].empresa_id || empT;
     }
     const cfg = parseChecklistCfg(await getConfigEmpresa(empT, 'checklist_turno'));
-    const marcado = (t.rows[0].checklist && typeof t.rows[0].checklist === 'object') ? t.rows[0].checklist : {};
+    let marcado = t.rows[0].checklist;
+    // Linhas antigas com o estado gravado como escalar JSON (string):
+    // desembrulha antes de validar — senão as marcações "desapareciam".
+    if (typeof marcado === 'string') { try { marcado = JSON.parse(marcado); } catch (_) { marcado = {}; } }
+    if (!marcado || typeof marcado !== 'object') marcado = {};
     return (cfg[fase] || []).filter((tarefa, i) =>
       !(marcado[fase] && marcado[fase][String(i)] && marcado[fase][String(i)].feito));
   } catch (_) { return []; }

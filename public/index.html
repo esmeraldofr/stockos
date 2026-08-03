@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-02-aviso-texto">
+<html lang="pt" data-stockos-ui="2026-08-03-checklist-fiavel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6024,7 +6024,8 @@ function refrescoAutomatico(forcar) {
             `/turnos/${S.turnoId}/saidas`,
             `/turnos/${S.turnoId}/caixa-entradas`,
             `/turnos/${S.turnoId}/vendas`,
-            '/avisos'
+            '/avisos',
+            '/config/checklist-turno'
           );
         }
         break;
@@ -6108,6 +6109,12 @@ function refrescarSeccaoComDadosFrescos(url) {
       carregarAvisosTurno().catch(() => {});
       return true;
     }
+    if (S.page === 'turno' && p.endsWith('/config/checklist-turno')) {
+      // Config das tarefas mudou noutro aparelho: barra recalcula já.
+      S.checklistCfg = null;
+      atualizarChecklistBar().catch(() => {});
+      return true;
+    }
     return false;
   } catch (_) { return false; }
 }
@@ -6115,7 +6122,7 @@ function refrescarSeccaoComDadosFrescos(url) {
 function urlRelevanteParaPagina(u) {
   const p = String(u || '').split('?')[0];
   switch (S.page) {
-    case 'turno': return !!S.turnoId && (p.includes(`/turnos/${S.turnoId}/`) || p.endsWith('/dia') || p.endsWith('/avisos'));
+    case 'turno': return !!S.turnoId && (p.includes(`/turnos/${S.turnoId}/`) || p.endsWith('/dia') || p.endsWith('/avisos') || p.endsWith('/config/checklist-turno'));
     case 'depositos': return p.endsWith('/depositos') || p.endsWith('/dia');
     case 'historico': return p.includes('/historico');
     case 'assiduidade': return p.includes('/assiduidade');
@@ -6533,6 +6540,12 @@ async function sincronizarEscritasOffline() {
         }
         removeDaFila();
         if (item.tipo === 'abrir' && item.localId) limparTurnoLocal(item.localId);
+        // Rejeição por checklist: a config em cache estava desactualizada —
+        // limpa e recalcula a barra para mostrar o que o servidor exige.
+        if (/checklist/i.test(String(e.message || ''))) {
+          S.checklistCfg = null;
+          try { atualizarChecklistBar().catch(() => {}); } catch (_) {}
+        }
         alert(`⚠ Um registo offline (${item.desc}, de ${item.quando || '—'}) foi REJEITADO ao sincronizar: ${e.message}`);
       }
     }
@@ -9627,7 +9640,7 @@ function deixadosBannerHtml(turno, fechado, canEdit, isAdmin, encontradosFechado
 
 async function fecharDeixados(turnoId) {
   // PORTÃO: o registo dos deixados só fecha com o checklist de FECHO feito.
-  const pendF = (await checklistPendentes(turnoId).catch(() => [])).filter((t) => t.fase === 'fecho');
+  const pendF = (await checklistPendentes(turnoId, true).catch(() => [])).filter((t) => t.fase === 'fecho');
   if (pendF.length) {
     turnoMsgErr(`📋 Conclui o checklist de FECHO antes de fechar o registo dos deixados — falta${pendF.length === 1 ? '' : 'm'} ${pendF.length} tarefa${pendF.length === 1 ? '' : 's'}.`, true);
     await abrirChecklistTurno();
@@ -9660,7 +9673,7 @@ async function reabrirDeixados(turnoId) {
 
 async function fecharEncontrados(turnoId) {
   // PORTÃO: o registo inicial só fecha com o checklist de ABERTURA feito.
-  const pendA = (await checklistPendentes(turnoId).catch(() => [])).filter((t) => t.fase === 'abertura');
+  const pendA = (await checklistPendentes(turnoId, true).catch(() => [])).filter((t) => t.fase === 'abertura');
   if (pendA.length) {
     turnoMsgErr(`📋 Conclui o checklist de ABERTURA antes de fechar o registo inicial — falta${pendA.length === 1 ? '' : 'm'} ${pendA.length} tarefa${pendA.length === 1 ? '' : 's'}.`, true);
     await abrirChecklistTurno();
@@ -9896,10 +9909,16 @@ async function tpaFotoOnFile(inp) {
 }
 
 // ── CHECKLIST DO TURNO (tarefas de abertura e fecho) ──────────────────
-/** Config das tarefas (por empresa), em cache na sessão. */
-async function obterChecklistCfg() {
-  if (S.checklistCfg) return S.checklistCfg;
-  const cfg = await api('GET', '/config/checklist-turno').catch(() => null);
+/** Config das tarefas (por empresa), em cache na sessão. Com fresco=true
+ *  vai buscar DIRECTO ao servidor (URL única fura o cache do SW) — para
+ *  as validações não passarem com uma lista de tarefas desactualizada. */
+async function obterChecklistCfg(fresco) {
+  if (!fresco && S.checklistCfg) return S.checklistCfg;
+  let cfg = null;
+  if (fresco && navigator.onLine !== false) {
+    cfg = await api('GET', `/config/checklist-turno?fresco=${Date.now()}`).catch(() => null);
+  }
+  if (!cfg) cfg = await api('GET', '/config/checklist-turno').catch(() => null);
   S.checklistCfg = cfg && typeof cfg === 'object'
     ? { abertura: cfg.abertura || [], fecho: cfg.fecho || [] }
     : { abertura: [], fecho: [] };
@@ -9908,8 +9927,11 @@ async function obterChecklistCfg() {
 
 /** Estado das marcações do turno actual (com as marcações offline em fila). */
 function checklistEstadoLocal(tid) {
-  const base = (S.turnoData && S.turnoData.checklist && typeof S.turnoData.checklist === 'object')
-    ? JSON.parse(JSON.stringify(S.turnoData.checklist)) : {};
+  let baseRaw = S.turnoData && S.turnoData.checklist;
+  // Formato antigo: estado gravado como texto JSON — desembrulha.
+  if (typeof baseRaw === 'string') { try { baseRaw = JSON.parse(baseRaw); } catch (_) { baseRaw = null; } }
+  const base = (baseRaw && typeof baseRaw === 'object')
+    ? JSON.parse(JSON.stringify(baseRaw)) : {};
   try {
     escritasOfflineLer().forEach((it) => {
       if (String(it.tid) !== String(tid)) return;
@@ -9924,9 +9946,10 @@ function checklistEstadoLocal(tid) {
   return base;
 }
 
-/** Tarefas ainda por fazer (ambas as fases). */
-async function checklistPendentes(tid) {
-  const cfg = await obterChecklistCfg();
+/** Tarefas ainda por fazer (ambas as fases). fresco=true → config do
+ *  servidor (usado nos portões de fecho, onde validar com cache é perigoso). */
+async function checklistPendentes(tid, fresco) {
+  const cfg = await obterChecklistCfg(fresco);
   const estado = checklistEstadoLocal(tid);
   const pend = [];
   for (const fase of ['abertura', 'fecho']) {
@@ -10078,7 +10101,7 @@ async function fecharTurno(ev, id) {
   }
   // CHECKLIST: nenhum turno fecha com tarefas por fazer (o servidor
   // valida também). Abre logo o painel para concluir.
-  const pendChk = await checklistPendentes(id).catch(() => []);
+  const pendChk = await checklistPendentes(id, true).catch(() => []);
   if (pendChk.length) {
     turnoMsgErr(`📋 Checklist do turno incompleto — falta${pendChk.length === 1 ? '' : 'm'} ${pendChk.length} tarefa${pendChk.length === 1 ? '' : 's'}. Conclui todas antes de fechar.`, true);
     await abrirChecklistTurno();

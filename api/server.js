@@ -1058,6 +1058,9 @@ async function limparAuditoriaAntiga() {
     // offline — 14 dias de retenção chegam e sobram.
     const r2 = await query(`DELETE FROM ops_idempotencia WHERE criado_em < NOW() - INTERVAL '14 days'`).catch(() => ({ rowCount: 0 }));
     if (r2.rowCount) console.log(`[idempotencia] limpeza diária: ${r2.rowCount} registos removidos`);
+    // Diário de sincronizações: retenção de 1 mês.
+    const r3 = await query(`DELETE FROM monitor_sync_log WHERE criado_em < NOW() - INTERVAL '30 days'`).catch(() => ({ rowCount: 0 }));
+    if (r3.rowCount) console.log(`[sync-log] limpeza diária: ${r3.rowCount} registos com mais de 30 dias removidos`);
   } catch (_) { /* melhor esforço — tenta de novo no dia seguinte */ }
 }
 
@@ -1070,7 +1073,7 @@ app.use(function auditMiddleware(req, res, next) {
   // RUÍDO de alta frequência fora da auditoria (98% do tamanho da tabela):
   // auto-guardar da folha de stock (um PUT por célula tocada), sonda de
   // internet (10 s) e heartbeat do monitoramento (60 s).
-  if (p === '/api/ping' || p === '/api/monitor/heartbeat') return next();
+  if (p === '/api/ping' || p === '/api/monitor/heartbeat' || p === '/api/monitor/sync-log') return next();
   if (m === 'PUT' && /^\/api\/turnos\/[^/]+\/stock$/.test(p)) return next();
   res.on('finish', () => {
     /** await assíncrono — não bloqueamos a resposta. */
@@ -8497,6 +8500,85 @@ app.get('/api/monitor', auth, requireRole('admin'), async (req, res) => {
     const r = await queryEmpresa(
       `${sel} WHERE u.empresa_id = $1 ORDER BY u.nome, m.visto_em DESC NULLS LAST`, [empresaDe(req)],
       `${sel} ORDER BY u.nome, m.visto_em DESC NULLS LAST`, []
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── DIÁRIO DE SINCRONIZAÇÕES (por aparelho) ──────────────────
+// Cada tentativa de sincronização da fila offline fica registada:
+// quanto demorou o pedido, quanto tempo o registo esperou na fila,
+// se entrou/foi rejeitado e porquê. Retenção: 30 dias (limpeza diária).
+let monitorSyncLogReady = false;
+async function ensureMonitorSyncLog() {
+  if (monitorSyncLogReady) return;
+  await query(`CREATE TABLE IF NOT EXISTS monitor_sync_log (
+    id SERIAL PRIMARY KEY,
+    empresa_id INTEGER,
+    loja_id INTEGER,
+    utilizador_id UUID,
+    utilizador_nome TEXT NOT NULL DEFAULT '',
+    dispositivo_id TEXT NOT NULL,
+    descricao TEXT NOT NULL DEFAULT '',
+    caminho TEXT NOT NULL DEFAULT '',
+    resultado TEXT NOT NULL DEFAULT 'ok',
+    motivo TEXT NOT NULL DEFAULT '',
+    duracao_ms INTEGER NOT NULL DEFAULT 0,
+    espera_ms BIGINT NOT NULL DEFAULT 0,
+    tentativa_em TIMESTAMPTZ,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`).catch(() => {});
+  await query(`CREATE INDEX IF NOT EXISTS idx_sync_log_criado ON monitor_sync_log (criado_em)`).catch(() => {});
+  await query(`CREATE INDEX IF NOT EXISTS idx_sync_log_disp ON monitor_sync_log (dispositivo_id, criado_em DESC)`).catch(() => {});
+  monitorSyncLogReady = true;
+}
+
+const SYNC_LOG_RESULTADOS = ['ok', 'rejeitado', 'transitorio', 'sem-rede'];
+/** Recebe um LOTE de tentativas do aparelho (o diário vive no cliente e
+ *  sobe quando há rede). Sem auditoria — é telemetria de alta frequência. */
+app.post('/api/monitor/sync-log', auth, async (req, res) => {
+  try {
+    await ensureMonitorSyncLog();
+    const disp = String((req.body && req.body.dispositivo_id) || '').slice(0, 64);
+    const itens = Array.isArray(req.body && req.body.itens) ? req.body.itens.slice(0, 100) : [];
+    if (!disp || !itens.length) return res.json({ ok: true, gravados: 0 });
+    let n = 0;
+    for (const it of itens) {
+      if (!it || typeof it !== 'object') continue;
+      const tRaw = it.tentativa_em ? new Date(it.tentativa_em) : null;
+      await query(
+        `INSERT INTO monitor_sync_log
+           (empresa_id, loja_id, utilizador_id, utilizador_nome, dispositivo_id, descricao, caminho, resultado, motivo, duracao_ms, espera_ms, tentativa_em)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          empresaDe(req), lojaDe(req), req.user.id, req.user.nome || '',
+          disp,
+          String(it.descricao || '').slice(0, 160),
+          String(it.caminho || '').slice(0, 160),
+          SYNC_LOG_RESULTADOS.includes(it.resultado) ? it.resultado : 'ok',
+          String(it.motivo || '').slice(0, 300),
+          Math.min(600000, Math.max(0, parseInt(it.duracao_ms, 10) || 0)),
+          Math.max(0, parseInt(it.espera_ms, 10) || 0),
+          tRaw && !isNaN(tRaw.getTime()) ? tRaw.toISOString() : null
+        ]
+      );
+      n++;
+    }
+    res.json({ ok: true, gravados: n });
+  } catch (_) { res.json({ ok: false }); }
+});
+
+/** Consulta do diário (admin): tudo da empresa ou só de um aparelho. */
+app.get('/api/monitor/sync-log', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureMonitorSyncLog();
+    const disp = String(req.query.dispositivo || '').slice(0, 64);
+    const filtroDisp = disp ? ` AND dispositivo_id=$2` : '';
+    const r = await queryEmpresa(
+      `SELECT * FROM monitor_sync_log WHERE empresa_id=$1${filtroDisp} ORDER BY criado_em DESC LIMIT 300`,
+      disp ? [empresaDe(req), disp] : [empresaDe(req)],
+      `SELECT * FROM monitor_sync_log WHERE TRUE${disp ? ' AND dispositivo_id=$1' : ''} ORDER BY criado_em DESC LIMIT 300`,
+      disp ? [disp] : []
     );
     res.json(r.rows);
   } catch (e) { res.status(500).json({ erro: e.message }); }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-03-checklist-fiavel">
+<html lang="pt" data-stockos-ui="2026-08-03-diario-sync">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5727,8 +5727,11 @@ async function sincronizarPedidosOffline() {
         const i = f.findIndex((x) => x.ref === item.ref && x.criado_em === item.criado_em);
         if (i >= 0) { f.splice(i, 1); pedidosOfflineGravar(f); }
       };
+      const itemLog = { desc: `Pedido ao balcão (${item.ref})`, path: `/turnos/${item.tid}/pedidos`, method: 'POST', criado_em: item.criado_em };
+      const t0 = Date.now();
       try {
         const resp = await apiPedidoComTimeout(item.tid, item.payload, 20000);
+        registarSyncLog(itemLog, 'ok', '', Date.now() - t0);
         // Memória de recém-sincronizado: o cache do GET /pedidos ainda não
         // tem este pedido — guarda a forma local (com o id oficial) para a
         // lista não «perder» o pedido no redesenho a seguir ao sync.
@@ -5747,8 +5750,12 @@ async function sincronizarPedidosOffline() {
         remover();
         agendarRefrescoPosSync();
       } catch (e) {
-        if (ehErroDeRede(e)) break; // ainda offline — tenta mais tarde
+        if (ehErroDeRede(e)) {
+          registarSyncLog(itemLog, 'sem-rede', String(e && e.message || 'sem rede'), Date.now() - t0);
+          break; // ainda offline — tenta mais tarde
+        }
         // Erro de validação (ex.: turno fechado): não vale a pena repetir.
+        registarSyncLog(itemLog, 'rejeitado', String(e && e.message || ''), Date.now() - t0);
         remover();
         alert(`⚠ Um pedido offline (${item.ref}, de ${item.quando || '—'}) foi REJEITADO ao sincronizar: ${e.message}\n\nConfere na lista de pedidos do turno.`);
       }
@@ -5898,6 +5905,58 @@ async function enviarHeartbeat(ehLogin) {
 }
 setInterval(() => { enviarHeartbeat().catch(() => {}); }, 60000);
 setTimeout(() => { enviarHeartbeat().catch(() => {}); }, 3000);
+
+// ── DIÁRIO DE SINCRONIZAÇÕES ─ Cada tentativa da fila fica registada
+// neste aparelho (quanto demorou o pedido, quanto esperou na fila, se
+// entrou ou porque foi rejeitada/adiada) e sobe ao servidor em lote —
+// a página Monitoramento mostra por aparelho. Retenção no servidor: 30 dias.
+const SYNC_LOG_KEY = 'stockos.syncLog';
+function syncLogLer() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SYNC_LOG_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (_) { return []; }
+}
+function registarSyncLog(item, resultado, motivo, duracaoMs) {
+  try {
+    const fila = syncLogLer();
+    const criado = item && item.criado_em ? new Date(item.criado_em).getTime() : NaN;
+    fila.push({
+      descricao: (item && item.desc) || `${item && item.method} ${item && item.path}`,
+      caminho: String((item && item.path) || '').split('?')[0],
+      resultado,
+      motivo: String(motivo || '').slice(0, 300),
+      duracao_ms: Math.round(duracaoMs || 0),
+      espera_ms: isNaN(criado) ? 0 : Math.max(0, Date.now() - criado),
+      tentativa_em: new Date().toISOString()
+    });
+    while (fila.length > 200) fila.shift(); // tecto local
+    localStorage.setItem(SYNC_LOG_KEY, JSON.stringify(fila));
+  } catch (_) {}
+  enviarSyncLog().catch(() => {});
+}
+let __syncLogEnvio = false;
+async function enviarSyncLog() {
+  if (__syncLogEnvio || !S.token || navigator.onLine === false) return;
+  const itens = syncLogLer();
+  if (!itens.length) return;
+  __syncLogEnvio = true;
+  try {
+    const lote = itens.slice(0, 100);
+    const r = await fetch(API + '/monitor/sync-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${S.token}` },
+      body: JSON.stringify({ dispositivo_id: dispositivoId(), itens: lote })
+    });
+    if (r.ok) {
+      // Só sai do aparelho o que o servidor confirmou.
+      const resto = syncLogLer().slice(lote.length);
+      localStorage.setItem(SYNC_LOG_KEY, JSON.stringify(resto));
+    }
+  } catch (_) { /* sem rede — o diário fica e sobe depois */ }
+  finally { __syncLogEnvio = false; }
+}
+setInterval(() => { enviarSyncLog().catch(() => {}); }, 60000);
 
 /** Faixa de estado PERMANENTE no topo, em todas as páginas:
  *  🔴 sem internet (+ nº de registos guardados neste aparelho)
@@ -6499,9 +6558,11 @@ async function sincronizarEscritasOffline() {
       const removeDaFila = () => {
         escritasOfflineGravar(escritasOfflineLer().filter((x) => x.ref !== item.ref));
       };
+      const t0 = Date.now();
       try {
         if (item.tipo === 'abrir') {
           const turno = await apiEscritaComTimeout(item, 25000);
+          registarSyncLog(item, 'ok', '', Date.now() - t0);
           removeDaFila();
           if (turno && turno.id != null && item.localId) {
             const viaLocal = String(S.turnoId) === String(item.localId) || S.page === 'dia';
@@ -6521,23 +6582,29 @@ async function sincronizarEscritasOffline() {
           if (pedidosOfflineLer().some((x) => String(x.tid) === String(item.tid))) { idx++; continue; }
         }
         await apiEscritaComTimeout(item, 25000);
+        registarSyncLog(item, 'ok', '', Date.now() - t0);
         removeDaFila();
         window.__escritaLocalTs = Date.now();
         agendarRefrescoPosSync();
       } catch (e) {
-        if (ehErroDeRede(e)) break; // sem rede — tenta mais tarde
+        if (ehErroDeRede(e)) {
+          registarSyncLog(item, 'sem-rede', String(e && e.message || 'sem rede'), Date.now() - t0);
+          break; // sem rede — tenta mais tarde
+        }
         // Erros TRANSITÓRIOS que não são culpa do registo: schema da BD
         // atrasado (falta correr o «Reparar schema») ou o SERVIDOR sem
         // conseguir falar com a BD (DNS/ligação). Fica na fila e tenta
         // mais tarde, em vez de ser rejeitado e perdido.
         const msgErr = String(e && e.message || '');
         if (/does not exist|não existe|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|connect timeout|EMAXCONNSESSION|max clients|permission denied/i.test(msgErr)) {
+          registarSyncLog(item, 'transitorio', msgErr, Date.now() - t0);
           if (!window.__avisoSyncTransitorio) {
             window.__avisoSyncTransitorio = true;
             alert(`⚠ O servidor não conseguiu processar «${item.desc}» (${msgErr}).\n\nO registo FICA GUARDADO na fila e volta a sincronizar sozinho.`);
           }
           break; // pára a ronda; a próxima sincronização volta a tentar
         }
+        registarSyncLog(item, 'rejeitado', msgErr, Date.now() - t0);
         removeDaFila();
         if (item.tipo === 'abrir' && item.localId) limparTurnoLocal(item.localId);
         // Rejeição por checklist: a config em cache estava desactualizada —
@@ -14880,7 +14947,7 @@ async function loadMonitor() {
               : `<span style="color:#cbd5e1">${escapeHtml(d.descricao || 'Aparelho')}</span>`;
             return `<div style="border-top:1px solid #1e293b;padding:7px 0;font-size:12px;display:flex;flex-direction:column;gap:3px">
               <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
-                <span>${online ? '🟢 <strong style="color:#4ade80">online</strong>' : `⚪ <span style="color:#94a3b8">visto ${rel(d.visto_em)}</span>`} · 📱 ${rotulo} <span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 6px;color:#93c5fd;font-family:monospace">#${escapeHtml(String(d.dispositivo_id).replace(/^d-/, '').slice(0, 4).toUpperCase())}</span>${(usosPorAparelho[d.dispositivo_id] && usosPorAparelho[d.dispositivo_id].size > 1) ? ` <span style="background:#3f1d6a;color:#d8b4fe;border-radius:6px;padding:0 6px;font-size:10px">partilhado · ${usosPorAparelho[d.dispositivo_id].size} utilizadores</span>` : ''} <button type="button" title="Dar nome ao aparelho" style="background:none;border:none;cursor:pointer;color:#64748b;padding:0 2px" onclick="runAction(event, () => renomearDispositivo('${escapeHtml(d.dispositivo_id)}'))">✏️</button></span>
+                <span>${online ? '🟢 <strong style="color:#4ade80">online</strong>' : `⚪ <span style="color:#94a3b8">visto ${rel(d.visto_em)}</span>`} · 📱 ${rotulo} <span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 6px;color:#93c5fd;font-family:monospace">#${escapeHtml(String(d.dispositivo_id).replace(/^d-/, '').slice(0, 4).toUpperCase())}</span>${(usosPorAparelho[d.dispositivo_id] && usosPorAparelho[d.dispositivo_id].size > 1) ? ` <span style="background:#3f1d6a;color:#d8b4fe;border-radius:6px;padding:0 6px;font-size:10px">partilhado · ${usosPorAparelho[d.dispositivo_id].size} utilizadores</span>` : ''} <button type="button" title="Dar nome ao aparelho" style="background:none;border:none;cursor:pointer;color:#64748b;padding:0 2px" onclick="runAction(event, () => renomearDispositivo('${escapeHtml(d.dispositivo_id)}'))">✏️</button> <button type="button" title="Diário de sincronizações deste aparelho" style="background:none;border:none;cursor:pointer;color:#64748b;padding:0 2px" onclick="runAction(event, () => abrirSyncLogDispositivo('${escapeHtml(d.dispositivo_id)}'))">⏱</button></span>
                 <span>${pend > 0 ? `<strong style="background:#7f1d1d;color:#fecaca;border-radius:999px;padding:1px 8px">⏳ ${pend} por sincronizar</strong>` : '<span style="color:#4ade80">✓ 0 em fila</span>'}</span>
               </div>
               <div style="color:#64748b">${d.empresa_nome || d.loja_nome ? `🏢 <span style="color:#cbd5e1">${escapeHtml(d.empresa_nome || '—')}</span> · 🏪 <span style="color:#cbd5e1">${escapeHtml(d.loja_nome || '—')}</span> · ` : ''}Última vez logado: <strong style="color:#cbd5e1">${fmtDt(d.visto_em)}</strong> · Última operação: <strong style="color:#cbd5e1">${fmtDt(d.ultima_operacao)}</strong></div>
@@ -14898,6 +14965,71 @@ async function loadMonitor() {
     show('monitor-content', cards || '<div class="card"><p style="color:#94a3b8;margin:0">Ainda ninguém esteve online nesta empresa — as linhas aparecem quando os aparelhos entrarem na app.</p></div>');
   } catch (e) {
     show('monitor-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
+  }
+}
+
+/** Diário de sincronizações de um aparelho: cada tentativa com a
+ *  descrição, tempo de resposta, espera na fila, resultado e motivo.
+ *  Retenção no servidor: 30 dias. */
+async function abrirSyncLogDispositivo(dispId) {
+  document.getElementById('synclog-overlay')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'synclog-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:1450;display:flex;align-items:flex-end;justify-content:center';
+  const codigo = '#' + String(dispId).replace(/^d-/, '').slice(0, 4).toUpperCase();
+  const nome = (window.__monitorNomes || {})[dispId] || '';
+  ov.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:640px;width:100%;max-height:85vh;display:flex;flex-direction:column;padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px))">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 6px">
+        <div style="font-size:15px;font-weight:700;color:#f1f5f9">⏱ Sincronizações — ${escapeHtml(nome || 'aparelho')} <span style="font-family:monospace;color:#93c5fd">${escapeHtml(codigo)}</span></div>
+        <button type="button" aria-label="Fechar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1" onclick="document.getElementById('synclog-overlay')?.remove()">✕</button>
+      </div>
+      <div id="synclog-corpo" style="overflow-y:auto;padding:0 16px 6px;-webkit-overflow-scrolling:touch"><div class="text-center" style="padding:30px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>`;
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+  const corpo = () => document.getElementById('synclog-corpo');
+  try {
+    const linhas = await api('GET', `/monitor/sync-log?dispositivo=${encodeURIComponent(dispId)}`);
+    if (!corpo()) return;
+    const lista = Array.isArray(linhas) ? linhas : [];
+    if (!lista.length) {
+      corpo().innerHTML = '<div style="color:#475569;font-size:13px;padding:14px 0">Ainda sem sincronizações registadas deste aparelho (o diário começou com a versão actual da app). Guardado 30 dias.</div>';
+      return;
+    }
+    // Resumo das últimas 24h: quantas entraram, rejeitadas, tempo médio/máximo.
+    const h24 = lista.filter((x) => Date.now() - new Date(x.criado_em).getTime() < 24 * 3600000);
+    const ok24 = h24.filter((x) => x.resultado === 'ok');
+    const rej24 = h24.filter((x) => x.resultado === 'rejeitado');
+    const durs = ok24.map((x) => parseInt(x.duracao_ms, 10) || 0);
+    const med = durs.length ? Math.round(durs.reduce((s, v) => s + v, 0) / durs.length) : 0;
+    const max = durs.length ? Math.max(...durs) : 0;
+    const ms = (v) => v >= 1000 ? (v / 1000).toFixed(1).replace('.', ',') + 's' : v + 'ms';
+    const corDur = (v) => v < 1500 ? '#4ade80' : v < 5000 ? '#fbbf24' : '#f87171';
+    const rotRes = { ok: ['✓ entrou', '#4ade80'], rejeitado: ['✗ rejeitado', '#f87171'], transitorio: ['↻ adiado (servidor)', '#fbbf24'], 'sem-rede': ['↻ adiado (sem rede)', '#94a3b8'] };
+    const fmtHora = (d) => new Date(d).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const itens = lista.map((x) => {
+      const [rot, cor] = rotRes[x.resultado] || ['—', '#94a3b8'];
+      const dur = parseInt(x.duracao_ms, 10) || 0;
+      const esp = parseInt(x.espera_ms, 10) || 0;
+      return `<div style="border-top:1px solid #1e293b;padding:8px 0;font-size:12.5px">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <span style="color:#e2e8f0;min-width:0">${escapeHtml(x.descricao || x.caminho || '')}</span>
+          <span style="color:${cor};font-weight:600;white-space:nowrap">${rot}</span>
+        </div>
+        <div style="color:#64748b;margin-top:2px">${fmtHora(x.tentativa_em || x.criado_em)} · ${escapeHtml(x.utilizador_nome || '')} · resposta <strong style="color:${corDur(dur)}">${ms(dur)}</strong>${esp > 3000 ? ` · esperou na fila <strong style="color:${corDur(esp)}">${ms(esp)}</strong>` : ''}</div>
+        ${x.motivo ? `<div style="color:#fca5a5;margin-top:2px;white-space:pre-wrap">${escapeHtml(String(x.motivo).slice(0, 200))}</div>` : ''}
+      </div>`;
+    }).join('');
+    corpo().innerHTML = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px;font-size:11.5px">
+        <span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#cbd5e1">Últimas 24h: <strong style="color:#4ade80">${ok24.length} ✓</strong>${rej24.length ? ` · <strong style="color:#f87171">${rej24.length} ✗</strong>` : ''}</span>
+        ${durs.length ? `<span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#cbd5e1">resposta média <strong style="color:${corDur(med)}">${ms(med)}</strong> · máx <strong style="color:${corDur(max)}">${ms(max)}</strong></span>` : ''}
+        <span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#64748b">guardado 30 dias</span>
+      </div>
+      ${itens}`;
+  } catch (e) {
+    if (corpo()) corpo().innerHTML = `<div class="alert alert-error">${escapeHtml(e && e.message || String(e))}</div>`;
   }
 }
 

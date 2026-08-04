@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-04-fila-quota">
+<html lang="pt" data-stockos-ui="2026-08-04-deixados-ordem">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3696,7 +3696,9 @@ async function loadTurno() {
         if (!pid) return '';
         const inputAttr = canEdit ? '' : 'disabled';
         const encInputAttr = canEdit && !encontradosFechados ? '' : 'disabled';
-        const deixInputAttr = canEdit && !deixadosFechados ? '' : 'disabled';
+        // Deixados SÓ depois de o registo inicial fechar: garante a ordem
+        // do turno (encontrados primeiro) e evita trocas de coluna.
+        const deixInputAttr = canEdit && encontradosFechados && !deixadosFechados ? '' : 'disabled';
         const taraKg = parseFloat(s.peso_tara_kg) || 0;
         const metaLinha = taraKg > 0 ? `recipiente ${fmtNum(taraKg)} kg` : '';
         // O registo de barris faz-se pelo botão «🛢️ Troca de barril» nos
@@ -3849,7 +3851,9 @@ async function loadTurno() {
         if (!pid) return '';
         const inputAttr = canEdit ? '' : 'disabled';
         const encInputAttr = canEdit && !encontradosFechados ? '' : 'disabled';
-        const deixInputAttr = canEdit && !deixadosFechados ? '' : 'disabled';
+        // Deixados SÓ depois de o registo inicial fechar: garante a ordem
+        // do turno (encontrados primeiro) e evita trocas de coluna.
+        const deixInputAttr = canEdit && encontradosFechados && !deixadosFechados ? '' : 'disabled';
         const prevCx = s.prev_deixado_caixa;
         const prevCxTxt = prevCx !== null && prevCx !== undefined ? `T. ant.: ${fmtNum(prevCx)}` : '';
         let compCaixaHtml = `<div class="stock-comp-caixa comp-null" id="comp-caixa-${pid}">${prevCxTxt}</div>`;

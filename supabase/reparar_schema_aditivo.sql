@@ -163,3 +163,8 @@ CREATE INDEX IF NOT EXISTS idx_auditoria_criado ON auditoria (criado_em);
 -- servidor salta os DDL dos ensure* no arranque frio (resposta rápida).
 -- Ao acrescentar schema novo: bump AQUI e no server.js (mesmo valor).
 INSERT INTO stockos_meta (k, v) VALUES ('ddl_ok', '2026-08-03-1') ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v;
+-- Únicos que o código usa em ON CONFLICT / valida na aplicação — com
+-- dedup prévio onde pode haver lixo antigo (mantém a linha mais recente).
+DELETE FROM turno_vendas a USING turno_vendas b WHERE a.turno_id=b.turno_id AND a.produto_id=b.produto_id AND a.id<b.id;
+CREATE UNIQUE INDEX IF NOT EXISTS turno_vendas_turno_id_produto_id_key ON turno_vendas (turno_id, produto_id);
+CREATE UNIQUE INDEX IF NOT EXISTS utilizadores_email_key ON utilizadores (email);

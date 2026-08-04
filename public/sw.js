@@ -50,28 +50,37 @@ self.addEventListener('fetch', (e) => {
   }
 
   if (url.pathname.startsWith('/api/')) {
-    // Dados: rede com PRAZO CURTO. Se a rede responde em <800 ms, dados
-    // frescos; se demora (3G, servidor a acordar), o cache serve JÁ e a
-    // rede continua em fundo a actualizar o cache para a próxima vez —
-    // com internet fica tão rápido como offline.
+    // Dados: INSTANTÂNEO SEMPRE (stale-while-revalidate). Com cache, a
+    // resposta sai JÁ do aparelho — online e offline ficam iguais. A rede
+    // corre em fundo; se os dados mudaram, o cache é actualizado e a app
+    // é avisada (postMessage) para se refrescar.
     e.respondWith((async () => {
+      const cached = await caches.match(req);
+      // Cópia feita JÁ: o `cached` é entregue à página e um Response só se
+      // lê uma vez — a comparação em fundo usa esta cópia independente.
+      const cachedCopia = cached ? cached.clone() : null;
       const network = fetch(req)
-        .then((resp) => {
+        .then(async (resp) => {
           if (resp && resp.ok) {
-            const clone = resp.clone();
-            caches.open(CACHE).then((c) => c.put(req, clone)).catch(() => {});
+            try {
+              const novoTxt = await resp.clone().text();
+              const antigoTxt = cachedCopia ? await cachedCopia.text() : null;
+              const c = await caches.open(CACHE);
+              await c.put(req, new Response(novoTxt, {
+                status: 200,
+                headers: { 'Content-Type': resp.headers.get('Content-Type') || 'application/json' }
+              }));
+              if (cached && antigoTxt !== novoTxt) {
+                const clientes = await self.clients.matchAll();
+                clientes.forEach((cl) => cl.postMessage({ tipo: 'dados-frescos', url: url.pathname + url.search }));
+              }
+            } catch (_) {}
           }
           return resp;
         })
         .catch(() => null);
       e.waitUntil(network); // a actualização em fundo completa mesmo após responder
-      const cached = await caches.match(req);
-      if (cached) {
-        const timer = new Promise((res) => setTimeout(() => res('timeout'), 800));
-        const winner = await Promise.race([network, timer]);
-        if (winner && winner !== 'timeout') return winner;
-        return cached;
-      }
+      if (cached) return cached;
       // Sem cache exacto: espera pela rede; falhando, fallback progressivo —
       // sem «empresa=» (admin que usou o selector não perde o cache da
       // própria) → sem «loja=» (cache pré-multi-loja, só loja 1).
@@ -98,19 +107,34 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // App shell/estáticos: cache primeiro, actualiza em fundo.
-  e.respondWith(
-    caches.match(req).then((hit) => {
-      const fresh = fetch(req)
-        .then((resp) => {
-          if (resp && resp.ok) {
-            const clone = resp.clone();
-            caches.open(CACHE).then((c) => c.put(req, clone)).catch(() => {});
-          }
-          return resp;
-        })
-        .catch(() => hit);
-      return hit || fresh;
-    })
-  );
+  // App shell/estáticos: cache primeiro, actualiza em fundo. Quando a
+  // versão nova do shell chega (marcador data-stockos-ui diferente),
+  // avisa a app para mostrar «Nova versão — toca para actualizar».
+  e.respondWith((async () => {
+    const hit = await caches.match(req);
+    const hitCopia = hit ? hit.clone() : null;
+    const ehShell = url.pathname === '/' || url.pathname === '/index.html';
+    const fresh = fetch(req)
+      .then(async (resp) => {
+        if (resp && resp.ok) {
+          try {
+            const c = await caches.open(CACHE);
+            await c.put(req, resp.clone());
+            if (hitCopia && ehShell) {
+              const marca = (s) => (String(s).match(/data-stockos-ui="([^"]*)"/) || [])[1] || '';
+              const nova = marca(await resp.clone().text());
+              const antiga = marca(await hitCopia.text());
+              if (nova && antiga && nova !== antiga) {
+                const clientes = await self.clients.matchAll();
+                clientes.forEach((cl) => cl.postMessage({ tipo: 'nova-versao', versao: nova }));
+              }
+            }
+          } catch (_) {}
+        }
+        return resp;
+      })
+      .catch(() => hit);
+    e.waitUntil(fresh.then(() => {}, () => {}));
+    return hit || fresh;
+  })());
 });

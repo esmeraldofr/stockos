@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-07-29-historico-hora">
+<html lang="pt" data-stockos-ui="2026-08-04-fila-quota">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -131,14 +131,14 @@ button.is-action-busy{cursor:wait!important}
 
 /* Tabela de stock */
 .table-wrap{overflow-x:auto;overflow-y:auto;max-height:calc(100vh - 180px);-webkit-overflow-scrolling:touch}
-table{width:100%;border-collapse:collapse;font-size:13px;min-width:580px}
+table{width:100%;border-collapse:collapse;font-size:13px}
 th{background:#0f172a;color:#64748b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;text-align:left;position:sticky;top:0}
 th:first-child{left:0;z-index:2}
 td{padding:6px 10px;border-bottom:1px solid #1e293b}
 tr:hover td{background:#1e293b}
-.td-name{position:sticky;left:0;background:#0f172a;z-index:1;vertical-align:middle;padding-top:8px;padding-bottom:8px}
-.td-name .stock-prod-nome{font-weight:500;line-height:1.25;white-space:nowrap;color:#f1f5f9}
-.td-name .stock-prod-meta{font-size:11px;color:#64748b;font-weight:400;line-height:1.2;margin-top:3px;white-space:nowrap}
+.td-name{position:sticky;left:0;background:#0f172a;z-index:1;vertical-align:middle;padding-top:8px;padding-bottom:8px;max-width:min(15vw,180px);min-width:48px}
+.td-name .stock-prod-nome{font-weight:500;line-height:1.25;white-space:normal;word-break:break-word;overflow-wrap:anywhere;color:#f1f5f9}
+.td-name .stock-prod-meta{font-size:11px;color:#64748b;font-weight:400;line-height:1.2;margin-top:3px;white-space:normal;overflow-wrap:anywhere}
 tr:hover .td-name{background:#1e293b}
 tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 #tab-stock tbody tr.stock-row--active td{background:rgba(59,130,246,.1)}
@@ -870,7 +870,7 @@ async function refrescarLojas() {
 /** localStorage: sobrevive a F5 e nova aba no mesmo domínio (sessionStorage falhava em alguns browsers / modos). */
 const UI_STATE_KEYS = { page: 'stockos_page', date: 'stockos_date', turnoId: 'stockos_turnoId', calYM: 'stockos_calYM', turnoTab: 'stockos_turnoTab' };
 const ALLOWED_TURNO_TABS = ['stock', 'caixas', 'vendas', 'pedidos', 'registos', 'escala'];
-const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria', 'configuracoes', 'empresas'];
+const ALLOWED_PAGES = ['dia', 'calendario', 'depositos', 'turno', 'historico', 'irregularidades', 'assiduidade', 'armazem', 'produtos', 'fornecedores', 'escala', 'admin', 'auditoria', 'configuracoes', 'empresas', 'monitor', 'avisos', 'checklist'];
 
 function _storageGet(key) {
   try {
@@ -1056,6 +1056,12 @@ async function api(method, path, body) {
   };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(API + path, opts);
+  // Auto-diagnóstico: quanto tempo foi DENTRO do servidor e se a
+  // instância acabou de arrancar — o diário de sincronizações usa isto.
+  try {
+    const sm = parseInt(r.headers.get('X-Srv-Ms'), 10);
+    if (Number.isFinite(sm)) window.__srvInfoUltimo = { ms: sm, boot: parseInt(r.headers.get('X-Srv-Boot-S'), 10), t: Date.now() };
+  } catch (_) {}
   let data = {};
   try {
     data = await r.json();
@@ -1515,6 +1521,15 @@ async function draw() {
       case 'produtos': await drawProdutos(); break;
       case 'escala':   await drawEscala(); break;
       case 'admin':    await drawAdmin(); break;
+      case 'avisos':   await drawAvisos(); break;
+      case 'checklist':
+        if (!['admin', 'gestor'].includes(S.user?.role)) { await navigate('dia'); break; }
+        await drawChecklistPage();
+        break;
+      case 'monitor':
+        if (S.user?.role !== 'admin') { await navigate('dia'); break; }
+        await drawMonitor();
+        break;
       case 'configuracoes':
         if (S.user?.role !== 'admin') { await navigate('dia'); return; }
         await drawConfiguracoes();
@@ -1596,6 +1611,7 @@ async function doLogin() {
       err('login-msg', sanitizeLoginErr(e && e.message != null ? e.message : String(e)))
     );
     refreshFaltasBadge();
+    enviarHeartbeat(true).catch(() => {});
   } catch (e) { err('login-msg', sanitizeLoginErr(e && e.message != null ? e.message : String(e))); }
 }
 
@@ -1624,6 +1640,8 @@ function menuEntries() {
     { page: 'calendario', label: 'Calendário',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/><line x1="8" y1="18" x2="8" y2="18.01"/><line x1="12" y1="18" x2="12" y2="18.01"/><line x1="16" y1="18" x2="16" y2="18.01"/></svg>' }
   ];
+  entries.push({ page: 'avisos', label: 'Avisos',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l18-7-4 16-6.5-4.5L3 11z"/><path d="M10.5 15.5L9 21l3-3.5"/></svg>' });
   if (showDepositos) entries.push({ page: 'depositos', label: 'Banco',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h3l2-7h8l2 7h3"/><path d="M5 10v10a2 2 0 002 2h10a2 2 0 002-2V10"/><rect x="9" y="14" width="6" height="4" rx="1"/></svg>' });
   if (showHistorico) {
@@ -1645,6 +1663,8 @@ function menuEntries() {
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>' });
   }
   if (isAdmin) {
+    entries.push({ page: 'monitor', label: 'Monitoramento',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/><polyline points="6 12 9 9 13 13 18 8"/></svg>' });
     entries.push({ page: 'empresas', label: 'Empresas',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 9h1"/><path d="M14 9h1"/><path d="M9 13h1"/><path d="M14 13h1"/><path d="M10 21v-4h4v4"/></svg>' });
   }
@@ -1659,6 +1679,8 @@ function menuEntries() {
     entries.push({ page: 'armazem', label: 'Armazém',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>' });
   }
+  if (showEscala) entries.push({ page: 'checklist', label: 'Checklist',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M21 12v6a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2h11"/><path d="M3 12h4"/></svg>' });
   if (showEscala) entries.push({ page: 'escala', label: 'Escala',
       svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="18"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="16" y1="14" x2="16" y2="18"/></svg>' });
   if (isAdmin) entries.push({ page: 'admin', label: 'Admin',
@@ -2224,14 +2246,9 @@ function renderDiaCards(turnos, provisorio, diaSemCache) {
     const cards = ['manha','tarde','noite'].map(nome => {
       const t = turnoMap[nome];
       if (!t) {
-        if ((S.turnosBloqueados || []).includes(nome)) {
-          return `
-          <div class="turno-card turno-card--locked">
-            <div class="turno-card-nome">${turnoLabel(nome)}</div>
-            <div class="badge badge-grey" style="margin-bottom:8px">⛔ Bloqueado</div>
-            <div style="font-size:11px;color:#94a3b8;line-height:1.35">Abertura de novos turnos desactivada pelo administrador (Configurações).</div>
-          </div>`;
-        }
+        // Turno bloqueado que nunca chegou a abrir: não há nada para ver
+        // nem para fazer — não ocupa espaço na página.
+        if ((S.turnosBloqueados || []).includes(nome)) return '';
         const pr = podeAbrirTurnoAgora(S.date, nome);
         if (!pr.ok) {
           return `
@@ -2253,8 +2270,10 @@ function renderDiaCards(turnos, provisorio, diaSemCache) {
             </div>
           </div>`;
       }
-      const totalVendas = t.total_vendas || 0;
       const totalCaixa  = t.caixa?.total_final || 0;
+      const totalGerado = t.caixa?.total_gerado;
+      const entradasKz  = parseFloat(t.caixa?.entradas_total) || 0;
+      const saidaKz     = parseFloat(t.caixa?.saida) || 0;
       const cls = t.estado === 'aberto' ? 'aberto' : 'fechado';
       const antecipado = t.estado === 'aberto' && turnoAbertoAntesDoHorarioOficial(S.date, nome);
       const startM = TURNO_INICIO_MINUTES[nome];
@@ -2271,10 +2290,19 @@ function renderDiaCards(turnos, provisorio, diaSemCache) {
         <div class="turno-card ${cls}${antecipado ? ' turno-card--antecipado' : ''}" onclick="runAction(event, () => navigate('turno',{turnoId:'${t.id}'}))">
           <div class="turno-card-nome">${turnoLabel(nome)}</div>
           <div class="turno-card-status">${badge}</div>
-          <div class="turno-card-value">${fmt(totalCaixa)}</div>
-          <div class="turno-card-label">Total Caixa</div>
-          <div style="font-size:12px;color:#64748b;margin-top:4px">Vendas: ${fmt(totalVendas)}</div>
-          <div style="font-size:12px;color:#94a3b8;margin-top:2px">Produtos vendidos: <strong style="color:#4ade80">${fmt(t.pedidos_total_kz || 0)}</strong></div>
+          <div style="display:flex;gap:14px;align-items:center;margin-top:2px">
+            <div style="flex:1;min-width:0">
+              <div class="turno-card-value" style="margin:0">${fmt(totalCaixa)}</div>
+              <div class="turno-card-label" style="margin:0">Caixa</div>
+            </div>
+            <div style="flex:1.15;display:flex;flex-direction:column;gap:2px;font-size:12px">
+              <div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#64748b">Pedidos</span><strong style="color:#e2e8f0">${fmt(t.pedidos_total_kz || 0)}</strong></div>
+              <div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#64748b">Vendidos</span><strong style="color:#e2e8f0">${fmt(t.total_vendas || 0)}</strong></div>
+              <div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#64748b">Fecho</span><strong style="color:#e2e8f0">${totalGerado == null ? '—' : fmt(totalGerado)}</strong></div>
+              <div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#64748b">Entradas</span><strong style="color:#4ade80">+ ${fmt(entradasKz)}</strong></div>
+              <div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#64748b">Saídas</span><strong style="color:#f87171">− ${fmt(saidaKz)}</strong></div>
+            </div>
+          </div>
           ${avisoAnt}
         </div>`;
     }).join('');
@@ -2289,9 +2317,156 @@ function renderDiaCards(turnos, provisorio, diaSemCache) {
 
     show('dia-content', `
       ${avisoOffline}
+      <div id="dia-avisos-slot"></div>
       <div class="turno-cards">${cards}</div>
       ${pendentesLoading}
     `);
+    carregarAvisosDia().catch(() => {});
+}
+
+/** Quadro «📢 Avisos» no Dia: orientações publicadas por admin/gestor,
+ *  visíveis a todos os turnos e utilizadores da empresa/loja. */
+async function carregarAvisosDia() {
+  const slot = document.getElementById('dia-avisos-slot');
+  if (!slot) return;
+  try {
+    const avisos = await api('GET', '/avisos').catch(() => []);
+    const podeGerir = ['admin', 'gestor'].includes(S.user?.role);
+    const btn = `<div style="display:flex;gap:6px">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => navigate('avisos'))">Ver todos</button>
+      ${podeGerir ? `<button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, novoAviso)">+ Novo aviso</button>` : ''}
+    </div>`;
+    // Só o texto do aviso — os detalhes (autor, datas, validade) ficam na
+    // página «Avisos». Linhas sem texto (cache antigo com outra forma)
+    // ficam de fora — nunca mostrar «undefined».
+    const linhas = (Array.isArray(avisos) ? avisos : []).filter((a) => a && typeof a.texto === 'string' && a.texto).slice(0, 10).map((a) => `
+      <div style="border-top:1px solid #1e293b;padding:8px 0;display:flex;gap:8px;align-items:flex-start">
+        <span style="flex-shrink:0">📌</span>
+        <div style="flex:1;min-width:0;color:#e2e8f0;font-size:13px;line-height:1.45;white-space:pre-wrap">${escapeHtml(a.texto)}</div>
+        ${podeGerir ? `<button type="button" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:14px;padding:0 2px" title="Remover aviso" onclick="runAction(event, () => removerAviso(${parseInt(a.id, 10) || 0}))">✕</button>` : ''}
+      </div>`).join('');
+    slot.innerHTML = `<div class="card" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div class="card-title" style="margin:0">📢 Avisos</div>${btn}
+      </div>
+      ${linhas || `<div style="color:#475569;font-size:12px;padding:6px 0">${podeGerir ? 'Sem avisos activos. Publica orientações aqui — todos os turnos as vêem ao abrir o Dia.' : 'Sem avisos activos. Consulta os anteriores em «Ver todos».'}</div>`}
+    </div>`;
+  } catch (_) {}
+}
+
+/** Avisos ACTIVOS sempre visíveis no topo da página do turno. */
+async function carregarAvisosTurno() {
+  const cont = document.getElementById('turno-avisos');
+  if (!cont) return;
+  try {
+    const resposta = await api('GET', '/avisos').catch(() => []);
+    // Linhas sem texto (cache antigo com outra forma) ficam de fora.
+    const avisos = (Array.isArray(resposta) ? resposta : []).filter((a) => a && typeof a.texto === 'string' && a.texto);
+    if (!avisos.length) { cont.innerHTML = ''; return; }
+    const linhas = avisos.map((a) => `<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0">
+        <span style="flex-shrink:0">📌</span>
+        <span style="font-size:12.5px;line-height:1.45;color:#e2e8f0;white-space:pre-wrap;min-width:0">${escapeHtml(a.texto)}</span>
+      </div>`).join('');
+    cont.innerHTML = `
+      <div style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid #1d4ed8;background:rgba(29,78,216,0.12)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:2px">
+          <span style="font-size:12px;font-weight:700;color:#93c5fd">📢 AVISOS EM VIGOR</span>
+          <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px" onclick="runAction(event, () => navigate('avisos'))">Ver todos</button>
+        </div>
+        ${linhas}
+      </div>`;
+  } catch (_) {}
+}
+
+/** Página AVISOS: activos em destaque + histórico completo (expirados;
+ *  removidos só para admin/gestor). Gestão no topo para quem pode. */
+async function drawAvisos() {
+  const podeGerir = ['admin', 'gestor'].includes(S.user?.role);
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">📢 Avisos</div></div>
+      ${podeGerir ? `<button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, novoAviso)">+ Novo aviso</button>` : ''}
+    </div>
+    <div id="content">
+      <p style="font-size:12px;color:#64748b;margin:0 0 12px;line-height:1.45">Orientações para todos os turnos. Cada aviso fica <strong style="color:#94a3b8">sempre visível</strong> durante o prazo definido e depois passa para o histórico.</p>
+      <div id="avisos-page-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadAvisosPagina();
+}
+
+async function loadAvisosPagina() {
+  const cont = document.getElementById('avisos-page-content');
+  if (!cont) return;
+  try {
+    const resposta = await api('GET', '/avisos?todos=1').catch(() => []);
+    const avisos = (Array.isArray(resposta) ? resposta : []).filter((a) => a && typeof a.texto === 'string' && a.texto);
+    const agora = Date.now();
+    const podeGerir = ['admin', 'gestor'].includes(S.user?.role);
+    const ehActivo = (a) => a.ativo !== false && (!a.valido_ate || new Date(a.valido_ate).getTime() > agora);
+    const activos = avisos.filter(ehActivo);
+    const historicos = avisos.filter((a) => !ehActivo(a));
+    const linha = (a, comEstado) => {
+      const novo = !comEstado && a.criado_em && (agora - new Date(a.criado_em).getTime()) < 24 * 3600000;
+      const estado = a.ativo === false
+        ? '<span style="background:#7f1d1d;color:#fecaca;border-radius:6px;padding:0 6px;font-size:10px">removido</span>'
+        : (a.valido_ate && new Date(a.valido_ate).getTime() <= agora
+          ? '<span style="background:#374151;color:#d1d5db;border-radius:6px;padding:0 6px;font-size:10px">expirado</span>' : '');
+      return `
+      <div style="border-top:1px solid #1e293b;padding:10px 0;display:flex;gap:8px;align-items:flex-start">
+        <div style="flex:1;min-width:0">
+          <div style="color:${comEstado ? '#94a3b8' : '#e2e8f0'};font-size:13px;line-height:1.45;white-space:pre-wrap">${novo ? '<span style="background:#1d4ed8;color:#fff;border-radius:6px;padding:0 6px;font-size:10px;font-weight:700;margin-right:6px;vertical-align:2px">NOVO</span>' : ''}${escapeHtml(a.texto)}</div>
+          <div style="color:#64748b;font-size:11px;margin-top:3px">${escapeHtml(a.criado_por || '')} · ${new Date(a.criado_em).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}${a.valido_ate ? ` · ${comEstado ? 'era válido' : 'visível'} até ${new Date(a.valido_ate).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })}` : ''}${a.loja_id ? ' · só esta loja' : ''}</div>
+        </div>
+        ${comEstado ? estado : (podeGerir ? `<button type="button" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:14px;padding:0 2px" title="Remover aviso" onclick="runAction(event, () => removerAviso(${parseInt(a.id, 10) || 0}))">✕</button>` : '')}
+      </div>`;
+    };
+    cont.innerHTML = `
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-title">🟢 Activos (${activos.length})</div>
+        ${activos.map((a) => linha(a, false)).join('') || '<div style="color:#475569;font-size:12px;padding:6px 0">Sem avisos activos neste momento.</div>'}
+      </div>
+      <div class="card">
+        <div class="card-title" style="color:#94a3b8">🗂 Histórico (${historicos.length})</div>
+        ${historicos.map((a) => linha(a, true)).join('') || '<div style="color:#475569;font-size:12px;padding:6px 0">Sem avisos antigos.</div>'}
+        ${podeGerir && historicos.some((a) => a.ativo === false) ? '<div style="color:#64748b;font-size:11px;margin-top:8px">Os removidos só aparecem a administradores e gestores.</div>' : ''}
+      </div>`;
+  } catch (e) {
+    cont.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function novoAviso() {
+  const texto = await dialogoTroca({
+    titulo: '📢 Novo aviso',
+    texto: 'Fica visível a todos os turnos e utilizadores' + (S.user?.role === 'admin' || S.user?.role === 'gestor' ? ' da empresa (todas as lojas)' : '') + '.',
+    tipo: 'texto',
+    placeholder: 'Escreve a orientação…',
+    botaoOk: 'Publicar'
+  });
+  if (texto === null || !String(texto).trim()) return;
+  const _refrescaAvisos = async () => { await carregarAvisosDia().catch(() => {}); await loadAvisosPagina().catch(() => {}); };
+  const diasTxt = await dialogoTroca({
+    titulo: '⏳ Durante quantos dias?',
+    texto: 'O aviso fica SEMPRE visível a todos durante este período e depois desaparece sozinho.\n1 a 90 dias (vazio = 7).',
+    tipo: 'texto',
+    numero: true,
+    placeholder: '7',
+    botaoOk: 'Publicar'
+  });
+  if (diasTxt === null) return;
+  const dias = Math.min(90, Math.max(1, parseInt(String(diasTxt).trim(), 10) || 7));
+  await apiEscrita('POST', '/avisos', { texto: String(texto).trim(), dias }, { desc: 'Novo aviso' });
+  await _refrescaAvisos();
+}
+
+async function removerAviso(id) {
+  const ok = await dialogoTroca({ titulo: 'Remover aviso', texto: 'O aviso deixa de aparecer a todos. Confirmas?', tipo: 'simnao' });
+  if (ok !== true) return;
+  await apiEscrita('DELETE', `/avisos/${id}`, {}, { desc: 'Remover aviso', chave: `aviso:${id}` });
+  await carregarAvisosDia().catch(() => {});
+  await loadAvisosPagina().catch(() => {});
 }
 
 async function loadDia() {
@@ -3006,6 +3181,9 @@ async function drawTurno() {
 
 // Stock buffer for edits
 let stockBuf = {};
+// Produtos com alterações POR ENVIAR: o auto-guardar só envia estes —
+// mudar 1 célula não pode gerar um registo por cada produto da folha.
+let stockDirty = new Set();
 /** Evita aplicar resposta GET /dia antiga após mudar de turno rapidamente. */
 let loadTurnoSeq = 0;
 let autoSaveTimer = null;
@@ -3444,6 +3622,7 @@ async function loadTurno() {
       S.turnoComentarios = cMap;
     } catch (_) { S.turnoDecisoes = {}; S.turnoComentarios = {}; }
     stockBuf = {};
+    stockDirty = new Set();
     turno.stock.forEach((s) => {
       const sid = prodIdKey(s.produto_id);
       if (!sid) return;
@@ -3753,6 +3932,8 @@ async function loadTurno() {
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
     show('turno-content', `
+      <div id="turno-avisos"></div>
+      <div id="turno-checklist-bar"></div>
       <div class="turno-tabs">
           <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
           <button type="button" class="${tabCls('stock')}" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
@@ -3968,6 +4149,8 @@ async function loadTurno() {
     }
     fotosAnexosInit();
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
+    atualizarChecklistBar().catch(() => {});
+    carregarAvisosTurno().catch(() => {});
     if (finoBarrilAjustadoRecipiente && turno.id) {
       try {
         await guardarStock(turno.id);
@@ -5554,12 +5737,41 @@ async function sincronizarPedidosOffline() {
         const i = f.findIndex((x) => x.ref === item.ref && x.criado_em === item.criado_em);
         if (i >= 0) { f.splice(i, 1); pedidosOfflineGravar(f); }
       };
+      const pl = item.payload || {};
+      const nArt = (pl.linhas || []).reduce((s, l) => s + (parseFloat(l.quantidade) || 0), 0);
+      const itemLog = {
+        ref: item.ref,
+        desc: `Pedido ao balcão${pl.cliente_nome ? ` — ${pl.cliente_nome}` : ''}${nArt ? ` (${nArt} artigo${nArt === 1 ? '' : 's'})` : ''}`,
+        path: `/turnos/${item.tid}/pedidos`, method: 'POST', criado_em: item.criado_em
+      };
+      const t0 = Date.now();
       try {
-        await apiPedidoComTimeout(item.tid, item.payload, 20000);
+        const resp = await apiPedidoComTimeout(item.tid, item.payload, 20000);
+        registarSyncLog(itemLog, 'ok', '', Date.now() - t0);
+        // Memória de recém-sincronizado: o cache do GET /pedidos ainda não
+        // tem este pedido — guarda a forma local (com o id oficial) para a
+        // lista não «perder» o pedido no redesenho a seguir ao sync.
+        try {
+          if (resp && resp.id) {
+            const shaped = pedidosOfflineComoPedidos(item.tid).find((p) => String(p.id) === String(item.ref));
+            if (shaped) {
+              shaped.id = resp.id;
+              delete shaped._offline;
+              window.__pedidosRecemSync = (window.__pedidosRecemSync || [])
+                .filter((r) => Date.now() - r.ts < 120000 && String(r.id) !== String(resp.id));
+              window.__pedidosRecemSync.push({ tid: item.tid, id: resp.id, ts: Date.now(), pedido: shaped });
+            }
+          }
+        } catch (_) {}
         remover();
+        agendarRefrescoPosSync();
       } catch (e) {
-        if (ehErroDeRede(e)) break; // ainda offline — tenta mais tarde
+        if (ehErroDeRede(e)) {
+          registarSyncLog(itemLog, 'sem-rede', String(e && e.message || 'sem rede'), Date.now() - t0);
+          break; // ainda offline — tenta mais tarde
+        }
         // Erro de validação (ex.: turno fechado): não vale a pena repetir.
+        registarSyncLog(itemLog, 'rejeitado', String(e && e.message || ''), Date.now() - t0);
         remover();
         alert(`⚠ Um pedido offline (${item.ref}, de ${item.quando || '—'}) foi REJEITADO ao sincronizar: ${e.message}\n\nConfere na lista de pedidos do turno.`);
       }
@@ -5571,6 +5783,16 @@ async function sincronizarPedidosOffline() {
   } finally {
     __syncPedidosOfflineEmCurso = false;
     renderPedidosOfflineBanner();
+    // Pedido acabou de sincronizar: refresca a lista a partir do SERVIDOR
+    // já — sem isto, o cache antigo mostrava N-1 pedidos durante segundos
+    // (o overlay da fila desaparece antes de o cache apanhar o novo).
+    try {
+      // Só com o catálogo de produtos já carregado — redesenhar com []
+      // apagava a grelha («Sem artigos…») até o utilizador mudar de aba.
+      if (S.page === 'turno' && S.turnoId && document.getElementById('pedidos-balcao-mount') && !document.getElementById('pedido-qtd-input') && (window.__pedidoProdutosOpts || []).length) {
+        renderPedidosBalcao(S.turnoId, !!S.turnoCanEdit, window.__pedidoProdutosOpts).catch(() => {});
+      }
+    } catch (_) {}
   }
 }
 window.addEventListener('online', () => {
@@ -5623,6 +5845,164 @@ function contarPendentesOffline() {
   return escritasOfflineLer().length + pedidosOfflineLer().length;
 }
 
+/** Ligação REAL à internet. navigator.onLine só diz se o Wi-Fi/dados
+ *  estão LIGADOS — pode não haver internet nenhuma (sem saldo, rede
+ *  presa…). Sonda: POST minúsculo ao servidor (não passa pelo service
+ *  worker, que só intercepta GET) com timeout curto; qualquer resposta
+ *  HTTP prova que há internet. */
+let __netReal = navigator.onLine !== false;
+let __netSondaEmCurso = false;
+async function sondarInternet() {
+  if (navigator.onLine === false) { __netReal = false; return false; }
+  if (__netSondaEmCurso) return __netReal;
+  __netSondaEmCurso = true;
+  const antes = __netReal;
+  // 2s por tentativa, 2 tentativas: rede presa cai nos timeouts (~4s no
+  // total); um servidor só lento a acordar apanha a 2ª tentativa e não
+  // gera falso «sem internet».
+  const tenta = async () => {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 2000);
+    try {
+      await fetch('/api/ping?t=' + Date.now(), { method: 'POST', cache: 'no-store', signal: ctl.signal });
+      return true;
+    } catch (_) {
+      return false;
+    } finally { clearTimeout(t); }
+  };
+  try {
+    __netReal = (await tenta()) || (await tenta());
+  } finally {
+    __netSondaEmCurso = false;
+  }
+  if (__netReal !== antes) {
+    renderOfflineBanner();
+    // Voltou a internet a sério: despacha a fila já.
+    if (__netReal && contarPendentesOffline()) sincronizarEscritasOffline().catch(() => {});
+  }
+  return __netReal;
+}
+setInterval(() => { sondarInternet().catch(() => {}); }, 10000);
+setTimeout(() => { sondarInternet().catch(() => {}); }, 1500);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) sondarInternet().catch(() => {}); });
+window.addEventListener('online', () => { sondarInternet().catch(() => {}); });
+window.addEventListener('offline', () => { __netReal = false; renderOfflineBanner(); });
+
+// ── Monitoramento: identidade do aparelho + sinal de vida ─────────────
+// Só este aparelho sabe quantos registos tem por sincronizar; envia ao
+// servidor um heartbeat leve (60s) para a página Monitoramento do admin.
+function dispositivoId() {
+  let id = localStorage.getItem('stockos.dispositivoId');
+  if (!id) {
+    id = 'd-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
+    localStorage.setItem('stockos.dispositivoId', id);
+  }
+  return id;
+}
+function dispositivoDescricao() {
+  const ua = navigator.userAgent || '';
+  const so = /iPhone|iPad/.test(ua) ? 'iPhone/iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac/.test(ua) ? 'Mac' : 'Outro';
+  const nav2 = /CriOS|Chrome/.test(ua) ? 'Chrome' : /FxiOS|Firefox/.test(ua) ? 'Firefox' : /Safari/.test(ua) ? 'Safari' : 'Browser';
+  const pwa = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches ? ' · app instalada' : '';
+  return `${so} · ${nav2}${pwa}`;
+}
+async function enviarHeartbeat(ehLogin) {
+  if (!S.token) return;
+  try {
+    await api('POST', '/monitor/heartbeat', {
+      dispositivo_id: dispositivoId(),
+      descricao: dispositivoDescricao(),
+      pendentes: contarPendentesOffline(),
+      ultima_operacao: localStorage.getItem('stockos.ultimaOperacao') || null,
+      empresa_id: empresaAtivaId(),
+      loja_id: lojaAtivaId(),
+      versao: document.documentElement.getAttribute('data-stockos-ui') || '',
+      login: ehLogin === true
+    });
+  } catch (_) { /* sem rede — o próximo heartbeat trata */ }
+}
+setInterval(() => { enviarHeartbeat().catch(() => {}); }, 60000);
+setTimeout(() => { enviarHeartbeat().catch(() => {}); }, 3000);
+
+// ── DIÁRIO DE SINCRONIZAÇÕES ─ Cada tentativa da fila fica registada
+// neste aparelho (quanto demorou o pedido, quanto esperou na fila, se
+// entrou ou porque foi rejeitada/adiada) e sobe ao servidor em lote —
+// a página Monitoramento mostra por aparelho. Retenção no servidor: 30 dias.
+const SYNC_LOG_KEY = 'stockos.syncLog';
+function syncLogLer() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SYNC_LOG_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (_) { return []; }
+}
+/** Traduz os erros técnicos mais comuns para linguagem clara; o texto
+ *  original fica entre [ ] para rastreio. Mensagens do servidor (já em
+ *  português) passam intactas. */
+function motivoSyncHumano(msg) {
+  const m = String(msg || '').trim();
+  if (!m) return '';
+  if (/^timeout$/i.test(m)) return 'Sem resposta do servidor dentro do prazo — rede muito lenta ou servidor ocupado; volta a tentar sozinho [timeout]';
+  if (/load failed|failed to fetch|networkerror|network request failed/i.test(m)) return `O pedido não chegou ao servidor — a ligação caiu a meio; volta a tentar sozinho [${m}]`;
+  if (/EMAXCONNSESSION|max clients|connection slots|too many clients/i.test(m)) return `Base de dados com as ligações esgotadas (pico de utilização) — volta a tentar sozinho [${m}]`;
+  if (/query timeout|statement timeout|canceling statement/i.test(m)) return `A base de dados demorou demais e a operação foi cortada — volta a tentar sozinho [${m}]`;
+  if (/exceed_.*_quota|restricted due to|spend caps/i.test(m)) return `O projecto Supabase está RESTRINGIDO por quota esgotada (plano gratuito) — o registo fica na fila até o serviço voltar; é preciso upgrade do plano [${m.slice(0, 120)}]`;
+  if (/ENOTFOUND|EAI_AGAIN/i.test(m)) return `O servidor não conseguiu encontrar a base de dados (DNS) — volta a tentar sozinho [${m}]`;
+  if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|connect timeout/i.test(m)) return `A ligação do servidor à base de dados falhou — volta a tentar sozinho [${m}]`;
+  if (/does not exist|não existe/i.test(m)) return `A base de dados ainda não tem esta estrutura (falta correr o «Reparar schema») — fica na fila [${m}]`;
+  return m;
+}
+function registarSyncLog(item, resultado, motivo, duracaoMs) {
+  try {
+    // Resposta lenta mas SEM erro: junta o auto-diagnóstico — quanto foi
+    // dentro do servidor e se este pedido pagou um arranque frio.
+    if (resultado === 'ok' && (duracaoMs || 0) > 2500 && !motivo) {
+      const si = window.__srvInfoUltimo;
+      if (si && Date.now() - si.t < 2000) {
+        const sSrv = (si.ms / 1000).toFixed(1).replace('.', ',');
+        const frio = Number.isFinite(si.boot) && si.boot <= 10;
+        motivo = `Diagnóstico: ${sSrv}s dentro do servidor${frio ? ' · instância acabada de arrancar (arranque frio da plataforma)' : ''} · o resto foi rede/plataforma`;
+      }
+    }
+    const fila = syncLogLer();
+    const criado = item && item.criado_em ? new Date(item.criado_em).getTime() : NaN;
+    fila.push({
+      ref: String((item && item.ref) || '').slice(0, 64),
+      descricao: (item && item.desc) || `${item && item.method} ${item && item.path}`,
+      caminho: String((item && item.path) || '').split('?')[0],
+      resultado,
+      motivo: motivoSyncHumano(motivo).slice(0, 300),
+      duracao_ms: Math.round(duracaoMs || 0),
+      espera_ms: isNaN(criado) ? 0 : Math.max(0, Date.now() - criado),
+      tentativa_em: new Date().toISOString()
+    });
+    while (fila.length > 200) fila.shift(); // tecto local
+    localStorage.setItem(SYNC_LOG_KEY, JSON.stringify(fila));
+  } catch (_) {}
+  enviarSyncLog().catch(() => {});
+}
+let __syncLogEnvio = false;
+async function enviarSyncLog() {
+  if (__syncLogEnvio || !S.token || navigator.onLine === false) return;
+  const itens = syncLogLer();
+  if (!itens.length) return;
+  __syncLogEnvio = true;
+  try {
+    const lote = itens.slice(0, 100);
+    const r = await fetch(API + '/monitor/sync-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${S.token}` },
+      body: JSON.stringify({ dispositivo_id: dispositivoId(), itens: lote })
+    });
+    if (r.ok) {
+      // Só sai do aparelho o que o servidor confirmou.
+      const resto = syncLogLer().slice(lote.length);
+      localStorage.setItem(SYNC_LOG_KEY, JSON.stringify(resto));
+    }
+  } catch (_) { /* sem rede — o diário fica e sobe depois */ }
+  finally { __syncLogEnvio = false; }
+}
+setInterval(() => { enviarSyncLog().catch(() => {}); }, 60000);
+
 /** Faixa de estado PERMANENTE no topo, em todas as páginas:
  *  🔴 sem internet (+ nº de registos guardados neste aparelho)
  *  🟠 com internet mas com registos a sincronizar
@@ -5630,7 +6010,7 @@ function contarPendentesOffline() {
  *  Tocar na faixa abre o gestor da fila. */
 function renderOfflineBanner() {
   try {
-    const semRede = navigator.onLine === false;
+    const semRede = navigator.onLine === false || __netReal === false;
     const n = contarPendentesOffline();
     let el = document.getElementById('offline-banner');
     if (!el) {
@@ -5672,6 +6052,220 @@ function renderOfflineBanner() {
 window.addEventListener('offline', () => renderOfflineBanner());
 window.addEventListener('online', () => renderOfflineBanner());
 setInterval(() => renderOfflineBanner(), 5000);
+
+// ── Modo INSTANTÂNEO SEMPRE: o service worker responde do cache e avisa
+//    aqui quando os dados frescos (diferentes) chegam por trás. A página
+//    Dia refresca-se sozinha; nas restantes aparece um chip para
+//    actualizar com um toque (nunca re-renderiza por baixo dos dedos). ──
+let __dadosFrescosTimer = null;
+let __dadosFrescosUrls = [];
+function processarDadosFrescos() {
+  const urls = __dadosFrescosUrls.splice(0);
+  try {
+    const ae = document.activeElement;
+    if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) {
+      // Campo com foco: NÃO descarta — volta a tentar quando largar; sem
+      // isto, a lista ficava desactualizada (ex.: um pedido a menos) até
+      // à próxima navegação.
+      __dadosFrescosUrls.push(...urls);
+      clearTimeout(__dadosFrescosTimer);
+      __dadosFrescosTimer = setTimeout(processarDadosFrescos, 2000);
+      return;
+    }
+    if (S.page === 'dia') { loadDia().catch(() => {}); return; }
+    // Só interessa o que a PÁGINA ACTUAL mostra — mudanças de outros
+    // ecrãs ficam no cache e aparecem quando lá fores.
+    const relevantes = urls.filter(urlRelevanteParaPagina);
+    if (!relevantes.length) return;
+    // Actualização CIRÚRGICA: o aviso diz qual endpoint mudou — se
+    // houver uma secção correspondente e for seguro, redesenha só essa.
+    const cirurgico = relevantes.some((u) => refrescarSeccaoComDadosFrescos(u));
+    if (cirurgico) return;
+    // A mudança veio DESTE aparelho há segundos (registaste algo) —
+    // o ecrã já a reflecte; o chip seria só ruído.
+    if (Date.now() - (window.__escritaLocalTs || 0) < 15000) return;
+    mostrarChipDadosNovos();
+  } catch (_) {}
+}
+if (navigator.serviceWorker) {
+  navigator.serviceWorker.addEventListener('message', (ev) => {
+    if (ev.data && ev.data.tipo === 'nova-versao') { mostrarChipNovaVersao(ev.data.versao); return; }
+    if (!ev.data || ev.data.tipo !== 'dados-frescos') return;
+    __dadosFrescosUrls.push(String(ev.data.url || ''));
+    clearTimeout(__dadosFrescosTimer);
+    __dadosFrescosTimer = setTimeout(processarDadosFrescos, 600);
+  });
+}
+
+// ── REFRESCO AUTOMÁTICO ─ Com «instantâneo sempre», o SW só revalida
+// quando a app faz um GET — parado numa página, o ecrã nunca sabia das
+// mudanças de OUTROS aparelhos. Este laço revalida em fundo os endpoints
+// da página actual: o SW compara com o cache e, mudando algo, a
+// actualização cirúrgica/chip tratam do resto. Corre a cada 25s, ao
+// voltar a app à frente, quando a rede volta, e ~2,5s depois de cada
+// sincronização (o cache fica a par das escritas próprias ainda dentro
+// da janela dos 15s que suprime o chip).
+let __refrescoAutoTs = 0;
+let __refrescoPosSyncTimer = null;
+function refrescoAutomatico(forcar) {
+  try {
+    if (!S.token || document.hidden) return;
+    if (navigator.onLine === false || __netReal === false) return;
+    const agora = Date.now();
+    if (!forcar && agora - __refrescoAutoTs < 20000) return;
+    __refrescoAutoTs = agora;
+    const urls = [];
+    switch (S.page) {
+      case 'dia':
+        urls.push(`/dia?data=${S.date}&resumo=1`, '/avisos');
+        break;
+      case 'turno':
+        if (S.turnoId && !turnoIdEhLocal(S.turnoId)) {
+          urls.push(
+            `/dia?data=${encodeURIComponent(S.date)}&turno_id=${encodeURIComponent(S.turnoId)}`,
+            `/turnos/${encodeURIComponent(S.turnoId)}/pedidos`,
+            `/turnos/${S.turnoId}/entradas`,
+            `/turnos/${S.turnoId}/saidas`,
+            `/turnos/${S.turnoId}/caixa-entradas`,
+            `/turnos/${S.turnoId}/vendas`,
+            '/avisos',
+            '/config/checklist-turno'
+          );
+        }
+        break;
+      case 'depositos':
+        urls.push(`/depositos?data=${encodeURIComponent(S.date)}`, `/dia?data=${S.date}&resumo=1`);
+        break;
+      case 'monitor': urls.push('/monitor'); break;
+      case 'avisos': urls.push('/avisos?todos=1'); break;
+      default: return;
+    }
+    // Espaçados 400ms — não competem com o que o utilizador está a fazer.
+    urls.forEach((u, i) => setTimeout(() => { api('GET', u).catch(() => {}); }, i * 400));
+  } catch (_) {}
+}
+setInterval(() => refrescoAutomatico(false), 25000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refrescoAutomatico(true); });
+window.addEventListener('online', () => refrescoAutomatico(true));
+/** Debounce pós-sincronização: um refresco ~2,5s após o ÚLTIMO item. */
+function agendarRefrescoPosSync() {
+  clearTimeout(__refrescoPosSyncTimer);
+  __refrescoPosSyncTimer = setTimeout(() => refrescoAutomatico(true), 2500);
+}
+
+/** Redesenha SÓ a secção ligada ao endpoint que mudou (nunca a página
+ *  inteira). Devolve true quando tratou; false → cai no chip. Nunca toca
+ *  numa secção com texto escrito a meio. */
+function refrescarSeccaoComDadosFrescos(url) {
+  try {
+    const p = String(url || '').split('?')[0];
+    const semTextoAMeio = (raiz) =>
+      ![...raiz.querySelectorAll('input,textarea')].some((i) => i.value && !['checkbox', 'radio', 'button', 'date', 'time', 'month'].includes(i.type));
+    // true = pode redesenhar estes contentores (nenhum input aberto com texto)
+    const livre = (ids) => ids.every((id) => { const e2 = document.getElementById(id); return !e2 || semTextoAMeio(e2); });
+    if (S.page === 'monitor' && p.endsWith('/monitor')) {
+      loadMonitor().catch(() => {});
+      return true;
+    }
+    if (S.page === 'turno' && S.turnoId && p.includes(`/turnos/${S.turnoId}/`)) {
+      const secMov = document.getElementById('movimentos-section');
+      if (secMov && (p.endsWith('/entradas') || p.endsWith('/saidas') || p.endsWith('/caixa-entradas'))) {
+        if (!semTextoAMeio(secMov)) return true; // há escrita a meio — não mexe, sem chip
+        loadRegistosMovimentosSection(S.turnoId, S.turnoData?.stock || [], !!S.turnoCanEdit).catch(() => {});
+        return true;
+      }
+      // Lista de pedidos ao balcão: outro aparelho registou → refresca a
+      // secção (o rascunho por enviar sobrevive; nunca com diálogo aberto).
+      const mountPed = document.getElementById('pedidos-balcao-mount');
+      if (mountPed && p.endsWith('/pedidos')) {
+        if (document.getElementById('pedido-qtd-input') || !semTextoAMeio(mountPed)) return true;
+        // Sem o catálogo carregado, redesenhar apagava a grelha de
+        // produtos («Sem artigos…») — fica quieto e sem chip.
+        if (!(window.__pedidoProdutosOpts || []).length) return true;
+        renderPedidosBalcao(S.turnoId, !!S.turnoCanEdit, window.__pedidoProdutosOpts).catch(() => {});
+        return true;
+      }
+    }
+    // ── Secções de leitura: redesenha só o contentor da lista; os campos
+    //    de filtro/registo ficam intactos. Com texto a meio → fica quieto.
+    if (S.page === 'depositos' && (p.endsWith('/depositos') || p.endsWith('/dia'))) {
+      if (livre(['depositos-content'])) loadDepositos().catch(() => {});
+      return true;
+    }
+    if (S.page === 'historico' && p.includes('/historico')) {
+      if (S.histLastHtml && livre(['hist-content'])) loadHistorico().catch(() => {});
+      return true;
+    }
+    if (S.page === 'assiduidade' && p.includes('/assiduidade')) {
+      if (livre(['assiduidade-content'])) loadAssiduidade().catch(() => {});
+      return true;
+    }
+    if (S.page === 'irregularidades' && (p.includes('/historico') || p.includes('/irregularidades') || p.endsWith('/receitas'))) {
+      if (livre(['irreg-content'])) loadIrregularidadesLista().catch(() => {});
+      return true;
+    }
+    if (S.page === 'faltas' && p.endsWith('/faltas')) {
+      if (livre(['faltas-pendentes', 'faltas-historico'])) loadFaltas().catch(() => {});
+      return true;
+    }
+    if (S.page === 'avisos' && p.endsWith('/avisos')) {
+      loadAvisosPagina().catch(() => {});
+      return true;
+    }
+    if (S.page === 'turno' && p.endsWith('/avisos')) {
+      carregarAvisosTurno().catch(() => {});
+      return true;
+    }
+    if (S.page === 'turno' && p.endsWith('/config/checklist-turno')) {
+      // Config das tarefas mudou noutro aparelho: barra recalcula já.
+      S.checklistCfg = null;
+      atualizarChecklistBar().catch(() => {});
+      return true;
+    }
+    return false;
+  } catch (_) { return false; }
+}
+/** O URL fresco pertence ao que a página ACTUAL está a mostrar? */
+function urlRelevanteParaPagina(u) {
+  const p = String(u || '').split('?')[0];
+  switch (S.page) {
+    case 'turno': return !!S.turnoId && (p.includes(`/turnos/${S.turnoId}/`) || p.endsWith('/dia') || p.endsWith('/avisos') || p.endsWith('/config/checklist-turno'));
+    case 'depositos': return p.endsWith('/depositos') || p.endsWith('/dia');
+    case 'historico': return p.includes('/historico');
+    case 'assiduidade': return p.includes('/assiduidade');
+    case 'irregularidades': return p.includes('/historico') || p.includes('/irregularidades') || p.endsWith('/receitas');
+    case 'faltas': return p.endsWith('/faltas');
+    case 'avisos': return p.endsWith('/avisos');
+    case 'monitor': return p.endsWith('/monitor');
+    default: return false;
+  }
+}
+
+/** Nova VERSÃO da app já descarregada — chip persistente até tocar. */
+function mostrarChipNovaVersao(versao) {
+  if (document.getElementById('chip-nova-versao')) return;
+  document.getElementById('chip-dados-novos')?.remove();
+  const c = document.createElement('button');
+  c.id = 'chip-nova-versao';
+  c.type = 'button';
+  c.textContent = `🔄 Nova versão da app — toca para actualizar${versao ? ` (${String(versao).toUpperCase()})` : ''}`;
+  c.style.cssText = 'position:fixed;bottom:76px;left:50%;transform:translateX(-50%);z-index:1420;background:#166534;color:#fff;border:1px solid #22c55e;border-radius:999px;padding:9px 16px;font-size:12px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.45);cursor:pointer;white-space:nowrap;max-width:92vw;overflow:hidden;text-overflow:ellipsis';
+  c.onclick = () => { try { location.reload(); } catch (_) {} };
+  document.body.appendChild(c);
+}
+
+function mostrarChipDadosNovos() {
+  if (document.getElementById('chip-dados-novos')) return;
+  if (!S.token) return;
+  const c = document.createElement('button');
+  c.id = 'chip-dados-novos';
+  c.type = 'button';
+  c.textContent = '🔄 Dados novos — toca para actualizar';
+  c.style.cssText = 'position:fixed;bottom:76px;left:50%;transform:translateX(-50%);z-index:1400;background:#1d4ed8;color:#fff;border:none;border-radius:999px;padding:8px 14px;font-size:12px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.4);cursor:pointer;white-space:nowrap';
+  c.onclick = () => { c.remove(); try { navigate(S.page); } catch (_) {} };
+  document.body.appendChild(c);
+  setTimeout(() => { try { c.remove(); } catch (_) {} }, 15000);
+}
 
 /** Compat: os pontos que actualizavam a antiga pastilha passam a
  *  actualizar a faixa de estado (a contagem vive agora no aviso). */
@@ -5739,7 +6333,7 @@ function abrirGestorFilaOffline() {
           const m = (v || 0) / (1024 * 1024);
           return m >= 1024 ? (m / 1024).toFixed(1) + ' GB' : Math.round(m) + ' MB';
         };
-        el.textContent = `Fila: ${mbTxt(bytesFilaOffline())} de 30 MB (limite) · aparelho: ${mb(est.quota)} disponíveis`;
+        el.textContent = `Fila: ${mbTxt(bytesFilaOffline())} de 30 MB (limite) · aparelho #${dispositivoId().replace(/^d-/, '').slice(0, 4).toUpperCase()} · ${mb(est.quota)} disponíveis`;
       }).catch(() => {});
     }
   } catch (_) {}
@@ -5784,6 +6378,11 @@ async function limparRegistosPresos() {
  */
 async function apiEscrita(method, path, body, opts) {
   opts = opts || {};
+  // Marca da última operação deste aparelho (página Monitoramento) e da
+  // última escrita local (suprime o chip «dados novos» das nossas próprias
+  // mudanças — o ecrã já as reflecte).
+  try { localStorage.setItem('stockos.ultimaOperacao', new Date().toISOString()); } catch (_) {}
+  window.__escritaLocalTs = Date.now();
   // Loja fixada JÁ no caminho: se o utilizador mudar de loja antes de a
   // fila sincronizar, o registo vai para a loja certa.
   path = comLojaNoPath(path);
@@ -6007,9 +6606,11 @@ async function sincronizarEscritasOffline() {
       const removeDaFila = () => {
         escritasOfflineGravar(escritasOfflineLer().filter((x) => x.ref !== item.ref));
       };
+      const t0 = Date.now();
       try {
         if (item.tipo === 'abrir') {
           const turno = await apiEscritaComTimeout(item, 25000);
+          registarSyncLog(item, 'ok', '', Date.now() - t0);
           removeDaFila();
           if (turno && turno.id != null && item.localId) {
             const viaLocal = String(S.turnoId) === String(item.localId) || S.page === 'dia';
@@ -6029,11 +6630,47 @@ async function sincronizarEscritasOffline() {
           if (pedidosOfflineLer().some((x) => String(x.tid) === String(item.tid))) { idx++; continue; }
         }
         await apiEscritaComTimeout(item, 25000);
+        registarSyncLog(item, 'ok', '', Date.now() - t0);
         removeDaFila();
+        window.__escritaLocalTs = Date.now();
+        agendarRefrescoPosSync();
       } catch (e) {
-        if (ehErroDeRede(e)) break; // sem rede — tenta mais tarde
+        if (ehErroDeRede(e)) {
+          registarSyncLog(item, 'sem-rede', String(e && e.message || 'sem rede'), Date.now() - t0);
+          break; // sem rede — tenta mais tarde
+        }
+        const msgErr = String(e && e.message || '');
+        // «Já está feito» numa RE-TENTATIVA = a 1ª tentativa entrou e a
+        // resposta perdeu-se. É SUCESSO — sem alerta de rejeição.
+        if (/já está|já estão|já foi|já fechado|ja_fechado|duplicad/i.test(msgErr)) {
+          registarSyncLog(item, 'ok', 'Já tinha entrado — confirmado na re-tentativa', Date.now() - t0);
+          removeDaFila();
+          window.__escritaLocalTs = Date.now();
+          agendarRefrescoPosSync();
+          continue;
+        }
+        // Erros TRANSITÓRIOS que não são culpa do registo: schema da BD
+        // atrasado (falta correr o «Reparar schema»), o SERVIDOR sem
+        // conseguir falar com a BD (DNS/ligação), ou o projecto Supabase
+        // restringido por quota (armazenamento de fotos incluído). Fica
+        // na fila e tenta mais tarde, em vez de ser rejeitado e perdido.
+        if (/does not exist|não existe|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|connect timeout|EMAXCONNSESSION|max clients|connection slots|too many clients|query timeout|statement timeout|canceling statement|permission denied|exceed_egress_quota|exceed_.*_quota|restricted due to|Upload Storage falhou|spend caps/i.test(msgErr)) {
+          registarSyncLog(item, 'transitorio', msgErr, Date.now() - t0);
+          if (!window.__avisoSyncTransitorio) {
+            window.__avisoSyncTransitorio = true;
+            alert(`⚠ O servidor não conseguiu processar «${item.desc}» (${msgErr}).\n\nO registo FICA GUARDADO na fila e volta a sincronizar sozinho.`);
+          }
+          break; // pára a ronda; a próxima sincronização volta a tentar
+        }
+        registarSyncLog(item, 'rejeitado', msgErr, Date.now() - t0);
         removeDaFila();
         if (item.tipo === 'abrir' && item.localId) limparTurnoLocal(item.localId);
+        // Rejeição por checklist: a config em cache estava desactualizada —
+        // limpa e recalcula a barra para mostrar o que o servidor exige.
+        if (/checklist/i.test(String(e.message || ''))) {
+          S.checklistCfg = null;
+          try { atualizarChecklistBar().catch(() => {}); } catch (_) {}
+        }
         alert(`⚠ Um registo offline (${item.desc}, de ${item.quando || '—'}) foi REJEITADO ao sincronizar: ${e.message}`);
       }
     }
@@ -6180,14 +6817,22 @@ function aplicarEscritasAoTurno(t, fila) {
     } else if (it.method === 'POST' && p.endsWith('/saidas')) {
       if (!String(b.notas || '').startsWith('ENTRADA::')) {
         out.caixa.saida = (parseFloat(out.caixa.saida) || 0) + (parseFloat(b.valor) || 0);
+      } else {
+        out.caixa.entradas_total = (parseFloat(out.caixa.entradas_total) || 0) + (parseFloat(b.valor) || 0);
       }
+    } else if (it.method === 'PUT' && p.endsWith('/checklist')) {
+      const faseChk = b.fase === 'abertura' ? 'abertura' : 'fecho';
+      out.checklist = out.checklist || {};
+      out.checklist[faseChk] = out.checklist[faseChk] || {};
+      if (b.feito) out.checklist[faseChk][String(b.idx)] = { feito: true };
+      else delete out.checklist[faseChk][String(b.idx)];
     }
   }
   const partes = [out.caixa.tpa, out.caixa.transferencia, out.caixa.dinheiro].map((v) => parseFloat(v));
   if (partes.every((v) => Number.isFinite(v))) {
     const tg = partes[0] + partes[1] + partes[2];
     out.caixa.total_gerado = tg;
-    out.caixa.total_final = tg - (parseFloat(out.caixa.saida) || 0);
+    out.caixa.total_final = tg - (parseFloat(out.caixa.saida) || 0) + (parseFloat(out.caixa.entradas_total) || 0);
   }
   return out;
 }
@@ -6640,6 +7285,14 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   // Pedidos da fila local entram como pedidos normais — reflectem em
   // todas as abas até serem substituídos pelos oficiais na sincronização.
   pedidos = pedidosOfflineComoPedidos(turnoId).concat(Array.isArray(pedidos) ? pedidos : []);
+  // Recém-sincronizados que o cache do GET ainda não traz: mantém-nos na
+  // lista (com o id oficial) até a resposta fresca os incluir — sem isto,
+  // o redesenho a seguir ao sync mostrava um pedido a menos.
+  window.__pedidosRecemSync = (window.__pedidosRecemSync || []).filter((r) => Date.now() - r.ts < 120000);
+  const recem = window.__pedidosRecemSync.filter(
+    (r) => String(r.tid) === String(turnoId) && !pedidos.some((p) => String(p.id) === String(r.id))
+  );
+  if (recem.length) pedidos = recem.map((r) => r.pedido).concat(pedidos);
   window.__stockosPedidosBalcao = pedidos;
   // Pedidos mudaram → recalcular o painel "Esperado" na aba Caixa.
   setTimeout(() => { try { renderCaixaEsperadoPedidos(); renderIrregularidadesTurno(); } catch (_) {} }, 0);
@@ -7956,6 +8609,9 @@ function updateStock(pid, field, value) {
   } else {
     stockBuf[k][field] = parseRaw(value);
   }
+  // Campos que o guardarStock envia: marca o produto como alterado.
+  // («entrada» fica de fora — as entradas têm o seu próprio registo.)
+  if (['encontrado', 'deixado', 'fechados', 'encontrado_caixa', 'deixado_caixa'].includes(field)) stockDirty.add(k);
   const inp = document.querySelector(`input[type="number"][data-stock-pid="${k}"][data-stock-field="${field}"]`);
   if (inp && document.activeElement !== inp) {
     const n = stockBuf[k][field];
@@ -8175,6 +8831,7 @@ function aplicarFinoBarrilZeroParaRecipienteKg(turno, canEdit) {
     stockBuf[sid].deixado = kg;
     ch = true;
   }
+  if (ch) stockDirty.add(sid); // ajuste automático também tem de ser enviado
   return ch;
 }
 
@@ -9111,6 +9768,13 @@ function deixadosBannerHtml(turno, fechado, canEdit, isAdmin, encontradosFechado
 }
 
 async function fecharDeixados(turnoId) {
+  // PORTÃO: o registo dos deixados só fecha com o checklist de FECHO feito.
+  const pendF = (await checklistPendentes(turnoId, true).catch(() => [])).filter((t) => t.fase === 'fecho');
+  if (pendF.length) {
+    turnoMsgErr(`📋 Conclui o checklist de FECHO antes de fechar o registo dos deixados — falta${pendF.length === 1 ? '' : 'm'} ${pendF.length} tarefa${pendF.length === 1 ? '' : 's'}.`, true);
+    await abrirChecklistTurno();
+    return;
+  }
   if (!confirm('Fechar o registo dos deixados? Os campos Deixado e Deix. caixa ficam bloqueados a partir daqui.')) return;
   try {
     turnoMsgPending('A fechar registo…');
@@ -9137,6 +9801,13 @@ async function reabrirDeixados(turnoId) {
 }
 
 async function fecharEncontrados(turnoId) {
+  // PORTÃO: o registo inicial só fecha com o checklist de ABERTURA feito.
+  const pendA = (await checklistPendentes(turnoId, true).catch(() => [])).filter((t) => t.fase === 'abertura');
+  if (pendA.length) {
+    turnoMsgErr(`📋 Conclui o checklist de ABERTURA antes de fechar o registo inicial — falta${pendA.length === 1 ? '' : 'm'} ${pendA.length} tarefa${pendA.length === 1 ? '' : 's'}.`, true);
+    await abrirChecklistTurno();
+    return;
+  }
   if (!confirm('Fechar o registo inicial de encontrados? Os campos Encontrado e Enc. caixa ficam bloqueados a partir daqui.')) return;
   try {
     turnoMsgPending('A fechar registo…');
@@ -9173,23 +9844,48 @@ function notifyEncontradosPendente() {
 }
 
 async function guardarStock(turnoId) {
+  // SÓ os produtos alterados: mudar 1 célula gera 1 registo na fila —
+  // não um por cada produto da folha.
+  let pids = [];
   try {
     if (String(turnoId) !== String(S.turnoData?.id)) return;
+    pids = [...stockDirty].filter((pid) => stockBuf[pid]);
+    if (!pids.length) return; // nada mudou — nada a enviar
+    stockDirty = new Set();
     turnoMsgPending('A guardar…');
-    const resultados = await Promise.all(Object.entries(stockBuf).map(([pid, v]) =>
-      apiEscrita('PUT', `/turnos/${turnoId}/stock`, {
+    // Descrição RASTREÁVEL no diário de sincronizações: turno, produto e
+    // os valores enviados — «Stock do turno» sozinho não dizia nada.
+    const t = S.turnoData || {};
+    const rotTurno = [t.nome, String(t.data || '').slice(0, 10).split('-').reverse().slice(0, 2).join('/')].filter(Boolean).join(' ');
+    const descStock = (pid, v) => {
+      const row = (t.stock || []).find((s) => String(s.produto_id) === String(pid));
+      const nomeProd = (row && String(row.produto_nome || '').trim()) || `produto ${pid}`;
+      const partes = [];
+      if (v.encontrado != null && v.encontrado !== '') partes.push(`enc ${v.encontrado}`);
+      if (v.deixado != null && v.deixado !== '') partes.push(`deix ${v.deixado}`);
+      if (v.fechados != null && v.fechados !== '') partes.push(`fech ${v.fechados}`);
+      if (v.encontrado_caixa != null && v.encontrado_caixa !== '') partes.push(`enc.cx ${v.encontrado_caixa}`);
+      if (v.deixado_caixa != null && v.deixado_caixa !== '') partes.push(`deix.cx ${v.deixado_caixa}`);
+      return `Stock — ${nomeProd}${rotTurno ? ` (${rotTurno})` : ''}${partes.length ? ': ' + partes.join(' · ') : ''}`;
+    };
+    const resultados = await Promise.all(pids.map((pid) => {
+      const v = stockBuf[pid];
+      return apiEscrita('PUT', `/turnos/${turnoId}/stock`, {
         produto_id: pid,
         encontrado: v.encontrado,
         deixado: v.deixado,
         fechados: v.fechados,
         encontrado_caixa: v.encontrado_caixa,
         deixado_caixa: v.deixado_caixa
-      }, { tid: turnoId, chave: `stock:${turnoId}:${pid}`, desc: 'Stock do turno' })
-    ));
+      }, { tid: turnoId, chave: `stock:${turnoId}:${pid}`, desc: descStock(pid, v) });
+    }));
     const emFila = resultados.some((r) => r && r._offline);
     turnoMsgOk(emFila ? 'Guardado neste aparelho (sincroniza sozinho)' : 'Guardado');
     setTimeout(() => turnoMsgIdle(), 1600);
-  } catch(e) { turnoMsgErr(e.message); }
+  } catch(e) {
+    pids.forEach((pid) => stockDirty.add(pid)); // volta a marcar — tenta no próximo guardar
+    turnoMsgErr(e.message);
+  }
 }
 
 function calcCaixa() {
@@ -9366,6 +10062,169 @@ async function tpaFotoOnFile(inp) {
   }
 }
 
+// ── CHECKLIST DO TURNO (tarefas de abertura e fecho) ──────────────────
+/** Config das tarefas (por empresa), em cache na sessão. Com fresco=true
+ *  vai buscar DIRECTO ao servidor (URL única fura o cache do SW) — para
+ *  as validações não passarem com uma lista de tarefas desactualizada. */
+async function obterChecklistCfg(fresco) {
+  if (!fresco && S.checklistCfg) return S.checklistCfg;
+  let cfg = null;
+  if (fresco && navigator.onLine !== false) {
+    cfg = await api('GET', `/config/checklist-turno?fresco=${Date.now()}`).catch(() => null);
+  }
+  if (!cfg) cfg = await api('GET', '/config/checklist-turno').catch(() => null);
+  S.checklistCfg = cfg && typeof cfg === 'object'
+    ? { abertura: cfg.abertura || [], fecho: cfg.fecho || [] }
+    : { abertura: [], fecho: [] };
+  return S.checklistCfg;
+}
+
+/** Estado das marcações do turno actual (com as marcações offline em fila). */
+function checklistEstadoLocal(tid) {
+  let baseRaw = S.turnoData && S.turnoData.checklist;
+  // Formato antigo: estado gravado como texto JSON — desembrulha.
+  if (typeof baseRaw === 'string') { try { baseRaw = JSON.parse(baseRaw); } catch (_) { baseRaw = null; } }
+  const base = (baseRaw && typeof baseRaw === 'object')
+    ? JSON.parse(JSON.stringify(baseRaw)) : {};
+  try {
+    escritasOfflineLer().forEach((it) => {
+      if (String(it.tid) !== String(tid)) return;
+      if (it.method !== 'PUT' || !String(it.path).split('?')[0].endsWith('/checklist')) return;
+      const b = it.body || {};
+      const fase = b.fase === 'abertura' ? 'abertura' : 'fecho';
+      base[fase] = base[fase] || {};
+      if (b.feito) base[fase][String(b.idx)] = { feito: true };
+      else delete base[fase][String(b.idx)];
+    });
+  } catch (_) {}
+  return base;
+}
+
+/** Tarefas ainda por fazer (ambas as fases). fresco=true → config do
+ *  servidor (usado nos portões de fecho, onde validar com cache é perigoso). */
+async function checklistPendentes(tid, fresco) {
+  const cfg = await obterChecklistCfg(fresco);
+  const estado = checklistEstadoLocal(tid);
+  const pend = [];
+  for (const fase of ['abertura', 'fecho']) {
+    (cfg[fase] || []).forEach((tarefa, i) => {
+      const m = estado[fase] && estado[fase][String(i)];
+      if (!(m && m.feito)) pend.push({ fase, i, tarefa });
+    });
+  }
+  return pend;
+}
+
+/** Fase do MOMENTO: abertura enquanto o registo inicial estiver aberto;
+ *  fechado esse registo, o que interessa passa a ser o fecho. */
+function faseChecklistAtual() {
+  return S.turnoData && S.turnoData.encontrados_fechados_em ? 'fecho' : 'abertura';
+}
+/** Barra compacta com as tarefas da FASE ACTUAL — toca para abrir o
+ *  painel. As fases nunca aparecem misturadas: abertura valida no registo
+ *  inicial, fecho valida nos deixados; o fecho do turno exige tudo. */
+async function atualizarChecklistBar() {
+  const bar = document.getElementById('turno-checklist-bar');
+  if (!bar || !S.turnoData) return;
+  const cfg = await obterChecklistCfg();
+  const fechado = S.turnoData.estado === 'fechado';
+  const fase = faseChecklistAtual();
+  const pendTodas = await checklistPendentes(S.turnoData.id);
+  let total, feitas, rotulo;
+  if (fechado) {
+    // Turno fechado: consulta do registo completo (as duas fases).
+    total = (cfg.abertura || []).length + (cfg.fecho || []).length;
+    feitas = total - pendTodas.length;
+    rotulo = '📋 Tarefas do turno';
+  } else {
+    total = (cfg[fase] || []).length;
+    feitas = total - pendTodas.filter((t) => t.fase === fase).length;
+    rotulo = fase === 'abertura' ? '🌅 Tarefas de abertura' : '🌙 Tarefas de fecho';
+  }
+  if (!total) { bar.innerHTML = ''; return; }
+  const completo = feitas >= total;
+  const dica = fechado ? 'consultar'
+    : (completo ? 'ver' : (fase === 'abertura' ? 'valida no registo inicial' : 'valida no registo dos deixados'));
+  bar.innerHTML = `
+    <button type="button" onclick="runAction(event, abrirChecklistTurno)"
+      style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 0 10px;padding:9px 12px;border-radius:10px;cursor:pointer;font-size:13px;font-weight:600;border:1px solid ${completo ? '#166534' : '#92400e'};background:${completo ? 'rgba(22,101,52,0.18)' : 'rgba(146,64,14,0.16)'};color:${completo ? '#4ade80' : '#fbbf24'}">
+      <span>${completo ? '✅' : rotulo.split(' ')[0]} ${rotulo.replace(/^\S+ /, '')}: ${feitas}/${total}${completo ? ' — tudo feito' : ''}</span>
+      <span style="font-weight:400;font-size:11px;opacity:.85">${dica}</span>
+    </button>`;
+}
+
+/** Painel com as duas listas (abertura e fecho) e caixas de marcação. */
+async function abrirChecklistTurno() {
+  if (!S.turnoData) return;
+  const tid = S.turnoData.id;
+  const cfg = await obterChecklistCfg();
+  const estado = checklistEstadoLocal(tid);
+  const podeMarcar = S.turnoData.estado !== 'fechado';
+  const seccao = (fase, titulo) => {
+    const lista = cfg[fase] || [];
+    if (!lista.length) return '';
+    const itens = lista.map((tarefa, i) => {
+      const m = estado[fase] && estado[fase][String(i)];
+      const feito = !!(m && m.feito);
+      const quem = m && m.por ? ` <span style="color:#475569;font-size:10px">(${escapeHtml(m.por)})</span>` : '';
+      return `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #1e293b;cursor:${podeMarcar ? 'pointer' : 'default'};user-select:none">
+        <input type="checkbox" ${feito ? 'checked' : ''} ${podeMarcar ? '' : 'disabled'}
+          style="width:19px;height:19px;accent-color:#22c55e;margin-top:1px;flex-shrink:0"
+          onchange="alternarTarefaChecklist('${fase}', ${i}, this.checked)"/>
+        <span style="font-size:13px;line-height:1.4;color:${feito ? '#64748b' : '#e2e8f0'};${feito ? 'text-decoration:line-through' : ''}">${escapeHtml(tarefa)}${quem}</span>
+      </label>`;
+    }).join('');
+    return `<div style="font-size:0.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 2px">${titulo}</div>${itens}`;
+  };
+  // Fase do momento: só ela aparece (nunca misturadas). Turno fechado →
+  // consulta do registo completo. Salvaguarda: já na fase de fecho mas com
+  // ABERTURA pendente (ex.: tarefa adicionada depois do registo inicial
+  // fechar) → mostra as duas, senão o fecho do turno bloqueava em tarefas
+  // invisíveis. (Fecho pendente durante a abertura é o normal — não conta.)
+  const fase = faseChecklistAtual();
+  const aberturaPend = (cfg.abertura || []).some((_, i) => !(estado.abertura && estado.abertura[String(i)] && estado.abertura[String(i)].feito));
+  const mostrarAmbas = S.turnoData.estado === 'fechado' || (fase === 'fecho' && aberturaPend);
+  const tituloFase = { abertura: '🌅 Abertura', fecho: '🌙 Fecho' };
+  const corpo = mostrarAmbas
+    ? (seccao('abertura', tituloFase.abertura) || '') + (seccao('fecho', tituloFase.fecho) || '')
+    : (seccao(fase, tituloFase[fase]) || '');
+  document.getElementById('checklist-overlay')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'checklist-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:1450;display:flex;align-items:flex-end;justify-content:center';
+  ov.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:560px;width:100%;max-height:82vh;display:flex;flex-direction:column;padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px))">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 6px">
+        <div style="font-size:15px;font-weight:700;color:#f1f5f9">${mostrarAmbas ? '📋 Tarefas do turno' : `${tituloFase[fase]} — tarefas`}</div>
+        <button type="button" aria-label="Fechar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1" onclick="document.getElementById('checklist-overlay')?.remove()">✕</button>
+      </div>
+      <div style="padding:0 16px;color:#94a3b8;font-size:12px">${fase === 'abertura' && !mostrarAmbas ? 'O registo inicial <strong style="color:#fbbf24">não fecha</strong> com tarefas de abertura por marcar.' : 'O turno <strong style="color:#fbbf24">não fecha</strong> enquanto houver tarefas por marcar.'} As marcações ficam registadas com quem as fez.</div>
+      <div style="overflow-y:auto;padding:0 16px 6px;-webkit-overflow-scrolling:touch">
+        ${corpo}
+        ${!corpo ? '<div style="color:#475569;font-size:13px;padding:14px 0">Sem tarefas configuradas para esta fase. O admin/gestor define-as na página Checklist.</div>' : ''}
+      </div>
+    </div>`;
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+}
+
+/** Marca/desmarca uma tarefa: optimista no ecrã + fila offline. */
+async function alternarTarefaChecklist(fase, idx, feito) {
+  if (!S.turnoData) return;
+  const tid = S.turnoData.id;
+  try {
+    S.turnoData.checklist = S.turnoData.checklist || {};
+    S.turnoData.checklist[fase] = S.turnoData.checklist[fase] || {};
+    if (feito) S.turnoData.checklist[fase][String(idx)] = { feito: true, por: S.user?.nome || '' };
+    else delete S.turnoData.checklist[fase][String(idx)];
+    await apiEscrita('PUT', `/turnos/${tid}/checklist`, { fase, idx, feito: !!feito },
+      { tid, desc: `Tarefa ${fase} ${feito ? 'feita' : 'desmarcada'}`, chave: `chk:${tid}:${fase}:${idx}` });
+  } catch (_) {}
+  atualizarChecklistBar().catch(() => {});
+  // re-render do painel para riscar/desriscar e actualizar «quem»
+  if (document.getElementById('checklist-overlay')) abrirChecklistTurno().catch(() => {});
+}
+
 async function fecharTurno(ev, id) {
   clearStockCaixaValidationHighlight();
   document.querySelectorAll('input[data-stock-req="1"][type="number"]').forEach((el) => {
@@ -9392,6 +10251,14 @@ async function fecharTurno(ev, id) {
   if (tpaValFechar > 0 && !(S.turnoData?.caixa?.tpa_foto_url) && !tpaFotoNaFila) {
     turnoMsgErr('Registaste valor no TPA — anexa a foto do recibo de fecho do TPA (por baixo do campo TPA) antes de fechar o turno.', true);
     document.getElementById('c-tpa-foto')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    return;
+  }
+  // CHECKLIST: nenhum turno fecha com tarefas por fazer (o servidor
+  // valida também). Abre logo o painel para concluir.
+  const pendChk = await checklistPendentes(id, true).catch(() => []);
+  if (pendChk.length) {
+    turnoMsgErr(`📋 Checklist do turno incompleto — falta${pendChk.length === 1 ? '' : 'm'} ${pendChk.length} tarefa${pendChk.length === 1 ? '' : 's'}. Conclui todas antes de fechar.`, true);
+    await abrirChecklistTurno();
     return;
   }
   // Equipa real: o servidor exige pelo menos uma pessoa ao fechar — valida
@@ -10871,10 +11738,26 @@ async function loadHistorico() {
       })
       .join('');
 
+    // Turnos que PARTICIPARAM neste histórico (respeita o filtro de hora)
+    const cont = { manha: 0, tarde: 0, noite: 0 };
+    let abertos = 0;
+    rows.forEach((t) => {
+      if (cont[t.nome] !== undefined) cont[t.nome]++;
+      if (t.estado === 'aberto') abertos++;
+    });
+    const participantes = `
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 12px">
+        <span style="background:#1e293b;border:1px solid #334155;border-radius:999px;padding:3px 10px;font-size:12px;color:#e2e8f0"><strong>${rows.length}</strong> turno${rows.length === 1 ? '' : 's'} no período</span>
+        ${cont.manha ? `<span style="background:#1e293b;border-radius:999px;padding:3px 10px;font-size:12px;color:#fbbf24">🌅 ${cont.manha} manhã</span>` : ''}
+        ${cont.tarde ? `<span style="background:#1e293b;border-radius:999px;padding:3px 10px;font-size:12px;color:#60a5fa">🌤️ ${cont.tarde} tarde</span>` : ''}
+        ${cont.noite ? `<span style="background:#1e293b;border-radius:999px;padding:3px 10px;font-size:12px;color:#a78bfa">🌙 ${cont.noite} noite</span>` : ''}
+        ${abertos ? `<span style="background:rgba(22,101,52,0.25);border:1px solid #166534;border-radius:999px;padding:3px 10px;font-size:12px;color:#4ade80">${abertos} ainda aberto${abertos === 1 ? '' : 's'}</span>` : ''}
+      </div>`;
     const histHtml = `
       ${histVendasChartCardHtml(days)}
       <div class="card" style="margin-bottom:16px">
         <div class="card-title" style="margin-bottom:12px">Somatório do período (todos os turnos)</div>
+        ${participantes}
         <div style="display:grid;grid-template-columns:1fr;gap:10px;font-size:15px">
           <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#1e293b;border-radius:8px">
             <span style="color:#94a3b8">Total vendas</span>
@@ -11666,6 +12549,7 @@ async function drawArmazem() {
   window.__faturaProformaId = null;
   await refreshArmazemFundos();
   await loadArmazemData();
+  refrescarFaturaProdSelects(); // a 1ª linha nasceu antes dos produtos chegarem
   loadArmazemProformas().catch(() => {});
 }
 
@@ -12593,6 +13477,19 @@ function initFaturaLinha(line) {
 function removeFaturaLinha(btn) {
   const line = btn.closest('.fatura-linha');
   if (line) line.remove();
+}
+
+/** A 1ª linha do formulário de compras nasce ANTES de S.produtos chegar
+ *  — o select ficava vazio até se clicar «+ Linha». Depois de os produtos
+ *  carregarem, repõe as opções nos selects que ainda não as têm (nunca
+ *  mexe num select onde já há produtos/escolha feita). */
+function refrescarFaturaProdSelects() {
+  document.querySelectorAll('#fatura-linhas-body .fatura-linha .af-prod').forEach((sel) => {
+    const temProdutos = [...sel.options].some((o) => o.value && o.value !== '__novo__');
+    if (temProdutos) return;
+    renderArmazemProdutoOptions(sel, sel.value || '', sel._filterBuf || '', true);
+    toggleFaturaLinhaNovo(sel);
+  });
 }
 
 function addFaturaLinha() {
@@ -13605,6 +14502,13 @@ async function drawConfiguracoes() {
         <div id="cfg-pedido-auto-print-msg" style="margin-top:6px;font-size:11px;color:#64748b">${autoOn ? 'Activo neste dispositivo.' : 'Desactivado neste dispositivo.'}</div>
       </div>
 
+      ${['admin', 'gestor'].includes(S.user?.role) ? `
+      <div class="card mb-12" id="cfg-checklist-card">
+        <div class="card-title">📋 Checklist do turno</div>
+        <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">As tarefas obrigatórias de abertura e fecho gerem-se agora na página própria.</p>
+        <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, () => navigate('checklist'))">Abrir página Checklist</button>
+      </div>` : ''}
+
       <div class="card mb-12">
         <div class="card-title">⌨️ Teclado numérico no balcão</div>
         <p style="font-size:12px;color:#94a3b8;margin:-2px 0 12px;line-height:1.45">
@@ -13691,6 +14595,117 @@ async function drawConfiguracoes() {
   pedidoBalcaoLogoRefreshUI();
   void configTurnosBloqueadosLoad();
   void configLojasLoad();
+  void carregarChecklistCfgForm();
+}
+
+// ── PÁGINA CHECKLIST (admin/gestor): editor das tarefas do turno ──────
+async function drawChecklistPage() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">📋 Checklist do turno</div></div>
+    </div>
+    <div id="content">
+      <p style="font-size:12px;color:#64748b;margin:0 0 12px;line-height:1.45">Tarefas obrigatórias por empresa. A <strong style="color:#cbd5e1">abertura</strong> valida-se ao fechar o registo inicial; o <strong style="color:#cbd5e1">fecho</strong> valida-se ao fechar o registo dos deixados. <strong style="color:#fbbf24">Nenhum turno fecha com tarefas por fazer.</strong></p>
+      <div id="checklist-page-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadChecklistPage();
+}
+
+async function loadChecklistPage() {
+  const cont = document.getElementById('checklist-page-content');
+  if (!cont) return;
+  try {
+    const cfg = await api('GET', '/config/checklist-turno').catch(() => null) || { abertura: [], fecho: [] };
+    S.checklistCfgEdit = { abertura: [...(cfg.abertura || [])], fecho: [...(cfg.fecho || [])] };
+    S.checklistCfg = null; // as barras/portões recarregam a versão nova
+    renderChecklistPage();
+  } catch (e) {
+    cont.innerHTML = `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+/** Desenha o editor a partir de S.checklistCfgEdit (estado local). */
+function renderChecklistPage() {
+  const cont = document.getElementById('checklist-page-content');
+  if (!cont) return;
+  {
+    const seccao = (fase, titulo, exemplo) => {
+      const lista = S.checklistCfgEdit[fase];
+      const linhas = lista.map((t, i) => `
+        <div style="display:flex;gap:8px;align-items:flex-start;border-top:1px solid #1e293b;padding:8px 0">
+          <span style="color:#64748b;font-size:12px;flex-shrink:0;min-width:20px;text-align:right">${i + 1}.</span>
+          <span style="flex:1;font-size:13px;color:#e2e8f0;line-height:1.4;min-width:0">${escapeHtml(t)}</span>
+          <button type="button" title="Remover tarefa" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:14px;padding:0 2px" onclick="runAction(event, () => checklistCfgRemover('${fase}', ${i}))">✕</button>
+        </div>`).join('');
+      return `
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-title">${titulo} (${lista.length})</div>
+        ${linhas || `<div style="color:#475569;font-size:12px;padding:6px 0">Sem tarefas. Ex.: ${exemplo}</div>`}
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <input id="chk-nova-${fase}" type="text" maxlength="200" placeholder="Nova tarefa…" style="flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:13px;padding:9px 12px" onkeydown="if(event.key==='Enter'){event.preventDefault();checklistCfgAdicionar('${fase}');}"/>
+          <button type="button" class="btn btn-primary btn-sm" onclick="runAction(event, () => checklistCfgAdicionar('${fase}'))">+ Adicionar</button>
+        </div>
+      </div>`;
+    };
+    cont.innerHTML =
+      seccao('abertura', '🌅 Tarefas de ABERTURA', '«Contar o fundo de caixa», «Ligar as arcas»') +
+      seccao('fecho', '🌙 Tarefas de FECHO', '«Fechar o TPA e anexar a foto», «Trancar a porta»') +
+      `<div id="checklist-page-msg"></div>`;
+  }
+}
+
+async function checklistCfgAdicionar(fase) {
+  const inp = document.getElementById(`chk-nova-${fase}`);
+  const t = String(inp?.value || '').trim();
+  if (!t) return;
+  S.checklistCfgEdit[fase].push(t.slice(0, 200));
+  await checklistCfgGravar();
+}
+
+async function checklistCfgRemover(fase, idx) {
+  const ok = await dialogoTroca({ titulo: 'Remover tarefa', texto: `«${S.checklistCfgEdit[fase][idx]}»\nDeixa de ser exigida nos turnos. Confirmas?`, tipo: 'simnao' });
+  if (ok !== true) return;
+  S.checklistCfgEdit[fase].splice(idx, 1);
+  await checklistCfgGravar();
+}
+
+async function checklistCfgGravar() {
+  try {
+    const resp = await apiEscrita('PUT', '/config/checklist-turno',
+      { abertura: S.checklistCfgEdit.abertura, fecho: S.checklistCfgEdit.fecho },
+      { desc: 'Checklist do turno', chave: 'cfg:checklist' });
+    S.checklistCfg = null;
+    renderChecklistPage(); // redesenha já a partir do estado local
+    if (resp && resp._offline) suc('checklist-page-msg', 'Guardado neste aparelho — sincroniza quando a rede voltar.');
+  } catch (e) { err('checklist-page-msg', e && e.message || String(e)); }
+}
+
+/** Preenche os textareas do checklist com a config actual da empresa. */
+async function carregarChecklistCfgForm() {
+  const a = document.getElementById('cfg-chk-abertura');
+  const f = document.getElementById('cfg-chk-fecho');
+  if (!a || !f) return;
+  const cfg = await api('GET', '/config/checklist-turno').catch(() => null);
+  if (cfg) {
+    a.value = (cfg.abertura || []).join('\n');
+    f.value = (cfg.fecho || []).join('\n');
+  }
+}
+
+async function guardarChecklistCfg() {
+  const linhas = (id2) => String(document.getElementById(id2)?.value || '')
+    .split('\n').map((t) => t.trim()).filter(Boolean);
+  const body = { abertura: linhas('cfg-chk-abertura'), fecho: linhas('cfg-chk-fecho') };
+  try {
+    const resp = await apiEscrita('PUT', '/config/checklist-turno', body, { desc: 'Checklist do turno', chave: 'cfg:checklist' });
+    S.checklistCfg = null; // força recarga na próxima consulta
+    suc('cfg-chk-msg', resp && resp._offline
+      ? 'Checklist guardado neste aparelho — sincroniza quando a rede voltar.'
+      : 'Checklist guardado — já vale para os turnos abertos e futuros.');
+    setTimeout(() => show('cfg-chk-msg', ''), 5000);
+  } catch (e) { err('cfg-chk-msg', e.message); }
 }
 
 // ── PÁGINA EMPRESAS (só admin) ────────────────────────────────
@@ -13975,6 +14990,267 @@ function configPedidoKeypadChange(el) {
   if (msg) msg.textContent = el.checked ? 'Visível neste dispositivo.' : 'Escondido neste dispositivo.';
 }
 
+/** Monitoramento (só admin): por utilizador e por aparelho — online agora,
+ *  último login, dispositivo, última operação e registos por sincronizar
+ *  (contagem enviada pelo próprio aparelho via heartbeat de 60s). */
+async function drawMonitor() {
+  render(`
+    <div id="header">
+      <div><div style="font-size:18px;font-weight:700;color:#f1f5f9">Monitoramento</div></div>
+      <div style="display:flex;gap:6px">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, () => abrirSyncLogDispositivo(null))">⏱ Sincronizações</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="runAction(event, loadMonitor)">↻ Actualizar</button>
+      </div>
+    </div>
+    <div id="content">
+      <p style="font-size:12px;color:#64748b;margin:0 0 12px;line-height:1.45">🟢 online = aparelho com a app aberta nos últimos 2 minutos. A contagem «por sincronizar» é reportada pelo próprio aparelho a cada minuto. ⏱ abre o diário de sincronizações (geral, ou por aparelho ao lado de cada um).</p>
+      <div id="monitor-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>
+    ${navBar()}
+  `);
+  await loadMonitor();
+}
+
+async function loadMonitor() {
+  try {
+    const rows = await api('GET', '/monitor');
+    const por = {};
+    // Nº de utilizadores distintos por aparelho → selo «partilhado».
+    const usosPorAparelho = {};
+    (rows || []).forEach((r) => {
+      if (!r.dispositivo_id) return;
+      (usosPorAparelho[r.dispositivo_id] = usosPorAparelho[r.dispositivo_id] || new Set()).add(String(r.id));
+    });
+    (rows || []).forEach((r) => {
+      if (!por[r.id]) por[r.id] = { nome: r.nome, role: r.role, ativo: r.ativo, dispositivos: [] };
+      if (r.dispositivo_id) por[r.id].dispositivos.push(r);
+    });
+    const agora = Date.now();
+    const fmtDt = (d) => d ? new Date(d).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+    const rel = (d) => {
+      if (!d) return '—';
+      const m = Math.round((agora - new Date(d).getTime()) / 60000);
+      if (m < 1) return 'agora mesmo';
+      if (m < 60) return `há ${m} min`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `há ${h} h`;
+      return `há ${Math.floor(h / 24)} dia${Math.floor(h / 24) === 1 ? '' : 's'}`;
+    };
+    const cards = Object.values(por).filter((u) => u.dispositivos.length > 0).map((u) => {
+      const roleLabel = u.role === 'compras' ? 'operador de sistema' : u.role;
+      const algumOnline = u.dispositivos.some((d) => d.visto_em && (agora - new Date(d.visto_em).getTime()) < 2 * 60000);
+      const disps = u.dispositivos.length === 0
+        ? '<div style="color:#475569;font-size:12px;padding:6px 0">Nunca usou a app (ou ainda sem heartbeat registado).</div>'
+        : u.dispositivos.map((d) => {
+            const online = d.visto_em && (agora - new Date(d.visto_em).getTime()) < 2 * 60000;
+            const pend = parseInt(d.pendentes, 10) || 0;
+            window.__monitorNomes = window.__monitorNomes || {};
+            window.__monitorNomes[d.dispositivo_id] = d.dispositivo_nome || '';
+            const rotulo = d.dispositivo_nome
+              ? `<strong style="color:#f1f5f9">${escapeHtml(d.dispositivo_nome)}</strong> <span style="color:#64748b">(${escapeHtml(d.descricao || 'aparelho')})</span>`
+              : `<span style="color:#cbd5e1">${escapeHtml(d.descricao || 'Aparelho')}</span>`;
+            return `<div style="border-top:1px solid #1e293b;padding:7px 0;font-size:12px;display:flex;flex-direction:column;gap:3px">
+              <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+                <span>${online ? '🟢 <strong style="color:#4ade80">online</strong>' : `⚪ <span style="color:#94a3b8">visto ${rel(d.visto_em)}</span>`} · 📱 ${rotulo} <span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 6px;color:#93c5fd;font-family:monospace">#${escapeHtml(String(d.dispositivo_id).replace(/^d-/, '').slice(0, 4).toUpperCase())}</span>${(usosPorAparelho[d.dispositivo_id] && usosPorAparelho[d.dispositivo_id].size > 1) ? ` <span style="background:#3f1d6a;color:#d8b4fe;border-radius:6px;padding:0 6px;font-size:10px">partilhado · ${usosPorAparelho[d.dispositivo_id].size} utilizadores</span>` : ''} <button type="button" title="Dar nome ao aparelho" style="background:none;border:none;cursor:pointer;color:#64748b;padding:0 2px" onclick="runAction(event, () => renomearDispositivo('${escapeHtml(d.dispositivo_id)}'))">✏️</button> <button type="button" title="Diário de sincronizações deste aparelho" style="background:none;border:none;cursor:pointer;color:#64748b;padding:0 2px" onclick="runAction(event, () => abrirSyncLogDispositivo('${escapeHtml(d.dispositivo_id)}'))">⏱</button></span>
+                <span>${pend > 0 ? `<strong style="background:#7f1d1d;color:#fecaca;border-radius:999px;padding:1px 8px">⏳ ${pend} por sincronizar</strong>` : '<span style="color:#4ade80">✓ 0 em fila</span>'}</span>
+              </div>
+              <div style="color:#64748b">${d.empresa_nome || d.loja_nome ? `🏢 <span style="color:#cbd5e1">${escapeHtml(d.empresa_nome || '—')}</span> · 🏪 <span style="color:#cbd5e1">${escapeHtml(d.loja_nome || '—')}</span> · ` : ''}Última vez logado: <strong style="color:#cbd5e1">${fmtDt(d.visto_em)}</strong> · Última operação: <strong style="color:#cbd5e1">${fmtDt(d.ultima_operacao)}</strong></div>
+              ${d.versao ? `<div style="color:#64748b">Versão da app: ${d.versao === (document.documentElement.getAttribute('data-stockos-ui') || '') ? `<span style="color:#4ade80">✓ ${escapeHtml(String(d.versao).toUpperCase())}</span>` : `<span style="color:#fbbf24">⚠ ${escapeHtml(String(d.versao).toUpperCase())} — desactualizada</span>`}</div>` : ''}
+            </div>`;
+          }).join('');
+      return `<div class="card" style="margin-bottom:10px;padding:12px 14px">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+          <div><strong style="color:#f1f5f9">${escapeHtml(u.nome)}</strong> <span style="color:#64748b;font-size:12px">· ${escapeHtml(roleLabel)}${u.ativo === false ? ' · inactivo' : ''}</span></div>
+          ${algumOnline ? '<span style="font-size:11px;color:#4ade80">● ligado</span>' : ''}
+        </div>
+        ${disps}
+      </div>`;
+    }).join('');
+    show('monitor-content', cards || '<div class="card"><p style="color:#94a3b8;margin:0">Ainda ninguém esteve online nesta empresa — as linhas aparecem quando os aparelhos entrarem na app.</p></div>');
+  } catch (e) {
+    show('monitor-content', `<div class="alert alert-error">${escapeHtml(e.message)}</div>`);
+  }
+}
+
+/** Diário de sincronizações: cada tentativa com a descrição, tempo de
+ *  resposta, espera na fila, resultado e motivo. Com dispId → só esse
+ *  aparelho; sem dispId → VISÃO GERAL de todos os aparelhos da empresa.
+ *  Retenção no servidor: 30 dias. */
+async function abrirSyncLogDispositivo(dispId) {
+  document.getElementById('synclog-overlay')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'synclog-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:1450;display:flex;align-items:flex-end;justify-content:center';
+  const geral = !dispId;
+  const codigo = geral ? '' : '#' + String(dispId).replace(/^d-/, '').slice(0, 4).toUpperCase();
+  const nome = geral ? '' : (window.__monitorNomes || {})[dispId] || '';
+  const titulo = geral
+    ? '⏱ Sincronizações — todos os aparelhos'
+    : `⏱ Sincronizações — ${escapeHtml(nome || 'aparelho')} <span style="font-family:monospace;color:#93c5fd">${escapeHtml(codigo)}</span>`;
+  ov.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:640px;width:100%;max-height:85vh;display:flex;flex-direction:column;padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px))">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 6px">
+        <div style="font-size:15px;font-weight:700;color:#f1f5f9">${titulo}</div>
+        <button type="button" aria-label="Fechar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1" onclick="document.getElementById('synclog-overlay')?.remove()">✕</button>
+      </div>
+      <div id="synclog-corpo" style="overflow-y:auto;padding:0 16px 6px;-webkit-overflow-scrolling:touch"><div class="text-center" style="padding:30px;color:#64748b"><div class="spinner"></div></div></div>
+    </div>`;
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+  const corpo = () => document.getElementById('synclog-corpo');
+  try {
+    const linhas = await api('GET', geral ? '/monitor/sync-log' : `/monitor/sync-log?dispositivo=${encodeURIComponent(dispId)}`);
+    if (!corpo()) return;
+    const lista = Array.isArray(linhas) ? linhas : [];
+    if (!lista.length) {
+      corpo().innerHTML = `<div style="color:#475569;font-size:13px;padding:14px 0">Ainda sem sincronizações registadas ${geral ? '' : 'deste aparelho '}(o diário começou com a versão actual da app). Guardado 30 dias.</div>`;
+      return;
+    }
+    window.__syncLogDados = lista;
+    window.__syncLogGeral = geral;
+    // Filtros: pesquisa, resultado e (na visão geral) aparelho. A escrita
+    // no campo só redesenha a LISTA (#synclog-lista) — o campo mantém o
+    // foco e o texto.
+    const dispsVistos = [...new Set(lista.map((x) => x.dispositivo_id).filter(Boolean))];
+    const nomeDisp = (id) => {
+      const n = (window.__monitorNomes || {})[id] || '';
+      return '#' + String(id).replace(/^d-/, '').slice(0, 4).toUpperCase() + (n ? ` · ${n}` : '');
+    };
+    const selEstilo = 'background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:12px;padding:7px 8px';
+    corpo().innerHTML = `
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 8px">
+        <input id="synclog-busca" type="text" placeholder="🔍 Procurar descrição, motivo, quem, ref…" style="flex:1;min-width:150px;${selEstilo}" oninput="renderSyncLogLista()"/>
+        <select id="synclog-res" style="${selEstilo}" onchange="renderSyncLogLista()">
+          <option value="">Tudo</option>
+          <option value="ok">✓ entradas</option>
+          <option value="rejeitado">✗ rejeitadas</option>
+          <option value="adiado">↻ adiadas</option>
+        </select>
+        ${geral && dispsVistos.length > 1 ? `<select id="synclog-disp" style="${selEstilo}" onchange="renderSyncLogLista()">
+          <option value="">Todos os aparelhos</option>
+          ${dispsVistos.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(nomeDisp(id))}</option>`).join('')}
+        </select>` : ''}
+      </div>
+      <div id="synclog-lista"></div>`;
+    renderSyncLogLista();
+  } catch (e) {
+    if (corpo()) corpo().innerHTML = `<div class="alert alert-error">${escapeHtml(e && e.message || String(e))}</div>`;
+  }
+}
+
+/** Redesenha a lista do diário aplicando os filtros (o resumo acompanha
+ *  o que está filtrado). Nunca toca nos controlos — só em #synclog-lista. */
+function renderSyncLogLista() {
+  const alvo = document.getElementById('synclog-lista');
+  if (!alvo) return;
+  const geral = window.__syncLogGeral === true;
+  const todos = Array.isArray(window.__syncLogDados) ? window.__syncLogDados : [];
+  const txt = String(document.getElementById('synclog-busca')?.value || '').trim().toLowerCase();
+  const res = String(document.getElementById('synclog-res')?.value || '');
+  const dispSel = String(document.getElementById('synclog-disp')?.value || '');
+  const nomeDe = (id) => (window.__monitorNomes || {})[id] || '';
+  const lista = todos.filter((x) => {
+    if (res === 'adiado' && !['transitorio', 'sem-rede'].includes(x.resultado)) return false;
+    if (res && res !== 'adiado' && x.resultado !== res) return false;
+    if (dispSel && String(x.dispositivo_id) !== dispSel) return false;
+    if (txt) {
+      const palheiro = [x.descricao, x.motivo, x.utilizador_nome, x.caminho, x.dispositivo_id, nomeDe(x.dispositivo_id), x.ref]
+        .map((v) => String(v || '').toLowerCase()).join(' ');
+      if (!palheiro.includes(txt)) return false;
+    }
+    return true;
+  });
+  const filtrado = !!(txt || res || dispSel);
+  if (!lista.length) {
+    alvo.innerHTML = '<div style="color:#475569;font-size:13px;padding:14px 0">Nada corresponde aos filtros.</div>';
+    return;
+  }
+  // Resumo das últimas 24h (do conjunto filtrado).
+  const h24 = lista.filter((x) => Date.now() - new Date(x.criado_em).getTime() < 24 * 3600000);
+  const ok24 = h24.filter((x) => x.resultado === 'ok');
+  const rej24 = h24.filter((x) => x.resultado === 'rejeitado');
+  const durs = ok24.map((x) => parseInt(x.duracao_ms, 10) || 0);
+  const med = durs.length ? Math.round(durs.reduce((s, v) => s + v, 0) / durs.length) : 0;
+  const max = durs.length ? Math.max(...durs) : 0;
+  // Tempos SEMPRE em segundos (0,4s · 6,2s · 45s); acima de 2 min, em minutos.
+  const ms = (v) => {
+    const s = (parseInt(v, 10) || 0) / 1000;
+    if (s >= 120) return Math.round(s / 60) + 'min';
+    return (s >= 10 ? String(Math.round(s)) : s.toFixed(1)).replace('.', ',') + 's';
+  };
+  const corDur = (v) => v < 1500 ? '#4ade80' : v < 5000 ? '#fbbf24' : '#f87171';
+  const rotRes = { ok: ['✓ entrou', '#4ade80'], rejeitado: ['✗ rejeitado', '#f87171'], transitorio: ['↻ adiado (servidor)', '#fbbf24'], 'sem-rede': ['↻ adiado (sem rede)', '#94a3b8'] };
+  const fmtHora = (d) => new Date(d).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const chipDisp = (id) => {
+    const cod = '#' + String(id || '').replace(/^d-/, '').slice(0, 4).toUpperCase();
+    const n = nomeDe(id);
+    return `<span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:0 5px;color:#93c5fd;font-family:monospace;font-size:10.5px">${escapeHtml(cod)}</span>${n ? ` <span style="color:#94a3b8">${escapeHtml(n)}</span>` : ''}`;
+  };
+  const itens = lista.map((x) => {
+    const [rot, cor] = rotRes[x.resultado] || ['—', '#94a3b8'];
+    const dur = parseInt(x.duracao_ms, 10) || 0;
+    const esp = parseInt(x.espera_ms, 10) || 0;
+    return `<div style="border-top:1px solid #1e293b;padding:8px 0;font-size:12.5px">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <span style="color:#e2e8f0;min-width:0">${geral ? chipDisp(x.dispositivo_id) + ' ' : ''}${escapeHtml(x.descricao || x.caminho || '')}</span>
+        <span style="color:${cor};font-weight:600;white-space:nowrap">${rot}</span>
+      </div>
+      <div style="color:#64748b;margin-top:2px">${fmtHora(x.tentativa_em || x.criado_em)} · ${escapeHtml(x.utilizador_nome || '')} · resposta <strong style="color:${corDur(dur)}">${ms(dur)}</strong>${esp > 3000 ? ` · esperou na fila <strong style="color:${corDur(esp)}">${ms(esp)}</strong>` : ''}${x.ref ? ` · <span style="font-family:monospace;font-size:10.5px;color:#7d8db1" title="Identificador do registo (client_ref) — pesquisável aqui e na idempotência do servidor">ref ${escapeHtml(String(x.ref))}</span>` : ''}</div>
+      ${x.motivo ? `<div style="color:${/^Diagnóstico:/.test(x.motivo) ? '#94a3b8' : '#fca5a5'};margin-top:2px;white-space:pre-wrap">${escapeHtml(String(x.motivo).slice(0, 300))}</div>` : ''}
+    </div>`;
+  }).join('');
+  // Visão geral sem aparelho escolhido: resumo POR APARELHO (pior primeiro).
+  let porAparelho = '';
+  if (geral && !dispSel) {
+    const agg = {};
+    h24.forEach((x) => {
+      const a = (agg[x.dispositivo_id] = agg[x.dispositivo_id] || { ok: 0, rej: 0, durs: [] });
+      if (x.resultado === 'ok') { a.ok++; a.durs.push(parseInt(x.duracao_ms, 10) || 0); }
+      else if (x.resultado === 'rejeitado') a.rej++;
+    });
+    porAparelho = Object.entries(agg)
+      .sort((a, b) => (b[1].rej - a[1].rej) || (Math.max(0, ...b[1].durs) - Math.max(0, ...a[1].durs)))
+      .map(([id, a]) => {
+        const m2 = a.durs.length ? Math.round(a.durs.reduce((s, v) => s + v, 0) / a.durs.length) : 0;
+        return `<div style="display:flex;justify-content:space-between;gap:8px;border-top:1px solid #1e293b;padding:6px 0;font-size:12px;align-items:center">
+          <span>${chipDisp(id)}</span>
+          <span style="color:#cbd5e1;white-space:nowrap"><strong style="color:#4ade80">${a.ok} ✓</strong>${a.rej ? ` · <strong style="color:#f87171">${a.rej} ✗</strong>` : ''}${a.durs.length ? ` · média <strong style="color:${corDur(m2)}">${ms(m2)}</strong>` : ''}</span>
+        </div>`;
+      }).join('');
+    if (porAparelho) porAparelho = `<div style="margin:2px 0 8px"><div style="font-size:0.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:6px 0 2px">Últimas 24h por aparelho</div>${porAparelho}</div>`;
+  }
+  alvo.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px;font-size:11.5px">
+      <span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#cbd5e1">Últimas 24h${filtrado ? ' (filtrado)' : ''}: <strong style="color:#4ade80">${ok24.length} ✓</strong>${rej24.length ? ` · <strong style="color:#f87171">${rej24.length} ✗</strong>` : ''}</span>
+      ${durs.length ? `<span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#cbd5e1">resposta média <strong style="color:${corDur(med)}">${ms(med)}</strong> · máx <strong style="color:${corDur(max)}">${ms(max)}</strong></span>` : ''}
+      <span style="background:#1e293b;border-radius:8px;padding:3px 8px;color:#64748b">guardado 30 dias</span>
+    </div>
+    ${porAparelho}
+    ${geral ? `<div style="font-size:0.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:6px 0 2px">${filtrado ? 'Tentativas (filtradas)' : 'Todas as tentativas'} · ${lista.length}</div>` : ''}
+    ${itens}`;
+}
+
+/** Admin dá um nome ao aparelho (ex.: «Balcão 1») — vale para o aparelho
+ *  inteiro, em todas as contas que o usam. Vazio remove o nome. */
+async function renomearDispositivo(dispId) {
+  const atual = (window.__monitorNomes || {})[dispId] || '';
+  const nome = await dialogoTroca({
+    titulo: '📱 Nome do aparelho',
+    texto: 'Dá um nome a este aparelho (ex.: Balcão 1, Telemóvel do gestor).\nDeixa vazio para remover o nome.',
+    tipo: 'texto',
+    valor: atual,
+    placeholder: 'Nome do aparelho',
+    botaoOk: 'Guardar'
+  });
+  if (nome === null) return;
+  try {
+    await api('PUT', '/monitor/dispositivo', { dispositivo_id: dispId, nome: String(nome).trim() });
+    await loadMonitor();
+  } catch (e) {
+    alert('Não foi possível guardar o nome (precisa de internet): ' + (e && e.message || e));
+  }
+}
+
 async function drawAdmin() {
   render(`
     <div id="header">
@@ -14042,8 +15318,8 @@ function showUserForm(u) {
       <div class="field"><label>Nome</label><input id="u-nome" value="${u?.nome||''}"/></div>
       <div class="field"><label>Nome de utilizador <span style="font-weight:400;color:#64748b">(opcional)</span></label><input id="u-username" type="text" value="${u?.username||''}" placeholder="apenas letras minúsculas, números, . _ -" autocapitalize="off"/></div>
       ${!isEdit?`<div class="field"><label>Email <span style="font-weight:400;color:#64748b">(opcional)</span></label><input id="u-email" type="email" value=""/></div>
-      <div class="field"><label>Password inicial <span style="font-weight:400;color:#f87171">(obrigatória)</span></label><input id="u-pass-inicial" type="password" placeholder="Mín. 6 caracteres"/></div>
-      <div style="font-size:11px;color:#64748b;margin:-6px 0 12px">Sem nome de utilizador nem email, o funcionário fica registado mas não consegue iniciar sessão.</div>`:''}
+      <div class="field"><label>Password inicial <span style="font-weight:400;color:#64748b">(opcional — só para quem vai aceder ao sistema)</span></label><input id="u-pass-inicial" type="password" placeholder="Mín. 6 caracteres"/></div>
+      <div style="font-size:11px;color:#64748b;margin:-6px 0 12px">Sem password (ou sem utilizador/email), o funcionário fica registado — para escala, assiduidade e comissões — mas não consegue iniciar sessão. Nunca existe password padrão.</div>`:''}
       <div class="field"><label>Role</label>
         <select id="u-role" onchange="userFormToggleLoja()">
           <option value="operador" ${u?.role==='operador'?'selected':''}>Operador</option>
@@ -14052,6 +15328,13 @@ function showUserForm(u) {
           <option value="admin"    ${u?.role==='admin'?'selected':''}>Admin</option>
         </select>
       </div>
+      ${S.user?.role === 'admin' ? `
+      <div class="field"><label>Empresa</label>
+        <select id="u-empresa" onchange="userFormEmpresaChange()">
+          ${(S.empresas || []).map((e) => `<option value="${e.id}" ${String(u?.empresa_id ?? empresaAtivaId()) === String(e.id) ? 'selected' : ''}>🏢 ${escapeHtml(e.nome)}</option>`).join('')}
+        </select>
+        <div style="font-size:11px;color:#64748b;margin-top:3px">O utilizador pertence a esta empresa; a loja fixa vem das lojas dela.</div>
+      </div>` : ''}
       <div class="field" id="u-loja-wrap">
         <label>Loja fixa <span style="font-weight:400;color:#64748b">(operador / operador de sistema trabalham numa só loja)</span></label>
         <select id="u-loja">
@@ -14119,6 +15402,38 @@ function showUserForm(u) {
       wrap.style.display = modoSel.value === 'total' ? 'block' : 'none';
     });
   }
+  if (S.user?.role === 'admin') userFormPrepararEmpresas(u).catch(() => {});
+}
+
+/** Admin: garante a lista de empresas no formulário do utilizador e
+ *  sincroniza as lojas com a empresa seleccionada (em edição, a do próprio
+ *  utilizador; em criação, a empresa activa). */
+async function userFormPrepararEmpresas(u) {
+  const sel = document.getElementById('u-empresa');
+  if (!sel) return;
+  if (!sel.options.length) {
+    S.empresas = await api('GET', '/empresas').catch(() => []) || [];
+    sel.innerHTML = S.empresas.map((e) => `<option value="${e.id}">🏢 ${escapeHtml(e.nome)}</option>`).join('');
+  }
+  const alvo = u && u.empresa_id != null ? String(u.empresa_id) : String(empresaAtivaId());
+  if ([...sel.options].some((o) => o.value === alvo)) sel.value = alvo;
+  await userFormEmpresaChange(u && u.loja_id != null ? u.loja_id : undefined);
+}
+
+/** Recarrega as opções da loja fixa com as lojas da empresa escolhida. */
+async function userFormEmpresaChange(lojaPre) {
+  const selLoja = document.getElementById('u-loja');
+  const empId = val('u-empresa');
+  if (!selLoja || !empId) return;
+  let lojas = [];
+  try {
+    lojas = String(empId) === String(empresaAtivaId())
+      ? (S.lojas || [])
+      : await api('GET', `/lojas?empresa=${empId}`);
+  } catch (_) { lojas = []; }
+  const atual = lojaPre !== undefined ? String(lojaPre ?? '') : String(selLoja.value || '');
+  selLoja.innerHTML = '<option value="">— Sem loja fixa —</option>' +
+    (lojas || []).map((l) => `<option value="${l.id}" ${String(l.id) === atual ? 'selected' : ''}>🏪 ${escapeHtml(l.nome)}</option>`).join('');
 }
 
 /** Campos da ficha do funcionário lidos do formulário. Os campos
@@ -14148,11 +15463,12 @@ function emailVisivel(email) {
 async function createUser() {
   try {
     const passInicial = val('u-pass-inicial');
-    if (!passInicial || passInicial.length < 6) {
-      err('user-form-msg', 'Define a password inicial (mínimo 6 caracteres) — não existe password padrão.');
+    if (passInicial && passInicial.length < 6) {
+      err('user-form-msg', 'A password inicial, quando definida, tem de ter pelo menos 6 caracteres.');
       return;
     }
     const body = {nome:val('u-nome'),email:val('u-email'),username:val('u-username'),role:val('u-role'),password:passInicial,loja_id:val('u-loja'),...fichaFuncionarioBody()};
+    if (document.getElementById('u-empresa')) body.empresa_id = val('u-empresa');
     if (['operador','compras'].includes(body.role) && !body.loja_id) {
       err('user-form-msg', 'Operador e operador de sistema trabalham numa loja fixa — escolhe a loja.');
       return;
@@ -14162,7 +15478,7 @@ async function createUser() {
     const extras = [resp && resp.aviso_login, resp && resp.aviso].filter(Boolean).map((a) => ' ⚠ ' + a).join('');
     suc('admin-msg', resp && resp._offline
       ? 'Utilizador guardado neste aparelho — a conta é criada quando a rede voltar.'
-      : 'Utilizador criado com a password definida.' + extras);
+      : (passInicial ? 'Utilizador criado com a password definida.' : 'Funcionário registado sem acesso ao sistema.') + extras);
     await loadUtilizadores().catch(() => {});
   } catch(e) { err('user-form-msg',e.message); }
 }
@@ -14170,6 +15486,7 @@ async function createUser() {
 async function saveUser(id) {
   try {
     const body = {nome:val('u-nome'),username:val('u-username'),role:val('u-role'),ativo:val('u-ativo')==='true',loja_id:val('u-loja'),...fichaFuncionarioBody()};
+    if (document.getElementById('u-empresa')) body.empresa_id = val('u-empresa');
     if (['operador','compras'].includes(body.role) && !body.loja_id) {
       err('user-form-msg', 'Operador e operador de sistema trabalham numa loja fixa — escolhe a loja.');
       return;

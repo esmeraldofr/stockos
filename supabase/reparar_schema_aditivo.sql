@@ -54,9 +54,24 @@ ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS produto_nome_livre TEXT NOT 
 ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT;
 ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS turno_pedidos (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, cliente_nome TEXT NOT NULL DEFAULT '', tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro', com_entrega BOOLEAN NOT NULL DEFAULT FALSE, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW());
 ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS com_entrega BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro';
 ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS valor_entrega NUMERIC(15,2) NOT NULL DEFAULT 0;
+-- turno_pedido_linhas pode não existir (é criada on-demand no 1º pedido);
+-- produto_id tem de seguir o tipo real de produtos.id (UUID vs INTEGER).
+DO $$
+DECLARE pid_type text;
+BEGIN
+  SELECT data_type INTO pid_type FROM information_schema.columns
+   WHERE table_schema='public' AND table_name='produtos' AND column_name='id';
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='turno_pedido_linhas') THEN
+    EXECUTE format(
+      'CREATE TABLE turno_pedido_linhas (id SERIAL PRIMARY KEY, pedido_id INTEGER NOT NULL REFERENCES turno_pedidos(id) ON DELETE CASCADE, produto_id %s NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT, quantidade NUMERIC(10,3) NOT NULL DEFAULT 0)',
+      CASE WHEN pid_type='uuid' THEN 'UUID' WHEN pid_type='bigint' THEN 'BIGINT' ELSE 'INTEGER' END);
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_turno_pedido_linhas_pedido ON turno_pedido_linhas (pedido_id);
 ALTER TABLE turno_pedido_linhas ADD COLUMN IF NOT EXISTS qtd_devolvida NUMERIC(10,3) NOT NULL DEFAULT 0;
 ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS deixado_caixa NUMERIC(10,3);
 ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS encontrado_caixa NUMERIC(10,3);
@@ -127,3 +142,29 @@ ALTER TABLE produtos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAUL
 ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_turnos_loja_data_nome ON turnos (loja_id, data, nome);
 CREATE INDEX IF NOT EXISTS idx_turnos_loja_data ON turnos (loja_id, data);
+CREATE TABLE IF NOT EXISTS monitor_dispositivos (id SERIAL PRIMARY KEY, utilizador_id UUID NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE, dispositivo_id TEXT NOT NULL, descricao TEXT NOT NULL DEFAULT '', ultimo_login TIMESTAMPTZ, ultima_operacao TIMESTAMPTZ, pendentes INTEGER NOT NULL DEFAULT 0, visto_em TIMESTAMPTZ NOT NULL DEFAULT NOW(), empresa_id INTEGER, loja_id INTEGER, UNIQUE (utilizador_id, dispositivo_id));
+ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS empresa_id INTEGER;
+ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS loja_id INTEGER;
+ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS nome TEXT NOT NULL DEFAULT '';
+ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS versao TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS avisos (id SERIAL PRIMARY KEY, empresa_id INTEGER NOT NULL DEFAULT 1, loja_id INTEGER, texto TEXT NOT NULL, criado_por TEXT NOT NULL DEFAULT '', ativo BOOLEAN NOT NULL DEFAULT TRUE, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(), valido_ate TIMESTAMPTZ);
+ALTER TABLE avisos ADD COLUMN IF NOT EXISTS valido_ate TIMESTAMPTZ;
+ALTER TABLE turnos ADD COLUMN IF NOT EXISTS checklist JSONB;
+CREATE TABLE IF NOT EXISTS monitor_sync_log (id SERIAL PRIMARY KEY, empresa_id INTEGER, loja_id INTEGER, utilizador_id UUID, utilizador_nome TEXT NOT NULL DEFAULT '', dispositivo_id TEXT NOT NULL, descricao TEXT NOT NULL DEFAULT '', caminho TEXT NOT NULL DEFAULT '', resultado TEXT NOT NULL DEFAULT 'ok', motivo TEXT NOT NULL DEFAULT '', duracao_ms INTEGER NOT NULL DEFAULT 0, espera_ms BIGINT NOT NULL DEFAULT 0, tentativa_em TIMESTAMPTZ, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW());
+CREATE INDEX IF NOT EXISTS idx_sync_log_criado ON monitor_sync_log (criado_em);
+CREATE INDEX IF NOT EXISTS idx_sync_log_disp ON monitor_sync_log (dispositivo_id, criado_em DESC);
+ALTER TABLE monitor_sync_log ADD COLUMN IF NOT EXISTS ref TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_turno_pedidos_turno ON turno_pedidos (turno_id);
+CREATE INDEX IF NOT EXISTS idx_turno_entradas_turno ON turno_entradas (turno_id);
+CREATE INDEX IF NOT EXISTS idx_turno_saidas_turno ON turno_saidas (turno_id);
+CREATE INDEX IF NOT EXISTS idx_turno_caixa_entradas_turno ON turno_caixa_entradas (turno_id);
+CREATE INDEX IF NOT EXISTS idx_auditoria_criado ON auditoria (criado_em);
+-- Selo do schema: com este valor igual ao DDL_OK_VERSION do código, o
+-- servidor salta os DDL dos ensure* no arranque frio (resposta rápida).
+-- Ao acrescentar schema novo: bump AQUI e no server.js (mesmo valor).
+INSERT INTO stockos_meta (k, v) VALUES ('ddl_ok', '2026-08-03-1') ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v;
+-- Únicos que o código usa em ON CONFLICT / valida na aplicação — com
+-- dedup prévio onde pode haver lixo antigo (mantém a linha mais recente).
+DELETE FROM turno_vendas a USING turno_vendas b WHERE a.turno_id=b.turno_id AND a.produto_id=b.produto_id AND a.id<b.id;
+CREATE UNIQUE INDEX IF NOT EXISTS turno_vendas_turno_id_produto_id_key ON turno_vendas (turno_id, produto_id);
+CREATE UNIQUE INDEX IF NOT EXISTS utilizadores_email_key ON utilizadores (email);

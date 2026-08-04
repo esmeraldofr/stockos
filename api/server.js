@@ -227,6 +227,7 @@ async function ensurePgSingleton() {
         ]);
         _pgSingleton = sqlConn;
         _activeDbUrl = url;
+        verificarSeloDdl(sqlConn); // em fundo — não atrasa a 1ª resposta
         return _pgSingleton;
       } catch (e) {
         lastErr = e;
@@ -238,7 +239,32 @@ async function ensurePgSingleton() {
   throw lastErr;
 }
 
+// ── SELO DO SCHEMA ─ As dezenas de «ensure*» (CREATE TABLE/ALTER IF NOT
+// EXISTS) corriam TODAS em cada arranque frio: segundos de DDL inútil e
+// bloqueios (ACCESS EXCLUSIVE) atrás de leituras longas. Quando o selo
+// «ddl_ok» na stockos_meta coincide com a versão do código, o query()
+// salta esses DDL instantaneamente — o schema já está garantido.
+// REGRA: ao acrescentar schema novo, actualizar DDL_OK_VERSION AQUI e o
+// INSERT no fim de supabase/reparar_schema_aditivo.sql (mesmo valor);
+// correr o «Reparar schema» (ou fix-dev-schema) repõe o selo.
+const DDL_OK_VERSION = '2026-08-03-1';
+let __ddlSkip = false;
+let __ddlVerificado = false;
+const DDL_SALTAVEL = /^\s*(CREATE TABLE IF NOT EXISTS|CREATE (UNIQUE )?INDEX IF NOT EXISTS|ALTER TABLE [\s\S]*?ADD COLUMN IF NOT EXISTS|ALTER TABLE [\s\S]*?DROP NOT NULL)/i;
+function verificarSeloDdl(sqlConn) {
+  if (__ddlVerificado) return;
+  __ddlVerificado = true;
+  (async () => {
+    try {
+      const r = await sqlConn.unsafe(`SELECT v FROM stockos_meta WHERE k='ddl_ok'`, []);
+      __ddlSkip = !!(r && r[0] && r[0].v === DDL_OK_VERSION);
+      if (__ddlSkip) console.log(`[boot] selo ddl_ok=${DDL_OK_VERSION} — DDL dos ensure* saltado`);
+    } catch (_) { /* sem selo/tabela — ensures correm como sempre */ }
+  })();
+}
+
 const query = async (text, params) => {
+  if (__ddlSkip && DDL_SALTAVEL.test(text)) return { rows: [] };
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -797,7 +823,24 @@ function isStockosApiReadOnly() {
   return false;
 }
 
-app.use(cors({ origin: '*' }));
+app.use(cors({ origin: '*', exposedHeaders: ['X-Srv-Ms', 'X-Srv-Boot-S'] }));
+// ── Auto-diagnóstico de latência ─ X-Srv-Ms: tempo DENTRO do servidor;
+// X-Srv-Boot-S: idade da instância (0–10s = este pedido pagou arranque
+// frio). O diário de sincronizações usa-os para dizer ONDE se perdeu o
+// tempo quando uma resposta é lenta.
+const __bootTs = Date.now();
+app.use((req, res, next) => {
+  const t0 = Date.now();
+  const wh = res.writeHead;
+  res.writeHead = function (...a) {
+    try {
+      res.setHeader('X-Srv-Ms', String(Date.now() - t0));
+      res.setHeader('X-Srv-Boot-S', String(Math.round((t0 - __bootTs) / 1000)));
+    } catch (_) {}
+    return wh.apply(this, a);
+  };
+  next();
+});
 app.use((req, res, next) => {
   res.setHeader('X-StockOS-Api-Build', STOCKOS_API_BUILD);
   res.setHeader('X-StockOS-Tier', stockosDeploymentTier());
@@ -836,6 +879,12 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ erro: 'Credenciais inválidas' });
     }
     const user = r.rows[0];
+    // Conta registada SEM password (funcionário sem acesso ao sistema):
+    // nunca autentica — não existe password padrão.
+    if (!user.senha_hash) {
+      auditLoginAttempt(req, res, 401, login, user);
+      return res.status(401).json({ erro: 'Esta conta não tem password definida — pede ao administrador para definir uma.' });
+    }
     if (user.senha_hash !== hashPassword(password)) {
       auditLoginAttempt(req, res, 401, login, user);
       return res.status(401).json({ erro: 'Credenciais inválidas' });
@@ -1031,12 +1080,44 @@ function auditSanitizeBody(body) {
 }
 
 /** Middleware: regista POST/PUT/DELETE /api/* depois da resposta. Não bloqueia o pedido. */
+// ── Limpeza automática da auditoria: retém só os últimos 30 dias ──────
+// Corre no máximo 1×/dia (marcador em stockos_meta partilhado entre
+// instâncias; trinco em memória evita bater na meta a cada pedido).
+let __auditoriaLimpezaTs = 0;
+async function limparAuditoriaAntiga() {
+  const agora = Date.now();
+  if (agora - __auditoriaLimpezaTs < 6 * 3600000) return;
+  __auditoriaLimpezaTs = agora;
+  try {
+    const hoje = new Date().toISOString().slice(0, 10);
+    const m = await query(`SELECT v FROM stockos_meta WHERE k='auditoria_limpeza'`);
+    if (m.rows.length && m.rows[0].v >= hoje) return;
+    await query(
+      `INSERT INTO stockos_meta (k,v) VALUES ('auditoria_limpeza',$1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`, [hoje]);
+    const r = await query(`DELETE FROM auditoria WHERE criado_em < NOW() - INTERVAL '30 days'`);
+    if (r.rowCount) console.log(`[auditoria] limpeza diária: ${r.rowCount} registos com mais de 30 dias removidos`);
+    // Idempotência: só é útil durante a janela de re-tentativas da fila
+    // offline — 14 dias de retenção chegam e sobram.
+    const r2 = await query(`DELETE FROM ops_idempotencia WHERE criado_em < NOW() - INTERVAL '14 days'`).catch(() => ({ rowCount: 0 }));
+    if (r2.rowCount) console.log(`[idempotencia] limpeza diária: ${r2.rowCount} registos removidos`);
+    // Diário de sincronizações: retenção de 1 mês.
+    const r3 = await query(`DELETE FROM monitor_sync_log WHERE criado_em < NOW() - INTERVAL '30 days'`).catch(() => ({ rowCount: 0 }));
+    if (r3.rowCount) console.log(`[sync-log] limpeza diária: ${r3.rowCount} registos com mais de 30 dias removidos`);
+  } catch (_) { /* melhor esforço — tenta de novo no dia seguinte */ }
+}
+
 app.use(function auditMiddleware(req, res, next) {
   const m = String(req.method || '').toUpperCase();
   if (m !== 'POST' && m !== 'PUT' && m !== 'DELETE') return next();
   const p = (req.path || req.url || '').split('?')[0];
   if (!p.startsWith('/api/')) return next();
   if (p === '/api/auditoria') return next(); // não regista as próprias leituras
+  // RUÍDO de alta frequência fora da auditoria (98% do tamanho da tabela):
+  // auto-guardar da folha de stock (um PUT por célula tocada), sonda de
+  // internet (10 s) e heartbeat do monitoramento (60 s).
+  if (p === '/api/ping' || p === '/api/monitor/heartbeat' || p === '/api/monitor/sync-log') return next();
+  if (m === 'PUT' && /^\/api\/turnos\/[^/]+\/stock$/.test(p)) return next();
   res.on('finish', () => {
     /** await assíncrono — não bloqueamos a resposta. */
     (async () => {
@@ -1066,6 +1147,7 @@ app.use(function auditMiddleware(req, res, next) {
       } catch (e) {
         console.warn('[auditoria] insert:', e && e.message);
       }
+      limparAuditoriaAntiga().catch(() => {});
     })();
   });
   next();
@@ -2509,6 +2591,11 @@ async function handleDbCheck(req, res) {
 }
 app.get('/api/db-check', handleDbCheck);
 app.get('/db-check', handleDbCheck);
+
+// Sonda de ligação REAL do frontend (a faixa de estado usa isto — o
+// navigator.onLine só diz se o Wi-Fi/dados estão ligados). Sem auth, sem BD.
+app.post('/api/ping', (req, res) => res.json({ ok: true }));
+app.get('/api/ping', (req, res) => res.json({ ok: true }));
 
 app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   const results = [];
@@ -5059,7 +5146,7 @@ app.get('/api/dia', auth, async (req, res) => {
 
     /** Vista lista (página Dia, depósitos): sem linhas de stock nem comparação com turno anterior — muito mais rápido. */
     if (resumo) {
-      const [caixaAll, vendasAgg, pedidosAgg] = await Promise.all([
+      const [caixaAll, vendasAgg, pedidosAgg, entradasMarcadas, entradasTabela] = await Promise.all([
         query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids]),
         queryEmpresa(
           `SELECT ts.turno_id,
@@ -5104,6 +5191,22 @@ app.get('/api/dia', auth, async (req, res) => {
            WHERE tp.turno_id = ANY($1::int[])
            GROUP BY tp.turno_id`,
           [ids]
+        ).catch(() => ({ rows: [] })),
+        // Dinheiro que ENTROU na caixa: registos marcados em turno_saidas
+        // (ENTRADA::) + tabela dedicada, quando existe.
+        query(
+          `SELECT turno_id, COALESCE(SUM(valor),0)::numeric AS t
+           FROM turno_saidas
+           WHERE turno_id = ANY($1::int[]) AND COALESCE(notas,'') LIKE 'ENTRADA::%'
+           GROUP BY turno_id`,
+          [ids]
+        ).catch(() => ({ rows: [] })),
+        query(
+          `SELECT turno_id, COALESCE(SUM(valor),0)::numeric AS t
+           FROM turno_caixa_entradas
+           WHERE turno_id = ANY($1::int[])
+           GROUP BY turno_id`,
+          [ids]
         ).catch(() => ({ rows: [] }))
       ]);
       const caixaByTurno = {};
@@ -5121,17 +5224,22 @@ app.get('/api/dia', auth, async (req, res) => {
           total_itens: parseFloat(row.total_itens) || 0
         };
       }
+      const entradasByTurno = {};
+      for (const row of [...entradasMarcadas.rows, ...entradasTabela.rows]) {
+        entradasByTurno[row.turno_id] = (entradasByTurno[row.turno_id] || 0) + (parseFloat(row.t) || 0);
+      }
       const result = [];
       for (const turno of turnos.rows) {
         const c = caixaByTurno[turno.id] || { tpa: null, transferencia: null, dinheiro: null, saida: 0 };
         const totalGerado = sumCaixaGeradoRow(c);
+        const entradasTot = entradasByTurno[turno.id] || 0;
         const totalFinal =
-          totalGerado === null ? null : totalGerado - parseFloat(c.saida || 0);
+          totalGerado === null ? null : totalGerado - parseFloat(c.saida || 0) + entradasTot;
         const ped = pedidosByTurno[turno.id] || { total_kz: 0, total_itens: 0 };
         result.push({
           ...turno,
           stock: [],
-          caixa: { ...c, total_gerado: totalGerado, total_final: totalFinal },
+          caixa: { ...c, total_gerado: totalGerado, total_final: totalFinal, entradas_total: entradasTot },
           total_vendas: vendasByTurno[turno.id] || 0,
           pedidos_total_kz: ped.total_kz,
           pedidos_total_itens: ped.total_itens
@@ -5529,6 +5637,76 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
   } finally { client.release(); }
 });
 
+// ── CHECKLIST DO TURNO: tarefas obrigatórias de abertura e fecho ──────
+// A lista é configurada por empresa (admin/gestor); cada turno guarda o
+// estado das marcações em turnos.checklist (JSONB). NENHUM turno fecha
+// com tarefas por fazer — validado no /fechar.
+function parseChecklistCfg(raw) {
+  try {
+    const c = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const lista = (x) => (Array.isArray(x) ? x : [])
+      .map((t) => String(t).trim()).filter(Boolean).slice(0, 40).map((t) => t.slice(0, 200));
+    return { abertura: lista(c && c.abertura), fecho: lista(c && c.fecho) };
+  } catch (_) { return { abertura: [], fecho: [] }; }
+}
+app.get('/api/config/checklist-turno', auth, async (req, res) => {
+  try { res.json(parseChecklistCfg(await getConfigEmpresa(empresaDe(req), 'checklist_turno'))); }
+  catch (e) { res.status(500).json({ erro: e.message }); }
+});
+app.put('/api/config/checklist-turno', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const cfg = parseChecklistCfg(req.body || {});
+    await setConfigEmpresa(empresaDe(req), 'checklist_turno', JSON.stringify(cfg));
+    res.json(cfg);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+let checklistColReady = false;
+async function ensureChecklistCol() {
+  if (checklistColReady) return;
+  await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS checklist JSONB`).catch(() => {});
+  checklistColReady = true;
+}
+
+app.put('/api/turnos/:id/checklist', auth, async (req, res) => {
+  try {
+    await ensureChecklistCol();
+    const fase = req.body && req.body.fase === 'abertura' ? 'abertura' : 'fecho';
+    const idx = String(Math.max(0, parseInt((req.body && req.body.idx), 10) || 0));
+    const feito = !!(req.body && req.body.feito);
+    const t = await query(`SELECT estado FROM turnos WHERE id=$1`, [req.params.id]);
+    if (!t.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    if (t.rows[0].estado !== 'aberto') return res.status(400).json({ erro: 'O turno já está fechado.' });
+    // Marcação ATÓMICA em SQL — o ler-alterar-gravar em JS perdia marcações:
+    // o driver gravava o parâmetro string como ESCALAR JSON e a leitura
+    // seguinte, não vendo um objecto, recomeçava de {} (apagava tudo). O
+    // CASE normaliza também linhas antigas nesse formato (desembrulha).
+    const norm = `CASE WHEN jsonb_typeof(checklist)='object' THEN checklist
+                       WHEN jsonb_typeof(checklist)='string' THEN (checklist #>> '{}')::jsonb
+                       ELSE '{}'::jsonb END`;
+    let r;
+    if (feito) {
+      r = await query(
+        `UPDATE turnos SET checklist =
+           jsonb_set(
+             jsonb_set(${norm}, ARRAY[$2::text], COALESCE(${norm} -> $2::text, '{}'::jsonb), true),
+             ARRAY[$2::text, $3::text],
+             jsonb_build_object('feito', true, 'por', $4::text, 'em', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
+             true)
+         WHERE id=$1 RETURNING checklist`,
+        [req.params.id, fase, idx, (req.user && req.user.nome) || '']
+      );
+    } else {
+      r = await query(
+        `UPDATE turnos SET checklist = (${norm}) #- ARRAY[$2::text, $3::text]
+         WHERE id=$1 RETURNING checklist`,
+        [req.params.id, fase, idx]
+      );
+    }
+    res.json({ ok: true, checklist: (r.rows[0] && r.rows[0].checklist) || {} });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -5572,6 +5750,37 @@ app.post('/api/turnos/:id/fechar', auth, async (req, res) => {
         return res.status(400).json({
           erro: 'Registaste valor no TPA — anexa a foto do recibo de fecho do TPA (aba 💰 Caixa) antes de fechar o turno.'
         });
+      }
+    }
+    // CHECKLIST: nenhum turno fecha com tarefas de abertura/fecho por
+    // fazer. Config por empresa; sem config, não bloqueia nada.
+    {
+      let cfgChk = null;
+      try {
+        const lojaT = r.rows[0].loja_id;
+        let empT = empresaDe(req);
+        if (lojaT) {
+          const le = await client.query(`SELECT empresa_id FROM lojas WHERE id=$1`, [lojaT]).catch(() => ({ rows: [] }));
+          if (le.rows.length) empT = le.rows[0].empresa_id || empT;
+        }
+        cfgChk = parseChecklistCfg(await getConfigEmpresa(empT, 'checklist_turno'));
+      } catch (_) { cfgChk = null; }
+      if (cfgChk && (cfgChk.abertura.length || cfgChk.fecho.length)) {
+        const marcado = (r.rows[0].checklist && typeof r.rows[0].checklist === 'object') ? r.rows[0].checklist : {};
+        const pend = [];
+        for (const fase of ['abertura', 'fecho']) {
+          cfgChk[fase].forEach((tarefa, i) => {
+            const m = marcado[fase] && marcado[fase][String(i)];
+            if (!(m && m.feito)) pend.push(`${fase === 'abertura' ? 'Abertura' : 'Fecho'} — ${tarefa}`);
+          });
+        }
+        if (pend.length) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            erro: `Checklist do turno incompleto — falta${pend.length === 1 ? '' : 'm'} ${pend.length} tarefa${pend.length === 1 ? '' : 's'}:\n• ` +
+              pend.slice(0, 6).join('\n• ') + (pend.length > 6 ? '\n…' : '')
+          });
+        }
       }
     }
     await client.query(
@@ -5697,8 +5906,37 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
 
 /** Fecha o registo inicial de encontrados — bloqueia futuras alterações
  *  às colunas Encontrado e Enc. caixa no PUT /api/turnos/:id/stock. */
+/** Tarefas por fazer de uma fase do checklist (portões dos registos). */
+async function checklistPendServidor(turnoId, fase, req) {
+  try {
+    await ensureChecklistCol();
+    const t = await query(`SELECT loja_id, checklist FROM turnos WHERE id=$1`, [turnoId]);
+    if (!t.rows.length) return [];
+    let empT = empresaDe(req);
+    if (t.rows[0].loja_id) {
+      const le = await query(`SELECT empresa_id FROM lojas WHERE id=$1`, [t.rows[0].loja_id]).catch(() => ({ rows: [] }));
+      if (le.rows.length) empT = le.rows[0].empresa_id || empT;
+    }
+    const cfg = parseChecklistCfg(await getConfigEmpresa(empT, 'checklist_turno'));
+    let marcado = t.rows[0].checklist;
+    // Linhas antigas com o estado gravado como escalar JSON (string):
+    // desembrulha antes de validar — senão as marcações "desapareciam".
+    if (typeof marcado === 'string') { try { marcado = JSON.parse(marcado); } catch (_) { marcado = {}; } }
+    if (!marcado || typeof marcado !== 'object') marcado = {};
+    return (cfg[fase] || []).filter((tarefa, i) =>
+      !(marcado[fase] && marcado[fase][String(i)] && marcado[fase][String(i)].feito));
+  } catch (_) { return []; }
+}
+
 app.post('/api/turnos/:id/encontrados/fechar', auth, async (req, res) => {
   try {
+    // PORTÃO: registo inicial exige o checklist de ABERTURA completo.
+    const pendA = await checklistPendServidor(req.params.id, 'abertura', req);
+    if (pendA.length) {
+      return res.status(400).json({
+        erro: `Antes de fechar o registo inicial, conclui o checklist de ABERTURA — falta${pendA.length === 1 ? '' : 'm'}:\n• ` + pendA.slice(0, 6).join('\n• ') + (pendA.length > 6 ? '\n…' : '')
+      });
+    }
     const r = await query(
       `UPDATE turnos SET encontrados_fechados_em = COALESCE(encontrados_fechados_em, NOW())
        WHERE id = $1 RETURNING *`,
@@ -5729,6 +5967,13 @@ app.post('/api/turnos/:id/encontrados/reabrir', auth, requireRole('admin', 'gest
  *  Deixado e Deix. caixa no PUT /api/turnos/:id/stock. */
 app.post('/api/turnos/:id/deixados/fechar', auth, async (req, res) => {
   try {
+    // PORTÃO: registo dos deixados exige o checklist de FECHO completo.
+    const pendF = await checklistPendServidor(req.params.id, 'fecho', req);
+    if (pendF.length) {
+      return res.status(400).json({
+        erro: `Antes de fechar o registo dos deixados, conclui o checklist de FECHO — falta${pendF.length === 1 ? '' : 'm'}:\n• ` + pendF.slice(0, 6).join('\n• ') + (pendF.length > 6 ? '\n…' : '')
+      });
+    }
     const r = await query(
       `UPDATE turnos SET deixados_fechados_em = COALESCE(deixados_fechados_em, NOW())
        WHERE id = $1 RETURNING *`,
@@ -8018,10 +8263,11 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
     await ensureUsernameColumn();
     const { email, nome, role, username } = req.body;
     if (!nome || !String(nome).trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
-    // Password inicial OBRIGATÓRIA — não existe password padrão.
+    // Password inicial OPCIONAL — funcionários sem acesso ao sistema ficam
+    // registados sem password e NUNCA conseguem iniciar sessão (não existe
+    // password padrão). Quando indicada, tem de ter pelo menos 6 caracteres.
     const passRaw = String((req.body && req.body.password) || '').trim();
-    if (!passRaw) return res.status(400).json({ erro: 'Define a password inicial (não existe password padrão).' });
-    if (passRaw.length < 6) {
+    if (passRaw && passRaw.length < 6) {
       return res.status(400).json({ erro: 'A password inicial deve ter pelo menos 6 caracteres.' });
     }
     // Nome de utilizador OPCIONAL — validado só quando indicado.
@@ -8042,21 +8288,33 @@ app.post('/api/utilizadores', auth, requireRole('admin'), async (req, res) => {
     } else {
       emailFinal = `sem-email-${crypto.randomBytes(4).toString('hex')}@stockos.local`;
     }
+    // Empresa de DESTINO: o admin escolhe-a no formulário (por defeito, a
+    // empresa efectiva). A loja fixa tem de pertencer a essa empresa —
+    // validado ANTES de criar a conta.
+    const empBody = parseInt((req.body && req.body.empresa_id) || '', 10);
+    const empresaDestino = Number.isFinite(empBody) && empBody > 0 ? empBody : empresaDe(req);
+    const lojaFixa = req.body.loja_id != null && String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null;
+    if (lojaFixa) {
+      const lv = await query('SELECT 1 FROM lojas WHERE id=$1 AND empresa_id=$2', [lojaFixa, empresaDestino]).catch(() => null);
+      if (lv && !lv.rows.length) {
+        return res.status(400).json({ erro: 'A loja fixa escolhida não pertence à empresa seleccionada.' });
+      }
+    }
     const r = await query(
       'INSERT INTO utilizadores (email,nome,username,role,senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id,email,nome,username,role',
-      [emailFinal, String(nome).trim(), un || null, role || 'operador', hashPassword(passRaw)]
+      [emailFinal, String(nome).trim(), un || null, role || 'operador', passRaw ? hashPassword(passRaw) : '']
     );
-    // Empresa do criador (admin migrado cria na empresa efectiva) + loja
-    // fixa (obrigatória na prática para operador / operador de sistema).
     try {
-      const lojaFixa = req.body.loja_id != null && String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null;
-      await query(`UPDATE utilizadores SET empresa_id=$1, loja_id=$2 WHERE id=$3`, [empresaDe(req), lojaFixa, r.rows[0].id]);
+      await query(`UPDATE utilizadores SET empresa_id=$1, loja_id=$2 WHERE id=$3`, [empresaDestino, lojaFixa, r.rows[0].id]);
     } catch (_) { /* BD antiga sem colunas */ }
     const aviso = await updateFichaFuncionario(r.rows[0].id, req.body || {}, req.user && req.user.role);
-    const semLogin = !un && emailFinal.endsWith('@stockos.local');
+    const semCredenciais = !un && emailFinal.endsWith('@stockos.local');
+    const avisoLogin = semCredenciais
+      ? 'Sem nome de utilizador nem email — este funcionário não consegue iniciar sessão até definires um deles.'
+      : (!passRaw ? 'Sem password definida — este funcionário não consegue iniciar sessão até lhe definires uma (Editar → Nova Password).' : '');
     res.json({
       ...r.rows[0],
-      ...(semLogin ? { aviso_login: 'Sem nome de utilizador nem email — este funcionário não consegue iniciar sessão até definires um deles.' } : {}),
+      ...(avisoLogin ? { aviso_login: avisoLogin } : {}),
       ...(aviso ? { aviso } : {})
     });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -8101,16 +8359,274 @@ app.put('/api/utilizadores/:id', auth, requireRole('admin'), async (req, res) =>
           'UPDATE utilizadores SET nome=$1,role=$2,ativo=$3,promotor=$4,comissao_modo=$5,comissao_pct_total=$6 WHERE id=$7 RETURNING id,email,nome,username,role,ativo,promotor,comissao_modo,comissao_pct_total',
           [nome, role, ativo, isPromotor, modo, pctTotal, req.params.id]
         );
-    // Loja fixa: '' → NULL (admin/gestor, sem loja fixa).
-    if (req.body.loja_id !== undefined) {
+    // Empresa (o admin pode movê-la) + loja fixa ('' → NULL). A loja tem
+    // de pertencer à empresa de destino.
+    if (req.body.loja_id !== undefined || req.body.empresa_id !== undefined) {
       try {
-        const lojaFixa = String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null;
-        await query(`UPDATE utilizadores SET loja_id=$1 WHERE id=$2`, [lojaFixa, req.params.id]);
-      } catch (_) { /* BD antiga sem coluna */ }
+        const atual = await query('SELECT empresa_id, loja_id FROM utilizadores WHERE id=$1', [req.params.id]);
+        const empBody = parseInt((req.body && req.body.empresa_id) || '', 10);
+        const empresaDestino = Number.isFinite(empBody) && empBody > 0
+          ? empBody
+          : ((atual.rows[0] && atual.rows[0].empresa_id) || empresaDe(req));
+        let lojaFixa = req.body.loja_id !== undefined
+          ? (String(req.body.loja_id).trim() !== '' ? (parseInt(req.body.loja_id, 10) || null) : null)
+          : (atual.rows[0] ? atual.rows[0].loja_id : null);
+        if (lojaFixa) {
+          const lv = await query('SELECT 1 FROM lojas WHERE id=$1 AND empresa_id=$2', [lojaFixa, empresaDestino]).catch(() => null);
+          if (lv && !lv.rows.length) {
+            if (req.body.loja_id !== undefined) {
+              return res.status(400).json({ erro: 'A loja fixa escolhida não pertence à empresa seleccionada.' });
+            }
+            lojaFixa = null; // loja herdada da empresa antiga — limpa
+          }
+        }
+        await query(`UPDATE utilizadores SET empresa_id=$1, loja_id=$2 WHERE id=$3`, [empresaDestino, lojaFixa, req.params.id]);
+      } catch (_) { /* BD antiga sem colunas */ }
     }
     const aviso = await updateFichaFuncionario(req.params.id, req.body || {}, req.user && req.user.role);
     res.json(aviso ? { ...r.rows[0], aviso } : r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── AVISOS: orientações visíveis a todos os turnos/utilizadores ───────
+let avisosReady = false;
+async function ensureAvisos() {
+  if (avisosReady) return;
+  await query(`CREATE TABLE IF NOT EXISTS avisos (
+    id SERIAL PRIMARY KEY,
+    empresa_id INTEGER NOT NULL DEFAULT 1,
+    loja_id INTEGER,
+    texto TEXT NOT NULL,
+    criado_por TEXT NOT NULL DEFAULT '',
+    ativo BOOLEAN NOT NULL DEFAULT TRUE,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    valido_ate TIMESTAMPTZ
+  )`).catch(() => {});
+  await query(`ALTER TABLE avisos ADD COLUMN IF NOT EXISTS valido_ate TIMESTAMPTZ`).catch(() => {});
+  avisosReady = true;
+}
+
+app.get('/api/avisos', auth, async (req, res) => {
+  try {
+    await ensureAvisos();
+    // todos=1 → histórico completo (expirados incluídos; removidos só
+    // para admin/gestor). Sem o parâmetro → só os activos dentro do prazo.
+    const todos = req.query.todos === '1';
+    const gerir = ['admin', 'gestor'].includes(req.user && req.user.role);
+    const filtro = todos
+      ? (gerir ? '' : 'AND ativo IS TRUE')
+      : `AND ativo IS TRUE AND (valido_ate IS NULL OR valido_ate > NOW())`;
+    const r = await query(
+      `SELECT * FROM avisos
+       WHERE empresa_id=$1 AND (loja_id IS NULL OR loja_id=$2) ${filtro}
+       ORDER BY criado_em DESC LIMIT ${todos ? 200 : 30}`,
+      [empresaDe(req), lojaDe(req)]
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/avisos', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureAvisos();
+    const texto = String((req.body && req.body.texto) || '').trim();
+    if (!texto) return res.status(400).json({ erro: 'Escreve o texto do aviso.' });
+    // Validade: o aviso fica SEMPRE visível durante N dias (1–90; 7 por
+    // defeito) e depois desaparece sozinho.
+    const dias = Math.min(90, Math.max(1, parseInt(req.body.dias, 10) || 7));
+    const r = await query(
+      `INSERT INTO avisos (empresa_id, loja_id, texto, criado_por, valido_ate)
+       VALUES ($1,$2,$3,$4, NOW() + ($5 || ' days')::interval) RETURNING *`,
+      [empresaDe(req), req.body.so_esta_loja === true ? lojaDe(req) : null, texto.slice(0, 2000), (req.user && req.user.nome) || '', String(dias)]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/avisos/:id', auth, requireRole('admin', 'gestor'), async (req, res) => {
+  try {
+    await ensureAvisos();
+    await query(`UPDATE avisos SET ativo=FALSE WHERE id=$1 AND empresa_id=$2`, [req.params.id, empresaDe(req)]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── MONITORAMENTO (admin): aparelhos, últimos logins, fila offline ────
+let monitorReady = false;
+async function ensureMonitorDispositivos() {
+  if (monitorReady) return;
+  await query(`CREATE TABLE IF NOT EXISTS monitor_dispositivos (
+    id SERIAL PRIMARY KEY,
+    utilizador_id UUID NOT NULL REFERENCES utilizadores(id) ON DELETE CASCADE,
+    dispositivo_id TEXT NOT NULL,
+    descricao TEXT NOT NULL DEFAULT '',
+    ultimo_login TIMESTAMPTZ,
+    ultima_operacao TIMESTAMPTZ,
+    pendentes INTEGER NOT NULL DEFAULT 0,
+    visto_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    empresa_id INTEGER,
+    loja_id INTEGER,
+    UNIQUE (utilizador_id, dispositivo_id)
+  )`).catch(() => {});
+  await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS empresa_id INTEGER`).catch(() => {});
+  await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS loja_id INTEGER`).catch(() => {});
+  await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS nome TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await query(`ALTER TABLE monitor_dispositivos ADD COLUMN IF NOT EXISTS versao TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  monitorReady = true;
+}
+
+/** Nome dado pelo admin ao aparelho (ex.: «Balcão 1») — aplica-se ao
+ *  aparelho inteiro, em todas as contas que o usam. */
+app.put('/api/monitor/dispositivo', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureMonitorDispositivos();
+    const disp = String((req.body && req.body.dispositivo_id) || '').slice(0, 64);
+    if (!disp) return res.status(400).json({ erro: 'dispositivo_id em falta' });
+    const nome = String((req.body && req.body.nome) || '').trim().slice(0, 60);
+    const r = await queryEmpresa(
+      `UPDATE monitor_dispositivos SET nome=$1 WHERE dispositivo_id=$2
+         AND utilizador_id IN (SELECT id FROM utilizadores WHERE empresa_id=$3) RETURNING id`,
+      [nome, disp, empresaDe(req)],
+      `UPDATE monitor_dispositivos SET nome=$1 WHERE dispositivo_id=$2 RETURNING id`,
+      [nome, disp]
+    );
+    res.json({ ok: true, linhas: r.rows.length, nome });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Sinal de vida de cada aparelho (a fila offline vive no aparelho — só o
+ *  próprio cliente sabe quantos registos tem por sincronizar). */
+app.post('/api/monitor/heartbeat', auth, async (req, res) => {
+  try {
+    await ensureMonitorDispositivos();
+    const b = req.body || {};
+    const disp = String(b.dispositivo_id || '').slice(0, 64);
+    if (!disp) return res.json({ ok: false });
+    const desc = String(b.descricao || '').slice(0, 120);
+    const pend = Math.max(0, parseInt(b.pendentes, 10) || 0);
+    const ultOpRaw = b.ultima_operacao ? new Date(b.ultima_operacao) : null;
+    const ultOp = ultOpRaw && !isNaN(ultOpRaw.getTime()) ? ultOpRaw.toISOString() : null;
+    const ehLogin = b.login === true;
+    const empHb = parseInt(b.empresa_id, 10) || empresaDe(req);
+    const lojaHb = parseInt(b.loja_id, 10) || lojaDe(req);
+    const versaoHb = String(b.versao || '').slice(0, 80);
+    await query(
+      `INSERT INTO monitor_dispositivos (utilizador_id, dispositivo_id, descricao, ultimo_login, ultima_operacao, pendentes, visto_em, empresa_id, loja_id, versao)
+       VALUES ($1,$2,$3, CASE WHEN $4 THEN NOW() END, $5, $6, NOW(), $7, $8, $9)
+       ON CONFLICT (utilizador_id, dispositivo_id) DO UPDATE SET
+         descricao = EXCLUDED.descricao,
+         ultimo_login = CASE WHEN $4 THEN NOW() ELSE monitor_dispositivos.ultimo_login END,
+         ultima_operacao = COALESCE(EXCLUDED.ultima_operacao, monitor_dispositivos.ultima_operacao),
+         pendentes = EXCLUDED.pendentes,
+         visto_em = NOW(),
+         empresa_id = EXCLUDED.empresa_id,
+         loja_id = EXCLUDED.loja_id,
+         versao = CASE WHEN EXCLUDED.versao <> '' THEN EXCLUDED.versao ELSE monitor_dispositivos.versao END`,
+      [req.user.id, disp, desc, ehLogin, ultOp, pend, empHb, lojaHb, versaoHb]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.json({ ok: false }); }
+});
+
+/** Página Monitoramento: utilizadores da empresa com os seus aparelhos. */
+app.get('/api/monitor', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureMonitorDispositivos();
+    const sel = `SELECT u.id, u.nome, u.role, u.ativo,
+            m.dispositivo_id, m.descricao, COALESCE(m.nome,'') AS dispositivo_nome, COALESCE(m.versao,'') AS versao, m.ultimo_login, m.ultima_operacao, m.pendentes, m.visto_em,
+            m.empresa_id AS hb_empresa_id, m.loja_id AS hb_loja_id,
+            e.nome AS empresa_nome, l.nome AS loja_nome
+       FROM utilizadores u
+       LEFT JOIN monitor_dispositivos m ON m.utilizador_id = u.id
+       LEFT JOIN empresas e ON e.id = m.empresa_id
+       LEFT JOIN lojas l ON l.id = m.loja_id`;
+    const r = await queryEmpresa(
+      `${sel} WHERE u.empresa_id = $1 ORDER BY u.nome, m.visto_em DESC NULLS LAST`, [empresaDe(req)],
+      `${sel} ORDER BY u.nome, m.visto_em DESC NULLS LAST`, []
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── DIÁRIO DE SINCRONIZAÇÕES (por aparelho) ──────────────────
+// Cada tentativa de sincronização da fila offline fica registada:
+// quanto demorou o pedido, quanto tempo o registo esperou na fila,
+// se entrou/foi rejeitado e porquê. Retenção: 30 dias (limpeza diária).
+let monitorSyncLogReady = false;
+async function ensureMonitorSyncLog() {
+  if (monitorSyncLogReady) return;
+  await query(`CREATE TABLE IF NOT EXISTS monitor_sync_log (
+    id SERIAL PRIMARY KEY,
+    empresa_id INTEGER,
+    loja_id INTEGER,
+    utilizador_id UUID,
+    utilizador_nome TEXT NOT NULL DEFAULT '',
+    dispositivo_id TEXT NOT NULL,
+    descricao TEXT NOT NULL DEFAULT '',
+    caminho TEXT NOT NULL DEFAULT '',
+    resultado TEXT NOT NULL DEFAULT 'ok',
+    motivo TEXT NOT NULL DEFAULT '',
+    duracao_ms INTEGER NOT NULL DEFAULT 0,
+    espera_ms BIGINT NOT NULL DEFAULT 0,
+    tentativa_em TIMESTAMPTZ,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`).catch(() => {});
+  await query(`ALTER TABLE monitor_sync_log ADD COLUMN IF NOT EXISTS ref TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await query(`CREATE INDEX IF NOT EXISTS idx_sync_log_criado ON monitor_sync_log (criado_em)`).catch(() => {});
+  await query(`CREATE INDEX IF NOT EXISTS idx_sync_log_disp ON monitor_sync_log (dispositivo_id, criado_em DESC)`).catch(() => {});
+  monitorSyncLogReady = true;
+}
+
+const SYNC_LOG_RESULTADOS = ['ok', 'rejeitado', 'transitorio', 'sem-rede'];
+/** Recebe um LOTE de tentativas do aparelho (o diário vive no cliente e
+ *  sobe quando há rede). Sem auditoria — é telemetria de alta frequência. */
+app.post('/api/monitor/sync-log', auth, async (req, res) => {
+  try {
+    await ensureMonitorSyncLog();
+    const disp = String((req.body && req.body.dispositivo_id) || '').slice(0, 64);
+    const itens = Array.isArray(req.body && req.body.itens) ? req.body.itens.slice(0, 100) : [];
+    if (!disp || !itens.length) return res.json({ ok: true, gravados: 0 });
+    let n = 0;
+    for (const it of itens) {
+      if (!it || typeof it !== 'object') continue;
+      const tRaw = it.tentativa_em ? new Date(it.tentativa_em) : null;
+      await query(
+        `INSERT INTO monitor_sync_log
+           (empresa_id, loja_id, utilizador_id, utilizador_nome, dispositivo_id, ref, descricao, caminho, resultado, motivo, duracao_ms, espera_ms, tentativa_em)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [
+          empresaDe(req), lojaDe(req), req.user.id, req.user.nome || '',
+          disp,
+          String(it.ref || '').slice(0, 64),
+          String(it.descricao || '').slice(0, 160),
+          String(it.caminho || '').slice(0, 160),
+          SYNC_LOG_RESULTADOS.includes(it.resultado) ? it.resultado : 'ok',
+          String(it.motivo || '').slice(0, 300),
+          Math.min(600000, Math.max(0, parseInt(it.duracao_ms, 10) || 0)),
+          Math.max(0, parseInt(it.espera_ms, 10) || 0),
+          tRaw && !isNaN(tRaw.getTime()) ? tRaw.toISOString() : null
+        ]
+      );
+      n++;
+    }
+    res.json({ ok: true, gravados: n });
+  } catch (_) { res.json({ ok: false }); }
+});
+
+/** Consulta do diário (admin): tudo da empresa ou só de um aparelho. */
+app.get('/api/monitor/sync-log', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureMonitorSyncLog();
+    const disp = String(req.query.dispositivo || '').slice(0, 64);
+    const filtroDisp = disp ? ` AND dispositivo_id=$2` : '';
+    const r = await queryEmpresa(
+      `SELECT * FROM monitor_sync_log WHERE empresa_id=$1${filtroDisp} ORDER BY criado_em DESC LIMIT 300`,
+      disp ? [empresaDe(req), disp] : [empresaDe(req)],
+      `SELECT * FROM monitor_sync_log WHERE TRUE${disp ? ' AND dispositivo_id=$1' : ''} ORDER BY criado_em DESC LIMIT 300`,
+      disp ? [disp] : []
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // ── PRESENÇAS / RECONHECIMENTO FACIAL ────────────────────────

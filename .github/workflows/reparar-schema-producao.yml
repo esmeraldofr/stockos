@@ -17,8 +17,11 @@
 # Idempotente: pode correr-se as vezes que forem precisas.
 # Ligação: usa o secret DATABASE_URL_PROD_ADMIN se existir; caso contrário
 # cai na ligação directa actual (mesma password já exposta em db-query.yml).
-# QUANDO rodares a password no Supabase: cria o secret com a URL nova
-# (directa, :5432 — não o pooler :6543) e remove este fallback.
+# QUANDO rodares a password no Supabase: cria o secret com a URL nova do
+# SESSION POOLER (aws-1-…pooler.supabase.com:5432, user postgres.<ref>) e
+# remove este fallback. Nota: o host directo db.<ref>.supabase.co é só
+# IPv6 — não funciona nos runners do GitHub; o pooler :6543 (transaction)
+# não serve para pg_dump. Usa sempre o session pooler :5432.
 
 name: Reparar schema produção
 
@@ -52,7 +55,7 @@ jobs:
           TEM_SECRET: ${{ secrets.DATABASE_URL_PROD_ADMIN != '' }}
         run: |
           if [ "$TEM_SECRET" != "true" ]; then
-            echo "::warning::A usar a ligação com a password ANTIGA em texto simples (fallback). Quando puderes: roda a password no Supabase e cria o secret DATABASE_URL_PROD_ADMIN com a URL directa (:5432)."
+            echo "::warning::A usar a ligação com a password ANTIGA em texto simples (fallback). Quando puderes: roda a password no Supabase e cria o secret DATABASE_URL_PROD_ADMIN com a URL do session pooler (aws-1-…:5432, user postgres.<ref>)."
           fi
 
       - name: Instalar cliente PostgreSQL
@@ -69,7 +72,7 @@ jobs:
 
       - name: Backup de produção (antes de qualquer alteração)
         env:
-          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:5432/postgres' }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
@@ -89,7 +92,7 @@ jobs:
 
       - name: 'FASE 1: DDL aditivo (seguro com código antigo)'
         env:
-          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:5432/postgres' }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
@@ -99,7 +102,7 @@ jobs:
       - name: 'FASE 2: troca de constraints (só com código novo em main)'
         if: ${{ github.event.inputs.trocar_constraints == 'true' }}
         env:
-          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:5432/postgres' }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
@@ -107,7 +110,7 @@ jobs:
 
       - name: Validar colunas críticas
         env:
-          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres:LKB2DWbWbc60fZXh@db.dakleqewbwbryuchlrzm.supabase.co:5432/postgres' }}
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:5432/postgres' }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"

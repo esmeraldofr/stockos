@@ -5890,7 +5890,9 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
     const deixG = parseOptionalNumericBody(deixado_caixa);
     const sets = ['fechados=$5'];
     if (!encontradosFechados) sets.push('encontrado=$3', 'encontrado_caixa=$6');
-    if (!deixadosFechados) sets.push('deixado=$4', 'deixado_caixa=$7');
+    // Deixados SÓ com o registo inicial fechado (ordem do turno) e
+    // enquanto o registo dos deixados não fechar.
+    if (!deixadosFechados && encontradosFechados) sets.push('deixado=$4', 'deixado_caixa=$7');
     const updateSet = sets.join(', ');
     const r = await query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados, encontrado_caixa, deixado_caixa)
@@ -5898,7 +5900,12 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
        ON CONFLICT (turno_id, produto_id)
        DO UPDATE SET ${updateSet}
        RETURNING *`,
-      [req.params.id, produto_id, enc, deix, fechados || 0, encG, deixG]
+      [
+        req.params.id, produto_id, enc,
+        encontradosFechados && !deixadosFechados ? deix : null,
+        fechados || 0, encG,
+        encontradosFechados && !deixadosFechados ? deixG : null
+      ]
     );
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -5967,6 +5974,11 @@ app.post('/api/turnos/:id/encontrados/reabrir', auth, requireRole('admin', 'gest
  *  Deixado e Deix. caixa no PUT /api/turnos/:id/stock. */
 app.post('/api/turnos/:id/deixados/fechar', auth, async (req, res) => {
   try {
+    // ORDEM DO TURNO: os deixados só existem depois do registo inicial.
+    const tEnc = await query(`SELECT encontrados_fechados_em FROM turnos WHERE id=$1`, [req.params.id]).catch(() => ({ rows: [] }));
+    if (tEnc.rows.length && !tEnc.rows[0].encontrados_fechados_em) {
+      return res.status(400).json({ erro: 'Fecha primeiro o registo inicial de encontrados — os deixados só abrem depois disso.' });
+    }
     // PORTÃO: registo dos deixados exige o checklist de FECHO completo.
     const pendF = await checklistPendServidor(req.params.id, 'fecho', req);
     if (pendF.length) {

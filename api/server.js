@@ -205,7 +205,16 @@ function resetPgSingleton() {
 }
 
 /** Garante uma ligação persistente; tenta URLs candidatas só até a primeira funcionar. */
+/** Última utilização real da ligação — para detectar sockets zombie. */
+let _lastPgUseTs = 0;
 async function ensurePgSingleton() {
+  // Instância CONGELADA pelo serverless entre pedidos: o Supavisor fecha a
+  // ligação do lado dele e nós nunca vemos o close. Usar esse socket morto
+  // custa 6s de timeout + retry (os «6,2s dentro do servidor» do diário).
+  // Ligação sem uso há >30s → reconecta preventivamente (~0,3s).
+  if (_pgSingleton && _lastPgUseTs && Date.now() - _lastPgUseTs > 30000) {
+    await resetPgSingleton();
+  }
   if (_pgSingleton) return _pgSingleton;
   let lastErr = null;
   for (let round = 0; round < 2; round++) {
@@ -227,6 +236,7 @@ async function ensurePgSingleton() {
         ]);
         _pgSingleton = sqlConn;
         _activeDbUrl = url;
+        _lastPgUseTs = Date.now();
         verificarSeloDdl(sqlConn); // em fundo — não atrasa a 1ª resposta
         return _pgSingleton;
       } catch (e) {
@@ -275,6 +285,7 @@ const query = async (text, params) => {
         sql.unsafe(text, params || []),
         new Promise((_, reject) => setTimeout(() => reject(new Error('query timeout (6s)')), 6000))
       ]);
+      _lastPgUseTs = Date.now();
       return { rows: Array.from(rows) };
     } catch (e) {
       lastErr = e;
@@ -316,6 +327,7 @@ const pool = {
         return {
           query: async (text, params) => {
             const rows = await reserved.unsafe(text, params || []);
+            _lastPgUseTs = Date.now();
             return { rows: Array.from(rows) };
           },
           release: async () => {

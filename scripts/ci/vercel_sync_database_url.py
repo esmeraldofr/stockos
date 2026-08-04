@@ -90,65 +90,58 @@ def main() -> None:
             return False
         return True
 
-    listed = req("GET", list_url)
-    envs = listed.get("envs") or []
-    for e in envs:
-        if e.get("key") != "DATABASE_URL":
-            continue
-        if target == "preview" and not should_delete_preview(e):
-            continue
-        if target == "production" and not should_delete_production(e):
-            continue
-        eid = e.get("id")
-        if not eid:
-            continue
-        del_url = f"{env_root}/{eid}{q}"
-        req("DELETE", del_url)
-        print(f"Removido DATABASE_URL ({target}) id={eid} gitBranch={e.get('gitBranch')!r}")
-
-    payload: dict = {
-        "key": "DATABASE_URL",
-        "value": db_url,
-        "type": "encrypted",
-        "target": [target],
-    }
-    if sync_branch:
-        payload["gitBranch"] = sync_branch
-
-    body = json.dumps(payload).encode()
-    req("POST", f"{env_root}{q}", body)
-
-    extra = f" branch={sync_branch!r}" if sync_branch else ""
-    print(f"DATABASE_URL ({target}) actualizado na Vercel.{extra}")
-
-    extra_key = (os.environ.get("VERCEL_SYNC_EXTRA_KEY") or "").strip()
-    extra_val = (os.environ.get("VERCEL_SYNC_EXTRA_VALUE") or "").strip()
-    if extra_key and extra_val:
-        listed2 = req("GET", list_url)
-        envs2 = listed2.get("envs") or []
-        for e in envs2:
-            if e.get("key") != extra_key:
-                continue
-            if target == "preview" and not should_delete_preview(e):
-                continue
-            if target == "production" and not should_delete_production(e):
+    def sync_key(key: str, value: str) -> None:
+        """Apaga entradas exclusivas do alvo e recria; se a variável for
+        PARTILHADA com outros ambientes (ex.: target production+preview+
+        development), actualiza o valor NO LUGAR (PATCH) em vez de tentar
+        criar uma duplicada — o POST falhava com ENV_ALREADY_EXISTS."""
+        listed = req("GET", list_url)
+        shared = None
+        for e in listed.get("envs") or []:
+            if e.get("key") != key:
                 continue
             eid = e.get("id")
             if not eid:
                 continue
-            del_url = f"{env_root}/{eid}{q}"
-            req("DELETE", del_url)
-            print(f"Removido {extra_key} ({target}) id={eid} gitBranch={e.get('gitBranch')!r}")
-        ex_payload: dict = {
-            "key": extra_key,
-            "value": extra_val,
+            apagar = (
+                should_delete_preview(e) if target == "preview" else should_delete_production(e)
+            )
+            if apagar:
+                req("DELETE", f"{env_root}/{eid}{q}")
+                print(f"Removido {key} ({target}) id={eid} gitBranch={e.get('gitBranch')!r}")
+            elif target in list(e.get("target") or []):
+                shared = e  # partilhada com outros ambientes — actualizar no lugar
+
+        extra = f" branch={sync_branch!r}" if sync_branch else ""
+        if shared is not None:
+            req(
+                "PATCH",
+                f"{env_root}/{shared['id']}{q}",
+                json.dumps({"value": value}).encode(),
+            )
+            print(
+                f"{key} ({target}) actualizado na variável PARTILHADA "
+                f"(targets={shared.get('target')}).{extra}"
+            )
+            return
+
+        payload: dict = {
+            "key": key,
+            "value": value,
             "type": "encrypted",
             "target": [target],
         }
         if sync_branch:
-            ex_payload["gitBranch"] = sync_branch
-        req("POST", f"{env_root}{q}", json.dumps(ex_payload).encode())
-        print(f"{extra_key} ({target}) actualizado na Vercel.{extra}")
+            payload["gitBranch"] = sync_branch
+        req("POST", f"{env_root}{q}", json.dumps(payload).encode())
+        print(f"{key} ({target}) actualizado na Vercel.{extra}")
+
+    sync_key("DATABASE_URL", db_url)
+
+    extra_key = (os.environ.get("VERCEL_SYNC_EXTRA_KEY") or "").strip()
+    extra_val = (os.environ.get("VERCEL_SYNC_EXTRA_VALUE") or "").strip()
+    if extra_key and extra_val:
+        sync_key(extra_key, extra_val)
 
 
 if __name__ == "__main__":

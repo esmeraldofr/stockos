@@ -54,9 +54,24 @@ ALTER TABLE turno_entradas ADD COLUMN IF NOT EXISTS produto_nome_livre TEXT NOT 
 ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS cobrindo_utilizador_id TEXT;
 ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS hora_extra BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE turno_equipa_real ADD COLUMN IF NOT EXISTS motivo_falta TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS turno_pedidos (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, cliente_nome TEXT NOT NULL DEFAULT '', tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro', com_entrega BOOLEAN NOT NULL DEFAULT FALSE, criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW());
 ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS com_entrega BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS tipo_pagamento VARCHAR(24) NOT NULL DEFAULT 'dinheiro';
 ALTER TABLE turno_pedidos ADD COLUMN IF NOT EXISTS valor_entrega NUMERIC(15,2) NOT NULL DEFAULT 0;
+-- turno_pedido_linhas pode não existir (é criada on-demand no 1º pedido);
+-- produto_id tem de seguir o tipo real de produtos.id (UUID vs INTEGER).
+DO $$
+DECLARE pid_type text;
+BEGIN
+  SELECT data_type INTO pid_type FROM information_schema.columns
+   WHERE table_schema='public' AND table_name='produtos' AND column_name='id';
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='turno_pedido_linhas') THEN
+    EXECUTE format(
+      'CREATE TABLE turno_pedido_linhas (id SERIAL PRIMARY KEY, pedido_id INTEGER NOT NULL REFERENCES turno_pedidos(id) ON DELETE CASCADE, produto_id %s NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT, quantidade NUMERIC(10,3) NOT NULL DEFAULT 0)',
+      CASE WHEN pid_type='uuid' THEN 'UUID' WHEN pid_type='bigint' THEN 'BIGINT' ELSE 'INTEGER' END);
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_turno_pedido_linhas_pedido ON turno_pedido_linhas (pedido_id);
 ALTER TABLE turno_pedido_linhas ADD COLUMN IF NOT EXISTS qtd_devolvida NUMERIC(10,3) NOT NULL DEFAULT 0;
 ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS deixado_caixa NUMERIC(10,3);
 ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS encontrado_caixa NUMERIC(10,3);

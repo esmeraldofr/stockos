@@ -1975,18 +1975,28 @@ async function ensureTurnoPedidos() {
       /** Alinhar produto_id ao tipo de produtos.id (INTEGER vs UUID — FK falha se diferir). */
       const _pidCheck = await query(
         `SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
-      ).catch(() => ({ rows: [] }));
-      const _pidType = _pidCheck.rows.length > 0 ? String(_pidCheck.rows[0].data_type).toLowerCase() : 'integer';
+      ).catch(() => null);
+      // Verificação FALHOU (BD instável)? ABORTA — o default 'integer' de
+      // antigamente fazia o bloco abaixo ver um mismatch FALSO contra uuid.
+      if (!_pidCheck || !_pidCheck.rows.length) return;
+      const _pidType = String(_pidCheck.rows[0].data_type).toLowerCase();
       const pidSql = _pidType === 'uuid' ? 'UUID' : _pidType === 'bigint' ? 'BIGINT' : 'INTEGER';
 
       const _tplCheck = await query(
         `SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='turno_pedido_linhas' AND column_name='produto_id'`
-      ).catch(() => ({ rows: [] }));
+      ).catch(() => null);
+      if (!_tplCheck) return; // idem — nunca decidir com verificações falhadas
       if (_tplCheck.rows.length > 0) {
         const cur = String(_tplCheck.rows[0].data_type).toLowerCase();
         if (cur !== _pidType) {
-          await query(`DROP TABLE IF EXISTS turno_pedido_linhas CASCADE`);
-          await query(`DROP TABLE IF EXISTS turno_pedidos CASCADE`);
+          // NUNCA apagar tabelas automaticamente: a 05/08 uma verificação
+          // falhada + este DROP apagaram turno_pedido_linhas em PRODUÇÃO
+          // (e o selo do schema impediu a recriação). Mismatch verdadeiro
+          // de tipos é intervenção manual, com backup.
+          console.error(
+            `[ensureTurnoPedidos] MISMATCH de tipos: turno_pedido_linhas.produto_id=${cur} vs produtos.id=${_pidType} — sem acção automática; corrigir manualmente.`
+          );
+          return;
         }
       }
       await query(`CREATE TABLE IF NOT EXISTS turno_pedidos (
@@ -2734,14 +2744,17 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
     saida NUMERIC(15,2) NOT NULL DEFAULT 0)`, 'turno_caixa');
   // Detect produtos.id type to align all FK columns
   const _pidCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`).catch(e=>({rows:[]}));
-  const _pidType = _pidCheck.rows.length > 0 ? _pidCheck.rows[0].data_type : 'integer';
-  results.push({ label: 'produtos-id-type', ok: true, type: _pidType });
+  // NUNCA decidir DROPs com verificações falhadas: o default 'integer' de
+  // antigamente, num falso falho da BD, fazia apagar tabelas REAIS (uuid).
+  const _pidOk = _pidCheck.rows.length > 0;
+  const _pidType = _pidOk ? _pidCheck.rows[0].data_type : 'uuid';
+  results.push({ label: 'produtos-id-type', ok: _pidOk, type: _pidType });
   const pidCol = _pidType === 'uuid' ? 'UUID' : 'INTEGER';
   // Fix receitas
   const _rcCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='receitas' AND column_name='produto_id'`).catch(e=>({rows:[]}));
   const _rcType = _rcCheck.rows.length > 0 ? _rcCheck.rows[0].data_type : 'not_found';
   results.push({ label: 'receitas-type-check', ok: true, type: _rcType });
-  if (_rcType !== _pidType) {
+  if (_pidOk && _rcCheck.rows.length > 0 && _rcType !== _pidType) {
     await run(`DROP TABLE IF EXISTS receitas CASCADE`, 'receitas-drop');
     await run(`CREATE TABLE receitas (id SERIAL PRIMARY KEY, produto_id ${pidCol} NOT NULL, componente_id ${pidCol} NOT NULL, quantidade NUMERIC(10,3) NOT NULL DEFAULT 1, UNIQUE(produto_id,componente_id))`, 'receitas-create');
   }
@@ -2749,7 +2762,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   const _tvCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='turno_vendas' AND column_name='produto_id'`).catch(e=>({rows:[]}));
   const _tvType = _tvCheck.rows.length > 0 ? _tvCheck.rows[0].data_type : 'not_found';
   results.push({ label: 'turno_vendas-type-check', ok: true, type: _tvType });
-  if (_tvType !== _pidType) {
+  if (_pidOk && _tvCheck.rows.length > 0 && _tvType !== _pidType) {
     await run(`DROP TABLE IF EXISTS turno_vendas CASCADE`, 'turno_vendas-drop');
     await run(`CREATE TABLE turno_vendas (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, quantidade NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_vendas-create');
   }
@@ -2757,7 +2770,7 @@ app.post('/api/migrate', auth, requireRole('admin'), async (req, res) => {
   const _tsCheck = await query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='turno_stock' AND column_name='produto_id'`).catch(e=>({rows:[]}));
   const _tsType = _tsCheck.rows.length > 0 ? _tsCheck.rows[0].data_type : 'not_found';
   results.push({ label: 'turno_stock-type-check', ok: true, type: _tsType });
-  if (_tsType !== _pidType) {
+  if (_pidOk && _tsCheck.rows.length > 0 && _tsType !== _pidType) {
     await run(`DROP TABLE IF EXISTS turno_stock CASCADE`, 'turno_stock-drop');
     await run(`CREATE TABLE turno_stock (id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL REFERENCES turnos(id) ON DELETE CASCADE, produto_id ${pidCol} NOT NULL REFERENCES produtos(id) ON DELETE CASCADE, encontrado NUMERIC(10,3), entrada NUMERIC(10,3) NOT NULL DEFAULT 0, deixado NUMERIC(10,3), fechados NUMERIC(10,3) NOT NULL DEFAULT 0, UNIQUE(turno_id,produto_id))`, 'turno_stock-create');
   }
@@ -3555,7 +3568,10 @@ async function ensureArmazemTables() {
      FROM information_schema.columns
      WHERE table_schema='public' AND table_name='produtos' AND column_name='id'`
   ).catch(() => ({ rows: [] }));
-  const pidType = (pidCheck.rows[0] && pidCheck.rows[0].data_type) || 'integer';
+  // Verificação falhada NUNCA autoriza DROPs: o default 'integer' contra
+  // tabelas reais uuid fazia apagar dados (caso turno_pedido_linhas 05/08).
+  const pidOk = pidCheck.rows.length > 0;
+  const pidType = (pidCheck.rows[0] && pidCheck.rows[0].data_type) || 'uuid';
   const pidCol = pidType === 'uuid' ? 'UUID' : 'INTEGER';
 
   const stockType = await query(
@@ -3569,10 +3585,10 @@ async function ensureArmazemTables() {
      WHERE table_schema='public' AND table_name='armazem_compras' AND column_name='produto_id'`
   ).catch(() => ({ rows: [] }));
 
-  if (stockType.rows.length && stockType.rows[0].data_type !== pidType) {
+  if (pidOk && stockType.rows.length && stockType.rows[0].data_type !== pidType) {
     await query(`DROP TABLE IF EXISTS armazem_stock CASCADE`);
   }
-  if (comprasType.rows.length && comprasType.rows[0].data_type !== pidType) {
+  if (pidOk && comprasType.rows.length && comprasType.rows[0].data_type !== pidType) {
     await query(`DROP TABLE IF EXISTS armazem_compras CASCADE`);
   }
   const invDiaType = await query(
@@ -3580,7 +3596,7 @@ async function ensureArmazemTables() {
      FROM information_schema.columns
      WHERE table_schema='public' AND table_name='armazem_inventario_diario' AND column_name='produto_id'`
   ).catch(() => ({ rows: [] }));
-  if (invDiaType.rows.length && invDiaType.rows[0].data_type !== pidType) {
+  if (pidOk && invDiaType.rows.length && invDiaType.rows[0].data_type !== pidType) {
     await query(`DROP TABLE IF EXISTS armazem_inventario_diario CASCADE`);
   }
 

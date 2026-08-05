@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-04-deixados-ordem">
+<html lang="pt" data-stockos-ui="2026-08-05-rejeitados-visiveis">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -5967,6 +5967,11 @@ function registarSyncLog(item, resultado, motivo, duracaoMs) {
         motivo = `Diagnóstico: ${sSrv}s dentro do servidor${frio ? ' · instância acabada de arrancar (arranque frio da plataforma)' : ''} · o resto foi rede/plataforma`;
       }
     }
+    // Rejeição = fora da fila mas NUNCA fora do radar: entra na lista
+    // «por conferir» que mantém a faixa vermelha até alguém ver.
+    if (resultado === 'rejeitado') {
+      try { registarRejeicao((item && item.desc) || '', motivoSyncHumano(motivo), item && item.ref); } catch (_) {}
+    }
     const fila = syncLogLer();
     const criado = item && item.criado_em ? new Date(item.criado_em).getTime() : NaN;
     fila.push({
@@ -6012,15 +6017,65 @@ setInterval(() => { enviarSyncLog().catch(() => {}); }, 60000);
  *  🟠 com internet mas com registos a sincronizar
  *  🟢 com internet e tudo sincronizado
  *  Tocar na faixa abre o gestor da fila. */
+// ── REJEIÇÕES POR RECONHECER ─ Um registo rejeitado sai da fila (senão
+// re-tentava para sempre), mas NÃO pode sair do radar: fica aqui até
+// alguém abrir a lista e marcar como visto. Sem isto, a faixa dizia
+// «tudo sincronizado» minutos depois de registos terem sido rejeitados.
+const REJEITADOS_KEY = 'stockos.rejeitadosPorVer';
+function rejeitadosLer() {
+  try {
+    const v = JSON.parse(localStorage.getItem(REJEITADOS_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (_) { return []; }
+}
+function registarRejeicao(desc, motivo, ref) {
+  try {
+    const lista = rejeitadosLer();
+    lista.push({ desc: String(desc || '').slice(0, 160), motivo: String(motivo || '').slice(0, 300), ref: String(ref || ''), em: new Date().toISOString() });
+    while (lista.length > 50) lista.shift();
+    localStorage.setItem(REJEITADOS_KEY, JSON.stringify(lista));
+  } catch (_) {}
+  try { renderOfflineBanner(); } catch (_) {}
+}
+function abrirRejeitados() {
+  document.getElementById('rejeitados-overlay')?.remove();
+  const lista = rejeitadosLer();
+  const ov = document.createElement('div');
+  ov.id = 'rejeitados-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.78);z-index:1450;display:flex;align-items:flex-end;justify-content:center';
+  const itens = lista.slice().reverse().map((x) => `
+    <div style="border-top:1px solid #1e293b;padding:9px 0;font-size:12.5px">
+      <div style="color:#e2e8f0">${escapeHtml(x.desc)}${x.ref ? ` <span style="font-family:monospace;font-size:10.5px;color:#7d8db1">ref ${escapeHtml(x.ref)}</span>` : ''}</div>
+      <div style="color:#64748b;margin-top:2px">${new Date(x.em).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
+      ${x.motivo ? `<div style="color:#fca5a5;margin-top:2px;white-space:pre-wrap">${escapeHtml(x.motivo)}</div>` : ''}
+    </div>`).join('');
+  ov.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #7f1d1d;border-radius:14px 14px 0 0;max-width:560px;width:100%;max-height:82vh;display:flex;flex-direction:column;padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px))">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 6px">
+        <div style="font-size:15px;font-weight:700;color:#fca5a5">✗ Registos rejeitados — precisam de atenção</div>
+        <button type="button" aria-label="Fechar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1" onclick="document.getElementById('rejeitados-overlay')?.remove()">✕</button>
+      </div>
+      <div style="padding:0 16px;color:#94a3b8;font-size:12px">Estes registos NÃO entraram no sistema. Confere cada um (refaz na app o que ainda fizer falta) e só depois marca como resolvido.</div>
+      <div style="overflow-y:auto;padding:0 16px 6px;-webkit-overflow-scrolling:touch">${itens || '<div style="color:#475569;font-size:13px;padding:14px 0">Nada por ver.</div>'}</div>
+      <div style="padding:10px 16px 0">
+        <button type="button" class="btn btn-primary btn-sm" style="width:100%" onclick="localStorage.removeItem('stockos.rejeitadosPorVer');document.getElementById('rejeitados-overlay')?.remove();renderOfflineBanner();">✓ Já conferi tudo — limpar aviso</button>
+      </div>
+    </div>`;
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+}
+
 function renderOfflineBanner() {
   try {
     const semRede = navigator.onLine === false || __netReal === false;
     const n = contarPendentesOffline();
+    const nRej = rejeitadosLer().length;
     let el = document.getElementById('offline-banner');
     if (!el) {
       el = document.createElement('div');
       el.id = 'offline-banner';
       el.onclick = () => {
+        if (rejeitadosLer().length) { try { abrirRejeitados(); } catch (_) {} return; }
         if (contarPendentesOffline()) {
           sincronizarEscritasOffline().then(() => sincronizarPedidosOffline()).catch(() => {});
           try { abrirGestorFilaOffline(); } catch (_) {}
@@ -6030,11 +6085,16 @@ function renderOfflineBanner() {
     }
     const base = 'position:fixed;left:0;right:0;z-index:1350;text-align:center;letter-spacing:.02em;box-shadow:0 2px 10px rgba(0,0,0,0.45);cursor:pointer;';
     const pill = (txt) => `<span style="background:rgba(255,255,255,0.22);border-radius:999px;padding:2px 10px">${txt}</span>`;
+    const rejPill = nRej ? ` · ${pill(`✗ ${nRej} rejeitado${nRej === 1 ? '' : 's'} — toca para ver`)}` : '';
     const usoBytes = bytesFilaOffline();
     const usoTxt = usoBytes > LIMITE_OFFLINE_BYTES / 2 ? ` · ${mbTxt(usoBytes)}/30 MB` : '';
     if (semRede) {
       el.style.cssText = base + 'background:#b91c1c;color:#fff;font-size:13px;font-weight:700;padding:9px 12px';
-      el.innerHTML = `📴 SEM INTERNET — a trabalhar offline · ${pill(`⏳ ${n} registo${n === 1 ? '' : 's'} por sincronizar${usoTxt}`)} <span style="font-weight:400;opacity:.85">· tudo fica guardado e sincroniza sozinho</span>`;
+      el.innerHTML = `📴 SEM INTERNET — a trabalhar offline · ${pill(`⏳ ${n} registo${n === 1 ? '' : 's'} por sincronizar${usoTxt}`)}${rejPill} <span style="font-weight:400;opacity:.85">· tudo fica guardado e sincroniza sozinho</span>`;
+    } else if (nRej) {
+      // Rejeições por conferir mandam na cor: NUNCA verde com isto pendente.
+      el.style.cssText = base + 'background:#7f1d1d;color:#fecaca;font-size:13px;font-weight:700;padding:8px 12px';
+      el.innerHTML = `🌐 Com internet${n ? ` · ${pill(`⏳ ${n} a sincronizar…`)}` : ''} · ${pill(`✗ ${nRej} registo${nRej === 1 ? '' : 's'} REJEITADO${nRej === 1 ? '' : 'S'}`)} <span style="font-weight:400;opacity:.9">· toca para conferir</span>`;
     } else if (n) {
       el.style.cssText = base + 'background:#b45309;color:#fff;font-size:13px;font-weight:700;padding:8px 12px';
       el.innerHTML = `🌐 COM INTERNET · ${pill(`⏳ ${n} registo${n === 1 ? '' : 's'} a sincronizar…`)} <span style="font-weight:400;opacity:.85">· toca para ver</span>`;

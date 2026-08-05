@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-05-rejeitados-visiveis">
+<html lang="pt" data-stockos-ui="2026-08-05-timeout-barato">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1060,7 +1060,7 @@ async function api(method, path, body) {
   // instância acabou de arrancar — o diário de sincronizações usa isto.
   try {
     const sm = parseInt(r.headers.get('X-Srv-Ms'), 10);
-    if (Number.isFinite(sm)) window.__srvInfoUltimo = { ms: sm, boot: parseInt(r.headers.get('X-Srv-Boot-S'), 10), t: Date.now() };
+    if (Number.isFinite(sm)) window.__srvInfoUltimo = { ms: sm, boot: parseInt(r.headers.get('X-Srv-Boot-S'), 10), nota: r.headers.get('X-Srv-Nota') || '', t: Date.now() };
   } catch (_) {}
   let data = {};
   try {
@@ -5964,7 +5964,7 @@ function registarSyncLog(item, resultado, motivo, duracaoMs) {
       if (si && Date.now() - si.t < 2000) {
         const sSrv = (si.ms / 1000).toFixed(1).replace('.', ',');
         const frio = Number.isFinite(si.boot) && si.boot <= 10;
-        motivo = `Diagnóstico: ${sSrv}s dentro do servidor${frio ? ' · instância acabada de arrancar (arranque frio da plataforma)' : ''} · o resto foi rede/plataforma`;
+        motivo = `Diagnóstico: ${sSrv}s dentro do servidor${si.nota === 'timeout-bd-retry' ? ' · uma query à BD encravou e foi repetida (timeout interno)' : ''}${frio ? ' · instância acabada de arrancar (arranque frio da plataforma)' : ''} · o resto foi rede/plataforma`;
       }
     }
     // Rejeição = fora da fila mas NUNCA fora do radar: entra na lista

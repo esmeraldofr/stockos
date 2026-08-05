@@ -38,9 +38,9 @@ on:
         type: boolean
         default: false
       restaurar_linhas_run_id:
-        description: 'RESTAURO: run ID com o artefacto backup-producao para repor turno_pedido_linhas (vazio = não restaurar). Incidente 05/08: usar 30955455093'
+        description: 'RESTAURO de turno_pedido_linhas: run ID do backup. DEIXA o valor predefinido (backup de 04/08 22:11, anterior ao incidente); apaga o campo para NÃO restaurar'
         required: false
-        default: ''
+        default: '30955455093'
         type: string
 
 jobs:

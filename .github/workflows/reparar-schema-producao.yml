@@ -37,6 +37,11 @@ on:
         required: false
         type: boolean
         default: false
+      restaurar_linhas_run_id:
+        description: 'RESTAURO: run ID com o artefacto backup-producao para repor turno_pedido_linhas (vazio = não restaurar). Incidente 05/08: usar 30955455093'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   fix:
@@ -98,6 +103,45 @@ jobs:
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
           # Sem ON_ERROR_STOP: cada statement é independente.
           psql -f supabase/reparar_schema_aditivo.sql
+
+      - name: 'RESTAURO: descarregar artefacto de backup'
+        if: ${{ github.event.inputs.restaurar_linhas_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: backup-producao
+          run-id: ${{ github.event.inputs.restaurar_linhas_run_id }}
+          github-token: ${{ github.token }}
+          path: _restauro
+
+      - name: 'RESTAURO: repor turno_pedido_linhas (só insere; não duplica)'
+        if: ${{ github.event.inputs.restaurar_linhas_run_id != '' }}
+        env:
+          DATABASE_URL_PROD_ADMIN: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:5432/postgres' }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD_ADMIN")"
+          gunzip -k _restauro/backup-producao-*.sql.gz
+          SQL=$(ls _restauro/backup-producao-*.sql | head -1)
+          HEADER=$(grep -m1 '^COPY public\.turno_pedido_linhas ' "$SQL")
+          echo "COPY encontrado: $HEADER"
+          if ! echo "$HEADER" | grep -q '(id, pedido_id, produto_id, quantidade, qtd_devolvida)'; then
+            echo "::error::Ordem de colunas inesperada no backup — restauro abortado por segurança. Header: $HEADER"
+            exit 1
+          fi
+          awk '/^COPY public\.turno_pedido_linhas /{f=1;next} f&&/^\\\.$/{exit} f' "$SQL" > linhas.tsv
+          echo "Linhas no backup: $(wc -l < linhas.tsv)"
+          psql -v ON_ERROR_STOP=1 << 'PSQL'
+          CREATE TEMP TABLE _restauro_l (id INTEGER, pedido_id INTEGER, produto_id UUID, quantidade NUMERIC, qtd_devolvida NUMERIC);
+          \copy _restauro_l (id, pedido_id, produto_id, quantidade, qtd_devolvida) FROM 'linhas.tsv'
+          INSERT INTO turno_pedido_linhas (pedido_id, produto_id, quantidade, qtd_devolvida)
+          SELECT r.pedido_id, r.produto_id, r.quantidade, COALESCE(r.qtd_devolvida, 0)
+            FROM _restauro_l r
+           WHERE EXISTS (SELECT 1 FROM turno_pedidos p WHERE p.id = r.pedido_id)
+             AND NOT EXISTS (SELECT 1 FROM turno_pedido_linhas t WHERE t.pedido_id = r.pedido_id);
+          SELECT COUNT(*) AS linhas_totais,
+                 COUNT(DISTINCT pedido_id) AS pedidos_com_linhas
+            FROM turno_pedido_linhas;
+          PSQL
 
       - name: 'FASE 2: troca de constraints (só com código novo em main)'
         if: ${{ github.event.inputs.trocar_constraints == 'true' }}

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-05-timeout-barato">
+<html lang="pt" data-stockos-ui="2026-08-09-sessao-nao-rejeita">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -1612,6 +1612,9 @@ async function doLogin() {
     );
     refreshFaltasBadge();
     enviarHeartbeat(true).catch(() => {});
+    // Registos que ficaram em fila enquanto a sessão estava expirada:
+    // retomam JÁ com a sessão nova (sem esperar o próximo ciclo de 45s).
+    sincronizarEscritasOffline().then(() => sincronizarPedidosOffline()).catch(() => {});
   } catch (e) { err('login-msg', sanitizeLoginErr(e && e.message != null ? e.message : String(e))); }
 }
 
@@ -5774,6 +5777,11 @@ async function sincronizarPedidosOffline() {
           registarSyncLog(itemLog, 'sem-rede', String(e && e.message || 'sem rede'), Date.now() - t0);
           break; // ainda offline — tenta mais tarde
         }
+        // Sessão expirada: o pedido fica na fila até ao próximo login.
+        if (/sessão expirou|não autenticado/i.test(String(e && e.message || ''))) {
+          registarSyncLog(itemLog, 'transitorio', String(e.message), Date.now() - t0);
+          break;
+        }
         // Erro de validação (ex.: turno fechado): não vale a pena repetir.
         registarSyncLog(itemLog, 'rejeitado', String(e && e.message || ''), Date.now() - t0);
         remover();
@@ -5950,6 +5958,7 @@ function motivoSyncHumano(msg) {
   if (/EMAXCONNSESSION|max clients|connection slots|too many clients/i.test(m)) return `Base de dados com as ligações esgotadas (pico de utilização) — volta a tentar sozinho [${m}]`;
   if (/query timeout|statement timeout|canceling statement/i.test(m)) return `A base de dados demorou demais e a operação foi cortada — volta a tentar sozinho [${m}]`;
   if (/exceed_.*_quota|restricted due to|spend caps/i.test(m)) return `O projecto Supabase está RESTRINGIDO por quota esgotada (plano gratuito) — o registo fica na fila até o serviço voltar; é preciso upgrade do plano [${m.slice(0, 120)}]`;
+  if (/sessão expirou|não autenticado/i.test(m)) return `A sessão expirou enquanto o registo esperava — fica na fila e entra sozinho depois de entrares de novo [${m}]`;
   if (/ENOTFOUND|EAI_AGAIN/i.test(m)) return `O servidor não conseguiu encontrar a base de dados (DNS) — volta a tentar sozinho [${m}]`;
   if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|connect timeout/i.test(m)) return `A ligação do servidor à base de dados falhou — volta a tentar sozinho [${m}]`;
   if (/does not exist|não existe/i.test(m)) return `A base de dados ainda não tem esta estrutura (falta correr o «Reparar schema») — fica na fila [${m}]`;
@@ -6704,6 +6713,13 @@ async function sincronizarEscritasOffline() {
           break; // sem rede — tenta mais tarde
         }
         const msgErr = String(e && e.message || '');
+        // Sessão expirada NÃO é culpa do registo: a fila PAUSA e retoma
+        // sozinha depois do próximo login (o guard !S.token trava o loop).
+        // Antes disto, um registo que esperou a noite toda era rejeitado.
+        if (/sessão expirou|não autenticado/i.test(msgErr)) {
+          registarSyncLog(item, 'transitorio', msgErr, Date.now() - t0);
+          break;
+        }
         // «Já está feito» numa RE-TENTATIVA = a 1ª tentativa entrou e a
         // resposta perdeu-se. É SUCESSO — sem alerta de rejeição.
         if (/já está|já estão|já foi|já fechado|ja_fechado|duplicad/i.test(msgErr)) {

@@ -273,17 +273,22 @@ function verificarSeloDdl(sqlConn) {
   })();
 }
 
+/** Último timeout-retry interno — o auto-diagnóstico expõe-o à app. */
+let __pgTimeoutTs = 0;
 const query = async (text, params) => {
   if (__ddlSkip && DDL_SALTAVEL.test(text)) return { rows: [] };
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const sql = await ensurePgSingleton();
-      // Timeout de 6s: zombies detectados rapidamente; queries sãs terminam em < 2s.
-      // "query timeout" casa com o regex transient → resetPgSingleton() + retry com ligação nova.
+      // 1ª tentativa 2,5s (zombie detectado barato — era o custo fixo de
+      // «6,2s dentro do servidor» no diário); retries 6s para queries
+      // legitimamente pesadas. "query timeout" casa com o regex transient
+      // → resetPgSingleton() + retry com ligação nova.
+      const tmoMs = attempt === 0 ? 2500 : 6000;
       const rows = await Promise.race([
         sql.unsafe(text, params || []),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('query timeout (6s)')), 6000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`query timeout (${tmoMs}ms)`)), tmoMs))
       ]);
       _lastPgUseTs = Date.now();
       return { rows: Array.from(rows) };
@@ -297,6 +302,7 @@ const query = async (text, params) => {
           e.code === 'ENETUNREACH' ||
           e.code === 'EPIPE');
       if (transient) {
+        if (/query timeout/i.test(msg)) __pgTimeoutTs = Date.now();
         await resetPgSingleton();
         // backoff curto para EMAXCONN (esperar conexões libertarem no pooler)
         if (/EMAXCONN|max client connections/i.test(msg)) {
@@ -848,6 +854,8 @@ app.use((req, res, next) => {
     try {
       res.setHeader('X-Srv-Ms', String(Date.now() - t0));
       res.setHeader('X-Srv-Boot-S', String(Math.round((t0 - __bootTs) / 1000)));
+      // Um timeout-retry interno da BD aconteceu durante ESTE pedido?
+      if (__pgTimeoutTs >= t0) res.setHeader('X-Srv-Nota', 'timeout-bd-retry');
     } catch (_) {}
     return wh.apply(this, a);
   };

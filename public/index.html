@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-passagem-turno">
+<html lang="pt" data-stockos-ui="2026-10-15-encontrado-bloqueado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3626,17 +3626,21 @@ async function loadTurno() {
     } catch (_) { S.turnoDecisoes = {}; S.turnoComentarios = {}; }
     stockBuf = {};
     stockDirty = new Set();
+    const temAnteriorAlinhar = turno.stock.some((r) =>
+      (r.prev_deixado !== null && r.prev_deixado !== undefined) ||
+      (r.prev_deixado_caixa !== null && r.prev_deixado_caixa !== undefined));
     turno.stock.forEach((s) => {
       const sid = prodIdKey(s.produto_id);
       if (!sid) return;
       // Passagem de turno: turnos abertos antes desta regra podem ter um
       // Encontrado diferente do Deixado anterior — alinha e grava (o
       // servidor aplica o valor herdado).
-      if (turno.estado === 'aberto') {
-        const difere = (a, b) => b !== null && b !== undefined &&
-          !(a !== null && a !== undefined && a !== '' && Math.abs(parseFloat(a) - parseFloat(b)) < 0.001);
-        if (difere(s.encontrado, s.prev_deixado)) { s.encontrado = s.prev_deixado; stockDirty.add(sid); }
-        if (difere(s.encontrado_caixa, s.prev_deixado_caixa)) { s.encontrado_caixa = s.prev_deixado_caixa; stockDirty.add(sid); }
+      if (turno.estado === 'aberto' && temAnteriorAlinhar) {
+        const vazio = (v) => v === null || v === undefined || v === '';
+        const difere = (a, b) => (vazio(a) !== vazio(b)) ||
+          (!vazio(a) && Math.abs(parseFloat(a) - parseFloat(b)) >= 0.001);
+        if (difere(s.encontrado, s.prev_deixado)) { s.encontrado = vazio(s.prev_deixado) ? null : s.prev_deixado; stockDirty.add(sid); }
+        if (difere(s.encontrado_caixa, s.prev_deixado_caixa)) { s.encontrado_caixa = vazio(s.prev_deixado_caixa) ? null : s.prev_deixado_caixa; stockDirty.add(sid); }
       }
       stockBuf[sid] = {
         encontrado: parseEncontradoFromRow(s.encontrado),
@@ -3701,6 +3705,11 @@ async function loadTurno() {
         return vb - va;
       });
 
+    // Passagem de turno: havendo turno anterior, TODOS os Encontrados
+    // vêm dele e ficam só de leitura — incluindo os que ficaram vazios.
+    const turnoTemAnterior = turno.stock.some((r) =>
+      (r.prev_deixado !== null && r.prev_deixado !== undefined) ||
+      (r.prev_deixado_caixa !== null && r.prev_deixado_caixa !== undefined));
     // Mapa de vendas no balcão (por produto) — usado pela coluna "Balcão"
     // da tabela Stock. Recalculado a cada draw.
     const stockBalcaoMap = typeof getVendasBalcaoPorProduto === 'function'
@@ -3713,7 +3722,7 @@ async function loadTurno() {
         const inputAttr = canEdit ? '' : 'disabled';
         // Passagem de turno: com Deixado no turno anterior, o Encontrado É
         // esse valor (herdado e mantido pelo servidor) — só leitura.
-        const encHerdado = s.prev_deixado !== null && s.prev_deixado !== undefined;
+        const encHerdado = turnoTemAnterior;
         const encInputAttr = canEdit && !encontradosFechados && !encHerdado ? '' : 'disabled';
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.
@@ -3870,7 +3879,7 @@ async function loadTurno() {
         if (!pid) return '';
         const inputAttr = canEdit ? '' : 'disabled';
         // Passagem de turno: Enc. caixa herdado do Deix. caixa anterior — só leitura.
-        const encCxHerdado = s.prev_deixado_caixa !== null && s.prev_deixado_caixa !== undefined;
+        const encCxHerdado = turnoTemAnterior;
         const encInputAttr = canEdit && !encontradosFechados && !encCxHerdado ? '' : 'disabled';
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.
@@ -8921,7 +8930,9 @@ function aplicarFinoBarrilZeroParaRecipienteKg(turno, canEdit) {
   let ch = false;
   const encB = stockBuf[sid].encontrado;
   // Encontrado herdado do Deixado anterior nunca é substituído pela tara.
-  const encHerdadoFb = row.prev_deixado !== null && row.prev_deixado !== undefined;
+  const encHerdadoFb = turno.stock.some((r) =>
+    (r.prev_deixado !== null && r.prev_deixado !== undefined) ||
+    (r.prev_deixado_caixa !== null && r.prev_deixado_caixa !== undefined));
   if (!encHerdadoFb && (encB == null || encB === '' || parseFloat(encB) === 0)) {
     stockBuf[sid].encontrado = kg;
     ch = true;

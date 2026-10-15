@@ -7213,6 +7213,34 @@ app.get('/api/historico', auth, async (req, res) => {
       sqlHistH.replace('{LOJA_FILTRO}', 'AND t.loja_id = $3'), [d1, d2, lojaDe(req)],
       sqlHistH.replace('{LOJA_FILTRO}', ''), [d1, d2]
     );
+    // Entradas extra de caixa (mesmas fontes que /dia): turno_saidas marcadas
+    // com ENTRADA:: e a tabela turno_caixa_entradas. Somam ao total final.
+    const ids = r.rows.map(x => x.turno_id);
+    if (ids.length) {
+      const [marcadas, tabela] = await Promise.all([
+        query(
+          `SELECT turno_id, COALESCE(SUM(valor),0)::numeric AS t
+           FROM turno_saidas
+           WHERE turno_id = ANY($1::int[]) AND COALESCE(notas,'') LIKE 'ENTRADA::%'
+           GROUP BY turno_id`, [ids]
+        ).catch(() => ({ rows: [] })),
+        query(
+          `SELECT turno_id, COALESCE(SUM(valor),0)::numeric AS t
+           FROM turno_caixa_entradas
+           WHERE turno_id = ANY($1::int[])
+           GROUP BY turno_id`, [ids]
+        ).catch(() => ({ rows: [] }))
+      ]);
+      const ent = {};
+      for (const x of [...marcadas.rows, ...tabela.rows]) {
+        ent[x.turno_id] = (ent[x.turno_id] || 0) + (parseFloat(x.t) || 0);
+      }
+      for (const row of r.rows) {
+        const e = ent[row.turno_id] || 0;
+        row.caixa_entradas = e;
+        row.total_final = (parseFloat(row.total_final) || 0) + e;
+      }
+    }
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

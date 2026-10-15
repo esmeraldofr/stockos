@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-talao-produtos-fix">
+<html lang="pt" data-stockos-ui="2026-10-15-talao-entradas-saidas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10309,6 +10309,8 @@ function recolherSeccoesTurno() {
     caixa: caixaValores,
     esperado,
     esperadoTitulo,
+    // Dados completos da aba Entradas e Saídas (independente do filtro do ecrã).
+    mvDados: window.__mvDados ? { ...window.__mvDados, movs: [...(window.__mvDados.movs || [])] } : null,
     movimentos: linhasDeTabelas([...document.querySelectorAll('#movimentos-section table')]),
     notas: document.getElementById('turno-notas')?.value ?? t.notas ?? ''
   };
@@ -10512,30 +10514,35 @@ function talaoTurnoLinhas(sec, W) {
       sec.esperado.map((e) => ({ c: [e[0], tlNum(e[1]), typeof e[2] === 'number' ? tlSinal(e[2]) : tlTxt(e[2])] })));
   }
 
-  // 4. Movimentos do turno — Hora · Descrição · Qtd · Valor (+ nota).
-  //    Linhas de rodapé (totais/saldo, com colspan) vão depois da tabela.
-  seccao('Movimentos do turno');
-  let iM = {}, nCabM = 0;
-  const linM = [], rodM = [];
-  sec.movimentos.forEach((r) => {
-    if (r.tipo === 'cab') {
-      nCabM = r.length;
-      iM = { h: idx(r, /^Hora/), d: idx(r, /^Descri/), q: idx(r, /^Qtd/), v: idx(r, /^Valor/), n: idx(r, /^Nota/) };
-      return;
-    }
-    if (r.tipo === 'seccao') { linM.push({ t: `-- ${tlTxt(cel(r, 0))} --`, s: 'b' }); return; }
-    if (r.tipo === 'total' || r.length < nCabM) {
-      const num = r.slice(1).map((x) => x.v).find((v) => typeof v === 'number');
-      rodM.push([tlTxt(cel(r, 0)), num === undefined ? tlTxt(r.slice(1).map((x) => x.v).filter((v) => v !== '').pop() ?? '') : fmt(num)]);
-      return;
-    }
-    const v = cel(r, iM.v);
-    linM.push({ c: [cel(r, iM.h), iM.d >= 0 ? cel(r, iM.d) : cel(r, 0), tlVazio(cel(r, iM.q)) ? '' : tlNum(cel(r, iM.q)), tlVazio(v) ? '' : typeof v === 'number' ? tlNum(v) : tlTxt(v).replace(/\s*Kz$/i, '')] });
-    if (!tlVazio(cel(r, iM.n))) linM.push({ t: `      obs: ${tlTxt(cel(r, iM.n))}` });
-  });
-  if (!linM.some((l) => l.c)) add('(sem movimentos)');
-  else tabela([{ h: 'Hora' }, { h: 'Descricao', flex: true }, { h: 'Qtd', al: 'r' }, { h: 'Valor Kz', al: 'r' }], linM);
-  if (rodM.length) { add('-'.repeat(W)); rodM.forEach(([l, v]) => addLR(l, v, 'b')); }
+  // 4. Entradas e Saídas (aba «🔄 Entradas e Saídas») — a partir dos dados
+  //    completos, não da tabela do ecrã (que pode estar filtrada).
+  seccao('Entradas e Saídas');
+  const mv = sec.mvDados;
+  const movs = ((mv && mv.movs) || []).slice().sort((x, y) => String(x.ts || '').localeCompare(String(y.ts || '')));
+  const hora = (ts) => (ts ? new Date(ts).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }) : '');
+  const sinal = (m) => (m.dir === 'out' ? '-' : '+');
+  const obs = (m) => (tlTxt(m.notas) ? [{ t: `      obs: ${tlTxt(m.notas)}` }] : []);
+  const mvStock = movs.filter((m) => m.cat === 'stock');
+  const mvCaixa = movs.filter((m) => m.cat !== 'stock');
+  if (!movs.length) add('(sem entradas nem saidas)');
+  if (mvStock.length) {
+    add('-- Stock (produtos) --', 'b');
+    tabela([{ h: 'Hora' }, { h: 'Produto', flex: true }, { h: 'Qtd', al: 'r' }, { h: 'Valor Kz', al: 'r' }],
+      mvStock.map((m) => [{ c: [hora(m.ts), `${tlTxt(m.desc)}${m.tag ? ` (${m.tag})` : ''}`, `${sinal(m)}${fmtNum(m.qtd)}${m.med ? ' ' + tlTxt(m.med) : ''}`, m.valor ? `-${fmtNum(m.valor)}` : ''] }, ...obs(m)]).flat());
+  }
+  if (mvCaixa.length) {
+    if (mvStock.length) add('');
+    add('-- Dinheiro --', 'b');
+    tabela([{ h: 'Hora' }, { h: 'Descricao', flex: true }, { h: 'Valor Kz', al: 'r' }],
+      mvCaixa.map((m) => [{ c: [hora(m.ts), tlTxt(m.desc), `${sinal(m)}${fmtNum(m.valor)}`] }, ...obs(m)]).flat());
+  }
+  if (mv && movs.length) {
+    const saldo = (mv.totalEntradas || 0) - (mv.totalSaidas || 0);
+    add('-'.repeat(W));
+    addLR('Total saidas (dinheiro)', `-${fmt(mv.totalSaidas || 0)}`, 'b');
+    addLR('Total entradas (dinheiro)', `+${fmt(mv.totalEntradas || 0)}`, 'b');
+    addLR('Saldo (entradas - saidas)', `${saldo >= 0 ? '+' : '-'}${fmt(Math.abs(saldo))}`, 'b');
+  }
 
   // 5. Observações — texto livre: só aqui se parte em palavras.
   seccao('Observações');

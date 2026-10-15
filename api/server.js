@@ -5957,8 +5957,9 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
     const deix = parseOptionalNumericBody(deixado);
     let encG = parseOptionalNumericBody(encontrado_caixa);
     const deixG = parseOptionalNumericBody(deixado_caixa);
-    // Passagem de turno: havendo Deixado no turno anterior, o Encontrado é
-    // esse valor — o que o cliente mandar é ignorado (sempre igual).
+    // Passagem de turno: havendo turno anterior, o Encontrado de TODOS os
+    // produtos é o Deixado desse turno (vazio fica vazio) — o que o cliente
+    // mandar é ignorado. Só sem turno anterior o Encontrado é editável.
     let encHerdado = false;
     let encGHerdado = false;
     const prevTurnoId = await turnoAnteriorComDeixados({ query }, req.params.id).catch(() => null);
@@ -5967,8 +5968,10 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
         `SELECT deixado, deixado_caixa FROM turno_stock WHERE turno_id=$1 AND produto_id=$2`,
         [prevTurnoId, produto_id]
       );
-      if (pv.rows.length && pv.rows[0].deixado != null) { enc = pv.rows[0].deixado; encHerdado = true; }
-      if (pv.rows.length && pv.rows[0].deixado_caixa != null) { encG = pv.rows[0].deixado_caixa; encGHerdado = true; }
+      enc = pv.rows.length ? pv.rows[0].deixado : null;
+      encG = pv.rows.length ? pv.rows[0].deixado_caixa : null;
+      encHerdado = true;
+      encGHerdado = true;
     }
     const sets = ['fechados=$5'];
     // Herdado: escreve-se sempre (é um espelho, nunca uma edição manual).

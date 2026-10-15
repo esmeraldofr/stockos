@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-talao-letra-mini">
+<html lang="pt" data-stockos-ui="2026-10-15-talao-produtos-fix">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10445,17 +10445,32 @@ function talaoTurnoLinhas(sec, W) {
   }
 
   // 2. Produtos vendidos — Qtd · Produto · (Dif) · Valor.
+  //    O resumo tem várias tabelas (uma por categoria, Total geral sem
+  //    cabeçalho, e Comissões por promotor com outras colunas): cada linha
+  //    usa as colunas da ÚLTIMA tabela com cabeçalho que a precede.
   seccao('Produtos vendidos');
-  let iP = {};
-  const linP = [];
+  const linP = [], linC = [];
+  let iP = null, iC = null, modo = '', pendentes = [];
   let algumP = false, temDif = false, temCom = false;
   sec.produtos.forEach((r) => {
-    if (r.tipo !== 'cab') return;
-    iP = { q: idx(r, /^Quantidade/), val: idx(r, /^Valor(?! vendido)/), com: idx(r, /^Comiss/), dq: idx(r, /^Dif\.? ?qtd/i), dv: idx(r, /^Dif\.? ?valor/i) };
-  });
-  sec.produtos.forEach((r) => {
-    if (r.tipo === 'cab') return;
-    if (r.tipo === 'seccao') { linP.push({ t: `-- ${tlTxt(cel(r, 0))} --`, s: 'b' }); return; }
+    if (r.tipo === 'cab') {
+      if (idx(r, /^Quantidade/) >= 0) {
+        modo = 'prod';
+        iP = { q: idx(r, /^Quantidade/), val: idx(r, /^Valor(?! vendido)/), com: idx(r, /^Comiss/), dq: idx(r, /^Dif\.? ?qtd/i), dv: idx(r, /^Dif\.? ?valor/i) };
+        linP.push(...pendentes);
+      } else {
+        modo = 'com';
+        iC = { n: idx(r, /^Pedidos/), v: idx(r, /^Vendido/), c: idx(r, /^Comiss/) };
+      }
+      pendentes = [];
+      return;
+    }
+    if (r.tipo === 'seccao') { pendentes.push({ t: `-- ${tlTxt(cel(r, 0))} --`, s: 'b' }); return; }
+    if (modo === 'com') {
+      linC.push({ c: [cel(r, 0), tlNum(cel(r, iC.n)), tlNum(cel(r, iC.v)), tlNum(cel(r, iC.c))], s: r.tipo === 'total' ? 'b' : '' });
+      return;
+    }
+    if (!iP) return;
     const total = r.tipo === 'total';
     if (total) linP.push({ t: '-'.repeat(W) });
     else algumP = true;
@@ -10471,6 +10486,12 @@ function talaoTurnoLinhas(sec, W) {
     const colsP = [{ h: 'Qtd', al: 'r' }, { h: 'Produto', flex: true }, { h: 'Com.', al: 'r' }, { h: 'Dif', al: 'r' }, { h: 'Dif Kz', al: 'r' }, { h: 'Valor Kz', al: 'r' }];
     const usar = [true, true, temCom, temDif, temDif, true];
     tabela(colsP.filter((_, i) => usar[i]), linP.map((l) => (l.c ? { ...l, c: l.c.filter((_, i) => usar[i]) } : l)));
+  }
+  if (linC.length) {
+    add('');
+    add('Comissoes por promotor', 'b');
+    tabela([{ h: 'Promotor', flex: true }, { h: 'Ped', al: 'r' }, { h: 'Vendido', al: 'r' }, { h: 'Comissao', al: 'r' }],
+      linC.map((l) => (l.s ? [{ t: '-'.repeat(W) }, l] : [l])).flat());
   }
 
   // 3. Caixa

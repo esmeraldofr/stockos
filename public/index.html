@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-encontrado-bloqueado">
+<html lang="pt" data-stockos-ui="2026-10-15-aba-ecra-inteiro">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -546,6 +546,10 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
   .turno-tab{padding:7px 10px;font-size:12px}
 }
 .turno-tab-panel{display:none}.turno-tab-panel.active{display:block}
+body.turno-full .turno-tab-panel.active{position:fixed;left:0;right:0;bottom:0;top:var(--turno-full-top,0px);z-index:1300;background:#0f172a;overflow:auto;-webkit-overflow-scrolling:touch;padding:52px 12px calc(16px + env(safe-area-inset-bottom,0px));margin:0}
+body.turno-full{overflow:hidden}
+#turno-full-sair{display:none}
+body.turno-full #turno-full-sair{display:inline-flex;position:fixed;right:12px;top:calc(var(--turno-full-top,0px) + 8px);z-index:1310;align-items:center;gap:6px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:999px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.45)}
 #content > .armazem-tab-panel{display:none}#content > .armazem-tab-panel.active{display:block}
 input.stock-caixa-required-missing,textarea.stock-caixa-required-missing{border-color:#f87171!important;box-shadow:0 0 0 1px rgba(248,113,113,.5)}
 #turno-equipa-real-section.stock-caixa-required-missing{outline:2px solid rgba(248,113,113,.55);border-radius:8px;padding:8px;margin:8px -8px 0}
@@ -1459,6 +1463,7 @@ async function runAction(ev, work) {
 
 // ── ROUTER ────────────────────────────────────────────────────
 async function navigate(page, params) {
+  if (document.body.classList.contains('turno-full')) alternarTurnoEcraInteiro(false);
   // Aviso se o utilizador sai do turno e o registo inicial de encontrados
   // ainda não foi fechado (chamada antes de mudar S.page).
   if (page !== 'turno' && S.page === 'turno') {
@@ -3979,7 +3984,9 @@ async function loadTurno() {
           <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
           ${turnoFechado ? `<button type="button" class="${tabCls('vendas')}" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>` : ''}
           ${turnoFechado ? `<button type="button" class="${tabCls('registos')}" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>` : ''}
+          <button type="button" class="turno-tab" style="margin-left:auto" title="Mostrar o conteúdo da aba em ecrã inteiro" onclick="alternarTurnoEcraInteiro(true)">⛶ Ecrã inteiro</button>
       </div>
+      <button type="button" id="turno-full-sair" onclick="alternarTurnoEcraInteiro(false)">✕ Sair do ecrã inteiro</button>
 
       <div id="tab-stock" class="${panelCls('stock')}">
         ${encontradosBannerHtml(turno, encontradosFechados, canEdit, isAdminUserScope)}
@@ -10018,6 +10025,31 @@ function calcCaixa() {
   clearTimeout(autoSaveCaixaTimer);
   autoSaveCaixaTimer = setTimeout(() => guardarCaixa(turnoId), 2000);
 }
+
+/** Conteúdo da aba do turno em ecrã inteiro: o painel activo cobre a
+ *  página (abaixo das faixas de estado) e, onde o browser deixa (Android,
+ *  computador), entra também em fullscreen nativo. iPhone: só o modo CSS. */
+function alternarTurnoEcraInteiro(ligar) {
+  const topo = parseInt(document.body.style.paddingTop, 10) || 0;
+  document.documentElement.style.setProperty('--turno-full-top', topo + 'px');
+  document.body.classList.toggle('turno-full', !!ligar);
+  try {
+    if (ligar && document.documentElement.requestFullscreen && !document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else if (!ligar && document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    }
+  } catch (_) {}
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('turno-full')) alternarTurnoEcraInteiro(false);
+});
+document.addEventListener('fullscreenchange', () => {
+  // Saiu do fullscreen nativo (voltar/Esc do browser) → sai também do modo CSS.
+  if (!document.fullscreenElement && document.body.classList.contains('turno-full')) {
+    document.body.classList.remove('turno-full');
+  }
+});
 
 async function switchTurnoTab(name, btn) {
   // Aviso se o registo inicial de encontrados ainda está por fechar e o

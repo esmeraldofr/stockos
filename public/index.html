@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-talao-colunas-produtos">
+<html lang="pt" data-stockos-ui="2026-10-15-talao-qtd-curta">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10481,7 +10481,15 @@ function talaoTurnoLinhas(sec, W) {
     if (total) linP.push({ t: '-'.repeat(W) });
     else algumP = true;
     const n = (i) => (tlVazio(cel(r, i)) ? '' : tlNum(cel(r, i)));
-    linP.push({ c: [cel(r, 0), n(iP.q), n(iP.val), n(iP.ven), n(iP.vv), tlSinal(cel(r, iP.dq)), tlSinal(cel(r, iP.dv))], s: total ? 'b' : '' });
+    // Quantidade: só o número (sem «copos (89 pacotes)», «itens», «un.»…).
+    const qtd = (() => {
+      const v = cel(r, iP.q);
+      if (typeof v === 'number' || tlVazio(v)) return n(iP.q);
+      const m = tlTxt(v).match(/-?\d{1,3}(?:[ .]\d{3})*(?:,\d+)?$|-?\d+(?:,\d+)?$/);
+      const num = m ? celulaExcel(m[0]) : '';
+      return typeof num === 'number' ? fmtNum(num) : tlTxt(v);
+    })();
+    linP.push({ c: [cel(r, 0), qtd, n(iP.val), n(iP.ven), n(iP.vv), tlSinal(cel(r, iP.dq)), tlSinal(cel(r, iP.dv))], s: total ? 'b' : '' });
   });
   if (!algumP) add('(sem pedidos)');
   else {

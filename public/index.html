@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-resumo-vendido">
+<html lang="pt" data-stockos-ui="2026-10-15-resumo-valor-vendido">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7687,26 +7687,40 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     // Larguras de coluna partilhadas por TODAS as tabelas (categorias e
     // Total geral) — com table-layout:fixed as colunas alinham verticalmente
     // entre tabelas diferentes.
-    const colgroupHtml = '<colgroup><col style="width:32%"><col style="width:20%"><col style="width:16%"><col style="width:16%"><col style="width:16%"></colgroup>';
-    const tableStyle = 'width:100%;min-width:560px;table-layout:fixed;border-collapse:collapse;font-size:13px';
+    const colgroupHtml = '<colgroup><col style="width:27%"><col style="width:17%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:14%"></colgroup>';
+    const tableStyle = 'width:100%;min-width:640px;table-layout:fixed;border-collapse:collapse;font-size:13px';
     // Vendido segundo a folha de Stock (Encontrado + Entrada − Deixado),
     // para comparar com a quantidade dos pedidos. «—» se o produto não está
     // na folha ou ainda falta o Deixado.
-    const vendidoStockHtml = (pid) => {
+    // Valor do vendido = mesma regra do servidor: vendido × preço do
+    // produto; turno fechado com valor congelado no fecho → esse valor.
+    const vendidoStockInfo = (pid) => {
       const k = prodIdKey(pid);
       const b = (typeof stockBuf === 'object' && stockBuf) ? stockBuf[k] : null;
-      if (!b) return '<span style="color:#475569">—</span>';
+      if (!b) return null;
       const v = vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado);
-      if (!Number.isFinite(v)) return '<span style="color:#475569">—</span>';
+      if (!Number.isFinite(v)) return null;
       const row = (S.turnoData && S.turnoData.stock || []).find((x) => prodIdKey(x.produto_id) === k);
       const sig = row ? medicaoSigla(row.tipo_medicao || 'unidade') : '';
-      return `${sig ? `<span style="color:#64748b;font-size:11px">${escapeHtml(sig)}</span> ` : ''}${num2(v)}`;
+      const snap = row && row.valor_vendas_reportado_kz;
+      const kz = (S.turnoData && S.turnoData.estado === 'fechado' && snap != null && snap !== '' && Number.isFinite(parseFloat(snap)))
+        ? parseFloat(snap)
+        : (row && parseFloat(row.preco) > 0 ? Math.max(0, v) * parseFloat(row.preco) : null);
+      return { v, sig, kz };
     };
+    const traco = '<span style="color:#475569">—</span>';
+    const vendidoStockHtml = (pid) => {
+      const i = vendidoStockInfo(pid);
+      if (!i) return traco;
+      return `${i.sig ? `<span style="color:#64748b;font-size:11px">${escapeHtml(i.sig)}</span> ` : ''}${num2(i.v)}`;
+    };
+    const valorVendidoKz = (pid) => { const i = vendidoStockInfo(pid); return i && Number.isFinite(i.kz) ? i.kz : null; };
     const renderTabela = (byProd) => {
       const arr = [...byProd.values()].sort((a, b) => b.valor - a.valor);
       const totalQtd = arr.reduce((s, r) => s + r.qtd, 0);
       const totalKz = arr.reduce((s, r) => s + r.valor, 0);
       const totalCom = arr.reduce((s, r) => s + r.comissao, 0);
+      const totalVendKz = arr.reduce((s, r) => s + (valorVendidoKz(r.pid) || 0), 0);
       const trs = arr.map((r) => {
         let unidadeStr = r.unidade;
         if (r.isCopo && r.pacoteN >= 2 && r.pacotePreco > 0 && r.pacotes > 0) {
@@ -7722,6 +7736,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)}</td>
           <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums"><span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span> ${num2(r.qtd)}</td>
           <td style="padding:5px 8px;text-align:right;color:#e2e8f0;font-variant-numeric:tabular-nums">${vendidoStockHtml(r.pid)}</td>
+          <td style="padding:5px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums">${valorVendidoKz(r.pid) != null ? fmt(valorVendidoKz(r.pid)) : traco}</td>
           <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.valor)}</td>
           <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${pctTxt}${fmt(r.comissao)}</td>
         </tr>`;
@@ -7735,6 +7750,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
                 <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Produto</th>
                 <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Quantidade</th>
                 <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em" title="Vendido segundo a folha de Stock: Encontrado + Entrada − Deixado">Vendido</th>
+                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em" title="Valor do vendido na folha de Stock: Vendido × preço do produto">Valor vendido</th>
                 <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Valor</th>
                 <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em" title="Comissão potencial = subtotal × % do produto">Comissão</th>
               </tr>
@@ -7745,6 +7761,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
                 <td style="padding:6px 8px;color:#cbd5e1;font-weight:700">Subtotal</td>
                 <td style="padding:6px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700">${num2(totalQtd)}</td>
                 <td></td>
+                <td style="padding:6px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalVendKz)}</td>
                 <td style="padding:6px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalKz)}</td>
                 <td style="padding:6px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalCom)}</td>
               </tr>
@@ -7759,9 +7776,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       bebida: '🥤 Bebidas',
       outros: '📦 Outros'
     }[c] || c);
-    let totalQtdGeral = 0, totalKzGeral = 0, totalComGeral = 0;
+    let totalQtdGeral = 0, totalKzGeral = 0, totalComGeral = 0, totalVendKzGeral = 0;
     porCat.forEach((byProd) => {
       byProd.forEach((r) => {
+        totalVendKzGeral += valorVendidoKz(r.pid) || 0;
         totalQtdGeral += r.qtd;
         totalKzGeral += r.valor;
         totalComGeral += r.comissao;
@@ -7786,6 +7804,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
                 <td style="padding:8px;color:#e2e8f0;font-weight:700">Total geral</td>
                 <td style="padding:8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700"><span style="color:#64748b;font-size:11px">itens</span> ${num2(totalQtdGeral)}</td>
                 <td></td>
+                <td style="padding:8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalVendKzGeral)}</td>
                 <td style="padding:8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalKzGeral)}</td>
                 <td style="padding:8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalComGeral)}</td>
               </tr>

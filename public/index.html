@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-excel-cores">
+<html lang="pt" data-stockos-ui="2026-10-15-excel-varios-turnos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3658,7 +3658,7 @@ async function loadTurno() {
         deixado_caixa: parseEncontradoFromRow(s.deixado_caixa)
       };
     });
-    if (stockDirty.size) {
+    if (stockDirty.size && !S.__exportando) {
       const tidAlinhar = turno.id;
       setTimeout(() => { guardarStock(tidAlinhar).catch(() => {}); }, 1500);
     }
@@ -4210,7 +4210,7 @@ async function loadTurno() {
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
     atualizarChecklistBar().catch(() => {});
     carregarAvisosTurno().catch(() => {});
-    if (finoBarrilAjustadoRecipiente && turno.id) {
+    if (finoBarrilAjustadoRecipiente && turno.id && !S.__exportando) {
       try {
         await guardarStock(turno.id);
       } catch (e) {
@@ -10153,7 +10153,7 @@ function criarXlsx(folhas) {
   const fontIdx = new Map(); const fillIdx = new Map(); const xfIdx = new Map();
   const estiloDe = (c, isNum, inteiro) => {
     const b = !!c.b, sz = c.sz || 11, cor = c.cor || '', fundo = c.fundo || '';
-    const nf = isNum ? (inteiro ? 3 : 4) : 0;
+    const nf = c.nf != null ? c.nf : (isNum ? (inteiro ? 3 : 4) : 0);
     if (!b && sz === 11 && !cor && !fundo && !nf) return 0;
     const fk = `${b}|${sz}|${cor}`;
     if (!fontIdx.has(fk)) { fontIdx.set(fk, fonts.length); fonts.push(`<font>${b ? '<b/>' : ''}<sz val="${sz}"/>${cor ? `<color rgb="FF${cor}"/>` : ''}<name val="Calibri"/></font>`); }
@@ -10234,7 +10234,10 @@ function corExcel(css, modo) {
 function linhasDeTabelas(tabelas, titulos) {
   const out = [];
   tabelas.forEach((tb, i) => {
-    if (titulos && titulos[i]) { if (out.length) out.push([]); out.push([{ v: titulos[i], b: true, sz: 12 }]); }
+    if (titulos && titulos[i]) {
+      if (out.length) out.push([]);
+      const lt = [{ v: titulos[i], b: true, sz: 12 }]; lt.tipo = 'seccao'; out.push(lt);
+    }
     tb.querySelectorAll('tr').forEach((tr) => {
       const celsEl = [...tr.children];
       const ehCab = celsEl.length && celsEl.every((c) => c.tagName === 'TH');
@@ -10248,67 +10251,222 @@ function linhasDeTabelas(tabelas, titulos) {
         const alvo = [...c.querySelectorAll('*')].reverse().find((e) => e.childElementCount === 0 && e.textContent.trim()) || c;
         return { v, b: ehTotal, cor: corExcel(getComputedStyle(alvo).color), fundo: corExcel(getComputedStyle(c).backgroundColor, 'fundo') };
       });
+      cels.tipo = ehCab ? 'cab' : ehSeccao ? 'seccao' : ehTotal ? 'total' : 'dados';
       if (cels.some((c) => c.v !== '')) out.push(cels);
     });
   });
   return out;
 }
-async function exportarTurnoExcel() {
+const XL_H = (v) => ({ v, b: true, cor: 'FFFFFF', fundo: '1F4E79' });
+const xlTitulo = (v) => ({ v, b: true, sz: 14, cor: '1F4E79' });
+/** O Resumo dos pedidos só carrega com a aba Pedidos/Caixa aberta — a
+ *  exportação garante-o (senão «Produtos vendidos» saía vazia). */
+async function garantirResumoPedidosCarregado() {
+  const m = document.getElementById('pedidos-resumo-mount');
+  if (m && /A carregar/i.test(m.textContent || '') && S.turnoData) {
+    try { await loadVendasMenu(S.turnoData.id, !!S.turnoCanEdit); } catch (_) {}
+  }
+  await new Promise((r) => setTimeout(r, 60)); // «esperado» da caixa é desenhado num setTimeout
+}
+/** Recolhe do ecrã do turno carregado as 5 secções (linhas tipadas). */
+function recolherSeccoesTurno() {
   const t = S.turnoData;
-  if (!t) throw new Error('Abre um turno primeiro.');
-  const folhas = [];
-  const juntar = (nome, linhas) => folhas.push({ nome, linhas });
-  const cab = [[{ v: `StockOS — ${lojaAtivaNome()} · ${turnoLabel(t.nome)} · ${String(S.date || t.data || '').slice(0, 10)}`, b: true, sz: 14, cor: '1F4E79' }], []];
-  const H = (v) => ({ v, b: true, cor: 'FFFFFF', fundo: '1F4E79' });
-
-  // 1) Validação do stock
   const tVal = document.querySelector('#tab-validacao table');
-  juntar('Validação do stock', cab.concat(tVal ? linhasDeTabelas([tVal]) : []));
-
-  // 2) Produtos vendidos (Resumo dos pedidos: uma tabela por categoria + total)
   const mountRes = document.getElementById('pedidos-resumo-mount');
   const blocosRes = mountRes ? [...mountRes.querySelectorAll('table')] : [];
   const titRes = blocosRes.map((tb) => {
     const tit = tb.closest('div[style*="margin-top:10px"]')?.querySelector(':scope > div');
     return tit ? tit.textContent.trim() : '';
   });
-  juntar('Produtos vendidos', cab.concat(linhasDeTabelas(blocosRes, titRes)));
-
-  // 3) Caixa (valores declarados + totais + esperado dos pedidos)
-  const val = (id) => celulaExcel(document.getElementById(id)?.value ?? '');
+  const val = (id) => {
+    const raw = String(document.getElementById(id)?.value ?? '').trim();
+    return raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : celulaExcel(raw); // inputs usam ponto decimal
+  };
   const txt = (id) => celulaExcel(document.getElementById(id)?.textContent ?? '');
-  const caixa = cab.concat([
-    [H('Campo'), H('Valor (Kz)')],
-    ['TPA', val('c-tpa')],
-    ['Transferência', val('c-transf')],
-    ['Dinheiro', val('c-din')],
-    ['Saídas de caixa', val('c-saida')],
-    ['Entradas de caixa', val('c-entradas')],
-    [{ v: 'Total gerado', b: true }, { v: txt('c-total-gerado'), b: true, cor: '2E7D32' }],
-    [{ v: 'Total final', b: true }, { v: txt('c-total-final'), b: true, cor: '2E7D32' }]
-  ]);
+  const caixaValores = {
+    tpa: val('c-tpa'), transf: val('c-transf'), din: val('c-din'),
+    saidas: val('c-saida'), entradas: val('c-entradas'),
+    gerado: txt('c-total-gerado'), final: txt('c-total-final')
+  };
+  const esperado = [];
   const esp = document.getElementById('caixa-esperado-pedidos');
   if (esp && esp.innerText.trim()) {
-    caixa.push([], [{ v: 'Esperado dos pedidos ao balcão', b: true, sz: 12 }]);
     esp.innerText.split('\n').map((l) => l.trim()).filter(Boolean).forEach((l) => {
       // «Dinheiro 35 500 Kz» → [rótulo, valor]
-      const m = l.match(/^(.*?)\s+([+\u2212-]?\d[\d .\u00a0\u202f]*(?:,\d+)?\s*Kz)$/i);
-      caixa.push(m ? [m[1], celulaExcel(m[2])] : [celulaExcel(l)]);
+      const m = l.match(/^(.*?)\s+([+−-]?\d[\d .  ]*(?:,\d+)?\s*Kz)$/i);
+      esperado.push(m ? [m[1], celulaExcel(m[2])] : [celulaExcel(l)]);
     });
   }
-  juntar('Caixa', caixa);
+  return {
+    data: String(S.date || t.data || '').slice(0, 10),
+    turno: turnoLabel(t.nome),
+    nome: t.nome,
+    validacao: tVal ? linhasDeTabelas([tVal]) : [],
+    produtos: linhasDeTabelas(blocosRes, titRes),
+    caixa: caixaValores,
+    esperado,
+    movimentos: linhasDeTabelas([...document.querySelectorAll('#movimentos-section table')]),
+    notas: document.getElementById('turno-notas')?.value ?? t.notas ?? ''
+  };
+}
+function linhasCaixaTurno(sec) {
+  const c = sec.caixa;
+  const out = [
+    [XL_H('Campo'), XL_H('Valor (Kz)')],
+    ['TPA', c.tpa], ['Transferência', c.transf], ['Dinheiro', c.din],
+    ['Saídas de caixa', c.saidas], ['Entradas de caixa', c.entradas],
+    [{ v: 'Total gerado', b: true }, { v: c.gerado, b: true, cor: '2E7D32' }],
+    [{ v: 'Total final', b: true }, { v: c.final, b: true, cor: '2E7D32' }]
+  ];
+  if (sec.esperado.length) out.push([], [{ v: 'Esperado dos pedidos ao balcão', b: true, sz: 12 }], ...sec.esperado);
+  return out;
+}
+const xlDataPt = (iso) => `${String(iso).slice(8, 10)}/${String(iso).slice(5, 7)}/${String(iso).slice(0, 4)}`;
+/** Data ISO → data real do Excel (número de série + formato 14 = data curta). */
+const xlData = (iso) => {
+  const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return { v: (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000, nf: 14 };
+};
+function nomeFicheiroXlsx(partes) {
+  return `StockOS_${partes.join('_')}.xlsx`.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_');
+}
+async function exportarTurnoExcel() {
+  if (!S.turnoData) throw new Error('Abre um turno primeiro.');
+  await garantirResumoPedidosCarregado();
+  const sec = recolherSeccoesTurno();
+  const cab = [[xlTitulo(`StockOS — ${lojaAtivaNome()} · ${sec.turno} · ${xlDataPt(sec.data)}`)], []];
+  descarregarBlob(criarXlsx([
+    { nome: 'Validação do stock', linhas: cab.concat(sec.validacao) },
+    { nome: 'Produtos vendidos', linhas: cab.concat(sec.produtos) },
+    { nome: 'Caixa', linhas: cab.concat(linhasCaixaTurno(sec)) },
+    { nome: 'Movimentos do turno', linhas: cab.concat(sec.movimentos) },
+    { nome: 'Observações', linhas: cab.concat([[XL_H('Observações do turno')], [sec.notas || '(sem observações)']]) }
+  ]), nomeFicheiroXlsx([lojaAtivaNome(), sec.data, sec.nome]));
+}
 
-  // 4) Movimentos do turno
-  const tMov = [...document.querySelectorAll('#movimentos-section table')];
-  juntar('Movimentos do turno', cab.concat(linhasDeTabelas(tMov)));
-
-  // 5) Observações
-  const notas = document.getElementById('turno-notas')?.value ?? t.notas ?? '';
-  juntar('Observações', cab.concat([[H('Observações do turno')], [notas || '(sem observações)']]));
-
-  const nomeF = `StockOS_${lojaAtivaNome()}_${String(S.date || t.data || '').slice(0, 10)}_${t.nome}.xlsx`
-    .replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_');
-  descarregarBlob(criarXlsx(folhas), nomeF);
+// ── EXPORTAR VÁRIOS TURNOS ────────────────────────────────────────────
+// Carrega cada turno com o MESMO código do ecrã (loadTurno) num contentor
+// escondido — os números são exactamente os da app — recolhe as secções
+// e volta ao estado anterior. S.__exportando desliga as gravações
+// automáticas que a abertura de um turno faria.
+async function recolherVariosTurnos(lista, progresso) {
+  const salvo = { date: S.date, turnoId: S.turnoId, turnoTab: S.turnoTab, turnoData: S.turnoData, turnoCanEdit: S.turnoCanEdit, stockBuf, stockDirty };
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:-20000px;top:0;width:1400px;opacity:0;pointer-events:none';
+  host.innerHTML = '<div id="turno-title"></div><div id="turno-header-actions"></div><div id="turno-msg"></div><div id="turno-content"></div>';
+  document.body.appendChild(host);
+  S.__exportando = true;
+  const out = [];
+  try {
+    for (let i = 0; i < lista.length; i++) {
+      const t = lista[i];
+      if (progresso) progresso(i + 1, lista.length, t);
+      S.date = String(t.data).slice(0, 10);
+      S.turnoId = t.id;
+      S.turnoTab = 'caixa';
+      await loadTurno();
+      if (!S.turnoData || String(S.turnoData.id) !== String(t.id)) continue;
+      await garantirResumoPedidosCarregado();
+      out.push(recolherSeccoesTurno());
+    }
+  } finally {
+    clearTurnoAutosaveTimers();
+    host.remove();
+    S.__exportando = false;
+    S.date = salvo.date; S.turnoId = salvo.turnoId; S.turnoTab = salvo.turnoTab;
+    S.turnoData = salvo.turnoData; S.turnoCanEdit = salvo.turnoCanEdit;
+    stockBuf = salvo.stockBuf; stockDirty = salvo.stockDirty;
+  }
+  return out;
+}
+/** Monta o livro com os turnos recolhidos, numa das 3 organizações. */
+function livroVariosTurnos(secs, layout, titulo) {
+  const cab = [[xlTitulo(titulo)], []];
+  const blocoTit = (sec) => { const l = [{ v: `${xlDataPt(sec.data)} · ${sec.turno}`, b: true, sz: 12, cor: 'FFFFFF', fundo: '2E75B6' }]; l.tipo = 'seccao'; return l; };
+  const resumoCaixa = () => {
+    const linhas = [[XL_H('Data'), XL_H('Turno'), XL_H('TPA'), XL_H('Transferência'), XL_H('Dinheiro'), XL_H('Saídas'), XL_H('Entradas'), XL_H('Total gerado'), XL_H('Total final')]];
+    const soma = [0, 0, 0, 0, 0, 0, 0];
+    secs.forEach((sec) => {
+      const c = sec.caixa; const vals = [c.tpa, c.transf, c.din, c.saidas, c.entradas, c.gerado, c.final];
+      vals.forEach((v, i) => { if (typeof v === 'number') soma[i] += v; });
+      linhas.push([xlData(sec.data), sec.turno, ...vals]);
+    });
+    linhas.push([{ v: 'Total do período', b: true }, '', ...soma.map((v) => ({ v, b: true, cor: '2E7D32' }))]);
+    return linhas;
+  };
+  if (layout === 'turno') {
+    // Uma folha por turno, com as 5 secções empilhadas.
+    return secs.map((sec) => {
+      const sub = (t) => { const l = [{ v: t, b: true, sz: 12, cor: '1F4E79' }]; return l; };
+      const linhas = [[xlTitulo(`${titulo} · ${xlDataPt(sec.data)} · ${sec.turno}`)], [],
+        sub('Validação do stock'), ...sec.validacao, [],
+        sub('Produtos vendidos'), ...sec.produtos, [],
+        sub('Caixa'), ...linhasCaixaTurno(sec), [],
+        sub('Movimentos do turno'), ...sec.movimentos, [],
+        sub('Observações'), [sec.notas || '(sem observações)']];
+      return { nome: `${sec.data.slice(8, 10)}-${sec.data.slice(5, 7)} ${sec.turno.replace(/[^\p{L}\p{N} ]/gu, '').trim()}`, linhas };
+    });
+  }
+  if (layout === 'tabela') {
+    // Uma tabela contínua por secção, com Data/Turno (e Categoria) em cada linha.
+    const continua = (campo, comCategoria) => {
+      let cabecalho = null; const linhas = [];
+      secs.forEach((sec) => {
+        let cat = '';
+        sec[campo].forEach((l) => {
+          if (l.tipo === 'cab') { if (!cabecalho) cabecalho = l; return; }
+          if (l.tipo === 'seccao') { cat = (l[0] && l[0].v) || ''; return; }
+          if (l.tipo === 'total') return;
+          linhas.push([xlData(sec.data), sec.turno, ...(comCategoria ? [cat] : []), ...l]);
+        });
+      });
+      const cabFinal = [XL_H('Data'), XL_H('Turno'), ...(comCategoria ? [XL_H('Categoria')] : []), ...(cabecalho || [])];
+      return [cabFinal, ...linhas];
+    };
+    return [
+      { nome: 'Validação do stock', linhas: continua('validacao', true) },
+      { nome: 'Produtos vendidos', linhas: continua('produtos', true) },
+      { nome: 'Caixa', linhas: resumoCaixa() },
+      { nome: 'Movimentos do turno', linhas: continua('movimentos', false) },
+      { nome: 'Observações', linhas: [[XL_H('Data'), XL_H('Turno'), XL_H('Observações')], ...secs.map((sec) => [xlData(sec.data), sec.turno, sec.notas || ''])] }
+    ];
+  }
+  // 'seccao' (predefinido): 5 folhas, turnos em blocos um a seguir ao outro.
+  const blocos = (campo) => {
+    const out = [];
+    secs.forEach((sec) => { out.push(blocoTit(sec), ...(sec[campo].length ? sec[campo] : [['(sem dados)']]), []); });
+    return out;
+  };
+  const caixaBlocos = [[{ v: 'Resumo do período', b: true, sz: 12 }], ...resumoCaixa(), []];
+  secs.forEach((sec) => caixaBlocos.push(blocoTit(sec), ...linhasCaixaTurno(sec), []));
+  return [
+    { nome: 'Validação do stock', linhas: cab.concat(blocos('validacao')) },
+    { nome: 'Produtos vendidos', linhas: cab.concat(blocos('produtos')) },
+    { nome: 'Caixa', linhas: cab.concat(caixaBlocos) },
+    { nome: 'Movimentos do turno', linhas: cab.concat(blocos('movimentos')) },
+    { nome: 'Observações', linhas: cab.concat(secs.flatMap((sec) => [blocoTit(sec), [sec.notas || '(sem observações)'], []])) }
+  ];
+}
+async function exportarVariosTurnosExcel(lista, layout, periodo) {
+  if (!lista.length) throw new Error('Escolhe pelo menos um turno.');
+  const ord = { manha: 0, tarde: 1, noite: 2 };
+  const turnos = lista.slice().sort((a, b) => String(a.data).localeCompare(String(b.data)) || (ord[a.nome] ?? 9) - (ord[b.nome] ?? 9));
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:1500;background:rgba(2,6,23,.78);display:flex;align-items:center;justify-content:center';
+  ov.innerHTML = '<div style="background:#0f172a;border:1px solid #334155;border-radius:14px;padding:22px 26px;color:#e2e8f0;font-size:14px;min-width:260px;text-align:center"><div class="spinner" style="margin:0 auto 12px"></div><div id="xl-prog">A preparar…</div></div>';
+  document.body.appendChild(ov);
+  try {
+    const secs = await recolherVariosTurnos(turnos, (i, n, t) => {
+      const el = document.getElementById('xl-prog');
+      if (el) el.textContent = `A exportar turno ${i} de ${n} (${String(t.data).slice(0, 10)} · ${turnoLabel(t.nome)})…`;
+    });
+    if (!secs.length) throw new Error('Nenhum turno pôde ser carregado (sem rede e sem cache?).');
+    const titulo = `StockOS — ${lojaAtivaNome()} · ${periodo}`;
+    const nomeLayout = { seccao: 'por-seccao', turno: 'por-turno', tabela: 'tabela' }[layout] || layout;
+    descarregarBlob(criarXlsx(livroVariosTurnos(secs, layout, titulo)),
+      nomeFicheiroXlsx([lojaAtivaNome(), periodo.replace(/\s/g, ''), `${secs.length}turnos`, nomeLayout]));
+  } finally { ov.remove(); }
 }
 
 /** Põe o botão «⛶ Ecrã inteiro» no topo de cada painel de aba do turno
@@ -11813,6 +11971,7 @@ async function drawHistorico() {
           <div class="field" style="flex:1 1 120px;margin:0"><label>Até</label><input type="date" id="h-fim"/></div>
           <div class="field" style="flex:0 1 92px;margin:0"><label>Hora</label><input type="time" id="h-fim-hora" value="23:59"/></div>
           <button type="button" class="btn btn-primary" onclick="runAction(event, loadHistorico)">Ver</button>
+          <button type="button" class="btn btn-ghost" title="Exportar vários turnos do período para Excel" onclick="runAction(event, abrirExportarVariosTurnos)">📥 Exportar Excel</button>
         </div>
         <p style="font-size:11px;color:#64748b;margin:8px 0 0;line-height:1.4">Com hora definida, contam os turnos <strong style="color:#94a3b8">abertos</strong> dentro do intervalo. 00:00–23:59 = dias inteiros.</p>
       </div>
@@ -11830,6 +11989,74 @@ async function drawHistorico() {
   } else {
     show('hist-content', '<div class="card"><p style="color:#94a3b8;margin:0">Escolhe um período e carrega para ver o histórico.</p></div>');
   }
+}
+
+/** Janela da exportação de vários turnos (página Histórico): todos os do
+ *  período ou escolhidos numa lista; 3 organizações do livro. */
+async function abrirExportarVariosTurnos() {
+  const ini = val('h-inicio'), fim = val('h-fim');
+  if (!ini || !fim) throw new Error('Escolhe o período (De / Até) primeiro.');
+  const hIni = val('h-inicio-hora') || '00:00';
+  const hFim = val('h-fim-hora') || '23:59';
+  const rows = await api('GET', `/historico?inicio=${encodeURIComponent(`${ini}T${hIni}`)}&fim=${encodeURIComponent(`${fim}T${hFim}`)}`);
+  const ord = { manha: 0, tarde: 1, noite: 2 };
+  const lista = (Array.isArray(rows) ? rows : [])
+    .map((r) => ({ id: r.turno_id, data: String(r.data).slice(0, 10), nome: r.nome, estado: r.estado }))
+    .filter((t) => t.id != null)
+    .sort((a, b) => a.data.localeCompare(b.data) || (ord[a.nome] ?? 9) - (ord[b.nome] ?? 9));
+  if (!lista.length) throw new Error('Sem turnos neste período.');
+  const fmtD = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
+  const periodo = ini === fim ? fmtD(ini) : `${fmtD(ini)} a ${fmtD(fim)}`;
+  document.getElementById('xl-varios')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'xl-varios';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:1450;background:rgba(2,6,23,.78);display:flex;align-items:flex-end;justify-content:center';
+  const opc = (name, value, txt, sub, checked) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
+      <input type="radio" name="${name}" value="${value}" ${checked ? 'checked' : ''} style="margin-top:3px;accent-color:#3b82f6" onchange="xlVariosAtualizar()"/>
+      <span><span style="color:#e2e8f0;font-size:13px;font-weight:600">${txt}</span><br><span style="color:#64748b;font-size:12px">${sub}</span></span></label>`;
+  const itens = lista.map((t, i) => `<label style="display:flex;gap:10px;align-items:center;padding:6px 0;border-top:1px solid #1e293b;cursor:pointer;font-size:13px;color:#e2e8f0">
+      <input type="checkbox" class="xl-turno" data-i="${i}" checked style="width:17px;height:17px;accent-color:#3b82f6" onchange="xlVariosAtualizar()"/>
+      ${fmtD(t.data)} · ${escapeHtml(turnoLabel(t.nome))}${t.estado === 'aberto' ? ' <span style="color:#fbbf24;font-size:11px">(aberto)</span>' : ''}</label>`).join('');
+  ov.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:14px 14px 0 0;max-width:560px;width:100%;max-height:88vh;display:flex;flex-direction:column;padding-bottom:calc(12px + env(safe-area-inset-bottom,0px))">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 4px">
+        <div style="font-size:15px;font-weight:700;color:#f1f5f9">📥 Exportar turnos para Excel</div>
+        <button type="button" aria-label="Fechar" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer" onclick="document.getElementById('xl-varios')?.remove()">✕</button>
+      </div>
+      <div style="padding:0 16px;color:#94a3b8;font-size:12px">Período: ${escapeHtml(periodo)} · ${lista.length} turno${lista.length === 1 ? '' : 's'}</div>
+      <div style="overflow-y:auto;padding:4px 16px 6px">
+        <div style="font-size:0.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 2px">Turnos</div>
+        ${opc('xl-sel', 'todos', 'Todos os turnos do período', `Os ${lista.length} turnos de ${escapeHtml(periodo)}.`, true)}
+        ${opc('xl-sel', 'escolher', 'Escolher turnos', 'Marca na lista quais entram no Excel.', false)}
+        <div id="xl-lista" style="display:none;margin:2px 0 6px 26px">${itens}</div>
+        <div style="font-size:0.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 2px">Organização</div>
+        ${opc('xl-lay', 'seccao', 'Uma folha por secção', '5 folhas; em cada uma, os turnos em blocos seguidos. A Caixa abre com o resumo e os totais do período.', true)}
+        ${opc('xl-lay', 'turno', 'Uma folha por turno', 'Cada turno numa folha própria com as 5 secções empilhadas.', false)}
+        ${opc('xl-lay', 'tabela', 'Tabela contínua por secção', 'Cada folha é uma tabela única com Data, Turno e Categoria em cada linha — para filtrar e tabelas dinâmicas.', false)}
+      </div>
+      <div style="padding:10px 16px 0">
+        <button type="button" id="xl-exportar" class="btn btn-primary" style="width:100%">📥 Exportar ${lista.length} turno${lista.length === 1 ? '' : 's'}</button>
+      </div>
+    </div>`;
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+  window.__xlVariosLista = lista;
+  document.getElementById('xl-exportar').onclick = (ev) => runAction(ev, async () => {
+    const escolher = document.querySelector('input[name="xl-sel"]:checked')?.value === 'escolher';
+    const sel = escolher ? [...document.querySelectorAll('#xl-lista .xl-turno:checked')].map((c) => lista[+c.dataset.i]) : lista;
+    if (!sel.length) throw new Error('Marca pelo menos um turno.');
+    const layout = document.querySelector('input[name="xl-lay"]:checked')?.value || 'seccao';
+    ov.remove();
+    await exportarVariosTurnosExcel(sel, layout, periodo);
+  });
+}
+function xlVariosAtualizar() {
+  const escolher = document.querySelector('input[name="xl-sel"]:checked')?.value === 'escolher';
+  const box = document.getElementById('xl-lista');
+  if (box) box.style.display = escolher ? 'block' : 'none';
+  const n = escolher ? document.querySelectorAll('#xl-lista .xl-turno:checked').length : (window.__xlVariosLista || []).length;
+  const b = document.getElementById('xl-exportar');
+  if (b) b.textContent = `📥 Exportar ${n} turno${n === 1 ? '' : 's'}`;
 }
 
 /** Categorias conhecidas para agrupar o card «Quantidade vendida por produto». */

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-talao-turno">
+<html lang="pt" data-stockos-ui="2026-10-15-talao-letra-pequena">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10354,55 +10354,57 @@ async function exportarTurnoExcel() {
 }
 
 // ── TALÃO DO TURNO (impressora térmica) ───────────────────────────────
-// Mesmas 5 secções do Excel, resumidas para 32 (58 mm) ou 48 (80 mm)
-// colunas. Android → RawBT (ESC/POS, como o talão dos pedidos); noutros
-// aparelhos → impressão do browser numa folha estreita.
+// Mesmas 5 secções do Excel, em letra pequena (Font B): 42 colunas em
+// 58 mm, 64 em 80 mm. Uma linha por produto/movimento (nomes cortados,
+// nunca partidos). Android → RawBT (ESC/POS, como o talão dos pedidos);
+// noutros aparelhos → impressão do browser numa folha estreita.
 const TALAO_LARG_KEY = 'stockos.talaoTurnoLargura';
 function talaoLargura() {
-  try { return localStorage.getItem(TALAO_LARG_KEY) === '80' ? 48 : 32; } catch (_) { return 32; }
+  try { return localStorage.getItem(TALAO_LARG_KEY) === '80' ? 64 : 42; } catch (_) { return 42; }
 }
 /** Texto sem emojis nem espaços estranhos. */
 const tlTxt = (v) => String(v == null ? '' : v)
-  .replace(/[\u{1F000}-\u{1FFFF}\u{2190}-\u{2BFF}️‍]/gu, '')
+  .replace(/[\u{1F000}-\u{1FFFF}\u{2190}-\u{21FF}\u{2300}-\u{2BFF}\uFE0F\u200D]/gu, '')
+  .replace(/[\u2212\u2013\u2014]/g, '-')
   .replace(/[^\S\n]+/g, ' ').trim();
 const tlNum = (v) => (v === '' || v == null ? '' : typeof v === 'number' ? fmtNum(v) : tlTxt(v));
 const tlKz = (v) => (v === '' || v == null ? '—' : typeof v === 'number' ? fmt(v) : tlTxt(v));
 const tlVazio = (v) => v === '' || v == null || v === 0 || /^[—-]?$/.test(tlTxt(v));
+const tlSinal = (v) => (tlVazio(v) ? '' : (typeof v === 'number' && v > 0 ? '+' : '') + tlNum(v));
 
 /** Linhas do talão: [{t: texto, s: ''|'titulo'|'seccao'|'b'|'centro'}]. */
 function talaoTurnoLinhas(sec, W) {
   const L = [];
-  const add = (t, s = '') => L.push({ t, s });
-  const padR = (l, r) => {
-    l = tlTxt(l); r = tlTxt(r);
-    if (l.length + 1 + r.length > W) return [l.slice(0, W), ' '.repeat(Math.max(0, W - r.length)) + r];
-    return [l + ' '.repeat(W - l.length - r.length) + r];
-  };
-  const addLR = (l, r, s = '') => padR(l, r).forEach((x) => add(x, s));
-  const wrap = (txt, ind = '') => {
-    const out = [];
-    String(txt || '').split('\n').forEach((par) => {
-      let cur = '';
-      tlTxt(par).split(' ').forEach((w) => {
-        while (w.length > W - ind.length) { if (cur) { out.push(cur); cur = ''; } out.push(ind + w.slice(0, W - ind.length)); w = w.slice(W - ind.length); }
-        if (!w) return;
-        if ((cur ? cur + ' ' : ind).length + w.length > W) { out.push(cur); cur = ind + w; }
-        else cur = cur ? cur + ' ' + w : ind + w;
-      });
-      out.push(cur);
-    });
-    return out;
+  const add = (t, s = '') => L.push({ t: String(t).slice(0, W), s });
+  const addLR = (l, r, s = '') => {
+    r = tlTxt(r); l = tlTxt(l).slice(0, Math.max(0, W - r.length - 1));
+    add(l + ' '.repeat(Math.max(1, W - l.length - r.length)) + r, s);
   };
   const seccao = (t) => { add(''); add('='.repeat(W)); add(t.toUpperCase(), 'seccao'); add('='.repeat(W)); };
   const idx = (cab, re) => cab.findIndex((c) => re.test(tlTxt(c && c.v !== undefined ? c.v : c)));
   const cel = (row, i) => (i < 0 || !row[i] ? '' : row[i].v !== undefined ? row[i].v : row[i]);
+  /** Tabela de largura fixa: colunas ajustadas ao conteúdo, a coluna
+   *  `flex` (nome) fica com o resto e é cortada — nunca parte a linha.
+   *  linhas: {c:[...], s} ou {t:'texto', s}. */
+  const tabela = (cols, linhas) => {
+    const w = cols.map((c, i) => (c.flex ? 0 : Math.max(c.h.length, ...linhas.filter((l) => l.c).map((l) => tlTxt(l.c[i]).length))));
+    const fi = cols.findIndex((c) => c.flex);
+    w[fi] = Math.max(6, W - w.reduce((a, b) => a + b, 0) - (cols.length - 1));
+    const lin = (vals) => cols.map((c, i) => {
+      const t = tlTxt(vals[i]).slice(0, w[i]);
+      return c.al === 'r' ? t.padStart(w[i]) : t.padEnd(w[i]);
+    }).join(' ').trimEnd();
+    add(lin(cols.map((c) => c.h)), 'b');
+    add('-'.repeat(W));
+    linhas.forEach((l) => add(l.c ? lin(l.c) : l.t, l.s || ''));
+  };
 
   add(tlTxt(lojaAtivaNome() || 'StockOS'), 'titulo');
   add('FECHO DE TURNO', 'centro');
   add(`${tlTxt(sec.turno)} - ${xlDataPt(sec.data)}`, 'centro');
   add(`Impresso: ${new Date().toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`, 'centro');
 
-  // 1. Validação do stock
+  // 1. Validação do stock — uma linha por produto + linha de alertas.
   seccao('Validação do stock');
   const cabV = sec.validacao.find((r) => r.tipo === 'cab') || [];
   const iV = {
@@ -10410,58 +10412,56 @@ function talaoTurnoLinhas(sec, W) {
     ven: idx(cabV, /^Vendido/), bal: idx(cabV, /^Balc/)
   };
   const alertasV = [
-    [/^Falta$/, 'FALTA', 'vs t. anterior'], [/^Sobra$/, 'SOBRA', 'vs t. anterior'],
-    [/^Falta balc/, 'FALTA', 'balcao'], [/^Sobra balc/, 'SOBRA', 'balcao'],
-    [/^Falta pr/, 'FALTA', 'prox. turno'], [/^Sobra pr/, 'SOBRA', 'prox. turno'],
-    [/^Falta caixa/, 'FALTA', 'caixas'], [/^Sobra caixa/, 'SOBRA', 'caixas']
+    [/^Falta$/, 'Falta', 'ant.'], [/^Sobra$/, 'Sobra', 'ant.'],
+    [/^Falta balc/, 'Falta', 'balc.'], [/^Sobra balc/, 'Sobra', 'balc.'],
+    [/^Falta pr/, 'Falta', 'prox.'], [/^Sobra pr/, 'Sobra', 'prox.'],
+    [/^Falta caixa/, 'Falta', 'cx'], [/^Sobra caixa/, 'Sobra', 'cx']
   ].map(([re, tipo, onde]) => ({ i: idx(cabV, re), tipo, onde }));
+  const linV = [];
   let nDif = 0, nProd = 0;
   sec.validacao.forEach((r) => {
     if (r.tipo === 'cab') return;
-    if (r.tipo === 'seccao') { add(''); add(`-- ${tlTxt(cel(r, 0))} --`, 'b'); return; }
+    if (r.tipo === 'seccao') { linV.push({ t: `-- ${tlTxt(cel(r, 0))} --`, s: 'b' }); return; }
     nProd++;
-    addLR(cel(r, 0), tlVazio(cel(r, iV.ven)) ? '' : `V ${tlNum(cel(r, iV.ven))}`);
-    const partes = [`E ${tlNum(cel(r, iV.enc)) || '-'}`, `+${tlNum(cel(r, iV.ent)) || '0'}`, `D ${tlNum(cel(r, iV.dei)) || '-'}`];
-    if (!tlVazio(cel(r, iV.bal))) partes.push(`Bal ${tlNum(cel(r, iV.bal))}`);
-    wrap(partes.join('  '), '  ').forEach((x) => add(x));
-    let teve = false;
-    alertasV.forEach((a) => {
-      const v = cel(r, a.i);
-      if (a.i >= 0 && !tlVazio(v)) { add(`  ! ${a.tipo} ${tlNum(v)} (${a.onde})`, 'b'); teve = true; }
-    });
-    if (teve) nDif++;
+    linV.push({ c: [cel(r, 0), tlNum(cel(r, iV.enc)), tlNum(cel(r, iV.ent)), tlNum(cel(r, iV.dei)), tlNum(cel(r, iV.ven)), tlVazio(cel(r, iV.bal)) ? '' : tlNum(cel(r, iV.bal))] });
+    const al = alertasV.filter((a) => a.i >= 0 && !tlVazio(cel(r, a.i))).map((a) => `${a.tipo} ${tlNum(cel(r, a.i))} ${a.onde}`);
+    if (al.length) { nDif++; linV.push({ t: `  ! ${al.join(' | ')}`, s: 'b' }); }
   });
   if (!nProd) add('(sem produtos)');
-  else { add('-'.repeat(W)); addLR(`${nProd} produto(s)`, nDif ? `${nDif} c/ diferenca` : 'sem diferencas', 'b'); }
-  add('E=encontrado +=entrada D=deixado');
-  add('V=vendido Bal=balcao');
+  else {
+    tabela([{ h: 'Produto', flex: true }, { h: 'Enc', al: 'r' }, { h: 'Ent', al: 'r' }, { h: 'Deix', al: 'r' }, { h: 'Vend', al: 'r' }, { h: 'Balc', al: 'r' }], linV);
+    add('-'.repeat(W));
+    addLR(`${nProd} produto(s)`, nDif ? `${nDif} com diferenca` : 'sem diferencas', 'b');
+  }
 
-  // 2. Produtos vendidos
+  // 2. Produtos vendidos — Qtd · Produto · (Dif) · Valor.
   seccao('Produtos vendidos');
-  let cabP = [];
   let iP = {};
-  let algumP = false;
+  const linP = [];
+  let algumP = false, temDif = false, temCom = false;
   sec.produtos.forEach((r) => {
-    if (r.tipo === 'cab') {
-      cabP = r;
-      iP = {
-        q: idx(cabP, /^Quantidade/), val: idx(cabP, /^Valor(?! vendido)/), com: idx(cabP, /^Comiss/),
-        dq: idx(cabP, /^Dif\.? ?qtd/i), dv: idx(cabP, /^Dif\.? ?valor/i)
-      };
-      return;
-    }
-    if (r.tipo === 'seccao') { add(''); add(`-- ${tlTxt(cel(r, 0))} --`, 'b'); return; }
-    if (r.tipo === 'total') { add('-'.repeat(W)); addLR(cel(r, 0), tlKz(cel(r, iP.val)), 'b'); return; }
-    algumP = true;
-    const q = tlNum(cel(r, iP.q));
-    addLR(`${q ? q + 'x ' : ''}${tlTxt(cel(r, 0))}`, tlKz(cel(r, iP.val)));
-    if (!tlVazio(cel(r, iP.com))) add(`  comissao ${tlKz(cel(r, iP.com))}`);
-    if (!tlVazio(cel(r, iP.dq)) || !tlVazio(cel(r, iP.dv))) {
-      const sinal = (v, f) => (typeof v === 'number' && v > 0 ? '+' : '') + f(v);
-      add(`  ! dif ${tlVazio(cel(r, iP.dq)) ? '-' : sinal(cel(r, iP.dq), tlNum)} / ${tlVazio(cel(r, iP.dv)) ? '-' : sinal(cel(r, iP.dv), tlKz)}`, 'b');
-    }
+    if (r.tipo !== 'cab') return;
+    iP = { q: idx(r, /^Quantidade/), val: idx(r, /^Valor(?! vendido)/), com: idx(r, /^Comiss/), dq: idx(r, /^Dif\.? ?qtd/i), dv: idx(r, /^Dif\.? ?valor/i) };
+  });
+  sec.produtos.forEach((r) => {
+    if (r.tipo === 'cab') return;
+    if (r.tipo === 'seccao') { linP.push({ t: `-- ${tlTxt(cel(r, 0))} --`, s: 'b' }); return; }
+    const total = r.tipo === 'total';
+    if (total) linP.push({ t: '-'.repeat(W) });
+    else algumP = true;
+    const dq = total ? '' : tlSinal(cel(r, iP.dq));
+    const dv = tlSinal(cel(r, iP.dv));
+    const com = tlVazio(cel(r, iP.com)) ? '' : tlNum(cel(r, iP.com));
+    if (dq || dv) temDif = true;
+    if (com) temCom = true;
+    linP.push({ c: [total ? '' : tlNum(cel(r, iP.q)), cel(r, 0), com, dq, dv, tlVazio(cel(r, iP.val)) ? '' : tlNum(cel(r, iP.val))], s: total ? 'b' : '' });
   });
   if (!algumP) add('(sem pedidos)');
+  else {
+    const colsP = [{ h: 'Qtd', al: 'r' }, { h: 'Produto', flex: true }, { h: 'Com.', al: 'r' }, { h: 'Dif', al: 'r' }, { h: 'Dif Kz', al: 'r' }, { h: 'Valor Kz', al: 'r' }];
+    const usar = [true, true, temCom, temDif, temDif, true];
+    tabela(colsP.filter((_, i) => usar[i]), linP.map((l) => (l.c ? { ...l, c: l.c.filter((_, i) => usar[i]) } : l)));
+  }
 
   // 3. Caixa
   seccao('Caixa');
@@ -10476,44 +10476,49 @@ function talaoTurnoLinhas(sec, W) {
   addLR('TOTAL FINAL', tlKz(c.final), 'b');
   if (sec.esperado.length) {
     add('');
-    wrap(sec.esperadoTitulo || 'Esperado dos pedidos ao balcão').forEach((x) => add(x, 'b'));
-    sec.esperado.forEach((e) => {
-      const dif = e[2] === '' || e[2] == null ? '' : typeof e[2] === 'number' ? `${e[2] > 0 ? '+' : ''}${fmt(e[2])}` : tlTxt(e[2]);
-      addLR(e[0], tlKz(e[1]));
-      if (dif) addLR('', `dif. caixa ${dif}`);
-    });
+    add(tlTxt(sec.esperadoTitulo || 'Esperado dos pedidos ao balcão'), 'b');
+    tabela([{ h: 'Meio', flex: true }, { h: 'Esperado Kz', al: 'r' }, { h: 'Dif. caixa', al: 'r' }],
+      sec.esperado.map((e) => ({ c: [e[0], tlNum(e[1]), typeof e[2] === 'number' ? tlSinal(e[2]) : tlTxt(e[2])] })));
   }
 
-  // 4. Movimentos do turno
-  seccao('Movimentos do turno');
-  let cabM = [];
-  let iM = {};
-  let algumM = false;
+  // 4. Movimentos do turno — Hora · Descrição · Qtd · Valor (+ nota).
+  //    Linhas de rodapé (totais/saldo, com colspan) vão depois da tabela.
+  let iM = {}, nCabM = 0;
+  const linM = [], rodM = [];
   sec.movimentos.forEach((r) => {
     if (r.tipo === 'cab') {
-      cabM = r;
-      iM = { h: idx(cabM, /^Hora/), d: idx(cabM, /^Descri/), q: idx(cabM, /^Qtd/), v: idx(cabM, /^Valor/), n: idx(cabM, /^Nota/) };
+      nCabM = r.length;
+      iM = { h: idx(r, /^Hora/), d: idx(r, /^Descri/), q: idx(r, /^Qtd/), v: idx(r, /^Valor/), n: idx(r, /^Nota/) };
       return;
     }
-    if (r.tipo === 'seccao') { add(`-- ${tlTxt(cel(r, 0))} --`, 'b'); return; }
-    if (r.tipo === 'total') { add('-'.repeat(W)); addLR(r.map((x) => tlTxt(x.v)).filter(Boolean)[0] || 'Total', tlTxt(r.map((x) => x.v).filter((v) => v !== '').slice(-1)[0] ?? ''), 'b'); return; }
-    algumM = true;
-    const desc = iM.d >= 0 ? cel(r, iM.d) : cel(r, 0);
-    wrap(`${tlTxt(cel(r, iM.h))} ${tlTxt(desc)}`.trim()).forEach((x) => add(x));
-    const q = tlVazio(cel(r, iM.q)) ? '' : `qtd ${tlNum(cel(r, iM.q))}`;
-    const v = tlVazio(cel(r, iM.v)) ? '' : tlKz(cel(r, iM.v));
-    if (q || v) addLR(`  ${q}`, v);
-    if (!tlVazio(cel(r, iM.n))) wrap(`obs: ${tlTxt(cel(r, iM.n))}`, '  ').forEach((x) => add(x));
+    if (r.tipo === 'seccao') { linM.push({ t: `-- ${tlTxt(cel(r, 0))} --`, s: 'b' }); return; }
+    if (r.tipo === 'total' || r.length < nCabM) {
+      const num = r.slice(1).map((x) => x.v).find((v) => typeof v === 'number');
+      rodM.push([tlTxt(cel(r, 0)), num === undefined ? tlTxt(r.slice(1).map((x) => x.v).filter((v) => v !== '').pop() ?? '') : fmt(num)]);
+      return;
+    }
+    const v = cel(r, iM.v);
+    linM.push({ c: [cel(r, iM.h), iM.d >= 0 ? cel(r, iM.d) : cel(r, 0), tlVazio(cel(r, iM.q)) ? '' : tlNum(cel(r, iM.q)), tlVazio(v) ? '' : typeof v === 'number' ? tlNum(v) : tlTxt(v).replace(/\s*Kz$/i, '')] });
+    if (!tlVazio(cel(r, iM.n))) linM.push({ t: `      obs: ${tlTxt(cel(r, iM.n))}` });
   });
-  if (!algumM) add('(sem movimentos)');
+  if (!linM.some((l) => l.c)) add('(sem movimentos)');
+  else tabela([{ h: 'Hora' }, { h: 'Descricao', flex: true }, { h: 'Qtd', al: 'r' }, { h: 'Valor Kz', al: 'r' }], linM);
+  if (rodM.length) { add('-'.repeat(W)); rodM.forEach(([l, v]) => addLR(l, v, 'b')); }
 
-  // 5. Observações
+  // 5. Observações — texto livre: só aqui se parte em palavras.
   seccao('Observações');
   const notas = String(sec.notas || '').trim();
-  (notas ? wrap(notas) : ['(sem observacoes)']).forEach((x) => add(x));
+  if (!notas) add('(sem observacoes)');
+  else notas.split('\n').forEach((par) => {
+    let cur = '';
+    tlTxt(par).split(' ').forEach((p) => {
+      if (cur && (cur + ' ' + p).length > W) { add(cur); cur = p; } else cur = cur ? cur + ' ' + p : p;
+    });
+    add(cur);
+  });
 
   add('');
-  add('Assinatura:', '');
+  add('Assinatura:');
   add('');
   add('_'.repeat(W));
   return L;
@@ -10523,12 +10528,13 @@ function talaoTurnoLinhas(sec, W) {
 function talaoTurnoEscPos(L, W) {
   const ESC = '\x1B', GS = '\x1D';
   const fold = pedidoBalcaoAsciiFold;
-  let out = ESC + '@' + ESC + 't' + '\x00';
+  // ESC M 1 = Font B (letra pequena): 42 col. em 58 mm, 64 em 80 mm.
+  let out = ESC + '@' + ESC + 't' + '\x00' + ESC + 'M' + '\x01';
   const logo = pedidoBalcaoLogoGetEscPos();
   if (logo) out += ESC + 'a' + '\x01' + logo + '\n' + ESC + 'a' + '\x00';
   L.forEach(({ t, s }) => {
     const txt = fold(t);
-    if (s === 'titulo') out += ESC + 'a' + '\x01' + GS + '!' + '\x11' + txt.slice(0, Math.floor(W / 2)) + '\n' + GS + '!' + '\x00' + ESC + 'a' + '\x00';
+    if (s === 'titulo') out += ESC + 'a' + '\x01' + GS + '!' + '\x01' + txt.slice(0, W) + '\n' + GS + '!' + '\x00' + ESC + 'a' + '\x00';
     else if (s === 'centro') out += ESC + 'a' + '\x01' + txt + '\n' + ESC + 'a' + '\x00';
     else if (s === 'seccao') out += ESC + 'a' + '\x01' + ESC + 'E' + '\x01' + txt + '\n' + ESC + 'E' + '\x00' + ESC + 'a' + '\x00';
     else if (s === 'b') out += ESC + 'E' + '\x01' + txt + '\n' + ESC + 'E' + '\x00';
@@ -10549,7 +10555,9 @@ function talaoTurnoHtml(L, W) {
 }
 
 function talaoTurnoImprimirBrowser(L, W) {
-  const mm = W === 48 ? 80 : 58;
+  const mm = W === 64 ? 80 : 58;
+  // Courier: 1 carácter ≈ 0,6 em → letra para W colunas na largura útil (papel − 4 mm).
+  const letraMm = ((mm - 4) / W / 0.6).toFixed(2);
   const fr = document.createElement('iframe');
   fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
   document.body.appendChild(fr);
@@ -10558,7 +10566,7 @@ function talaoTurnoImprimirBrowser(L, W) {
   d.write(`<!doctype html><html><head><meta charset="utf-8"><title>Talão do turno</title><style>
     @page { size: ${mm}mm auto; margin: 2mm; }
     html, body { margin: 0; background: #fff; color: #000; }
-    pre { font: ${W === 48 ? 11 : 10.5}px/1.25 "Courier New", Consolas, monospace; margin: 0; white-space: pre; }
+    pre { font: ${letraMm}mm/1.2 "Courier New", Consolas, monospace; margin: 0; white-space: pre; }
   </style></head><body><pre>${talaoTurnoHtml(L, W)}</pre></body></html>`);
   d.close();
   setTimeout(() => {
@@ -10583,7 +10591,7 @@ async function abrirTalaoTurno() {
     const pre = div.querySelector('#talao-turno-pre');
     pre.innerHTML = talaoTurnoHtml(L, W);
     pre.style.width = `${W + 2}ch`;
-    div.querySelectorAll('input[name="talao-larg"]').forEach((r) => { r.checked = (r.value === '80') === (W === 48); });
+    div.querySelectorAll('input[name="talao-larg"]').forEach((r) => { r.checked = (r.value === '80') === (W === 64); });
   };
   div.innerHTML = `
     <div class="modal" style="max-width:min(560px,96vw)">
@@ -10597,7 +10605,7 @@ async function abrirTalaoTurno() {
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-larg" value="80"/> 80 mm</label>
       </div>
       <div style="max-height:58vh;overflow:auto;background:#fff;border-radius:8px;padding:10px;display:flex;justify-content:center">
-        <pre id="talao-turno-pre" style="margin:0;color:#000;font:12px/1.3 'Courier New',Consolas,monospace;white-space:pre"></pre>
+        <pre id="talao-turno-pre" style="margin:0;color:#000;font:10.5px/1.25 'Courier New',Consolas,monospace;white-space:pre"></pre>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap">
         <button type="button" class="btn btn-ghost btn-sm" data-acao="browser" title="Imprime pelo browser (PC, iPhone, impressora instalada no sistema)">🖨️ Imprimir (browser)</button>

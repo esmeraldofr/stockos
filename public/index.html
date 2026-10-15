@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-talao-qtd-curta">
+<html lang="pt" data-stockos-ui="2026-10-15-talao-milhares-ponto">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10379,8 +10379,12 @@ const tlTxt = (v) => String(v == null ? '' : v)
   .replace(/[\u{1F000}-\u{1FFFF}\u{2190}-\u{21FF}\u{2300}-\u{2BFF}\uFE0F\u200D]/gu, '')
   .replace(/[\u2212\u2013\u2014]/g, '-')
   .replace(/[^\S\n]+/g, ' ').trim();
-const tlNum = (v) => (v === '' || v == null ? '' : typeof v === 'number' ? fmtNum(v) : tlTxt(v));
-const tlKz = (v) => (v === '' || v == null ? '—' : typeof v === 'number' ? fmt(v) : tlTxt(v));
+/** Talão: milhares separados por ponto (2.400, 14.000 Kz); decimais com vírgula. */
+const tlMil = (t) => String(t).replace(/(\d)[\s\u00a0\u202f](?=\d{3}(?:\D|$))/g, '$1.');
+const tlFmtNum = (v) => tlMil(fmtNum(v));
+const tlFmt = (v) => tlMil(fmt(v));
+const tlNum = (v) => (v === '' || v == null ? '' : typeof v === 'number' ? tlFmtNum(v) : tlMil(tlTxt(v)));
+const tlKz = (v) => (v === '' || v == null ? '—' : typeof v === 'number' ? tlFmt(v) : tlMil(tlTxt(v)));
 const tlVazio = (v) => v === '' || v == null || v === 0 || /^[—-]?$/.test(tlTxt(v));
 const tlSinal = (v) => (tlVazio(v) ? '' : (typeof v === 'number' && v > 0 ? '+' : '') + tlNum(v));
 
@@ -10487,7 +10491,7 @@ function talaoTurnoLinhas(sec, W) {
       if (typeof v === 'number' || tlVazio(v)) return n(iP.q);
       const m = tlTxt(v).match(/-?\d{1,3}(?:[ .]\d{3})*(?:,\d+)?$|-?\d+(?:,\d+)?$/);
       const num = m ? celulaExcel(m[0]) : '';
-      return typeof num === 'number' ? fmtNum(num) : tlTxt(v);
+      return typeof num === 'number' ? tlFmtNum(num) : tlTxt(v);
     })();
     linP.push({ c: [cel(r, 0), qtd, n(iP.val), n(iP.ven), n(iP.vv), tlSinal(cel(r, iP.dq)), tlSinal(cel(r, iP.dv))], s: total ? 'b' : '' });
   });
@@ -10536,20 +10540,20 @@ function talaoTurnoLinhas(sec, W) {
   if (mvStock.length) {
     add('-- Stock (produtos) --', 'b');
     tabela([{ h: 'Hora' }, { h: 'Produto', flex: true }, { h: 'Qtd', al: 'r' }, { h: 'Valor Kz', al: 'r' }],
-      mvStock.map((m) => [{ c: [hora(m.ts), `${tlTxt(m.desc)}${m.tag ? ` (${m.tag})` : ''}`, `${sinal(m)}${fmtNum(m.qtd)}${m.med ? ' ' + tlTxt(m.med) : ''}`, m.valor ? `-${fmtNum(m.valor)}` : ''] }, ...obs(m)]).flat());
+      mvStock.map((m) => [{ c: [hora(m.ts), `${tlTxt(m.desc)}${m.tag ? ` (${m.tag})` : ''}`, `${sinal(m)}${tlFmtNum(m.qtd)}${m.med ? ' ' + tlTxt(m.med) : ''}`, m.valor ? `-${tlFmtNum(m.valor)}` : ''] }, ...obs(m)]).flat());
   }
   if (mvCaixa.length) {
     if (mvStock.length) add('');
     add('-- Dinheiro --', 'b');
     tabela([{ h: 'Hora' }, { h: 'Descricao', flex: true }, { h: 'Valor Kz', al: 'r' }],
-      mvCaixa.map((m) => [{ c: [hora(m.ts), tlTxt(m.desc), `${sinal(m)}${fmtNum(m.valor)}`] }, ...obs(m)]).flat());
+      mvCaixa.map((m) => [{ c: [hora(m.ts), tlTxt(m.desc), `${sinal(m)}${tlFmtNum(m.valor)}`] }, ...obs(m)]).flat());
   }
   if (mv && movs.length) {
     const saldo = (mv.totalEntradas || 0) - (mv.totalSaidas || 0);
     add('-'.repeat(W));
-    addLR('Total saidas (dinheiro)', `-${fmt(mv.totalSaidas || 0)}`, 'b');
-    addLR('Total entradas (dinheiro)', `+${fmt(mv.totalEntradas || 0)}`, 'b');
-    addLR('Saldo (entradas - saidas)', `${saldo >= 0 ? '+' : '-'}${fmt(Math.abs(saldo))}`, 'b');
+    addLR('Total saidas (dinheiro)', `-${tlFmt(mv.totalSaidas || 0)}`, 'b');
+    addLR('Total entradas (dinheiro)', `+${tlFmt(mv.totalEntradas || 0)}`, 'b');
+    addLR('Saldo (entradas - saidas)', `${saldo >= 0 ? '+' : '-'}${tlFmt(Math.abs(saldo))}`, 'b');
   }
 
   // 5. Observações — texto livre: só aqui se parte em palavras.

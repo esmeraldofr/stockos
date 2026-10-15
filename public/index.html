@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-talao-letra-pequena">
+<html lang="pt" data-stockos-ui="2026-10-15-talao-letra-mini">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10354,13 +10354,23 @@ async function exportarTurnoExcel() {
 }
 
 // ── TALÃO DO TURNO (impressora térmica) ───────────────────────────────
-// Mesmas 5 secções do Excel, em letra pequena (Font B): 42 colunas em
-// 58 mm, 64 em 80 mm. Uma linha por produto/movimento (nomes cortados,
+// Mesmas 5 secções do Excel. Letra Normal (Font B: 42 col. em 58 mm, 64
+// em 80 mm), Pequena (52/78) ou Mini (60/90) — estas como imagem. Uma linha por produto/movimento (nomes cortados,
 // nunca partidos). Android → RawBT (ESC/POS, como o talão dos pedidos);
 // noutros aparelhos → impressão do browser numa folha estreita.
 const TALAO_LARG_KEY = 'stockos.talaoTurnoLargura';
+const TALAO_LETRA_KEY = 'stockos.talaoTurnoLetra';
+/** Colunas por papel e tamanho de letra. «normal» = Font B da impressora
+ *  (texto); «pequena» e «mini» vão como imagem (letra abaixo da Font B). */
+const TALAO_COLUNAS = { 58: { normal: 42, pequena: 52, mini: 60 }, 80: { normal: 64, pequena: 78, mini: 90 } };
+function talaoPapel() {
+  try { return localStorage.getItem(TALAO_LARG_KEY) === '80' ? 80 : 58; } catch (_) { return 58; }
+}
+function talaoLetra() {
+  try { const v = localStorage.getItem(TALAO_LETRA_KEY); return TALAO_COLUNAS[58][v] ? v : 'pequena'; } catch (_) { return 'pequena'; }
+}
 function talaoLargura() {
-  try { return localStorage.getItem(TALAO_LARG_KEY) === '80' ? 64 : 42; } catch (_) { return 42; }
+  return TALAO_COLUNAS[talaoPapel()][talaoLetra()];
 }
 /** Texto sem emojis nem espaços estranhos. */
 const tlTxt = (v) => String(v == null ? '' : v)
@@ -10483,6 +10493,7 @@ function talaoTurnoLinhas(sec, W) {
 
   // 4. Movimentos do turno — Hora · Descrição · Qtd · Valor (+ nota).
   //    Linhas de rodapé (totais/saldo, com colspan) vão depois da tabela.
+  seccao('Movimentos do turno');
   let iM = {}, nCabM = 0;
   const linM = [], rodM = [];
   sec.movimentos.forEach((r) => {
@@ -10543,6 +10554,62 @@ function talaoTurnoEscPos(L, W) {
   return out + '\n\n\n\n' + GS + 'V' + '\x01';
 }
 
+/** Talão como imagem ESC/POS (GS v 0): permite letra mais pequena que a
+ *  Font B. Desenha cada linha num canvas com a largura em pontos do papel
+ *  (384 = 58 mm, 576 = 80 mm @ 203 dpi) e converte a preto e branco. */
+function talaoTurnoEscPosRaster(L, W, mm) {
+  const ESC = '\x1B', GS = '\x1D';
+  const largura = mm === 80 ? 576 : 384;
+  const cw = largura / W; // pontos por carácter
+  const fam = '"DejaVu Sans Mono","Roboto Mono","Droid Sans Mono","Courier New",monospace';
+  const cv = document.createElement('canvas');
+  const ctx = cv.getContext('2d');
+  ctx.font = `100px ${fam}`;
+  const tam = Math.max(6, (100 * cw) / (ctx.measureText('M').width || 60)); // px de letra p/ cw
+  const alt = Math.ceil(tam * 1.18);
+  const altTit = Math.ceil(tam * 1.6);
+  const h = L.reduce((a, l) => a + (l.s === 'titulo' ? altTit : alt), 0) + 4;
+  cv.width = largura;
+  cv.height = h;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, largura, h);
+  ctx.fillStyle = '#000';
+  ctx.textBaseline = 'top';
+  let y = 2;
+  L.forEach(({ t, s }) => {
+    const tit = s === 'titulo';
+    const neg = tit || s === 'seccao' || s === 'b';
+    ctx.font = `${neg ? 'bold ' : ''}${tit ? (tam * 1.35).toFixed(1) : tam.toFixed(1)}px ${fam}`;
+    const txt = String(t);
+    const tw = Math.min(largura, ctx.measureText(txt).width);
+    const x = tit || s === 'centro' || s === 'seccao' ? Math.max(0, (largura - tw) / 2) : 0;
+    ctx.fillText(txt, x, y, largura - x);
+    y += tit ? altTit : alt;
+  });
+  const px = ctx.getImageData(0, 0, largura, h).data;
+  const bpr = largura / 8;
+  let out = ESC + '@';
+  const logo = pedidoBalcaoLogoGetEscPos();
+  if (logo) out += ESC + 'a' + '\x01' + logo + '\n' + ESC + 'a' + '\x00';
+  // Blocos de até 240 linhas de pontos (várias impressoras têm buffer curto).
+  for (let y0 = 0; y0 < h; y0 += 240) {
+    const hh = Math.min(240, h - y0);
+    let blk = GS + 'v0' + '\x00' + String.fromCharCode(bpr & 0xff, bpr >> 8, hh & 0xff, hh >> 8);
+    for (let yy = y0; yy < y0 + hh; yy++) {
+      for (let b = 0; b < bpr; b++) {
+        let byte = 0;
+        for (let k = 0; k < 8; k++) {
+          const i = (yy * largura + b * 8 + k) * 4;
+          if (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114 < 170) byte |= 0x80 >> k;
+        }
+        blk += String.fromCharCode(byte);
+      }
+    }
+    out += blk;
+  }
+  return out + '\n\n\n\n' + GS + 'V' + '\x01';
+}
+
 /** Talão em HTML (pré-visualização e impressão pelo browser). */
 function talaoTurnoHtml(L, W) {
   const centro = (t) => { const p = Math.max(0, Math.floor((W - t.length) / 2)); return ' '.repeat(p) + t; };
@@ -10555,7 +10622,7 @@ function talaoTurnoHtml(L, W) {
 }
 
 function talaoTurnoImprimirBrowser(L, W) {
-  const mm = W === 64 ? 80 : 58;
+  const mm = talaoPapel();
   // Courier: 1 carácter ≈ 0,6 em → letra para W colunas na largura útil (papel − 4 mm).
   const letraMm = ((mm - 4) / W / 0.6).toFixed(2);
   const fr = document.createElement('iframe');
@@ -10590,8 +10657,9 @@ async function abrirTalaoTurno() {
     div.__talao = { L, W };
     const pre = div.querySelector('#talao-turno-pre');
     pre.innerHTML = talaoTurnoHtml(L, W);
-    pre.style.width = `${W + 2}ch`;
-    div.querySelectorAll('input[name="talao-larg"]').forEach((r) => { r.checked = (r.value === '80') === (W === 64); });
+    pre.style.fontSize = `${Math.min(10.5, 470 / (W * 0.6)).toFixed(1)}px`;
+    div.querySelectorAll('input[name="talao-larg"]').forEach((r) => { r.checked = r.value === String(talaoPapel()); });
+    div.querySelectorAll('input[name="talao-letra"]').forEach((r) => { r.checked = r.value === talaoLetra(); });
   };
   div.innerHTML = `
     <div class="modal" style="max-width:min(560px,96vw)">
@@ -10603,6 +10671,12 @@ async function abrirTalaoTurno() {
         <span style="color:#94a3b8">Papel:</span>
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-larg" value="58"/> 58 mm</label>
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-larg" value="80"/> 80 mm</label>
+      </div>
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:13px;color:#cbd5e1;margin-bottom:10px">
+        <span style="color:#94a3b8">Letra:</span>
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-letra" value="normal"/> Normal</label>
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-letra" value="pequena"/> Pequena</label>
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-letra" value="mini"/> Mini</label>
       </div>
       <div style="max-height:58vh;overflow:auto;background:#fff;border-radius:8px;padding:10px;display:flex;justify-content:center">
         <pre id="talao-turno-pre" style="margin:0;color:#000;font:10.5px/1.25 'Courier New',Consolas,monospace;white-space:pre"></pre>
@@ -10619,13 +10693,19 @@ async function abrirTalaoTurno() {
   div.querySelectorAll('input[name="talao-larg"]').forEach((r) => {
     r.onchange = () => { try { localStorage.setItem(TALAO_LARG_KEY, r.value); } catch (_) {} desenhar(); };
   });
+  div.querySelectorAll('input[name="talao-letra"]').forEach((r) => {
+    r.onchange = () => { try { localStorage.setItem(TALAO_LETRA_KEY, r.value); } catch (_) {} desenhar(); };
+  });
   div.querySelector('[data-acao="browser"]').onclick = () => talaoTurnoImprimirBrowser(div.__talao.L, div.__talao.W);
   div.querySelector('[data-acao="rawbt"]').onclick = () => {
     if (!pedidoBalcaoIsAndroid()) {
       pedidoBalcaoMostrarAjudaImpressao('A impressora térmica Bluetooth (RawBT) só funciona no Android. Neste aparelho usa «Imprimir (browser)».');
       return;
     }
-    const b64 = pedidoBalcaoB64Latin1(talaoTurnoEscPos(div.__talao.L, div.__talao.W));
+    const { L, W } = div.__talao;
+    // Letra «normal» = texto (Font B); mais pequena só como imagem.
+    const esc = talaoLetra() === 'normal' ? talaoTurnoEscPos(L, W) : talaoTurnoEscPosRaster(L, W, talaoPapel());
+    const b64 = pedidoBalcaoB64Latin1(esc);
     if (!b64) { alert('Não foi possível preparar o talão.'); return; }
     const a = document.createElement('a');
     a.href = `rawbt:base64,${b64}`;

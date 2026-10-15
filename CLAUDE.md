@@ -33,6 +33,7 @@ Este ficheiro serve de referência para sessões futuras. Resume tudo o que foi 
 | Campo | Valor |
 |---|---|
 | URL | https://stockos-mu.vercel.app |
+| URL develop | https://stockos-develop-esmeraldofr.vercel.app (alias fixo actualizado pelo `deploy-dev.yml`; o antigo `stockos-git-develop-…` deixou de existir quando a integração Git da Vercel foi desligada) |
 
 **Contas:** sem seed automático no código. O administrador cria os utilizadores pela UI (Admin → Utilizadores). Se ficares sem nenhum admin activo, reactiva uma conta directamente na BD: `UPDATE utilizadores SET ativo=true WHERE email='…';`.
 

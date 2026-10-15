@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-falta-sobra-colunas">
+<html lang="pt" data-stockos-ui="2026-10-15-falta-sobra-balcao-prox">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3778,7 +3778,8 @@ async function loadTurno() {
         // Balcão (vendas dos pedidos do turno).
         const balcao = (stockBalcaoMap && stockBalcaoMap[pid]) || null;
         let balcaoTxt = '';
-        let balcaoDelta = '';
+        let faltaBalcaoHtml = '<span class="comp-null">—</span>';
+        let sobraBalcaoHtml = '<span class="comp-null">—</span>';
         if (balcao) {
           if (balcao.isCopo && balcao.copos > 0) {
             balcaoTxt = `${fmtNum(balcao.copos)} copos`;
@@ -3794,13 +3795,15 @@ async function loadTurno() {
           const tol = (s.tipo_medicao === 'peso' || (balcao && balcao.isCopo)) ? 0.001 : 0.5;
           if (balcaoNativo > 0 && absDiff > tol) {
             const isFalta = diff > 0; // saiu stock a mais do que o balcão registou
-            const cor = isFalta ? '#f87171' : '#fb923c';
-            balcaoDelta = `<div style="font-size:10px;color:${cor};margin-top:2px;line-height:1.2">${isFalta ? '⚠ falta' : '↑ sobra'} ${fmtNum(absDiff)}</div>`;
+            if (isFalta) faltaBalcaoHtml = `<span class="comp-falta">${fmtNum(absDiff)}</span>`;
+            else sobraBalcaoHtml = `<span class="comp-sobra">${fmtNum(absDiff)}</span>`;
           }
         }
 
         // Próx. Encontrado.
         let proxHtml = '<span style="color:#475569">—</span>';
+        let faltaProxHtml = '<span class="comp-null">—</span>';
+        let sobraProxHtml = '<span class="comp-null">—</span>';
         const nx = s.next_encontrado;
         if (nx !== null && nx !== undefined) {
           const nxV = parseFloat(nx);
@@ -3816,8 +3819,9 @@ async function loadTurno() {
               proxHtml = `<span style="color:#86efac">✓ ${escapeHtml(txt)}</span>`;
             } else {
               const isFalta = diff < 0;
-              const cor = isFalta ? '#f87171' : '#fb923c';
-              proxHtml = `<span style="color:${cor}">${escapeHtml(txt)}<div style="font-size:10px;line-height:1.2;margin-top:2px">${isFalta ? '⚠ falta' : '↑ sobra'} ${fmtNum(Math.abs(diff))}</div></span>`;
+              proxHtml = `<span style="color:${isFalta ? '#f87171' : '#fb923c'}">${escapeHtml(txt)}</span>`;
+              if (isFalta) faltaProxHtml = `<span class="comp-falta">${fmtNum(Math.abs(diff))}</span>`;
+              else sobraProxHtml = `<span class="comp-sobra">${fmtNum(Math.abs(diff))}</span>`;
             }
           }
         }
@@ -3863,8 +3867,12 @@ async function loadTurno() {
             <td class="td-calc" style="text-align:right">${dei}</td>
             <td class="td-calc" style="text-align:right;color:#94a3b8">${fmtNum(parseFloat(s.fechados) || 0)}</td>
             <td class="td-calc" style="text-align:right">${vendTxt}</td>
-            <td class="td-calc" style="text-align:right;color:#a5b4fc">${balcaoTxt}${balcaoDelta}</td>
+            <td class="td-calc" style="text-align:right;color:#a5b4fc">${balcaoTxt}</td>
+            <td class="td-calc" style="text-align:right">${faltaBalcaoHtml}</td>
+            <td class="td-calc" style="text-align:right">${sobraBalcaoHtml}</td>
             <td class="td-calc" style="text-align:right">${proxHtml}</td>
+            <td class="td-calc" style="text-align:right">${faltaProxHtml}</td>
+            <td class="td-calc" style="text-align:right">${sobraProxHtml}</td>
             <td class="td-calc" style="text-align:right;color:#94a3b8;${cxBg}">${s.prev_deixado_caixa !== null && s.prev_deixado_caixa !== undefined ? fmtNum(s.prev_deixado_caixa) : '—'}</td>
             <td class="td-calc" style="text-align:right;${cxBg}">${faltaCxHtml}</td>
             <td class="td-calc" style="text-align:right;${cxBg}">${sobraCxHtml}</td>
@@ -3878,7 +3886,7 @@ async function loadTurno() {
     function validacaoTableFor(items, label) {
       if (!items.length) return '';
       return `
-        <tr><td colspan="17" class="section-header">${label}</td></tr>
+        <tr><td colspan="21" class="section-header">${label}</td></tr>
         ${validacaoRows(items)}`;
     }
 
@@ -4043,7 +4051,11 @@ async function loadTurno() {
                   <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(bloqueado)</span></th>
                   <th style="text-align:right">Vendido</th>
                   <th style="text-align:right" title="Quantidade vendida em Pedidos ao balcão (deste turno)">Balcão</th>
+                  <th style="text-align:right" title="Saiu mais stock (Vendido) do que o registado nos Pedidos ao balcão">Falta balcão</th>
+                  <th style="text-align:right" title="Os Pedidos ao balcão registaram mais do que saiu do stock (Vendido)">Sobra balcão</th>
                   <th style="text-align:right" title="Encontrado registado no próximo turno — deve bater com o Deixado deste">Próx. Enc.</th>
+                  <th style="text-align:right" title="Próximo turno encontrou menos do que este deixou">Falta próx.</th>
+                  <th style="text-align:right" title="Próximo turno encontrou mais do que este deixou">Sobra próx.</th>
                   <th style="text-align:right;background:rgba(124,58,237,0.10)" title="Caixas/fardos deixados no turno anterior">T. Ant. caixa</th>
                   <th style="text-align:right;background:rgba(124,58,237,0.10)" title="Caixas encontradas abaixo do turno anterior">Falta caixa</th>
                   <th style="text-align:right;background:rgba(124,58,237,0.10)" title="Caixas encontradas acima do turno anterior">Sobra caixa</th>

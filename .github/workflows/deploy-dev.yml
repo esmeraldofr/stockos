@@ -65,15 +65,23 @@ jobs:
 
       - name: Deploy to Vercel (Preview)
         run: |
+          set -euo pipefail
           REF_DEV="${SUPABASE_PROJECT_REF_DEV:-}"
-          npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
+          URL=$(npx vercel@latest --yes --no-clipboard --token "$VERCEL_TOKEN" \
             --build-env NODE_ENV=development \
             --build-env DATABASE_URL="$DATABASE_URL_DEV" \
             --env NODE_ENV=development \
             --env DATABASE_URL="$DATABASE_URL_DEV" \
-            ${REF_DEV:+--env SUPABASE_PROJECT_REF="$REF_DEV"}
+            ${REF_DEV:+--env SUPABASE_PROJECT_REF="$REF_DEV"} | tail -1)
+          echo "Deploy: $URL"
+          # Endereço FIXO para develop: com a integração Git da Vercel
+          # desligada, o alias stockos-git-develop-… deixou de existir e
+          # cada deploy só tinha um URL único.
+          npx vercel@latest alias set "$URL" "$DEV_ALIAS" --token "$VERCEL_TOKEN" --scope "$VERCEL_ORG_ID"
+          echo "::notice::Develop disponível em https://$DEV_ALIAS"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
           SUPABASE_PROJECT_REF_DEV: ${{ secrets.SUPABASE_PROJECT_REF_DEV }}
+          DEV_ALIAS: stockos-develop-esmeraldofr.vercel.app

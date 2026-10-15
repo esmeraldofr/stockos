@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-aba-ecra-inteiro">
+<html lang="pt" data-stockos-ui="2026-10-15-ecra-inteiro-visivel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3973,6 +3973,9 @@ async function loadTurno() {
     show('turno-content', `
       <div id="turno-avisos"></div>
       <div id="turno-checklist-bar"></div>
+      <div style="display:flex;justify-content:flex-end;margin:0 0 6px">
+        <button type="button" id="turno-full-entrar" class="btn btn-ghost btn-sm" title="Mostrar o conteúdo da aba em ecrã inteiro" onclick="alternarTurnoEcraInteiro(true)">⛶ Ecrã inteiro</button>
+      </div>
       <div class="turno-tabs">
           <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
           <button type="button" class="${tabCls('stock')}" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
@@ -3984,7 +3987,6 @@ async function loadTurno() {
           <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
           ${turnoFechado ? `<button type="button" class="${tabCls('vendas')}" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>` : ''}
           ${turnoFechado ? `<button type="button" class="${tabCls('registos')}" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>` : ''}
-          <button type="button" class="turno-tab" style="margin-left:auto" title="Mostrar o conteúdo da aba em ecrã inteiro" onclick="alternarTurnoEcraInteiro(true)">⛶ Ecrã inteiro</button>
       </div>
       <button type="button" id="turno-full-sair" onclick="alternarTurnoEcraInteiro(false)">✕ Sair do ecrã inteiro</button>
 

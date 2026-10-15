@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-ecra-inteiro-visivel">
+<html lang="pt" data-stockos-ui="2026-10-15-ecra-inteiro-na-aba">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -548,6 +548,8 @@ tr:hover .td-name .stock-prod-nome{color:#f1f5f9}
 .turno-tab-panel{display:none}.turno-tab-panel.active{display:block}
 body.turno-full .turno-tab-panel.active{position:fixed;left:0;right:0;bottom:0;top:var(--turno-full-top,0px);z-index:1300;background:#0f172a;overflow:auto;-webkit-overflow-scrolling:touch;padding:52px 12px calc(16px + env(safe-area-inset-bottom,0px));margin:0}
 body.turno-full{overflow:hidden}
+.turno-full-entrar-wrap{display:flex;justify-content:flex-end;margin:0 0 8px}
+body.turno-full .turno-full-entrar-wrap{display:none}
 #turno-full-sair{display:none}
 body.turno-full #turno-full-sair{display:inline-flex;position:fixed;right:12px;top:calc(var(--turno-full-top,0px) + 8px);z-index:1310;align-items:center;gap:6px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:999px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.45)}
 #content > .armazem-tab-panel{display:none}#content > .armazem-tab-panel.active{display:block}
@@ -3973,9 +3975,6 @@ async function loadTurno() {
     show('turno-content', `
       <div id="turno-avisos"></div>
       <div id="turno-checklist-bar"></div>
-      <div style="display:flex;justify-content:flex-end;margin:0 0 6px">
-        <button type="button" id="turno-full-entrar" class="btn btn-ghost btn-sm" title="Mostrar o conteúdo da aba em ecrã inteiro" onclick="alternarTurnoEcraInteiro(true)">⛶ Ecrã inteiro</button>
-      </div>
       <div class="turno-tabs">
           <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
           <button type="button" class="${tabCls('stock')}" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
@@ -4190,6 +4189,7 @@ async function loadTurno() {
         /* resolve IDs Fino 400/1000 sem catálogo */
       }
     }
+    garantirBotoesEcraInteiro();
     fotosAnexosInit();
     await loadRegistosMovimentosSection(turno.id, turno.stock, canEdit);
     atualizarChecklistBar().catch(() => {});
@@ -10031,6 +10031,17 @@ function calcCaixa() {
 /** Conteúdo da aba do turno em ecrã inteiro: o painel activo cobre a
  *  página (abaixo das faixas de estado) e, onde o browser deixa (Android,
  *  computador), entra também em fullscreen nativo. iPhone: só o modo CSS. */
+/** Põe o botão «⛶ Ecrã inteiro» no topo de cada painel de aba do turno
+ *  (idempotente — os painéis podem ser redesenhados). */
+function garantirBotoesEcraInteiro() {
+  document.querySelectorAll('.turno-tab-panel').forEach((p) => {
+    if (p.querySelector(':scope > .turno-full-entrar-wrap')) return;
+    const w = document.createElement('div');
+    w.className = 'turno-full-entrar-wrap';
+    w.innerHTML = '<button type="button" class="btn btn-ghost btn-sm" title="Mostrar o conteúdo desta aba em ecrã inteiro" onclick="alternarTurnoEcraInteiro(true)">⛶ Ecrã inteiro</button>';
+    p.insertBefore(w, p.firstChild);
+  });
+}
 function alternarTurnoEcraInteiro(ligar) {
   const topo = parseInt(document.body.style.paddingTop, 10) || 0;
   document.documentElement.style.setProperty('--turno-full-top', topo + 'px');
@@ -10062,6 +10073,7 @@ async function switchTurnoTab(name, btn) {
   document.querySelectorAll('.turno-tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.turno-tab').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name)?.classList.add('active');
+  garantirBotoesEcraInteiro();
   if (btn) btn.classList.add('active');
   else document.querySelector(`.turno-tab[data-turno-tab="${name}"]`)?.classList.add('active');
   if (name === 'escala') {

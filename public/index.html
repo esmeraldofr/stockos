@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-resumo-diferenca">
+<html lang="pt" data-stockos-ui="2026-10-15-exportar-excel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10109,6 +10109,154 @@ function calcCaixa() {
 /** Conteúdo da aba do turno em ecrã inteiro: o painel activo cobre a
  *  página (abaixo das faixas de estado) e, onde o browser deixa (Android,
  *  computador), entra também em fullscreen nativo. iPhone: só o modo CSS. */
+// ── EXPORTAR TURNO PARA EXCEL ─────────────────────────────────────────
+// Lê o que o ecrã do turno já mostra (todas as abas estão no DOM, mesmo
+// escondidas) e gera um .xlsx com uma folha por secção.
+// Gerador .xlsx próprio (ZIP sem compressão + SpreadsheetML): sem
+// bibliotecas externas, funciona offline desde a 1.ª utilização.
+const __crcTab = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(bytes) { let c = 0xFFFFFFFF; for (let i = 0; i < bytes.length; i++) c = __crcTab[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zipStore(ficheiros) {
+  const enc = new TextEncoder();
+  const partes = []; const central = []; let off = 0;
+  const u16 = (v) => [v & 0xFF, (v >>> 8) & 0xFF];
+  const u32 = (v) => [v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF];
+  for (const f of ficheiros) {
+    const nome = enc.encode(f.nome); const dados = enc.encode(f.dados); const crc = crc32(dados);
+    const cab = new Uint8Array([...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21),
+      ...u32(crc), ...u32(dados.length), ...u32(dados.length), ...u16(nome.length), ...u16(0)]);
+    partes.push(cab, nome, dados);
+    central.push(new Uint8Array([...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21),
+      ...u32(crc), ...u32(dados.length), ...u32(dados.length), ...u16(nome.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+      ...u32(0), ...u32(off)]), nome);
+    off += cab.length + nome.length + dados.length;
+  }
+  const tamCentral = central.reduce((a, b) => a + b.length, 0);
+  const fim = new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(ficheiros.length), ...u16(ficheiros.length),
+    ...u32(tamCentral), ...u32(off), ...u16(0)]);
+  return new Blob([...partes, ...central, fim], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+function criarXlsx(folhas) {
+  const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  const colRef = (i) => { let r = ''; i++; while (i > 0) { const m = (i - 1) % 26; r = String.fromCharCode(65 + m) + r; i = Math.floor((i - 1) / 26); } return r; };
+  const nomes = []; const usados = new Set();
+  folhas.forEach((f) => {
+    let n = String(f.nome).replace(/[\\/?*\[\]:]/g, ' ').slice(0, 31) || 'Folha'; let k = 2;
+    while (usados.has(n.toLowerCase())) n = n.slice(0, 28) + ' ' + (k++);
+    usados.add(n.toLowerCase()); nomes.push(n);
+  });
+  const sheetXml = (linhas) => {
+    const larg = [];
+    linhas.forEach((l) => l.forEach((c, i) => { larg[i] = Math.min(60, Math.max(larg[i] || 8, String(c).length + 2)); }));
+    const cols = larg.length ? `<cols>${larg.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>` : '';
+    const rows = linhas.map((l, r) => `<row r="${r + 1}">${l.map((c, i) => {
+      if (c === '' || c == null) return '';
+      const ref = colRef(i) + (r + 1);
+      if (typeof c === 'number' && Number.isFinite(c)) return `<c r="${ref}"><v>${c}</v></c>`;
+      return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${esc(c)}</t></is></c>`;
+    }).join('')}</row>`).join('');
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${cols}<sheetData>${rows}</sheetData></worksheet>`;
+  };
+  const fich = [
+    { nome: '[Content_Types].xml', dados: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${nomes.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>` },
+    { nome: '_rels/.rels', dados: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { nome: 'xl/workbook.xml', dados: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${nomes.map((n, i) => `<sheet name="${esc(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>` },
+    { nome: 'xl/_rels/workbook.xml.rels', dados: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${nomes.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${nomes.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+    { nome: 'xl/styles.xml', dados: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs></styleSheet>` },
+    ...folhas.map((f, i) => ({ nome: `xl/worksheets/sheet${i + 1}.xml`, dados: sheetXml(f.linhas.length ? f.linhas : [['(sem dados)']]) }))
+  ];
+  return zipStore(fich);
+}
+function descarregarBlob(blob, nome) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = nome;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+/** Texto de uma célula do ecrã → número do Excel quando é claramente um
+ *  valor (Kz, quantidade, ±diferença); senão texto. «—» → vazio. */
+function celulaExcel(txt) {
+  let t = String(txt == null ? '' : txt).replace(/ | /g, ' ').replace(/\s+/g, ' ').trim();
+  if (t === '' || t === '—' || t === '-') return '';
+  const semUnid = t.replace(/\s*Kz$/i, '').replace(/^(un\.|unid\.?|copos?|kg|g|l|itens)\s+/i, '').trim();
+  if (/^[+−-]?\s?\d{1,3}(?:[ .]\d{3})*(?:,\d+)?$|^[+−-]?\s?\d+(?:,\d+)?$/.test(semUnid)) {
+    const neg = /^[−-]/.test(semUnid);
+    const n = parseFloat(semUnid.replace(/^[+−-]\s?/, '').replace(/[ .](?=\d{3}(\D|$))/g, '').replace(',', '.'));
+    if (Number.isFinite(n)) return neg ? -n : n;
+  }
+  return t;
+}
+/** Linhas de uma ou mais tabelas do ecrã (cabeçalho, corpo, rodapé). */
+function linhasDeTabelas(tabelas, titulos) {
+  const out = [];
+  tabelas.forEach((tb, i) => {
+    if (titulos && titulos[i]) { if (out.length) out.push([]); out.push([titulos[i]]); }
+    tb.querySelectorAll('tr').forEach((tr) => {
+      // textContent: texto original (innerText aplicaria as MAIÚSCULAS do CSS).
+      const cels = [...tr.children].map((c) => celulaExcel(c.textContent));
+      if (cels.some((c) => c !== '')) out.push(cels);
+    });
+  });
+  return out;
+}
+async function exportarTurnoExcel() {
+  const t = S.turnoData;
+  if (!t) throw new Error('Abre um turno primeiro.');
+  const folhas = [];
+  const juntar = (nome, linhas) => folhas.push({ nome, linhas });
+  const cab = [[`StockOS — ${lojaAtivaNome()} · ${turnoLabel(t.nome)} · ${String(S.date || t.data || '').slice(0, 10)}`], []];
+
+  // 1) Validação do stock
+  const tVal = document.querySelector('#tab-validacao table');
+  juntar('Validação do stock', cab.concat(tVal ? linhasDeTabelas([tVal]) : []));
+
+  // 2) Produtos vendidos (Resumo dos pedidos: uma tabela por categoria + total)
+  const mountRes = document.getElementById('pedidos-resumo-mount');
+  const blocosRes = mountRes ? [...mountRes.querySelectorAll('table')] : [];
+  const titRes = blocosRes.map((tb) => {
+    const tit = tb.closest('div[style*="margin-top:10px"]')?.querySelector(':scope > div');
+    return tit ? tit.textContent.trim() : '';
+  });
+  juntar('Produtos vendidos', cab.concat(linhasDeTabelas(blocosRes, titRes)));
+
+  // 3) Caixa (valores declarados + totais + esperado dos pedidos)
+  const val = (id) => celulaExcel(document.getElementById(id)?.value ?? '');
+  const txt = (id) => celulaExcel(document.getElementById(id)?.textContent ?? '');
+  const caixa = cab.concat([
+    ['Campo', 'Valor (Kz)'],
+    ['TPA', val('c-tpa')],
+    ['Transferência', val('c-transf')],
+    ['Dinheiro', val('c-din')],
+    ['Saídas de caixa', val('c-saida')],
+    ['Entradas de caixa', val('c-entradas')],
+    ['Total gerado', txt('c-total-gerado')],
+    ['Total final', txt('c-total-final')]
+  ]);
+  const esp = document.getElementById('caixa-esperado-pedidos');
+  if (esp && esp.innerText.trim()) {
+    caixa.push([], ['Esperado dos pedidos ao balcão']);
+    esp.innerText.split('\n').map((l) => l.trim()).filter(Boolean).forEach((l) => {
+      // «Dinheiro 35 500 Kz» → [rótulo, valor]
+      const m = l.match(/^(.*?)\s+([+\u2212-]?\d[\d .\u00a0\u202f]*(?:,\d+)?\s*Kz)$/i);
+      caixa.push(m ? [m[1], celulaExcel(m[2])] : [celulaExcel(l)]);
+    });
+  }
+  juntar('Caixa', caixa);
+
+  // 4) Movimentos do turno
+  const tMov = [...document.querySelectorAll('#movimentos-section table')];
+  juntar('Movimentos do turno', cab.concat(linhasDeTabelas(tMov)));
+
+  // 5) Observações
+  const notas = document.getElementById('turno-notas')?.value ?? t.notas ?? '';
+  juntar('Observações', cab.concat([['Observações do turno'], [notas || '(sem observações)']]));
+
+  const nomeF = `StockOS_${lojaAtivaNome()}_${String(S.date || t.data || '').slice(0, 10)}_${t.nome}.xlsx`
+    .replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_');
+  descarregarBlob(criarXlsx(folhas), nomeF);
+}
+
 /** Põe o botão «⛶ Ecrã inteiro» no topo de cada painel de aba do turno
  *  (idempotente — os painéis podem ser redesenhados). */
 function garantirBotoesEcraInteiro() {
@@ -10116,7 +10264,8 @@ function garantirBotoesEcraInteiro() {
     if (p.querySelector(':scope > .turno-full-entrar-wrap')) return;
     const w = document.createElement('div');
     w.className = 'turno-full-entrar-wrap';
-    w.innerHTML = '<button type="button" class="btn btn-ghost btn-sm" title="Mostrar o conteúdo desta aba em ecrã inteiro" onclick="alternarTurnoEcraInteiro(true)">⛶ Ecrã inteiro</button>';
+    w.innerHTML = '<button type="button" class="btn btn-ghost btn-sm" title="Exportar o turno para Excel: Validação do stock, Produtos vendidos, Caixa, Movimentos do turno e Observações" onclick="runAction(event, exportarTurnoExcel)" style="margin-right:6px">📥 Excel</button>'
+      + '<button type="button" class="btn btn-ghost btn-sm" title="Mostrar o conteúdo desta aba em ecrã inteiro" onclick="alternarTurnoEcraInteiro(true)">⛶ Ecrã inteiro</button>';
     p.insertBefore(w, p.firstChild);
   });
 }

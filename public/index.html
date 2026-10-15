@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-resumo-valor-vendido">
+<html lang="pt" data-stockos-ui="2026-10-15-resumo-grupo-stock">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7735,10 +7735,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
         <tr>
           <td style="padding:5px 8px;color:#e2e8f0">${escapeHtml(r.nome)}</td>
           <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums"><span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span> ${num2(r.qtd)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#e2e8f0;font-variant-numeric:tabular-nums">${vendidoStockHtml(r.pid)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums">${valorVendidoKz(r.pid) != null ? fmt(valorVendidoKz(r.pid)) : traco}</td>
           <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.valor)}</td>
           <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${pctTxt}${fmt(r.comissao)}</td>
+          <td style="padding:5px 8px;text-align:right;color:#e2e8f0;font-variant-numeric:tabular-nums;background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9"">${vendidoStockHtml(r.pid)}</td>
+          <td style="padding:5px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;background:rgba(14,165,233,0.08)"">${valorVendidoKz(r.pid) != null ? fmt(valorVendidoKz(r.pid)) : traco}</td>
         </tr>`;
       }).join('');
       return `
@@ -7749,10 +7749,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
               <tr>
                 <th style="text-align:left;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Produto</th>
                 <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Quantidade</th>
-                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em" title="Vendido segundo a folha de Stock: Encontrado + Entrada − Deixado">Vendido</th>
-                <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em" title="Valor do vendido na folha de Stock: Vendido × preço do produto">Valor vendido</th>
                 <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Valor</th>
                 <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em" title="Comissão potencial = subtotal × % do produto">Comissão</th>
+                <th style="text-align:right;padding:6px 8px;color:#7dd3fc;font-size:11px;text-transform:uppercase;letter-spacing:.04em;background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9" title="Vendido segundo a folha de Stock: Encontrado + Entrada − Deixado">Vendido <span style="font-weight:400;text-transform:none">(stock)</span></th>
+                <th style="text-align:right;padding:6px 8px;color:#7dd3fc;font-size:11px;text-transform:uppercase;letter-spacing:.04em;background:rgba(14,165,233,0.08)" title="Valor do vendido na folha de Stock: Vendido × preço do produto">Valor vendido</th>
               </tr>
             </thead>
             <tbody>${trs}</tbody>
@@ -7760,10 +7760,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
               <tr style="border-top:1px solid #334155">
                 <td style="padding:6px 8px;color:#cbd5e1;font-weight:700">Subtotal</td>
                 <td style="padding:6px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700">${num2(totalQtd)}</td>
-                <td></td>
-                <td style="padding:6px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalVendKz)}</td>
                 <td style="padding:6px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalKz)}</td>
                 <td style="padding:6px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalCom)}</td>
+                <td style="background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9"></td>
+                <td style="padding:6px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;font-weight:700;background:rgba(14,165,233,0.08)">${fmt(totalVendKz)}</td>
               </tr>
             </tfoot>
           </table>
@@ -7803,10 +7803,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
               <tr style="border-top:2px solid #334155">
                 <td style="padding:8px;color:#e2e8f0;font-weight:700">Total geral</td>
                 <td style="padding:8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700"><span style="color:#64748b;font-size:11px">itens</span> ${num2(totalQtdGeral)}</td>
-                <td></td>
-                <td style="padding:8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalVendKzGeral)}</td>
                 <td style="padding:8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalKzGeral)}</td>
                 <td style="padding:8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalComGeral)}</td>
+                <td style="background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9"></td>
+                <td style="padding:8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;font-weight:700;background:rgba(14,165,233,0.08)">${fmt(totalVendKzGeral)}</td>
               </tr>
             </tbody>
           </table>

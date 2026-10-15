@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-talao-milhares-ponto">
+<html lang="pt" data-stockos-ui="2026-10-15-talao-estado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10309,6 +10309,7 @@ function recolherSeccoesTurno() {
     caixa: caixaValores,
     esperado,
     esperadoTitulo,
+    estado: { turno: t.estado || '', encontrados: t.encontrados_fechados_em || null, deixados: t.deixados_fechados_em || null },
     // Dados completos da aba Entradas e Saídas (independente do filtro do ecrã).
     mvDados: window.__mvDados ? { ...window.__mvDados, movs: [...(window.__mvDados.movs || [])] } : null,
     movimentos: linhasDeTabelas([...document.querySelectorAll('#movimentos-section table')]),
@@ -10416,9 +10417,21 @@ function talaoTurnoLinhas(sec, W) {
   };
 
   add(tlTxt(lojaAtivaNome() || 'StockOS'), 'titulo');
-  add('FECHO DE TURNO', 'centro');
+  add(sec.estado && sec.estado.turno === 'aberto' ? 'TURNO EM CURSO (PARCIAL)' : 'FECHO DE TURNO', 'centro');
   add(`${tlTxt(sec.turno)} - ${xlDataPt(sec.data)}`, 'centro');
   add(`Impresso: ${new Date().toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`, 'centro');
+
+  // Estado do turno — turno aberto/fechado e os dois registos de contagem.
+  const est = sec.estado || {};
+  const quando = (ts) => {
+    const d = ts ? new Date(ts) : null;
+    return d && !isNaN(d) ? d.toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  };
+  const regTxt = (ts) => (ts ? `fechado ${quando(ts)}`.trim() : 'POR FECHAR');
+  seccao('Estado do turno');
+  addLR('Turno', est.turno === 'fechado' ? 'FECHADO' : est.turno === 'aberto' ? 'ABERTO' : tlTxt(est.turno || '-'), 'b');
+  addLR('Registo inicial (encontrados)', regTxt(est.encontrados), est.encontrados ? '' : 'b');
+  addLR('Registo dos deixados', regTxt(est.deixados), est.deixados ? '' : 'b');
 
   // 1. Validação do stock — uma linha por produto + linha de alertas.
   seccao('Validação do stock');

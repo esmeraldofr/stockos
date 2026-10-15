@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-resumo-grupo-stock">
+<html lang="pt" data-stockos-ui="2026-10-15-resumo-diferenca">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7687,8 +7687,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     // Larguras de coluna partilhadas por TODAS as tabelas (categorias e
     // Total geral) — com table-layout:fixed as colunas alinham verticalmente
     // entre tabelas diferentes.
-    const colgroupHtml = '<colgroup><col style="width:27%"><col style="width:17%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:14%"></colgroup>';
-    const tableStyle = 'width:100%;min-width:640px;table-layout:fixed;border-collapse:collapse;font-size:13px';
+    const colgroupHtml = '<colgroup><col style="width:22%"><col style="width:14%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:9%"><col style="width:11%"></colgroup>';
+    const tableStyle = 'width:100%;min-width:820px;table-layout:fixed;border-collapse:collapse;font-size:13px';
     // Vendido segundo a folha de Stock (Encontrado + Entrada − Deixado),
     // para comparar com a quantidade dos pedidos. «—» se o produto não está
     // na folha ou ainda falta o Deixado.
@@ -7715,12 +7715,28 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       return `${i.sig ? `<span style="color:#64748b;font-size:11px">${escapeHtml(i.sig)}</span> ` : ''}${num2(i.v)}`;
     };
     const valorVendidoKz = (pid) => { const i = vendidoStockInfo(pid); return i && Number.isFinite(i.kz) ? i.kz : null; };
+    // Diferença stock − pedidos. Quantidade só quando as unidades batem
+    // (copos vs kg do barril não se comparam); valor sempre em Kz.
+    const difQtd = (r) => {
+      const i = vendidoStockInfo(r.pid);
+      if (!i || r.isCopo) return null;
+      return i.v - r.qtd;
+    };
+    const difKz = (r) => { const v = valorVendidoKz(r.pid); return v == null ? null : v - r.valor; };
+    const difCell = (d, fmtFn, estilo) => {
+      if (d == null) return `<td style="padding:5px 8px;text-align:right;${estilo}">${traco}</td>`;
+      const zero = Math.abs(d) < 0.005;
+      const cor = zero ? '#86efac' : (d > 0 ? '#f87171' : '#fb923c');
+      const txt = zero ? '✓' : `${d > 0 ? '+' : '−'}${fmtFn(Math.abs(d))}`;
+      return `<td style="padding:5px 8px;text-align:right;color:${cor};font-variant-numeric:tabular-nums;${estilo}">${txt}</td>`;
+    };
     const renderTabela = (byProd) => {
       const arr = [...byProd.values()].sort((a, b) => b.valor - a.valor);
       const totalQtd = arr.reduce((s, r) => s + r.qtd, 0);
       const totalKz = arr.reduce((s, r) => s + r.valor, 0);
       const totalCom = arr.reduce((s, r) => s + r.comissao, 0);
       const totalVendKz = arr.reduce((s, r) => s + (valorVendidoKz(r.pid) || 0), 0);
+      const totalDifKz = arr.reduce((s, r) => s + (difKz(r) || 0), 0);
       const trs = arr.map((r) => {
         let unidadeStr = r.unidade;
         if (r.isCopo && r.pacoteN >= 2 && r.pacotePreco > 0 && r.pacotes > 0) {
@@ -7737,8 +7753,10 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums"><span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span> ${num2(r.qtd)}</td>
           <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.valor)}</td>
           <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${pctTxt}${fmt(r.comissao)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#e2e8f0;font-variant-numeric:tabular-nums;background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9"">${vendidoStockHtml(r.pid)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;background:rgba(14,165,233,0.08)"">${valorVendidoKz(r.pid) != null ? fmt(valorVendidoKz(r.pid)) : traco}</td>
+          <td style="padding:5px 8px;text-align:right;color:#e2e8f0;font-variant-numeric:tabular-nums;background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9">${vendidoStockHtml(r.pid)}</td>
+          <td style="padding:5px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;background:rgba(14,165,233,0.08)">${valorVendidoKz(r.pid) != null ? fmt(valorVendidoKz(r.pid)) : traco}</td>
+          ${difCell(difQtd(r), num2, 'background:rgba(244,63,94,0.07);border-left:2px solid #f43f5e')}
+          ${difCell(difKz(r), fmt, 'background:rgba(244,63,94,0.07)')}
         </tr>`;
       }).join('');
       return `
@@ -7753,6 +7771,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
                 <th style="text-align:right;padding:6px 8px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em" title="Comissão potencial = subtotal × % do produto">Comissão</th>
                 <th style="text-align:right;padding:6px 8px;color:#7dd3fc;font-size:11px;text-transform:uppercase;letter-spacing:.04em;background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9" title="Vendido segundo a folha de Stock: Encontrado + Entrada − Deixado">Vendido <span style="font-weight:400;text-transform:none">(stock)</span></th>
                 <th style="text-align:right;padding:6px 8px;color:#7dd3fc;font-size:11px;text-transform:uppercase;letter-spacing:.04em;background:rgba(14,165,233,0.08)" title="Valor do vendido na folha de Stock: Vendido × preço do produto">Valor vendido</th>
+                <th style="text-align:right;padding:6px 8px;color:#fda4af;font-size:11px;text-transform:uppercase;letter-spacing:.04em;background:rgba(244,63,94,0.07);border-left:2px solid #f43f5e" title="Vendido (stock) − Quantidade (pedidos). + saiu mais stock do que os pedidos registaram; − o contrário. «—» quando as unidades não se comparam (copos vs kg).">Dif. qtd</th>
+                <th style="text-align:right;padding:6px 8px;color:#fda4af;font-size:11px;text-transform:uppercase;letter-spacing:.04em;background:rgba(244,63,94,0.07)" title="Valor vendido (stock) − Valor (pedidos)">Dif. valor</th>
               </tr>
             </thead>
             <tbody>${trs}</tbody>
@@ -7764,6 +7784,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
                 <td style="padding:6px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalCom)}</td>
                 <td style="background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9"></td>
                 <td style="padding:6px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;font-weight:700;background:rgba(14,165,233,0.08)">${fmt(totalVendKz)}</td>
+                <td style="background:rgba(244,63,94,0.07);border-left:2px solid #f43f5e"></td>
+                ${difCell(totalDifKz, fmt, 'font-weight:700;background:rgba(244,63,94,0.07)')}
               </tr>
             </tfoot>
           </table>
@@ -7776,10 +7798,11 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       bebida: '🥤 Bebidas',
       outros: '📦 Outros'
     }[c] || c);
-    let totalQtdGeral = 0, totalKzGeral = 0, totalComGeral = 0, totalVendKzGeral = 0;
+    let totalQtdGeral = 0, totalKzGeral = 0, totalComGeral = 0, totalVendKzGeral = 0, totalDifKzGeral = 0;
     porCat.forEach((byProd) => {
       byProd.forEach((r) => {
         totalVendKzGeral += valorVendidoKz(r.pid) || 0;
+        totalDifKzGeral += difKz(r) || 0;
         totalQtdGeral += r.qtd;
         totalKzGeral += r.valor;
         totalComGeral += r.comissao;
@@ -7807,6 +7830,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
                 <td style="padding:8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalComGeral)}</td>
                 <td style="background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9"></td>
                 <td style="padding:8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;font-weight:700;background:rgba(14,165,233,0.08)">${fmt(totalVendKzGeral)}</td>
+                <td style="background:rgba(244,63,94,0.07);border-left:2px solid #f43f5e"></td>
+                ${difCell(totalDifKzGeral, fmt, 'font-weight:700;background:rgba(244,63,94,0.07)')}
               </tr>
             </tbody>
           </table>

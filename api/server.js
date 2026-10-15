@@ -5595,6 +5595,39 @@ app.put('/api/config/turnos-bloqueados', auth, requireRole('admin', 'gestor'), a
   }
 });
 
+// ── PASSAGEM DE TURNO: uma só contagem ────────────────────────────────
+// O Encontrado de um turno É o Deixado do turno anterior (mesma loja):
+// herdado na abertura, actualizado sempre que esse Deixado muda e
+// bloqueado para edição. «Turno anterior» = mesma regra do T. Anterior
+// do /dia: o último turno anterior da loja com deixados registados.
+const SLOT_TURNO_SQL = (a) => `CASE ${a}.nome WHEN 'manha' THEN 0 WHEN 'tarde' THEN 1 WHEN 'noite' THEN 2 END`;
+async function turnoAnteriorComDeixados(db, turnoId) {
+  const r = await db.query(
+    `SELECT t.id FROM turnos c JOIN turnos t
+       ON t.loja_id IS NOT DISTINCT FROM c.loja_id
+      AND (t.data < c.data OR (t.data = c.data AND ${SLOT_TURNO_SQL('t')} < ${SLOT_TURNO_SQL('c')}))
+     WHERE c.id = $1
+       AND EXISTS (SELECT 1 FROM turno_stock ts WHERE ts.turno_id = t.id AND ts.deixado IS NOT NULL)
+     ORDER BY t.data DESC, ${SLOT_TURNO_SQL('t')} DESC
+     LIMIT 1`,
+    [turnoId]
+  );
+  return r.rows.length ? r.rows[0].id : null;
+}
+/** Turno imediatamente a seguir (mesma loja), se ainda estiver aberto. */
+async function turnoSeguinteAberto(db, turnoId) {
+  const r = await db.query(
+    `SELECT t.id, t.estado FROM turnos c JOIN turnos t
+       ON t.loja_id IS NOT DISTINCT FROM c.loja_id
+      AND (t.data > c.data OR (t.data = c.data AND ${SLOT_TURNO_SQL('t')} > ${SLOT_TURNO_SQL('c')}))
+     WHERE c.id = $1
+     ORDER BY t.data ASC, ${SLOT_TURNO_SQL('t')} ASC
+     LIMIT 1`,
+    [turnoId]
+  );
+  return r.rows.length && r.rows[0].estado === 'aberto' ? r.rows[0].id : null;
+}
+
 app.post('/api/turnos/abrir', auth, async (req, res) => {
   // Antes da transacção: a folha de stock do turno usa SÓ produtos da
   // empresa (verificação prévia da coluna — nunca aborta o BEGIN).
@@ -5646,21 +5679,21 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
         );
     const turnoId = turno.rows[0].id;
 
-    // Stock do turno: só produtos activos DA EMPRESA marcados para a folha
-    const produtos = temEmpProd
-      ? await client.query(
-          `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND empresa_id=$1 AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`,
-          [empresaDe(req)]
-        )
-      : await client.query(
-          `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`
-        );
-    for (const p of produtos.rows) {
-      await client.query(
-        'INSERT INTO turno_stock (turno_id, produto_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-        [turnoId, p.id]
-      );
-    }
+    // Stock do turno: só produtos activos DA EMPRESA marcados para a folha.
+    // Encontrado / Enc. caixa nascem iguais ao Deixado / Deix. caixa do
+    // turno anterior — a passagem de turno é uma só contagem.
+    const prevTurnoId = temLojaCol ? await turnoAnteriorComDeixados(client, turnoId) : null;
+    const filtroEmp = temEmpProd ? 'AND p.empresa_id = $3' : '';
+    await client.query(
+      `INSERT INTO turno_stock (turno_id, produto_id, encontrado, encontrado_caixa)
+       SELECT $1, p.id, ps.deixado, ps.deixado_caixa
+         FROM produtos p
+         LEFT JOIN turno_stock ps ON ps.turno_id = $2 AND ps.produto_id = p.id
+        WHERE p.ativo = true AND p.em_stock_turno IS TRUE ${filtroEmp}
+          AND ${SQL_P_STOCK_CATEGORIAS}
+       ON CONFLICT DO NOTHING`,
+      temEmpProd ? [turnoId, prevTurnoId, empresaDe(req)] : [turnoId, prevTurnoId]
+    );
 
     // Criar entrada de caixa
     await client.query('INSERT INTO turno_caixa (turno_id) VALUES ($1) ON CONFLICT DO NOTHING', [turnoId]);
@@ -5920,15 +5953,31 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
       const turnoRow = await query(`SELECT encontrados_fechados_em FROM turnos WHERE id=$1`, [req.params.id]);
       encontradosFechados = turnoRow.rows.length && turnoRow.rows[0].encontrados_fechados_em != null;
     }
-    const enc = parseOptionalNumericBody(encontrado);
+    let enc = parseOptionalNumericBody(encontrado);
     const deix = parseOptionalNumericBody(deixado);
-    const encG = parseOptionalNumericBody(encontrado_caixa);
+    let encG = parseOptionalNumericBody(encontrado_caixa);
     const deixG = parseOptionalNumericBody(deixado_caixa);
+    // Passagem de turno: havendo Deixado no turno anterior, o Encontrado é
+    // esse valor — o que o cliente mandar é ignorado (sempre igual).
+    let encHerdado = false;
+    let encGHerdado = false;
+    const prevTurnoId = await turnoAnteriorComDeixados({ query }, req.params.id).catch(() => null);
+    if (prevTurnoId) {
+      const pv = await query(
+        `SELECT deixado, deixado_caixa FROM turno_stock WHERE turno_id=$1 AND produto_id=$2`,
+        [prevTurnoId, produto_id]
+      );
+      if (pv.rows.length && pv.rows[0].deixado != null) { enc = pv.rows[0].deixado; encHerdado = true; }
+      if (pv.rows.length && pv.rows[0].deixado_caixa != null) { encG = pv.rows[0].deixado_caixa; encGHerdado = true; }
+    }
     const sets = ['fechados=$5'];
-    if (!encontradosFechados) sets.push('encontrado=$3', 'encontrado_caixa=$6');
+    // Herdado: escreve-se sempre (é um espelho, nunca uma edição manual).
+    if (!encontradosFechados || encHerdado) sets.push('encontrado=$3');
+    if (!encontradosFechados || encGHerdado) sets.push('encontrado_caixa=$6');
     // Deixados SÓ com o registo inicial fechado (ordem do turno) e
     // enquanto o registo dos deixados não fechar.
-    if (!deixadosFechados && encontradosFechados) sets.push('deixado=$4', 'deixado_caixa=$7');
+    const escreveDeixados = !deixadosFechados && encontradosFechados;
+    if (escreveDeixados) sets.push('deixado=$4', 'deixado_caixa=$7');
     const updateSet = sets.join(', ');
     const r = await query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados, encontrado_caixa, deixado_caixa)
@@ -5938,12 +5987,25 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
        RETURNING *`,
       [
         req.params.id, produto_id, enc,
-        encontradosFechados && !deixadosFechados ? deix : null,
+        escreveDeixados ? deix : null,
         fechados || 0, encG,
-        encontradosFechados && !deixadosFechados ? deixG : null
+        escreveDeixados ? deixG : null
       ]
     );
-    res.json(r.rows[0]);
+    // O Deixado mudou → o Encontrado do turno seguinte (se aberto) segue-o.
+    if (escreveDeixados) {
+      const nextId = await turnoSeguinteAberto({ query }, req.params.id).catch(() => null);
+      if (nextId) {
+        await query(
+          `INSERT INTO turno_stock (turno_id, produto_id, encontrado, encontrado_caixa)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (turno_id, produto_id)
+           DO UPDATE SET encontrado = EXCLUDED.encontrado, encontrado_caixa = EXCLUDED.encontrado_caixa`,
+          [nextId, produto_id, r.rows[0].deixado, r.rows[0].deixado_caixa]
+        ).catch((e) => console.warn('[stock] propagar deixado → encontrado seguinte:', e && e.message));
+      }
+    }
+    res.json({ ...r.rows[0], encontrado_herdado: encHerdado, encontrado_caixa_herdado: encGHerdado });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

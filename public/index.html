@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-08-09-sessao-nao-rejeita">
+<html lang="pt" data-stockos-ui="2026-10-15-passagem-turno">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3629,6 +3629,15 @@ async function loadTurno() {
     turno.stock.forEach((s) => {
       const sid = prodIdKey(s.produto_id);
       if (!sid) return;
+      // Passagem de turno: turnos abertos antes desta regra podem ter um
+      // Encontrado diferente do Deixado anterior — alinha e grava (o
+      // servidor aplica o valor herdado).
+      if (turno.estado === 'aberto') {
+        const difere = (a, b) => b !== null && b !== undefined &&
+          !(a !== null && a !== undefined && a !== '' && Math.abs(parseFloat(a) - parseFloat(b)) < 0.001);
+        if (difere(s.encontrado, s.prev_deixado)) { s.encontrado = s.prev_deixado; stockDirty.add(sid); }
+        if (difere(s.encontrado_caixa, s.prev_deixado_caixa)) { s.encontrado_caixa = s.prev_deixado_caixa; stockDirty.add(sid); }
+      }
       stockBuf[sid] = {
         encontrado: parseEncontradoFromRow(s.encontrado),
         entrada: parseFloat(s.entrada)||0,
@@ -3638,6 +3647,10 @@ async function loadTurno() {
         deixado_caixa: parseEncontradoFromRow(s.deixado_caixa)
       };
     });
+    if (stockDirty.size) {
+      const tidAlinhar = turno.id;
+      setTimeout(() => { guardarStock(tidAlinhar).catch(() => {}); }, 1500);
+    }
     caixaBuf = {
       tpa: parseEncontradoFromRow(turno.caixa?.tpa),
       transferencia: parseEncontradoFromRow(turno.caixa?.transferencia),
@@ -3698,7 +3711,10 @@ async function loadTurno() {
         const pid = prodIdKey(s.produto_id);
         if (!pid) return '';
         const inputAttr = canEdit ? '' : 'disabled';
-        const encInputAttr = canEdit && !encontradosFechados ? '' : 'disabled';
+        // Passagem de turno: com Deixado no turno anterior, o Encontrado É
+        // esse valor (herdado e mantido pelo servidor) — só leitura.
+        const encHerdado = s.prev_deixado !== null && s.prev_deixado !== undefined;
+        const encInputAttr = canEdit && !encontradosFechados && !encHerdado ? '' : 'disabled';
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.
         const deixInputAttr = canEdit && encontradosFechados && !deixadosFechados ? '' : 'disabled';
@@ -3853,7 +3869,9 @@ async function loadTurno() {
         const pid = prodIdKey(s.produto_id);
         if (!pid) return '';
         const inputAttr = canEdit ? '' : 'disabled';
-        const encInputAttr = canEdit && !encontradosFechados ? '' : 'disabled';
+        // Passagem de turno: Enc. caixa herdado do Deix. caixa anterior — só leitura.
+        const encCxHerdado = s.prev_deixado_caixa !== null && s.prev_deixado_caixa !== undefined;
+        const encInputAttr = canEdit && !encontradosFechados && !encCxHerdado ? '' : 'disabled';
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.
         const deixInputAttr = canEdit && encontradosFechados && !deixadosFechados ? '' : 'disabled';
@@ -8902,7 +8920,9 @@ function aplicarFinoBarrilZeroParaRecipienteKg(turno, canEdit) {
   if (!sid || !stockBuf[sid]) return false;
   let ch = false;
   const encB = stockBuf[sid].encontrado;
-  if (encB == null || encB === '' || parseFloat(encB) === 0) {
+  // Encontrado herdado do Deixado anterior nunca é substituído pela tara.
+  const encHerdadoFb = row.prev_deixado !== null && row.prev_deixado !== undefined;
+  if (!encHerdadoFb && (encB == null || encB === '' || parseFloat(encB) === 0)) {
     stockBuf[sid].encontrado = kg;
     ch = true;
   }

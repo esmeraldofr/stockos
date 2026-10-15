@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-talao-entradas-saidas">
+<html lang="pt" data-stockos-ui="2026-10-15-talao-colunas-produtos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10446,19 +10446,23 @@ function talaoTurnoLinhas(sec, W) {
     addLR(`${nProd} produto(s)`, nDif ? `${nDif} com diferenca` : 'sem diferencas', 'b');
   }
 
-  // 2. Produtos vendidos — Qtd · Produto · (Dif) · Valor.
+  // 2. Produtos vendidos — mesmas colunas do sistema: Produto, Quantidade,
+  //    Valor, Vendido (stock), Valor vendido, Dif. qtd, Dif. valor.
   //    O resumo tem várias tabelas (uma por categoria, Total geral sem
   //    cabeçalho, e Comissões por promotor com outras colunas): cada linha
   //    usa as colunas da ÚLTIMA tabela com cabeçalho que a precede.
   seccao('Produtos vendidos');
   const linP = [], linC = [];
   let iP = null, iC = null, modo = '', pendentes = [];
-  let algumP = false, temDif = false, temCom = false;
+  let algumP = false;
   sec.produtos.forEach((r) => {
     if (r.tipo === 'cab') {
       if (idx(r, /^Quantidade/) >= 0) {
         modo = 'prod';
-        iP = { q: idx(r, /^Quantidade/), val: idx(r, /^Valor(?! vendido)/), com: idx(r, /^Comiss/), dq: idx(r, /^Dif\.? ?qtd/i), dv: idx(r, /^Dif\.? ?valor/i) };
+        iP = {
+          q: idx(r, /^Quantidade/), val: idx(r, /^Valor(?! vendido)/), ven: idx(r, /^Vendido/),
+          vv: idx(r, /^Valor vendido/), dq: idx(r, /^Dif\.? ?qtd/i), dv: idx(r, /^Dif\.? ?valor/i)
+        };
         linP.push(...pendentes);
       } else {
         modo = 'com';
@@ -10476,18 +10480,14 @@ function talaoTurnoLinhas(sec, W) {
     const total = r.tipo === 'total';
     if (total) linP.push({ t: '-'.repeat(W) });
     else algumP = true;
-    const dq = total ? '' : tlSinal(cel(r, iP.dq));
-    const dv = tlSinal(cel(r, iP.dv));
-    const com = tlVazio(cel(r, iP.com)) ? '' : tlNum(cel(r, iP.com));
-    if (dq || dv) temDif = true;
-    if (com) temCom = true;
-    linP.push({ c: [total ? '' : tlNum(cel(r, iP.q)), cel(r, 0), com, dq, dv, tlVazio(cel(r, iP.val)) ? '' : tlNum(cel(r, iP.val))], s: total ? 'b' : '' });
+    const n = (i) => (tlVazio(cel(r, i)) ? '' : tlNum(cel(r, i)));
+    linP.push({ c: [cel(r, 0), n(iP.q), n(iP.val), n(iP.ven), n(iP.vv), tlSinal(cel(r, iP.dq)), tlSinal(cel(r, iP.dv))], s: total ? 'b' : '' });
   });
   if (!algumP) add('(sem pedidos)');
   else {
-    const colsP = [{ h: 'Qtd', al: 'r' }, { h: 'Produto', flex: true }, { h: 'Com.', al: 'r' }, { h: 'Dif', al: 'r' }, { h: 'Dif Kz', al: 'r' }, { h: 'Valor Kz', al: 'r' }];
-    const usar = [true, true, temCom, temDif, temDif, true];
-    tabela(colsP.filter((_, i) => usar[i]), linP.map((l) => (l.c ? { ...l, c: l.c.filter((_, i) => usar[i]) } : l)));
+    tabela([{ h: 'Produto', flex: true }, { h: 'Qtd', al: 'r' }, { h: 'Valor', al: 'r' }, { h: 'Vend', al: 'r' },
+      { h: 'V.vend', al: 'r' }, { h: 'Dif', al: 'r' }, { h: 'Dif Kz', al: 'r' }], linP);
+    add('Vend = vendido (stock)  V.vend = valor vendido');
   }
   if (linC.length) {
     add('');

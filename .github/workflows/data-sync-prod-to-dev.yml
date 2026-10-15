@@ -51,7 +51,7 @@ jobs:
 
       - name: Validar secrets
         env:
-          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:5432/postgres' }}
           DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
         run: |
           if [ -z "${DATABASE_URL_PROD}" ]; then
@@ -77,9 +77,30 @@ jobs:
                   raise SystemExit(1)
           PY
 
+      - name: Backup do develop (antes de apagar)
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          NOME="backup-develop-$(date -u +%Y%m%d-%H%M%S).sql.gz"
+          pg_dump --no-owner --no-privileges --schema=public | gzip > "$NOME"
+          ls -lh "$NOME"
+          [ "$(stat -c%s "$NOME")" -gt 1024 ] || { echo "::error::Backup do develop suspeito (<1 KB) — abortar antes de apagar."; exit 1; }
+
+      - name: Guardar backup do develop (30 dias)
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-develop
+          path: backup-develop-*.sql.gz
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Dump produção (data-only, COPY)
         env:
-          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL }}
+          # Session pooler (:5432): o pooler em modo transacção da app não é
+          # fiável para pg_dump. Mesma ligação do «Reparar schema produção».
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:5432/postgres' }}
         run: |
           set -euo pipefail
           eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD")"

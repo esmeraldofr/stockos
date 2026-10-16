@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-16-movimentos-todos-produtos">
+<html lang="pt" data-stockos-ui="2026-10-16-movimentos-produto-novo">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -11521,15 +11521,17 @@ async function loadRegistosMovimentosSection(turnoId, stocks, canEdit) {
     const listaOffline = (p) => {
       try { return aplicarEscritasOffline(comLojaNoPath(p), []); } catch (_) { return []; }
     };
-    // Catálogo completo (produtos activos) para o formulário: reaproveita a
-    // cache dos Pedidos; sem cache, pede à rede.
-    const catalogoCache = posCacheRead('stockos.cache.produtosPos');
+    // Catálogo de produtos activos para o formulário — versão leve (sem
+    // imagens), sempre fresca: um produto acabado de criar aparece logo.
+    // Offline: cai para a última lista leve ou para a cache dos Pedidos.
+    const CAT_LEVE_KEY = 'stockos.cache.produtosLeve';
     const [entradas, saidas, caixaEntradas, catalogo] = await Promise.all([
       api('GET', `/turnos/${turnoId}/entradas`).catch(() => listaOffline(`/turnos/${turnoId}/entradas`)),
       api('GET', `/turnos/${turnoId}/saidas`).catch(() => listaOffline(`/turnos/${turnoId}/saidas`)),
       api('GET', `/turnos/${turnoId}/caixa-entradas`).catch(() => []),
-      Array.isArray(catalogoCache) ? Promise.resolve(catalogoCache)
-        : api('GET', '/produtos?todos=0').then((d) => { posCacheWrite('stockos.cache.produtosPos', d); return d; }).catch(() => [])
+      api('GET', '/produtos?leve=1')
+        .then((d) => { posCacheWrite(CAT_LEVE_KEY, d); return d; })
+        .catch(() => posCacheRead(CAT_LEVE_KEY) || posCacheRead('stockos.cache.produtosPos') || [])
     ]);
     window.__mvCatalogo = Array.isArray(catalogo) ? catalogo : [];
     renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, caixaEntradas);

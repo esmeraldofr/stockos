@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-15-talao-estado">
+<html lang="pt" data-stockos-ui="2026-10-16-talao-vendido-stock">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10309,6 +10309,18 @@ function recolherSeccoesTurno() {
     caixa: caixaValores,
     esperado,
     esperadoTitulo,
+    // Vendido pela folha de Stock (mesma regra do Resumo dos pedidos):
+    // usado no talão quando o turno não tem pedidos ao balcão.
+    stockVendido: (t.stock || []).map((row) => {
+      const b = (typeof stockBuf === 'object' && stockBuf) ? stockBuf[prodIdKey(row.produto_id)] : null;
+      const v = b ? vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado) : NaN;
+      if (!Number.isFinite(v) || v <= 0) return null;
+      const snap = row.valor_vendas_reportado_kz;
+      const kz = (t.estado === 'fechado' && snap != null && snap !== '' && Number.isFinite(parseFloat(snap)))
+        ? parseFloat(snap)
+        : (parseFloat(row.preco) > 0 ? v * parseFloat(row.preco) : null);
+      return { nome: row.produto_nome, categoria: row.categoria || 'outros', v, kz };
+    }).filter(Boolean),
     estado: { turno: t.estado || '', encontrados: t.encontrados_fechados_em || null, deixados: t.deixados_fechados_em || null },
     // Dados completos da aba Entradas e Saídas (independente do filtro do ecrã).
     mvDados: window.__mvDados ? { ...window.__mvDados, movs: [...(window.__mvDados.movs || [])] } : null,
@@ -10508,7 +10520,24 @@ function talaoTurnoLinhas(sec, W) {
     })();
     linP.push({ c: [cel(r, 0), qtd, n(iP.val), n(iP.ven), n(iP.vv), tlSinal(cel(r, iP.dq)), tlSinal(cel(r, iP.dv))], s: total ? 'b' : '' });
   });
-  if (!algumP) add('(sem pedidos)');
+  const sv = sec.stockVendido || [];
+  if (!algumP && sv.length) {
+    // Sem pedidos ao balcão: mostra o vendido pela folha de Stock.
+    add('Sem pedidos ao balcao - vendido pelo stock', 'b');
+    const catNome = { menu: 'Menu', ingredientes: 'Ingredientes', bebida: 'Bebidas', outros: 'Outros' };
+    const linS = [];
+    let totQ = 0, totKz = 0;
+    [...new Set(sv.map((x) => x.categoria))].forEach((cat) => {
+      linS.push({ t: `-- ${catNome[cat] || tlTxt(cat)} --`, s: 'b' });
+      sv.filter((x) => x.categoria === cat).forEach((x) => {
+        totQ += x.v; totKz += x.kz || 0;
+        linS.push({ c: [x.nome, tlFmtNum(x.v), x.kz == null ? '' : tlFmtNum(x.kz)] });
+      });
+    });
+    linS.push({ t: '-'.repeat(W) });
+    linS.push({ c: ['Total', tlFmtNum(totQ), tlFmtNum(totKz)], s: 'b' });
+    tabela([{ h: 'Produto', flex: true }, { h: 'Vend', al: 'r' }, { h: 'Valor Kz', al: 'r' }], linS);
+  } else if (!algumP) add('(sem pedidos nem vendas)');
   else {
     tabela([{ h: 'Produto', flex: true }, { h: 'Qtd', al: 'r' }, { h: 'Valor', al: 'r' }, { h: 'Vend', al: 'r' },
       { h: 'V.vend', al: 'r' }, { h: 'Dif', al: 'r' }, { h: 'Dif Kz', al: 'r' }], linP);

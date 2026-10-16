@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-16-equipa-export">
+<html lang="pt" data-stockos-ui="2026-10-16-escala-visivel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3990,8 +3990,8 @@ async function loadTurno() {
     // pode mostrar, com o botão «⋯ Mais» (preferência guardada no aparelho).
     const isAdminAbas = !!(S.user && S.user.role === 'admin');
     const abasOcultasOn = isAdminAbas && abasOcultasVisiveis();
-    const abasOcultas = turnoFechado ? ['caixas','diferencas','escala','vendas','registos'] : ['caixas','diferencas','escala'];
-    const allowedTabs = ['pedidos','stock','validacao','caixa','movimentos'].concat(abasOcultasOn ? abasOcultas : []);
+    const abasOcultas = turnoFechado ? ['caixas','diferencas','vendas','registos'] : ['caixas','diferencas'];
+    const allowedTabs = ['pedidos','stock','validacao','caixa','movimentos','escala'].concat(abasOcultasOn ? abasOcultas : []);
     const activeTab = allowedTabs.includes(S.turnoTab) ? S.turnoTab : 'stock';
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
@@ -4004,6 +4004,7 @@ async function loadTurno() {
           <button type="button" class="${tabCls('validacao')}" data-turno-tab="validacao" onclick="runAction(event, async (ev) => { await switchTurnoTab('validacao', ev.currentTarget); })">🧪 Validação</button>
           <button type="button" class="${tabCls('caixa')}" data-turno-tab="caixa" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixa', ev.currentTarget); })">💰 Caixa</button>
           <button type="button" class="${tabCls('movimentos')}" data-turno-tab="movimentos" onclick="runAction(event, async (ev) => { await switchTurnoTab('movimentos', ev.currentTarget); })">🔄 Entradas e Saídas</button>
+          <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
           ${abasOcultasOn ? abasOcultasBotoesHtml(abasOcultas, tabCls) : ''}
           ${isAdminAbas ? `<button type="button" class="turno-tab" style="margin-left:auto;color:#a78bfa" title="Mostrar/esconder as abas ocultas (só admin)" onclick="alternarAbasOcultas()">${abasOcultasOn ? '✕ Menos' : '⋯ Mais'}</button>` : ''}
       </div>
@@ -9970,7 +9971,7 @@ function abasOcultasBotoesHtml(abas, tabCls) {
 async function alternarAbasOcultas() {
   const on = !abasOcultasVisiveis();
   try { localStorage.setItem(ABAS_OCULTAS_KEY, on ? '1' : '0'); } catch (_) {}
-  if (!on && ['caixas', 'diferencas', 'escala', 'vendas', 'registos'].includes(S.turnoTab)) S.turnoTab = 'stock';
+  if (!on && ['caixas', 'diferencas', 'vendas', 'registos'].includes(S.turnoTab)) S.turnoTab = 'stock';
   await loadTurno();
 }
 
@@ -11499,8 +11500,7 @@ async function fecharTurno(ev, id) {
   try {
     const eqReal = await api('GET', `/turnos/${encodeURIComponent(id)}/equipa-real`);
     if (Array.isArray(eqReal) && eqReal.length === 0) {
-      turnoMsgErr('Regista pelo menos uma pessoa em «Quem realmente trabalhou» (secção Escala, aberta abaixo) antes de fechar o turno.', true);
-      // A aba Escala está oculta: abre o painel na mesma para registar a equipa.
+      turnoMsgErr('Regista pelo menos uma pessoa em «Quem realmente trabalhou» (aba Escala) antes de fechar o turno.', true);
       await switchTurnoTab('escala', document.querySelector('.turno-tab[data-turno-tab="escala"]'));
       return;
     }

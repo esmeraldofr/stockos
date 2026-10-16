@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-16-talao-vendido-stock">
+<html lang="pt" data-stockos-ui="2026-10-16-resumo-vendido-stock">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7627,7 +7627,9 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       : '<span style="color:#64748b">Nenhum pedido registado neste turno.</span>';
   // "Resumo do turno" removido — os totais de caixa já estão no card 💰 Caixa.
   const resumoProdutosHtml = (() => {
-    if (!pedidos.length) return '';
+    // Sem pedidos ao balcão: a tabela mostra na mesma o vendido pela folha
+    // de Stock (Quantidade/Valor dos pedidos a 0, diferença = vendido).
+    const semPedidos = !pedidos.length;
     // Mapa por categoria → Map<produto_id, agregado>.
     const porCat = new Map();
     for (const p of pedidos) {
@@ -7681,6 +7683,20 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           e.avulsos += c % n;
         }
       }
+    }
+    if (semPedidos && typeof stockBuf === 'object' && stockBuf) {
+      (S.turnoData && S.turnoData.stock || []).forEach((row) => {
+        const b = stockBuf[prodIdKey(row.produto_id)];
+        const v = b ? vendidoQtyFromStockParts(b.encontrado, b.entrada, b.deixado) : NaN;
+        if (!Number.isFinite(v) || v <= 0) return;
+        let cat = String(row.categoria || 'outros').toLowerCase();
+        if (cat === 'outro') cat = 'outros';
+        if (!porCat.has(cat)) porCat.set(cat, new Map());
+        porCat.get(cat).set(String(row.produto_id), {
+          pid: String(row.produto_id), nome: row.produto_nome || 'Sem nome', qtd: 0, valor: 0, comissao: 0, pct: 0,
+          unidade: 'un.', isCopo: false, pacoteN: 0, pacotePreco: 0, pacotes: 0, avulsos: 0
+        });
+      });
     }
     if (!porCat.size) return '';
     const num2 = (v) => (parseFloat(v) || 0).toLocaleString('pt-AO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -7839,6 +7855,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     return `
       <div class="pedidos-balcao-lista-turno" style="border-top:0;padding-top:0;margin-top:14px">
         <div style="font-size:0.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:0 0 4px">Produtos vendidos</div>
+        ${semPedidos ? '<p class="resumo-sem-pedidos" style="font-size:12px;color:#fbbf24;margin:2px 0 6px">Ainda não há pedidos ao balcão neste turno — abaixo, o vendido segundo a folha de Stock.</p>' : ''}
         ${blocos}
         ${totalGeralHtml}
       </div>`;
@@ -10306,6 +10323,7 @@ function recolherSeccoesTurno() {
     nome: t.nome,
     validacao: tVal ? linhasDeTabelas([tVal]) : [],
     produtos: linhasDeTabelas(blocosRes, titRes),
+    semPedidos: !!(mountRes && mountRes.querySelector('.resumo-sem-pedidos')),
     caixa: caixaValores,
     esperado,
     esperadoTitulo,
@@ -10481,6 +10499,7 @@ function talaoTurnoLinhas(sec, W) {
   //    cabeçalho, e Comissões por promotor com outras colunas): cada linha
   //    usa as colunas da ÚLTIMA tabela com cabeçalho que a precede.
   seccao('Produtos vendidos');
+  if (sec.semPedidos) add('Sem pedidos ao balcao - vendido pelo stock', 'b');
   const linP = [], linC = [];
   let iP = null, iC = null, modo = '', pendentes = [];
   let algumP = false;

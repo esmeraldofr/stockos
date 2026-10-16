@@ -2939,6 +2939,15 @@ async function qtdDevolvidaAvailable() {
 
 app.get('/api/produtos', auth, async (req, res) => {
   try {
+    // ?leve=1 → só o essencial para listas (sem imagens): poupa tráfego.
+    if (req.query.leve === '1') {
+      const empL = empresaDe(req);
+      const rl = await queryEmpresa(
+        `SELECT id, nome, categoria, tipo_medicao, ativo, em_stock_turno FROM produtos WHERE empresa_id=$1 AND ativo=true ORDER BY nome`, [empL],
+        `SELECT id, nome, categoria, tipo_medicao, ativo, em_stock_turno FROM produtos WHERE ativo=true ORDER BY nome`, []
+      );
+      return res.json(rl.rows);
+    }
     const hasFP = await forcaPacoteAvailable();
     const todos = req.query.todos === '1';
     // Quando a coluna não existe, devolve forca_pacote=false para o frontend

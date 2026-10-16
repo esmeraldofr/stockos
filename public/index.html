@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-16-resumo-vendido-stock">
+<html lang="pt" data-stockos-ui="2026-10-16-deixado-auto">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3631,6 +3631,15 @@ async function loadTurno() {
       }
       S.turnoComentarios = cMap;
     } catch (_) { S.turnoDecisoes = {}; S.turnoComentarios = {}; }
+    // Deixado automático (Encontrado + Entrada − Balcão): o servidor recalcula
+    // e devolve os valores actuais — a folha mostra-os já preenchidos.
+    if (deixadoAutoAtivoTurno(turno) && !S.__exportando) {
+      try {
+        const rAuto = await api('POST', `/turnos/${encodeURIComponent(turno.id)}/deixados/recalcular`, {});
+        if (mySeq !== loadTurnoSeq) return;
+        aplicarDeixadosAuto(turno, rAuto && rAuto.linhas);
+      } catch (_) { /* offline: fica o último valor conhecido */ }
+    }
     stockBuf = {};
     stockDirty = new Set();
     const temAnteriorAlinhar = turno.stock.some((r) =>
@@ -3733,7 +3742,9 @@ async function loadTurno() {
         const encInputAttr = canEdit && !encontradosFechados && !encHerdado ? '' : 'disabled';
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.
-        const deixInputAttr = canEdit && encontradosFechados && !deixadosFechados ? '' : 'disabled';
+        const deixAuto = deixadoAutoAtivoTurno(turno);
+        const deixInputAttr = canEdit && encontradosFechados && !deixadosFechados && !deixAuto ? '' : 'disabled';
+        const deixTitulo = deixAuto ? 'Automático: Encontrado + Entrada − Balcão' : 'Obrigatório';
         const taraKg = parseFloat(s.peso_tara_kg) || 0;
         const metaLinha = taraKg > 0 ? `recipiente ${fmtNum(taraKg)} kg` : '';
         // O registo de barris faz-se pelo botão «🛢️ Troca de barril» nos
@@ -3749,7 +3760,7 @@ async function loadTurno() {
             <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado)}"
               onblur="stockNumberInputBlur(this)"
-              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="deixado" title="Obrigatório" ${deixInputAttr}/></td>
+              oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="deixado" title="${deixTitulo}" ${deixInputAttr}/></td>
           </tr>`;
       }).join('');
     }
@@ -4002,6 +4013,7 @@ async function loadTurno() {
       <div id="tab-stock" class="${panelCls('stock')}">
         ${encontradosBannerHtml(turno, encontradosFechados, canEdit, isAdminUserScope)}
         ${deixadosBannerHtml(turno, deixadosFechados, canEdit, isAdminUserScope, encontradosFechados)}
+        ${deixadoAutoBannerHtml(turno, encontradosFechados, deixadosFechados)}
         <div class="card" style="padding:0;overflow:hidden">
           <div class="table-wrap">
             <table>
@@ -9946,6 +9958,63 @@ function encontradosBannerHtml(turno, fechado, canEdit, isAdmin) {
     </div>`;
 }
 
+/** Deixado automático activo neste turno? (registo inicial fechado,
+ *  deixados por fechar, e o admin não activou a edição manual). */
+function deixadoAutoAtivoTurno(turno) {
+  return !!(turno && turno.encontrados_fechados_em && !turno.deixados_fechados_em && !turno.deixados_edicao_manual);
+}
+/** Aplica ao turno (e ao stockBuf, se já montado) os Deixados devolvidos pelo servidor. */
+function aplicarDeixadosAuto(turno, linhas) {
+  if (!turno || !Array.isArray(linhas)) return 0;
+  let n = 0;
+  linhas.forEach((l) => {
+    const k = prodIdKey(l.produto_id);
+    const row = (turno.stock || []).find((x) => prodIdKey(x.produto_id) === k);
+    if (!row) return;
+    const novo = l.deixado == null ? null : parseFloat(l.deixado);
+    const antigo = row.deixado == null || row.deixado === '' ? null : parseFloat(row.deixado);
+    if (novo === antigo || (novo != null && antigo != null && Math.abs(novo - antigo) < 0.0005)) return;
+    row.deixado = l.deixado;
+    if (stockBuf && stockBuf[k]) stockBuf[k].deixado = parseEncontradoFromRow(l.deixado);
+    n++;
+  });
+  return n;
+}
+/** Ao entrar no Stock/Validação: traz os Deixados automáticos actuais (os
+ *  pedidos feitos entretanto mudam-nos) e redesenha se algo mudou. */
+async function sincronizarDeixadosAuto() {
+  const t = S.turnoData;
+  if (!deixadoAutoAtivoTurno(t) || S.__exportando) return;
+  try {
+    const r = await api('POST', `/turnos/${encodeURIComponent(t.id)}/deixados/recalcular`, {});
+    if (S.turnoData !== t) return;
+    if (aplicarDeixadosAuto(t, r && r.linhas)) await loadTurno();
+  } catch (_) {}
+}
+/** Aviso na aba Stock + botão do admin para activar/desactivar a edição manual. */
+function deixadoAutoBannerHtml(turno, encontradosFechados, deixadosFechados) {
+  if (!turno || deixadosFechados) return '';
+  const isAdmin = S.user && S.user.role === 'admin';
+  const manual = !!turno.deixados_edicao_manual;
+  const btn = isAdmin
+    ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="runAction(event, () => alternarDeixadoManual('${turno.id}', ${manual ? 'false' : 'true'}))">${manual ? '🤖 Voltar ao automático' : '✏️ Activar edição manual'}</button>`
+    : '';
+  const txt = manual
+    ? '<strong style="color:#fbbf24">Deixado em edição manual</strong> — activada pelo admin neste turno.'
+    : `<strong style="color:#93c5fd">Deixado automático</strong> = Encontrado + Entrada − Balcão (copos convertidos em kg)${encontradosFechados ? '' : ' — começa quando o registo inicial fechar'}.`;
+  return `
+    <div class="card mb-12" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;border:1px solid ${manual ? '#854d0e' : '#1e3a8a'};background:${manual ? 'rgba(234,179,8,0.06)' : 'rgba(59,130,246,0.06)'}">
+      <span style="font-size:18px">${manual ? '✏️' : '🤖'}</span>
+      <div style="flex:1;min-width:200px;font-size:12px;color:#cbd5e1;line-height:1.45">${txt}</div>
+      ${btn}
+    </div>`;
+}
+async function alternarDeixadoManual(turnoId, manual) {
+  if (!manual && !confirm('Voltar ao automático? Os Deixados deste turno passam a ser Encontrado + Entrada − Balcão (as edições manuais são substituídas).')) return;
+  await api('POST', `/turnos/${encodeURIComponent(turnoId)}/deixados/edicao`, { manual: !!manual });
+  await loadTurno();
+}
+
 /** Banner do registo dos DEIXADOS (fim do turno). Só aparece depois do
  *  registo inicial de encontrados estar fechado — antes disso seria ruído. */
 function deixadosBannerHtml(turno, fechado, canEdit, isAdmin, encontradosFechados) {
@@ -10991,6 +11060,9 @@ async function switchTurnoTab(name, btn) {
   else document.querySelector(`.turno-tab[data-turno-tab="${name}"]`)?.classList.add('active');
   if (name === 'escala') {
     await loadEscalaTurno();
+  }
+  if (name === 'stock' || name === 'validacao') {
+    await sincronizarDeixadosAuto();
   }
   if (name === 'stock' || name === 'caixa' || name === 'movimentos') {
     // Entradas de stock e Caixa — movimentos vivem agora na aba Movimentos,

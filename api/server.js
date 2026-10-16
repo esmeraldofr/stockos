@@ -523,6 +523,7 @@ async function initDB() {
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS deixado_caixa NUMERIC(10,3)`, [], 'turno_stock-deixado-caixa');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS encontrados_fechados_em TIMESTAMPTZ`, [], 'turnos-encontrados-fechados-em');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_fechados_em TIMESTAMPTZ`, [], 'turnos-deixados-fechados-em');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_edicao_manual BOOLEAN NOT NULL DEFAULT FALSE`, [], 'turnos-deixados-edicao-manual');
   await qry(`CREATE TABLE IF NOT EXISTS turno_caixa (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
     tpa NUMERIC(15,2), transferencia NUMERIC(15,2), dinheiro NUMERIC(15,2),
@@ -5926,6 +5927,123 @@ function sumCaixaGeradoRow(row) {
   return t + tr + d;
 }
 
+// ── DEIXADO AUTOMÁTICO ───────────────────────────────────────────────
+// Deixado = Encontrado + Entrada − Balcão (pedidos do turno, já sem as
+// devoluções). Copos → kg: copos × kg_por_copo; os copos de «Fino…» que não
+// estão na folha (Fino 400, Fino 1000…) descontam do «Fino Barril».
+// Fica bloqueado; o admin pode activar a edição manual por turno
+// (turnos.deixados_edicao_manual). Só corre com o registo inicial fechado
+// e enquanto o registo dos deixados estiver aberto.
+let _deixadoManualColReady = false;
+async function ensureDeixadoManualCol() {
+  if (_deixadoManualColReady) return;
+  try {
+    await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_edicao_manual BOOLEAN NOT NULL DEFAULT FALSE`);
+    _deixadoManualColReady = true;
+  } catch (_) {}
+}
+async function deixadoAutoAtivo(turnoId) {
+  await ensureDeixadoManualCol();
+  const t = await query(
+    `SELECT encontrados_fechados_em, deixados_fechados_em, COALESCE(deixados_edicao_manual, false) AS manual FROM turnos WHERE id=$1`,
+    [turnoId]
+  ).catch(() => ({ rows: [] }));
+  if (!t.rows.length) return false;
+  const r = t.rows[0];
+  return !!r.encontrados_fechados_em && !r.deixados_fechados_em && !r.manual;
+}
+/** Recalcula os Deixados do turno (se o automático estiver activo) e
+ *  propaga ao Encontrado do turno seguinte aberto. Devolve as linhas
+ *  alteradas [{produto_id, deixado, deixado_caixa}]. */
+async function recalcularDeixadosAuto(turnoId, profundidade = 0) {
+  if (!(await deixadoAutoAtivo(turnoId))) return [];
+  const hasDev = await qtdDevolvidaAvailable().catch(() => false);
+  const dev = hasDev ? 'COALESCE(tpl.qtd_devolvida,0)' : '0';
+  const r = await query(
+    `WITH ts_turno AS (
+       SELECT ts.produto_id, p.nome FROM turno_stock ts JOIN produtos p ON p.id = ts.produto_id WHERE ts.turno_id = $1
+     ),
+     barril AS (SELECT produto_id FROM ts_turno WHERE lower(trim(nome)) = 'fino barril' LIMIT 1),
+     linhas AS (
+       SELECT tpl.produto_id AS pid_venda, p.nome, COALESCE(p.venda_por_copo, false) AS copo,
+              COALESCE(p.kg_por_copo, 0)::numeric AS kgc, GREATEST(0, tpl.quantidade - ${dev})::numeric AS q
+       FROM turno_pedidos tp
+       JOIN turno_pedido_linhas tpl ON tpl.pedido_id = tp.id
+       JOIN produtos p ON p.id = tpl.produto_id
+       WHERE tp.turno_id = $1
+     ),
+     balcao AS (
+       SELECT CASE
+                WHEN l.pid_venda IN (SELECT produto_id FROM ts_turno) THEN l.pid_venda
+                WHEN l.copo AND l.kgc > 0 AND lower(trim(l.nome)) LIKE 'fino%' THEN (SELECT produto_id FROM barril)
+              END AS pid,
+              SUM(CASE WHEN l.copo AND l.kgc > 0 THEN l.q * l.kgc ELSE l.q END) AS qtd
+       FROM linhas l
+       GROUP BY 1
+     ),
+     calc AS (
+       SELECT ts.id, ROUND(GREATEST(0, ts.encontrado + COALESCE(ts.entrada, 0) - COALESCE(b.qtd, 0)), 3) AS novo
+       FROM turno_stock ts
+       LEFT JOIN balcao b ON b.pid = ts.produto_id
+       WHERE ts.turno_id = $1 AND ts.encontrado IS NOT NULL
+     )
+     UPDATE turno_stock ts SET deixado = calc.novo
+       FROM calc
+      WHERE ts.id = calc.id AND ts.deixado IS DISTINCT FROM calc.novo
+     RETURNING ts.produto_id, ts.deixado, ts.deixado_caixa`,
+    [turnoId]
+  );
+  // Passagem de turno: o Encontrado do turno seguinte (aberto) segue o Deixado.
+  if (r.rows.length) {
+    const nextId = await turnoSeguinteAberto({ query }, turnoId).catch(() => null);
+    if (nextId) {
+      for (const row of r.rows) {
+        await query(
+          `INSERT INTO turno_stock (turno_id, produto_id, encontrado, encontrado_caixa)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (turno_id, produto_id)
+           DO UPDATE SET encontrado = EXCLUDED.encontrado, encontrado_caixa = EXCLUDED.encontrado_caixa`,
+          [nextId, row.produto_id, row.deixado, row.deixado_caixa]
+        ).catch((e) => console.warn('[deixado-auto] propagar ao turno seguinte:', e && e.message));
+      }
+      if (profundidade < 3) await recalcularDeixadosAuto(nextId, profundidade + 1).catch(() => {});
+    }
+  }
+  return r.rows;
+}
+/** Recalcula sem deixar falhar o pedido principal. */
+function recalcularDeixadosAutoSeguro(turnoId) {
+  return recalcularDeixadosAuto(turnoId).catch((e) => { console.warn('[deixado-auto]', e && e.message); return []; });
+}
+
+/** Recalcula agora (o cliente chama ao abrir o turno) e diz se está activo. */
+app.post('/api/turnos/:id/deixados/recalcular', auth, async (req, res) => {
+  try {
+    const alterados = await recalcularDeixadosAuto(req.params.id);
+    const ativo = await deixadoAutoAtivo(req.params.id);
+    const linhas = ativo
+      ? (await query(`SELECT produto_id, deixado FROM turno_stock WHERE turno_id=$1`, [req.params.id])).rows
+      : [];
+    res.json({ ativo, alterados: alterados.length, linhas });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Admin: activa/desactiva a edição manual dos Deixados neste turno.
+ *  Ao voltar ao automático, recalcula logo. */
+app.post('/api/turnos/:id/deixados/edicao', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureDeixadoManualCol();
+    const manual = req.body && req.body.manual === true;
+    const r = await query(
+      `UPDATE turnos SET deixados_edicao_manual = $2 WHERE id = $1 RETURNING id, deixados_edicao_manual`,
+      [req.params.id, manual]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    const alterados = manual ? [] : await recalcularDeixadosAuto(req.params.id);
+    res.json({ ...r.rows[0], alterados });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   try {
     const { produto_id, encontrado, deixado, fechados, encontrado_caixa, deixado_caixa } = req.body;
@@ -5980,7 +6098,10 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
     // Deixados SÓ com o registo inicial fechado (ordem do turno) e
     // enquanto o registo dos deixados não fechar.
     const escreveDeixados = !deixadosFechados && encontradosFechados;
-    if (escreveDeixados) sets.push('deixado=$4', 'deixado_caixa=$7');
+    // Deixado automático activo → o Deixado vem do cálculo (Encontrado +
+    // Entrada − Balcão), não do cliente; o Deix. caixa continua manual.
+    const deixAuto = escreveDeixados && await deixadoAutoAtivo(req.params.id);
+    if (escreveDeixados) sets.push(...(deixAuto ? ['deixado_caixa=$7'] : ['deixado=$4', 'deixado_caixa=$7']));
     const updateSet = sets.join(', ');
     const r = await query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados, encontrado_caixa, deixado_caixa)
@@ -5990,7 +6111,7 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
        RETURNING *`,
       [
         req.params.id, produto_id, enc,
-        escreveDeixados ? deix : null,
+        escreveDeixados && !deixAuto ? deix : null,
         fechados || 0, encG,
         escreveDeixados ? deixG : null
       ]
@@ -6008,7 +6129,13 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
         ).catch((e) => console.warn('[stock] propagar deixado → encontrado seguinte:', e && e.message));
       }
     }
-    res.json({ ...r.rows[0], encontrado_herdado: encHerdado, encontrado_caixa_herdado: encGHerdado });
+    let linha = r.rows[0];
+    if (deixAuto) {
+      const alt = await recalcularDeixadosAutoSeguro(req.params.id);
+      const mine = alt.find((x) => String(x.produto_id) === String(produto_id));
+      if (mine) linha = { ...linha, deixado: mine.deixado };
+    }
+    res.json({ ...linha, encontrado_herdado: encHerdado, encontrado_caixa_herdado: encGHerdado, deixado_auto: !!deixAuto });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -6051,6 +6178,7 @@ app.post('/api/turnos/:id/encontrados/fechar', auth, async (req, res) => {
       [req.params.id]
     );
     if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    await recalcularDeixadosAutoSeguro(req.params.id);
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -6110,6 +6238,7 @@ app.post('/api/turnos/:id/deixados/reabrir', auth, requireRole('admin', 'gestor'
       [req.params.id]
     );
     if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    await recalcularDeixadosAutoSeguro(req.params.id);
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -6238,6 +6367,7 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
     }
 
     await client.query('COMMIT');
+    if (produto_id) await recalcularDeixadosAutoSeguro(turnoId);
     res.json(registo.rows[0]);
   } catch(e) {
     await client.query('ROLLBACK').catch(()=>{});
@@ -7792,6 +7922,7 @@ app.post('/api/turnos/:turnoId/pedidos/:pedidoId/devolver', auth, async (req, re
       await client.query(`UPDATE turno_caixa SET saida=$1 WHERE turno_id=$2`, [novasSaida, turnoId]);
     }
     await client.query('COMMIT');
+    await recalcularDeixadosAutoSeguro(turnoId);
     res.json({
       sucesso: true,
       pedido_id: pedidoId,
@@ -8002,6 +8133,7 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
       await applyTurnoVendaQuantity(client, turnoId, line.produto_id, oldQ + line.quantidade);
     }
     await client.query('COMMIT');
+    await recalcularDeixadosAutoSeguro(turnoId);
     res.json({
       id: pedidoId,
       sucesso: true,

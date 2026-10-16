@@ -524,6 +524,9 @@ async function initDB() {
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS encontrados_fechados_em TIMESTAMPTZ`, [], 'turnos-encontrados-fechados-em');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_fechados_em TIMESTAMPTZ`, [], 'turnos-deixados-fechados-em');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_edicao_manual BOOLEAN NOT NULL DEFAULT FALSE`, [], 'turnos-deixados-edicao-manual');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin TEXT NOT NULL DEFAULT ''`, [], 'turnos-notas-admin');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin_em TIMESTAMPTZ`, [], 'turnos-notas-admin-em');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin_por TEXT`, [], 'turnos-notas-admin-por');
   await qry(`CREATE TABLE IF NOT EXISTS turno_caixa (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
     tpa NUMERIC(15,2), transferencia NUMERIC(15,2), dinheiro NUMERIC(15,2),
@@ -6398,6 +6401,33 @@ app.put('/api/turnos/:id/notas', auth, async (req, res) => {
     if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Observações do admin (separadas das do turno). Só o admin escreve —
+ *  também com o turno já fechado; ficam registados quem e quando. */
+let _notasAdminColsReady = false;
+app.put('/api/turnos/:id/notas-admin', auth, requireRole('admin'), async (req, res) => {
+  try {
+    if (!_notasAdminColsReady) {
+      await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin TEXT NOT NULL DEFAULT ''`);
+      await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin_em TIMESTAMPTZ`);
+      await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin_por TEXT`);
+      _notasAdminColsReady = true;
+    }
+    const texto = String((req.body && req.body.notas_admin) || '').slice(0, 5000);
+    let nome = (req.user && req.user.nome) || '';
+    try {
+      const u = await query(`SELECT nome FROM utilizadores WHERE id::text = $1::text`, [String(req.user && req.user.id)]);
+      nome = (u.rows[0] && u.rows[0].nome) || nome;
+    } catch (_) {}
+    const r = await query(
+      `UPDATE turnos SET notas_admin=$1, notas_admin_em=NOW(), notas_admin_por=$2 WHERE id=$3
+       RETURNING notas_admin, notas_admin_em, notas_admin_por`,
+      [texto, nome, req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // ── Foto do recibo de fecho do TPA (obrigatória para fechar turno com TPA > 0) ──

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-16-abas-ocultas">
+<html lang="pt" data-stockos-ui="2026-10-16-notas-admin">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4187,6 +4187,7 @@ async function loadTurno() {
             ${canEdit ? '' : 'disabled'}
             onchange="saveTurnoNotas('${turno.id}', this.value)">${turno.notas || ''}</textarea>
         </div>
+        ${notasAdminCardHtml(turno)}
       </div>
 
       <div id="tab-registos" class="${panelCls('registos')}"${turnoFechado ? '' : ' style="display:none"'}>
@@ -10405,7 +10406,8 @@ function recolherSeccoesTurno() {
     // Dados completos da aba Entradas e Saídas (independente do filtro do ecrã).
     mvDados: window.__mvDados ? { ...window.__mvDados, movs: [...(window.__mvDados.movs || [])] } : null,
     movimentos: linhasDeTabelas([...document.querySelectorAll('#movimentos-section table')]),
-    notas: document.getElementById('turno-notas')?.value ?? t.notas ?? ''
+    notas: document.getElementById('turno-notas')?.value ?? t.notas ?? '',
+    notasAdmin: document.getElementById('turno-notas-admin')?.value ?? t.notas_admin ?? ''
   };
 }
 function linhasCaixaTurno(sec) {
@@ -10444,7 +10446,7 @@ async function exportarTurnoExcel() {
     { nome: 'Produtos vendidos', linhas: cab.concat(sec.produtos) },
     { nome: 'Caixa', linhas: cab.concat(linhasCaixaTurno(sec)) },
     { nome: 'Movimentos do turno', linhas: cab.concat(sec.movimentos) },
-    { nome: 'Observações', linhas: cab.concat([[XL_H('Observações do turno')], [sec.notas || '(sem observações)']]) }
+    { nome: 'Observações', linhas: cab.concat([[XL_H('Observações do turno')], [sec.notas || '(sem observações)'], [], [XL_H('Observações do admin')], [sec.notasAdmin || '(sem observações)']]) }
   ]), nomeFicheiroXlsx([lojaAtivaNome(), sec.data, sec.nome]));
 }
 
@@ -10680,16 +10682,23 @@ function talaoTurnoLinhas(sec, W) {
   }
 
   // 5. Observações — texto livre: só aqui se parte em palavras.
-  seccao('Observações');
-  const notas = String(sec.notas || '').trim();
-  if (!notas) add('(sem observacoes)');
-  else notas.split('\n').forEach((par) => {
-    let cur = '';
-    tlTxt(par).split(' ').forEach((p) => {
-      if (cur && (cur + ' ' + p).length > W) { add(cur); cur = p; } else cur = cur ? cur + ' ' + p : p;
+  const textoLivre = (txt, vazio) => {
+    const t = String(txt || '').trim();
+    if (!t) { add(vazio); return; }
+    t.split('\n').forEach((par) => {
+      let cur = '';
+      tlTxt(par).split(' ').forEach((p) => {
+        if (cur && (cur + ' ' + p).length > W) { add(cur); cur = p; } else cur = cur ? cur + ' ' + p : p;
+      });
+      add(cur);
     });
-    add(cur);
-  });
+  };
+  seccao('Observações');
+  textoLivre(sec.notas, '(sem observacoes)');
+  if (String(sec.notasAdmin || '').trim()) {
+    seccao('Observações do admin');
+    textoLivre(sec.notasAdmin, '');
+  }
 
   add('');
   add('Assinatura:');
@@ -10939,7 +10948,8 @@ function livroVariosTurnos(secs, layout, titulo) {
         sub('Produtos vendidos'), ...sec.produtos, [],
         sub('Caixa'), ...linhasCaixaTurno(sec), [],
         sub('Movimentos do turno'), ...sec.movimentos, [],
-        sub('Observações'), [sec.notas || '(sem observações)']];
+        sub('Observações'), [sec.notas || '(sem observações)'],
+        ...(String(sec.notasAdmin || '').trim() ? [[], sub('Observações do admin'), [sec.notasAdmin]] : [])];
       return { nome: `${sec.data.slice(8, 10)}-${sec.data.slice(5, 7)} ${sec.turno.replace(/[^\p{L}\p{N} ]/gu, '').trim()}`, linhas };
     });
   }
@@ -10964,7 +10974,7 @@ function livroVariosTurnos(secs, layout, titulo) {
       { nome: 'Produtos vendidos', linhas: continua('produtos', true) },
       { nome: 'Caixa', linhas: resumoCaixa() },
       { nome: 'Movimentos do turno', linhas: continua('movimentos', false) },
-      { nome: 'Observações', linhas: [[XL_H('Data'), XL_H('Turno'), XL_H('Observações')], ...secs.map((sec) => [xlData(sec.data), sec.turno, sec.notas || ''])] }
+      { nome: 'Observações', linhas: [[XL_H('Data'), XL_H('Turno'), XL_H('Observações'), XL_H('Observações do admin')], ...secs.map((sec) => [xlData(sec.data), sec.turno, sec.notas || '', sec.notasAdmin || ''])] }
     ];
   }
   // 'seccao' (predefinido): 5 folhas, turnos em blocos um a seguir ao outro.
@@ -10980,7 +10990,7 @@ function livroVariosTurnos(secs, layout, titulo) {
     { nome: 'Produtos vendidos', linhas: cab.concat(blocos('produtos')) },
     { nome: 'Caixa', linhas: cab.concat(caixaBlocos) },
     { nome: 'Movimentos do turno', linhas: cab.concat(blocos('movimentos')) },
-    { nome: 'Observações', linhas: cab.concat(secs.flatMap((sec) => [blocoTit(sec), [sec.notas || '(sem observações)'], []])) }
+    { nome: 'Observações', linhas: cab.concat(secs.flatMap((sec) => [blocoTit(sec), [sec.notas || '(sem observações)'], ...(String(sec.notasAdmin || '').trim() ? [[{ v: 'Admin:', b: true }, sec.notasAdmin]] : []), []])) }
   ];
 }
 async function exportarVariosTurnosExcel(lista, layout, periodo) {
@@ -11149,6 +11159,39 @@ async function guardarCaixa(turnoId) {
     turnoMsgOk(r && r._offline ? 'Guardado neste aparelho (sincroniza sozinho)' : 'Guardado');
     setTimeout(() => turnoMsgIdle(), 1600);
   } catch(e) { turnoMsgErr(e.message); }
+}
+
+/** Cartão «Observações do admin»: o admin escreve (mesmo com o turno
+ *  fechado); os outros vêem só o texto. */
+function notasAdminCardHtml(turno) {
+  const isAdmin = S.user && S.user.role === 'admin';
+  const texto = String(turno.notas_admin || '');
+  if (!isAdmin && !texto.trim()) return '';
+  const quando = turno.notas_admin_em ? new Date(turno.notas_admin_em).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) : '';
+  const meta = quando || turno.notas_admin_por
+    ? `<div id="notas-admin-meta" style="font-size:11px;color:#64748b;margin-top:6px">Última alteração${turno.notas_admin_por ? ` por ${escapeHtml(turno.notas_admin_por)}` : ''}${quando ? ` · ${escapeHtml(quando)}` : ''}</div>`
+    : '<div id="notas-admin-meta" style="font-size:11px;color:#64748b;margin-top:6px"></div>';
+  const corpo = isAdmin
+    ? `<textarea id="turno-notas-admin" rows="3" placeholder="Observações do admin sobre este turno..."
+        style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #7c3aed;border-radius:8px;padding:10px;font-size:14px;resize:vertical;box-sizing:border-box"
+        onchange="saveTurnoNotasAdmin('${turno.id}', this.value)">${escapeHtml(texto)}</textarea>`
+    : `<div id="turno-notas-admin-txt" style="white-space:pre-wrap;color:#e2e8f0;font-size:14px;line-height:1.45">${escapeHtml(texto)}</div>`;
+  return `
+        <div class="card mt-16" style="border:1px solid rgba(124,58,237,0.45)">
+          <div class="card-title">🛡️ Observações do admin</div>
+          ${corpo}
+          ${meta}
+        </div>`;
+}
+async function saveTurnoNotasAdmin(turnoId, texto) {
+  try {
+    const r = await api('PUT', `/turnos/${turnoId}/notas-admin`, { notas_admin: texto });
+    if (S.turnoData && String(S.turnoData.id) === String(turnoId)) Object.assign(S.turnoData, r || {});
+    const meta = document.getElementById('notas-admin-meta');
+    if (meta && r) meta.textContent = `Última alteração${r.notas_admin_por ? ` por ${r.notas_admin_por}` : ''} · ${new Date(r.notas_admin_em).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' })}`;
+    turnoMsgOk('Observações do admin guardadas');
+    setTimeout(() => turnoMsgIdle(), 2000);
+  } catch (e) { turnoMsgErr(e.message); }
 }
 
 async function saveTurnoNotas(turnoId, notas) {

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-16-abas-ocultas-admin">
+<html lang="pt" data-stockos-ui="2026-10-16-equipa-export">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10364,6 +10364,14 @@ const xlTitulo = (v) => ({ v, b: true, sz: 14, cor: '1F4E79' });
 /** O Resumo dos pedidos só carrega com a aba Pedidos/Caixa aberta — a
  *  exportação garante-o (senão «Produtos vendidos» saía vazia). */
 async function garantirResumoPedidosCarregado() {
+  // Quem trabalhou (equipa real) — para o talão e o Excel.
+  if (S.turnoData) {
+    try {
+      const eq = await api('GET', `/turnos/${encodeURIComponent(S.turnoData.id)}/equipa-real`);
+      S.__equipaExport = S.__equipaExport || {};
+      S.__equipaExport[String(S.turnoData.id)] = Array.isArray(eq) ? eq : [];
+    } catch (_) { /* offline: fica a última conhecida */ }
+  }
   const m = document.getElementById('pedidos-resumo-mount');
   if (m && /A carregar/i.test(m.textContent || '') && S.turnoData) {
     try { await loadVendasMenu(S.turnoData.id, !!S.turnoCanEdit); } catch (_) {}
@@ -10429,7 +10437,14 @@ function recolherSeccoesTurno() {
     mvDados: window.__mvDados ? { ...window.__mvDados, movs: [...(window.__mvDados.movs || [])] } : null,
     movimentos: linhasDeTabelas([...document.querySelectorAll('#movimentos-section table')]),
     notas: document.getElementById('turno-notas')?.value ?? t.notas ?? '',
-    notasAdmin: document.getElementById('turno-notas-admin')?.value ?? t.notas_admin ?? ''
+    notasAdmin: document.getElementById('turno-notas-admin')?.value ?? t.notas_admin ?? '',
+    equipa: ((S.__equipaExport || {})[String(t.id)] || []).map((e) => ({
+      nome: e.utilizador_nome || String(e.utilizador_id || ''),
+      funcao: ({ admin: 'Admin', gestor: 'Gestor', funcionario: 'Funcionário', externo: 'Externo' })[e.utilizador_role] || (e.utilizador_role || ''),
+      cobrindo: e.cobrindo_utilizador_nome || '',
+      horaExtra: !!e.hora_extra,
+      notas: e.notas || ''
+    }))
   };
 }
 function linhasCaixaTurno(sec) {
@@ -10447,6 +10462,13 @@ function linhasCaixaTurno(sec) {
       ...sec.esperado.map((e) => [e[0], e[1], e[2] === '' ? '' : { v: e[2], cor: typeof e[2] === 'number' ? 'C65911' : '2E7D32' }]));
   }
   return out;
+}
+/** Linhas «Quem trabalhou» (equipa real) para o Excel. */
+function linhasEquipaTurno(sec) {
+  const cab = [XL_H('Nome'), XL_H('Função'), XL_H('A cobrir'), XL_H('Hora extra'), XL_H('Notas')]; cab.tipo = 'cab';
+  const eq = sec.equipa || [];
+  if (!eq.length) return [cab, ['(ninguém registado)']];
+  return [cab, ...eq.map((e) => { const l = [e.nome, e.funcao, e.cobrindo, e.horaExtra ? 'Sim' : '', e.notas]; l.tipo = 'dados'; return l; })];
 }
 const xlDataPt = (iso) => `${String(iso).slice(8, 10)}/${String(iso).slice(5, 7)}/${String(iso).slice(0, 4)}`;
 /** Data ISO → data real do Excel (número de série + formato 14 = data curta). */
@@ -10468,6 +10490,7 @@ async function exportarTurnoExcel() {
     { nome: 'Produtos vendidos', linhas: cab.concat(sec.produtos) },
     { nome: 'Caixa', linhas: cab.concat(linhasCaixaTurno(sec)) },
     { nome: 'Movimentos do turno', linhas: cab.concat(sec.movimentos) },
+    { nome: 'Quem trabalhou', linhas: cab.concat(linhasEquipaTurno(sec)) },
     { nome: 'Observações', linhas: cab.concat([[XL_H('Observações do turno')], [sec.notas || '(sem observações)'], [], [XL_H('Observações do admin')], [sec.notasAdmin || '(sem observações)']]) }
   ]), nomeFicheiroXlsx([lojaAtivaNome(), sec.data, sec.nome]));
 }
@@ -10548,6 +10571,13 @@ function talaoTurnoLinhas(sec, W) {
   addLR('Turno', est.turno === 'fechado' ? 'FECHADO' : est.turno === 'aberto' ? 'ABERTO' : tlTxt(est.turno || '-'), 'b');
   addLR('Registo inicial (encontrados)', regTxt(est.encontrados), est.encontrados ? '' : 'b');
   addLR('Registo dos deixados', regTxt(est.deixados), est.deixados ? '' : 'b');
+
+  // Quem trabalhou (equipa real do turno).
+  seccao('Quem trabalhou');
+  const eq = sec.equipa || [];
+  if (!eq.length) add('(ninguem registado)');
+  else tabela([{ h: 'Nome', flex: true }, { h: 'Funcao' }, { h: 'Obs.' }],
+    eq.map((e) => ({ c: [e.nome, e.funcao, [e.cobrindo ? `cobre ${e.cobrindo}` : '', e.horaExtra ? 'h. extra' : ''].filter(Boolean).join(', ')] })));
 
   // 1. Validação do stock — uma linha por produto + linha de alertas.
   seccao('Validação do stock');
@@ -10717,10 +10747,8 @@ function talaoTurnoLinhas(sec, W) {
   };
   seccao('Observações');
   textoLivre(sec.notas, '(sem observacoes)');
-  if (String(sec.notasAdmin || '').trim()) {
-    seccao('Observações do admin');
-    textoLivre(sec.notasAdmin, '');
-  }
+  seccao('Observações do admin');
+  textoLivre(sec.notasAdmin, '(sem observacoes)');
 
   add('');
   add('Assinatura:');
@@ -10970,8 +10998,9 @@ function livroVariosTurnos(secs, layout, titulo) {
         sub('Produtos vendidos'), ...sec.produtos, [],
         sub('Caixa'), ...linhasCaixaTurno(sec), [],
         sub('Movimentos do turno'), ...sec.movimentos, [],
-        sub('Observações'), [sec.notas || '(sem observações)'],
-        ...(String(sec.notasAdmin || '').trim() ? [[], sub('Observações do admin'), [sec.notasAdmin]] : [])];
+        sub('Quem trabalhou'), ...linhasEquipaTurno(sec), [],
+        sub('Observações'), [sec.notas || '(sem observações)'], [],
+        sub('Observações do admin'), [sec.notasAdmin || '(sem observações)']];
       return { nome: `${sec.data.slice(8, 10)}-${sec.data.slice(5, 7)} ${sec.turno.replace(/[^\p{L}\p{N} ]/gu, '').trim()}`, linhas };
     });
   }
@@ -10996,6 +11025,8 @@ function livroVariosTurnos(secs, layout, titulo) {
       { nome: 'Produtos vendidos', linhas: continua('produtos', true) },
       { nome: 'Caixa', linhas: resumoCaixa() },
       { nome: 'Movimentos do turno', linhas: continua('movimentos', false) },
+      { nome: 'Quem trabalhou', linhas: [[XL_H('Data'), XL_H('Turno'), XL_H('Nome'), XL_H('Função'), XL_H('A cobrir'), XL_H('Hora extra'), XL_H('Notas')],
+        ...secs.flatMap((sec) => (sec.equipa || []).map((e) => [xlData(sec.data), sec.turno, e.nome, e.funcao, e.cobrindo, e.horaExtra ? 'Sim' : '', e.notas]))] },
       { nome: 'Observações', linhas: [[XL_H('Data'), XL_H('Turno'), XL_H('Observações'), XL_H('Observações do admin')], ...secs.map((sec) => [xlData(sec.data), sec.turno, sec.notas || '', sec.notasAdmin || ''])] }
     ];
   }
@@ -11012,7 +11043,8 @@ function livroVariosTurnos(secs, layout, titulo) {
     { nome: 'Produtos vendidos', linhas: cab.concat(blocos('produtos')) },
     { nome: 'Caixa', linhas: cab.concat(caixaBlocos) },
     { nome: 'Movimentos do turno', linhas: cab.concat(blocos('movimentos')) },
-    { nome: 'Observações', linhas: cab.concat(secs.flatMap((sec) => [blocoTit(sec), [sec.notas || '(sem observações)'], ...(String(sec.notasAdmin || '').trim() ? [[{ v: 'Admin:', b: true }, sec.notasAdmin]] : []), []])) }
+    { nome: 'Quem trabalhou', linhas: cab.concat(secs.flatMap((sec) => [blocoTit(sec), ...linhasEquipaTurno(sec), []])) },
+    { nome: 'Observações', linhas: cab.concat(secs.flatMap((sec) => [blocoTit(sec), [sec.notas || '(sem observações)'], [{ v: 'Admin:', b: true }, sec.notasAdmin || '(sem observações)'], []])) }
   ];
 }
 async function exportarVariosTurnosExcel(lista, layout, periodo) {

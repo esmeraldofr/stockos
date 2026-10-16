@@ -242,11 +242,18 @@ async function ensurePgSingleton() {
       } catch (e) {
         lastErr = e;
         try { await sqlConn?.end({ timeout: 2 }).catch(() => {}); } catch (_) {}
+        // Pooler cheio: tentar os outros endereços só abre mais ligações e
+        // mantém-no cheio (tempestade de EMAXCONN) — desiste já.
+        if (isEmaxconn(e)) throw e;
       }
     }
     if (round === 0) await new Promise((r) => setTimeout(r, 120));
   }
   throw lastErr;
+}
+/** Pooler do Supabase sem lugares livres («max client connections reached»). */
+function isEmaxconn(e) {
+  return /EMAXCONN|max client connections|MaxClientsInSessionMode/i.test(String((e && e.message) || e || ''));
 }
 
 // ── SELO DO SCHEMA ─ As dezenas de «ensure*» (CREATE TABLE/ALTER IF NOT
@@ -303,11 +310,14 @@ const query = async (text, params) => {
           e.code === 'EPIPE');
       if (transient) {
         if (/query timeout/i.test(msg)) __pgTimeoutTs = Date.now();
-        await resetPgSingleton();
-        // backoff curto para EMAXCONN (esperar conexões libertarem no pooler)
-        if (/EMAXCONN|max client connections/i.test(msg)) {
-          await new Promise((r) => setTimeout(r, 250 + Math.floor(Math.random() * 250)));
+        if (isEmaxconn(e)) {
+          // Pooler cheio: NÃO deitar fora uma ligação que ainda funcione (teria
+          // de voltar a disputar um lugar) e esperar mais; só 1 nova tentativa.
+          if (attempt >= 1) throw e;
+          await new Promise((r) => setTimeout(r, 1200 + Math.floor(Math.random() * 800)));
+          continue;
         }
+        await resetPgSingleton();
         continue;
       }
       throw e;
@@ -347,6 +357,11 @@ const pool = {
           attempt < 2 &&
           /EMAXCONN|max client connections|MaxClientsInSessionMode|pool_size|ECONNRESET|EPIPE|Connection|terminated|closed|destroyed|socket/i.test(msg);
         if (transient) {
+          if (isEmaxconn(e)) {
+            if (attempt >= 1) throw e;
+            await new Promise((r) => setTimeout(r, 1200 + Math.floor(Math.random() * 800)));
+            continue;
+          }
           await resetPgSingleton();
           await new Promise((r) => setTimeout(r, 300 + Math.floor(Math.random() * 400)));
           continue;
@@ -6141,13 +6156,10 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
         ).catch((e) => console.warn('[stock] propagar deixado → encontrado seguinte:', e && e.message));
       }
     }
-    let linha = r.rows[0];
-    if (deixAuto) {
-      const alt = await recalcularDeixadosAutoSeguro(req.params.id);
-      const mine = alt.find((x) => String(x.produto_id) === String(produto_id));
-      if (mine) linha = { ...linha, deixado: mine.deixado };
-    }
-    res.json({ ...linha, encontrado_herdado: encHerdado, encontrado_caixa_herdado: encGHerdado, deixado_auto: !!deixAuto });
+    // Com o Deixado automático este PUT não muda o Deixado (o Encontrado já
+    // está fechado): sem recálculo aqui — corre nos pedidos, devoluções,
+    // entradas e ao abrir o turno (POST …/deixados/recalcular).
+    res.json({ ...r.rows[0], encontrado_herdado: encHerdado, encontrado_caixa_herdado: encGHerdado, deixado_auto: !!deixAuto });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

@@ -6329,24 +6329,26 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
     const precoVal  = origemVal === 'compra' ? (parseFloat(preco) || 0) : 0;
 
     let registo;
+    let naFolhaStock = false;
     if (produto_id) {
+      const existe = await client.query(`SELECT 1 FROM produtos WHERE id=$1`, [produto_id]);
+      if (!existe.rows.length) throw new Error('Produto não encontrado.');
+      // Produtos fora da folha de stock também se registam (ex.: compra de
+      // alface ou gás): fica o movimento e a compra conta na caixa; a folha
+      // de stock só muda para os produtos que fazem parte dela.
       const emStock = await client.query(
         `SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS}`,
         [produto_id]
       );
-      if (!emStock.rows.length) {
-        throw new Error(
-          'Este produto não está na folha de stock do turno. Activa «Stock no turno» em Produtos ou regista no armazém.'
-        );
-      }
+      naFolhaStock = emStock.rows.length > 0;
 
       registo = await client.query(
         'INSERT INTO turno_entradas (turno_id, produto_id, tipo, origem, preco, quantidade, notas) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
         [turnoId, produto_id, tipoVal, origemVal, precoVal, quantidade, notasVal]
       );
 
-      // entrada = soma das entradas - soma das saídas
-      await client.query(
+      // entrada = soma das entradas - soma das saídas (só na folha de stock)
+      if (naFolhaStock) await client.query(
         `UPDATE turno_stock SET entrada=(
            SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE -quantidade END),0)
            FROM turno_entradas WHERE turno_id=$1 AND produto_id=$2
@@ -6370,7 +6372,7 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
     }
 
     await client.query('COMMIT');
-    if (produto_id) await recalcularDeixadosAutoSeguro(turnoId);
+    if (produto_id && naFolhaStock) await recalcularDeixadosAutoSeguro(turnoId);
     res.json(registo.rows[0]);
   } catch(e) {
     await client.query('ROLLBACK').catch(()=>{});

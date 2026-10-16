@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-16-notas-admin">
+<html lang="pt" data-stockos-ui="2026-10-16-movimentos-todos-produtos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -11521,11 +11521,17 @@ async function loadRegistosMovimentosSection(turnoId, stocks, canEdit) {
     const listaOffline = (p) => {
       try { return aplicarEscritasOffline(comLojaNoPath(p), []); } catch (_) { return []; }
     };
-    const [entradas, saidas, caixaEntradas] = await Promise.all([
+    // Catálogo completo (produtos activos) para o formulário: reaproveita a
+    // cache dos Pedidos; sem cache, pede à rede.
+    const catalogoCache = posCacheRead('stockos.cache.produtosPos');
+    const [entradas, saidas, caixaEntradas, catalogo] = await Promise.all([
       api('GET', `/turnos/${turnoId}/entradas`).catch(() => listaOffline(`/turnos/${turnoId}/entradas`)),
       api('GET', `/turnos/${turnoId}/saidas`).catch(() => listaOffline(`/turnos/${turnoId}/saidas`)),
-      api('GET', `/turnos/${turnoId}/caixa-entradas`).catch(() => [])
+      api('GET', `/turnos/${turnoId}/caixa-entradas`).catch(() => []),
+      Array.isArray(catalogoCache) ? Promise.resolve(catalogoCache)
+        : api('GET', '/produtos?todos=0').then((d) => { posCacheWrite('stockos.cache.produtosPos', d); return d; }).catch(() => [])
     ]);
+    window.__mvCatalogo = Array.isArray(catalogo) ? catalogo : [];
     renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, caixaEntradas);
   } catch (e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
@@ -11585,8 +11591,23 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
     cats.forEach(cat => {
       const items = (stocks || []).filter(s => (s.categoria === cat || (!['ingredientes','bebida'].includes(s.categoria) && cat === 'outro')));
       if (!items.length) return;
-      opts += `<optgroup label="${labels[cat] || cat}">`;
-      items.forEach(s => { opts += `<option value="${s.produto_id}" data-medicao="${s.tipo_medicao || 'unidade'}">${s.produto_nome} (${medicaoSigla(s.tipo_medicao)})</option>`; });
+      opts += `<optgroup label="${labels[cat] || cat} — folha de stock">`;
+      items.forEach(s => { const sg = medicaoSigla(s.tipo_medicao); opts += `<option value="${s.produto_id}" data-medicao="${s.tipo_medicao || 'unidade'}">${s.produto_nome}${sg ? ` (${sg})` : ''}</option>`; });
+      opts += '</optgroup>';
+    });
+    // Restantes produtos activos do catálogo (fora da folha de stock): o
+    // movimento fica registado e uma compra conta na caixa, mas a folha de
+    // stock do turno não muda.
+    const naFolha = new Set((stocks || []).map((s) => prodIdKey(s.produto_id)));
+    const fora = (window.__mvCatalogo || []).filter((p) => p && p.ativo !== false && !naFolha.has(prodIdKey(p.id)));
+    const labelsFora = { ingredientes: 'Ingredientes', bebida: 'Bebidas', menu: 'Menu', outro: 'Outros' };
+    ['ingredientes', 'bebida', 'menu', 'outro'].forEach((cat) => {
+      const items = fora
+        .filter((p) => (cat === 'outro' ? !['ingredientes', 'bebida', 'menu'].includes(p.categoria) : p.categoria === cat))
+        .sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt'));
+      if (!items.length) return;
+      opts += `<optgroup label="${labelsFora[cat]} — fora da folha de stock">`;
+      items.forEach((p) => { const sg = medicaoSigla(p.tipo_medicao); opts += `<option value="${escapeHtml(String(p.id))}" data-medicao="${p.tipo_medicao || 'unidade'}" data-fora="1">${escapeHtml(p.nome)}${sg ? ` (${sg})` : ''}</option>`; });
       opts += '</optgroup>';
     });
     // Produto que ainda não está registado no catálogo: escreve-se o nome à

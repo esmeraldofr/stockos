@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-16-abas-sem-scroll">
+<html lang="pt" data-stockos-ui="2026-10-16-abas-ocultas">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3985,9 +3985,9 @@ async function loadTurno() {
     const compEncOn = turnoFechado || encontradosFechados;
     const compDeixOn = turnoFechado || deixadosFechados;
     const isAdminUserScope = S.user && (S.user.role === 'admin' || S.user.role === 'gestor');
-    const allowedTabs = turnoFechado
-      ? ['pedidos','stock','validacao','diferencas','caixas','caixa','movimentos','escala','vendas','registos']
-      : ['pedidos','stock','validacao','diferencas','caixas','caixa','movimentos','escala'];
+    // Abas ocultas (Armazém, Diferenças, Escala, Vendas, Registos): os painéis
+    // continuam no DOM — talão, Excel e validações usam-nos —, só sem botão.
+    const allowedTabs = ['pedidos','stock','validacao','caixa','movimentos'];
     const activeTab = allowedTabs.includes(S.turnoTab) ? S.turnoTab : 'stock';
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
@@ -3997,14 +3997,9 @@ async function loadTurno() {
       <div class="turno-tabs">
           <button type="button" class="${tabCls('pedidos')}" data-turno-tab="pedidos" onclick="runAction(event, async (ev) => { await switchTurnoTab('pedidos', ev.currentTarget); })">🧾 Pedidos ao balcão</button>
           <button type="button" class="${tabCls('stock')}" data-turno-tab="stock" onclick="runAction(event, async (ev) => { await switchTurnoTab('stock', ev.currentTarget); })">📊 Stock</button>
-          <button type="button" class="${tabCls('caixas')}" data-turno-tab="caixas" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixas', ev.currentTarget); })">🏬 Armazém</button>
           <button type="button" class="${tabCls('validacao')}" data-turno-tab="validacao" onclick="runAction(event, async (ev) => { await switchTurnoTab('validacao', ev.currentTarget); })">🧪 Validação</button>
-          <button type="button" class="${tabCls('diferencas')}" data-turno-tab="diferencas" onclick="runAction(event, async (ev) => { await switchTurnoTab('diferencas', ev.currentTarget); })">⚠️ Diferenças</button>
           <button type="button" class="${tabCls('caixa')}" data-turno-tab="caixa" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixa', ev.currentTarget); })">💰 Caixa</button>
           <button type="button" class="${tabCls('movimentos')}" data-turno-tab="movimentos" onclick="runAction(event, async (ev) => { await switchTurnoTab('movimentos', ev.currentTarget); })">🔄 Entradas e Saídas</button>
-          <button type="button" class="${tabCls('escala')}" data-turno-tab="escala" onclick="runAction(event, async (ev) => { await switchTurnoTab('escala', ev.currentTarget); })">👥 Escala</button>
-          ${turnoFechado ? `<button type="button" class="${tabCls('vendas')}" data-turno-tab="vendas" onclick="runAction(event, async (ev) => { await switchTurnoTab('vendas', ev.currentTarget); })">🍽️ Vendas</button>` : ''}
-          ${turnoFechado ? `<button type="button" class="${tabCls('registos')}" data-turno-tab="registos" onclick="runAction(event, async (ev) => { await switchTurnoTab('registos', ev.currentTarget); })">📦 Registos</button>` : ''}
       </div>
       <button type="button" id="turno-full-sair" onclick="alternarTurnoEcraInteiro(false)">✕ Sair do ecrã inteiro</button>
 
@@ -11407,9 +11402,9 @@ async function fecharTurno(ev, id) {
   try {
     const eqReal = await api('GET', `/turnos/${encodeURIComponent(id)}/equipa-real`);
     if (Array.isArray(eqReal) && eqReal.length === 0) {
-      turnoMsgErr('Regista pelo menos uma pessoa em «Quem realmente trabalhou» (separador Escala) antes de fechar o turno.', true);
-      const btnEscala = document.querySelector('.turno-tab[data-turno-tab="escala"]');
-      if (btnEscala) await switchTurnoTab('escala', btnEscala);
+      turnoMsgErr('Regista pelo menos uma pessoa em «Quem realmente trabalhou» (secção Escala, aberta abaixo) antes de fechar o turno.', true);
+      // A aba Escala está oculta: abre o painel na mesma para registar a equipa.
+      await switchTurnoTab('escala', document.querySelector('.turno-tab[data-turno-tab="escala"]'));
       return;
     }
   } catch (_) { /* sem rede e sem cache — o servidor valida ao sincronizar */ }
@@ -11436,8 +11431,7 @@ async function fecharTurno(ev, id) {
     } catch (e) {
       turnoMsgErr(e.message, true);
       if (e.message && e.message.includes('Quem realmente trabalhou')) {
-        const btnEscala = document.querySelector('.turno-tab[data-turno-tab="escala"]');
-        if (btnEscala) await switchTurnoTab('escala', btnEscala);
+        await switchTurnoTab('escala', document.querySelector('.turno-tab[data-turno-tab="escala"]'));
         requestAnimationFrame(() => {
           const sec = document.getElementById('turno-equipa-real-section');
           if (sec) {

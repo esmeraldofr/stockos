@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-16-movimentos-produto-novo">
+<html lang="pt" data-stockos-ui="2026-10-16-abas-ocultas-admin">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3986,8 +3986,12 @@ async function loadTurno() {
     const compDeixOn = turnoFechado || deixadosFechados;
     const isAdminUserScope = S.user && (S.user.role === 'admin' || S.user.role === 'gestor');
     // Abas ocultas (Armazém, Diferenças, Escala, Vendas, Registos): os painéis
-    // continuam no DOM — talão, Excel e validações usam-nos —, só sem botão.
-    const allowedTabs = ['pedidos','stock','validacao','caixa','movimentos'];
+    // continuam no DOM — talão, Excel e validações usam-nos. Só o admin as
+    // pode mostrar, com o botão «⋯ Mais» (preferência guardada no aparelho).
+    const isAdminAbas = !!(S.user && S.user.role === 'admin');
+    const abasOcultasOn = isAdminAbas && abasOcultasVisiveis();
+    const abasOcultas = turnoFechado ? ['caixas','diferencas','escala','vendas','registos'] : ['caixas','diferencas','escala'];
+    const allowedTabs = ['pedidos','stock','validacao','caixa','movimentos'].concat(abasOcultasOn ? abasOcultas : []);
     const activeTab = allowedTabs.includes(S.turnoTab) ? S.turnoTab : 'stock';
     const tabCls = (k) => 'turno-tab' + (activeTab === k ? ' active' : '');
     const panelCls = (k) => 'turno-tab-panel' + (activeTab === k ? ' active' : '');
@@ -4000,6 +4004,8 @@ async function loadTurno() {
           <button type="button" class="${tabCls('validacao')}" data-turno-tab="validacao" onclick="runAction(event, async (ev) => { await switchTurnoTab('validacao', ev.currentTarget); })">🧪 Validação</button>
           <button type="button" class="${tabCls('caixa')}" data-turno-tab="caixa" onclick="runAction(event, async (ev) => { await switchTurnoTab('caixa', ev.currentTarget); })">💰 Caixa</button>
           <button type="button" class="${tabCls('movimentos')}" data-turno-tab="movimentos" onclick="runAction(event, async (ev) => { await switchTurnoTab('movimentos', ev.currentTarget); })">🔄 Entradas e Saídas</button>
+          ${abasOcultasOn ? abasOcultasBotoesHtml(abasOcultas, tabCls) : ''}
+          ${isAdminAbas ? `<button type="button" class="turno-tab" style="margin-left:auto;color:#a78bfa" title="Mostrar/esconder as abas ocultas (só admin)" onclick="alternarAbasOcultas()">${abasOcultasOn ? '✕ Menos' : '⋯ Mais'}</button>` : ''}
       </div>
       <button type="button" id="turno-full-sair" onclick="alternarTurnoEcraInteiro(false)">✕ Sair do ecrã inteiro</button>
 
@@ -9950,6 +9956,22 @@ function encontradosBannerHtml(turno, fechado, canEdit, isAdmin) {
       </div>
       ${btn}
     </div>`;
+}
+
+/** Abas ocultas do turno (só admin, com «⋯ Mais»). */
+const ABAS_OCULTAS_KEY = 'stockos.abasOcultasVisiveis';
+const ABAS_OCULTAS_ROTULO = { caixas: '🏬 Armazém', diferencas: '⚠️ Diferenças', escala: '👥 Escala', vendas: '🍽️ Vendas', registos: '📦 Registos' };
+function abasOcultasVisiveis() {
+  try { return localStorage.getItem(ABAS_OCULTAS_KEY) === '1'; } catch (_) { return false; }
+}
+function abasOcultasBotoesHtml(abas, tabCls) {
+  return abas.map((k) => `<button type="button" class="${tabCls(k)}" data-turno-tab="${k}" style="color:#c4b5fd" onclick="runAction(event, async (ev) => { await switchTurnoTab('${k}', ev.currentTarget); })">${ABAS_OCULTAS_ROTULO[k]}</button>`).join('');
+}
+async function alternarAbasOcultas() {
+  const on = !abasOcultasVisiveis();
+  try { localStorage.setItem(ABAS_OCULTAS_KEY, on ? '1' : '0'); } catch (_) {}
+  if (!on && ['caixas', 'diferencas', 'escala', 'vendas', 'registos'].includes(S.turnoTab)) S.turnoTab = 'stock';
+  await loadTurno();
 }
 
 /** Deixado automático activo neste turno? (registo inicial fechado,

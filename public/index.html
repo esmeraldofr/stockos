@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-coluna-saida">
+<html lang="pt" data-stockos-ui="2026-10-17-stock-outros">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3657,6 +3657,11 @@ async function loadTurno() {
       try {
         const rAuto = await api('POST', `/turnos/${encodeURIComponent(turno.id)}/deixados/recalcular`, {});
         if (mySeq !== loadTurnoSeq) return;
+        // Produtos novos na folha (Monitorar stock activado depois da abertura) → recarrega uma vez.
+        if (rAuto && rAuto.inseridos > 0 && !S.__recargaFolha) {
+          S.__recargaFolha = true;
+          try { return await loadTurno(); } finally { S.__recargaFolha = false; }
+        }
         aplicarDeixadosAuto(turno, rAuto && rAuto.linhas);
       } catch (_) { /* offline: fica o último valor conhecido */ }
     }
@@ -3671,7 +3676,7 @@ async function loadTurno() {
       // Passagem de turno: turnos abertos antes desta regra podem ter um
       // Encontrado diferente do Deixado anterior — alinha e grava (o
       // servidor aplica o valor herdado).
-      if (turno.estado === 'aberto' && temAnteriorAlinhar) {
+      if (turno.estado === 'aberto' && temAnteriorAlinhar && s.prev_tem_linha !== false) {
         const vazio = (v) => v === null || v === undefined || v === '';
         const difere = (a, b) => (vazio(a) !== vazio(b)) ||
           (!vazio(a) && Math.abs(parseFloat(a) - parseFloat(b)) >= 0.001);
@@ -3728,7 +3733,8 @@ async function loadTurno() {
       : `<span class="badge badge-grey">Fechado</span>${reabrirBtn}`
     );
 
-    // Folha de stock: só Menu, Ingredientes e Bebidas (API não devolve «outro»)
+    // Folha de stock: Menu, Ingredientes, Bebidas e Outros (copos, vasilhames…)
+    const outros  = turno.stock.filter(s => !['menu', 'ingredientes', 'bebida'].includes(s.categoria));
     const menu    = turno.stock.filter(s => s.categoria === 'menu');
     const comida  = turno.stock.filter(s => s.categoria === 'ingredientes');
     const bebida  = turno.stock
@@ -3758,8 +3764,9 @@ async function loadTurno() {
         const inputAttr = canEdit ? '' : 'disabled';
         // Passagem de turno: com Deixado no turno anterior, o Encontrado É
         // esse valor (herdado e mantido pelo servidor) — só leitura.
-        const encHerdado = turnoTemAnterior;
-        const encInputAttr = canEdit && !encontradosFechados && !encHerdado ? '' : 'disabled';
+        // Produto novo na folha (não existia no turno anterior): editável.
+        const encHerdado = turnoTemAnterior && s.prev_tem_linha !== false;
+        const encInputAttr = canEdit && !encHerdado ? '' : 'disabled';
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.
         const deixAuto = deixadoAutoAtivoTurno(turno);
@@ -3929,8 +3936,8 @@ async function loadTurno() {
         if (!pid) return '';
         const inputAttr = canEdit ? '' : 'disabled';
         // Passagem de turno: Enc. caixa herdado do Deix. caixa anterior — só leitura.
-        const encCxHerdado = turnoTemAnterior;
-        const encInputAttr = canEdit && !encontradosFechados && !encCxHerdado ? '' : 'disabled';
+        const encCxHerdado = turnoTemAnterior && s.prev_tem_linha !== false;
+        const encInputAttr = canEdit && !encCxHerdado ? '' : 'disabled';
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.
         const deixInputAttr = canEdit && !deixadosFechados ? '' : 'disabled';
@@ -4052,6 +4059,7 @@ async function loadTurno() {
                 ${tableFor(menu,'🍽️ Menu')}
                 ${tableFor(comida,'🧂 Ingredientes')}
                 ${tableFor(bebida,'🥤 Bebidas')}
+                ${tableFor(outros,'📦 Outros')}
               </tbody>
             </table>
           </div>
@@ -4104,6 +4112,7 @@ async function loadTurno() {
                 ${validacaoTableFor(menu,'🍽️ Menu')}
                 ${validacaoTableFor(comida,'🧂 Ingredientes')}
                 ${validacaoTableFor(bebida,'🥤 Bebidas')}
+                ${validacaoTableFor(outros,'📦 Outros')}
               </tbody>
             </table>
           </div>
@@ -4132,6 +4141,7 @@ async function loadTurno() {
                 ${caixaTableFor(menu,'🍽️ Menu')}
                 ${caixaTableFor(comida,'🧂 Ingredientes')}
                 ${caixaTableFor(bebida,'🥤 Bebidas')}
+                ${caixaTableFor(outros,'📦 Outros')}
               </tbody>
             </table>
           </div>

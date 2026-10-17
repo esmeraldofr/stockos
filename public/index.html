@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-total-ordem">
+<html lang="pt" data-stockos-ui="2026-10-17-aviso-deixados">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10021,7 +10021,7 @@ function encontradosBannerHtml(turno, fechado, canEdit, isAdmin) {
       <span style="font-size:18px">⚠</span>
       <div style="flex:1">
         <div style="font-weight:600;color:#fbbf24">Regista os encontrados iniciais</div>
-        <div style="font-size:11px;color:#cbd5e1">Preenche o Encontrado (Stock) e o Enc. caixa (Caixas) e depois fecha o registo. Enquanto não fechares, vais ser avisado a cada navegação.</div>
+        <div style="font-size:11px;color:#cbd5e1">Preenche o Encontrado (Stock) e depois fecha o registo. Enquanto não fechares, vais ser avisado a cada navegação.</div>
       </div>
       ${btn}
     </div>`;
@@ -10129,8 +10129,10 @@ function deixadosBannerHtml(turno, fechado, canEdit, isAdmin, encontradosFechado
     <div class="card encontrados-banner encontrados-banner-pend mb-12" style="display:flex;align-items:center;gap:10px">
       <span style="font-size:18px">⚠</span>
       <div style="flex:1">
-        <div style="font-weight:600;color:#fbbf24">Regista os deixados</div>
-        <div style="font-size:11px;color:#cbd5e1">No fim do turno, preenche o Deixado (Stock) e o Deix. caixa (Armazém) e fecha o registo para bloquear os valores.</div>
+        <div style="font-weight:600;color:#fbbf24">${deixadoAutoAtivoTurno(turno) ? 'Confere os deixados' : 'Regista os deixados'}</div>
+        <div style="font-size:11px;color:#cbd5e1">${deixadoAutoAtivoTurno(turno)
+          ? 'O Deixado é calculado automaticamente a partir do balcão. No fim do turno, confere os valores e fecha o registo para os bloquear.'
+          : 'No fim do turno, preenche o Deixado (Stock) e fecha o registo para bloquear os valores.'}</div>
       </div>
       ${btn}
     </div>`;

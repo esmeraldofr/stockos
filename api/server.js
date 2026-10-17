@@ -4952,14 +4952,14 @@ async function ensureFotosAnexos() {
 }
 
 function fotosAnexosChaveValida(chave) {
-  return /^(tpa:\d+|bordero:\d{4}-\d{2}-\d{2}|fatura:\d+)$/.test(String(chave || ''));
+  return /^(tpa:\d+|barril:\d+|bordero:\d{4}-\d{2}-\d{2}|fatura:\d+)$/.test(String(chave || ''));
 }
 
 app.get('/api/fotos', auth, async (req, res) => {
   try {
     const chave = String(req.query.chave || '').trim();
     if (!fotosAnexosChaveValida(chave)) return res.status(400).json({ erro: 'Chave inválida' });
-    const mTpaF = chave.match(/^tpa:(\d+)$/);
+    const mTpaF = chave.match(/^(?:tpa|barril):(\d+)$/);
     if (mTpaF && !(await turnoNoContexto(req, parseInt(mTpaF[1], 10)).catch(() => true))) {
       return res.status(404).json({ erro: 'Turno não encontrado' });
     }
@@ -4979,7 +4979,7 @@ app.post('/api/fotos', auth, async (req, res) => {
     if (typeof foto_base64 !== 'string' || !foto_base64.startsWith('data:image')) {
       return res.status(400).json({ erro: 'Envia a foto (data URL de imagem)' });
     }
-    const mTpaP = String(chave).match(/^tpa:(\d+)$/);
+    const mTpaP = String(chave).match(/^(?:tpa|barril):(\d+)$/);
     if (mTpaP && !(await turnoNoContexto(req, parseInt(mTpaP[1], 10)).catch(() => true))) {
       return res.status(404).json({ erro: 'Turno não encontrado' });
     }

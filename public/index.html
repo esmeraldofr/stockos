@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-talao-totais-kz">
+<html lang="pt" data-stockos-ui="2026-10-17-foto-peso-barril">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3787,7 +3787,10 @@ async function loadTurno() {
         // O registo de barris faz-se pelo botão «🛢️ Troca de barril» nos
         // Pedidos ao balcão (fluxo completo com estado dos dois barris) —
         // sem botão duplicado na folha de Stock.
-        const fbBtnHtml = '';
+        // Fino Barril: fotos do peso do barril (balança) neste turno.
+        const fbBtnHtml = isFinoBarrilNome(s.produto_nome)
+          ? `<div style="font-size:11px;color:#94a3b8;margin-top:4px">📷 Fotos do peso do barril</div><div class="fotos-anexos" data-chave="barril:${turno.id}" data-canedit="${canEdit || (S.user && S.user.role === 'admin') ? '1' : '0'}"></div>`
+          : '';
         return `
           <tr class="stock-row">
             <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div>${metaLinha ? `<div class="stock-prod-meta">${metaLinha}</div>` : ''}${fbBtnHtml}</td>
@@ -3907,7 +3910,7 @@ async function loadTurno() {
         const cxBg = 'background:rgba(124,58,237,0.06)';
         return `
           <tr class="stock-row">
-            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div></td>
+            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div>${isFinoBarrilNome(s.produto_nome) ? `<div class="fotos-anexos" data-chave="barril:${turno.id}" data-canedit="0"></div>` : ''}</td>
             <td class="td-calc" style="color:#94a3b8;text-align:right">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td class="td-calc" style="text-align:right">${faltaHtml}</td>
             <td class="td-calc" style="text-align:right">${sobraHtml}</td>
@@ -7313,7 +7316,7 @@ async function fotosAnexosAdicionar(inp, chave) {
     for (const f of files.slice(0, 12)) {
       const b64 = await comprimirFotoDataUrl(await fileToDataUrl(f), 1600, 0.8);
       await apiEscrita('POST', '/fotos', { chave, foto_base64: b64 },
-        { desc: 'Foto adicional', timeoutMs: 10000, tid: (chave.match(/^tpa:(.+)$/) || [])[1] || null });
+        { desc: /^barril:/.test(chave) ? 'Foto do peso do barril' : 'Foto adicional', timeoutMs: 10000, tid: (chave.match(/^(?:tpa|barril):(.+)$/) || [])[1] || null });
     }
     if (inp) inp.value = '';
   } catch (e) { alert(e.message || String(e)); }

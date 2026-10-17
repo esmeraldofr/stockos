@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-balcao-fino-barril">
+<html lang="pt" data-stockos-ui="2026-10-17-resumo-fino-barril">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7702,6 +7702,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
             pct,
             unidade: isCopo ? 'copos' : 'un.',
             isCopo,
+            kgc: isCopo ? (parseFloat(ln.kg_por_copo) || 0) : 0,
             pacoteN: n,
             pacotePreco: pp,
             pacotes: 0,
@@ -7769,14 +7770,40 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       return `${i.sig ? `<span style="color:#64748b;font-size:11px">${escapeHtml(i.sig)}</span> ` : ''}${num2(i.v)}`;
     };
     const valorVendidoKz = (pid) => { const i = vendidoStockInfo(pid); return i && Number.isFinite(i.kz) ? i.kz : null; };
+    // Copos de «Fino…» fora da folha (Fino 400, Fino 1000, grande, torre) são
+    // copos do Fino Barril: o Vendido (stock) do barril em kg é repartido por
+    // eles (proporção dos kg pedidos) e convertido em copos (÷ kg por copo).
+    const stockResumo = (S.turnoData && S.turnoData.stock) || [];
+    const naFolhaResumo = new Set(stockResumo.map((x) => prodIdKey(x.produto_id)));
+    const barrilResumo = stockResumo.find((x) => isFinoBarrilNome(x.produto_nome));
+    const ehCopoFino = (r) => !!barrilResumo && r.isCopo && r.kgc > 0 && !naFolhaResumo.has(prodIdKey(r.pid)) && /^fino/i.test(String(r.nome || '').trim());
+    let kgFinoPedidos = 0;
+    porCat.forEach((byProd) => byProd.forEach((r) => { if (ehCopoFino(r)) kgFinoPedidos += r.qtd * r.kgc; }));
+    const barrilInfo = barrilResumo ? vendidoStockInfo(barrilResumo.produto_id) : null;
+    const finoInfo = (r) => {
+      if (!ehCopoFino(r) || !barrilInfo || !(kgFinoPedidos > 0)) return null;
+      const kg = barrilInfo.v * (r.qtd * r.kgc) / kgFinoPedidos;
+      const v = kg / r.kgc;
+      return { v, sig: 'copos', kz: r.qtd > 0 ? Math.round(v * (r.valor / r.qtd)) : null, kg };
+    };
+    const infoR = (r) => finoInfo(r) || vendidoStockInfo(r.pid);
+    const vendidoHtmlR = (r) => {
+      const i = infoR(r);
+      if (!i) return traco;
+      const kgTxt = i.kg != null ? ` <span style="color:#64748b;font-size:11px">(${num2(i.kg)} kg)</span>` : '';
+      return `${i.sig ? `<span style="color:#64748b;font-size:11px">${escapeHtml(i.sig)}</span> ` : ''}${num2(i.v)}${kgTxt}`;
+    };
+    const valorVendidoKzR = (r) => { const i = infoR(r); return i && Number.isFinite(i.kz) ? i.kz : null; };
     // Diferença stock − pedidos. Quantidade só quando as unidades batem
     // (copos vs kg do barril não se comparam); valor sempre em Kz.
     const difQtd = (r) => {
+      const f = finoInfo(r);
+      if (f) return f.v - r.qtd; // copos do barril vs copos pedidos
       const i = vendidoStockInfo(r.pid);
       if (!i || r.isCopo) return null;
       return i.v - r.qtd;
     };
-    const difKz = (r) => { const v = valorVendidoKz(r.pid); return v == null ? null : v - r.valor; };
+    const difKz = (r) => { const v = valorVendidoKzR(r); return v == null ? null : v - r.valor; };
     const difCell = (d, fmtFn, estilo) => {
       if (d == null) return `<td style="padding:5px 8px;text-align:right;${estilo}">${traco}</td>`;
       const zero = Math.abs(d) < 0.005;
@@ -7789,7 +7816,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       const totalQtd = arr.reduce((s, r) => s + r.qtd, 0);
       const totalKz = arr.reduce((s, r) => s + r.valor, 0);
       const totalCom = arr.reduce((s, r) => s + r.comissao, 0);
-      const totalVendKz = arr.reduce((s, r) => s + (valorVendidoKz(r.pid) || 0), 0);
+      const totalVendKz = arr.reduce((s, r) => s + (valorVendidoKzR(r) || 0), 0);
       const totalDifKz = arr.reduce((s, r) => s + (difKz(r) || 0), 0);
       const trs = arr.map((r) => {
         let unidadeStr = r.unidade;
@@ -7807,8 +7834,8 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <td style="padding:5px 8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums"><span style="color:#64748b;font-size:11px">${escapeHtml(unidadeStr)}</span> ${num2(r.qtd)}</td>
           <td style="padding:5px 8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums">${fmt(r.valor)}</td>
           <td style="padding:5px 8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums">${pctTxt}${fmt(r.comissao)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#e2e8f0;font-variant-numeric:tabular-nums;background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9">${vendidoStockHtml(r.pid)}</td>
-          <td style="padding:5px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;background:rgba(14,165,233,0.08)">${valorVendidoKz(r.pid) != null ? fmt(valorVendidoKz(r.pid)) : traco}</td>
+          <td style="padding:5px 8px;text-align:right;color:#e2e8f0;font-variant-numeric:tabular-nums;background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9"${finoInfo(r) ? ' title="Copos do Fino Barril: kg vendidos no barril ÷ kg por copo"' : ''}>${vendidoHtmlR(r)}</td>
+          <td style="padding:5px 8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;background:rgba(14,165,233,0.08)">${valorVendidoKzR(r) != null ? fmt(valorVendidoKzR(r)) : traco}</td>
           ${difCell(difQtd(r), num2, 'background:rgba(244,63,94,0.07);border-left:2px solid #f43f5e')}
           ${difCell(difKz(r), fmt, 'background:rgba(244,63,94,0.07)')}
         </tr>`;
@@ -7855,7 +7882,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     let totalQtdGeral = 0, totalKzGeral = 0, totalComGeral = 0, totalVendKzGeral = 0, totalDifKzGeral = 0;
     porCat.forEach((byProd) => {
       byProd.forEach((r) => {
-        totalVendKzGeral += valorVendidoKz(r.pid) || 0;
+        totalVendKzGeral += valorVendidoKzR(r) || 0;
         totalDifKzGeral += difKz(r) || 0;
         totalQtdGeral += r.qtd;
         totalKzGeral += r.valor;

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-troca-barril-selado">
+<html lang="pt" data-stockos-ui="2026-10-17-barril-consumo">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3483,9 +3483,17 @@ function getVendasBalcaoPorProduto() {
       }
     }
   }
+  // Consumos (ex.: barril selado gasto na troca) contam como balcão/vendido.
+  const stockT = (S.turnoData && S.turnoData.stock) || [];
+  stockT.forEach((x) => {
+    const c = parseFloat(x.consumo) || 0;
+    if (c <= 0) return;
+    const k = prodIdKey(x.produto_id);
+    if (!map[k]) map[k] = { copos: 0, unidades: 0, kg: 0, isCopo: false, kg_por_copo: 0 };
+    map[k].unidades += c;
+  });
   // Copos de «Fino…» que não estão na folha (Fino 400, Fino 1000…) saem do
   // Fino Barril — mesma regra do Deixado automático no servidor.
-  const stockT = (S.turnoData && S.turnoData.stock) || [];
   const barril = stockT.find((x) => isFinoBarrilNome(x.produto_nome));
   if (barril) {
     const bid = prodIdKey(barril.produto_id);
@@ -6991,8 +6999,9 @@ function aplicarEscritasAoTurno(t, fila) {
     } else if (it.method === 'POST' && p.endsWith('/entradas')) {
       const row = (out.stock || []).find((s) => String(s.produto_id) === String(b.produto_id));
       if (row) {
-        const sinal = b.tipo === 'tirar' ? -1 : 1;
-        row.entrada = (parseFloat(row.entrada) || 0) + sinal * (parseFloat(b.quantidade) || 0);
+        const q = parseFloat(b.quantidade) || 0;
+        if (String(b.notas || '').startsWith('CONSUMO::')) row.consumo = (parseFloat(row.consumo) || 0) + q;
+        else row.entrada = (parseFloat(row.entrada) || 0) + (b.tipo === 'tirar' ? -q : q);
       }
       if (b.origem === 'compra' && b.tipo !== 'tirar') {
         out.caixa.saida = (parseFloat(out.caixa.saida) || 0) + (parseFloat(b.preco) || 0);
@@ -11705,11 +11714,11 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
       movs.push({
         ts: e.criado_em, cat: 'stock', dir: e.tipo === 'tirar' ? 'out' : 'in',
         desc: (e.produto_nome || '') + (e.produto_id ? '' : ' ✏️'),
-        tag: e.tipo === 'tirar' ? '' : (compra ? 'compra' : 'armazém'),
+        tag: String(e.notas || '').startsWith('CONSUMO::') ? 'consumo' : (e.tipo === 'tirar' ? '' : (compra ? 'compra' : 'armazém')),
         qtd: parseFloat(e.quantidade) || 0,
         med: medicaoSigla(e.tipo_medicao || stockById[String(e.produto_id)]?.tipo_medicao),
         valor: compra && parseFloat(e.preco) > 0 ? parseFloat(e.preco) : null, // dinheiro que saiu na compra
-        notas: e.notas || ''
+        notas: String(e.notas || '').replace(/^CONSUMO::/, '')
       });
     });
     const isEntradaMarcada = (s) => String(s.notas || '').startsWith(ENTRADA_MARK);
@@ -11967,6 +11976,7 @@ function atualizarCelulasEntradaSaida(pid, rows) {
   let ent = 0, sai = 0;
   (rows || []).filter((e) => prodIdKey(e.produto_id) === pid).forEach((e) => {
     const q = parseFloat(e.quantidade) || 0;
+    if (String(e.notas || '').startsWith('CONSUMO::')) return; // consumo = vendido, não é Saída
     if (e.tipo === 'tirar') sai += q; else ent += q;
   });
   const cE = document.getElementById(`entrada-${pid}`);
@@ -12178,7 +12188,7 @@ async function adicionarFinoBarrilNovo(produtoId) {
   linhas.push(entraNovo
     ? `Entra: barril NOVO → + ${fmtNum(entradaLiquidosKg)} kg líquidos`
     : `Entra: barril USADO — pesou ${fmtNum(pesoEntrada)} kg → + ${fmtNum(entradaLiquidosKg)} kg líquidos`);
-  if (entraNovo && selado) linhas.push(`Sai do stock: 1 × ${selado.nome}`);
+  if (entraNovo && selado) linhas.push(`Consumido: 1 × ${selado.nome} (conta como vendido)`);
   const okFinal = await dialogoTroca({
     titulo: 'Registar a troca de barril?',
     texto: linhas.join('\n'),
@@ -12214,7 +12224,8 @@ async function adicionarFinoBarrilNovo(produtoId) {
       origem: 'armazem',
       preco: 0,
       quantidade: 1,
-      notas: 'Troca de barril — barril novo posto no Fino Barril'
+      // CONSUMO:: → conta como vendido (não é perda/Saída).
+      notas: 'CONSUMO::Troca de barril — barril novo posto no Fino Barril'
     }, { tid: turnoId, desc: 'Barril selado usado na troca', extra: { produto_nome: selado.nome } });
   }
   try {

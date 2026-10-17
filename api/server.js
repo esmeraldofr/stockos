@@ -6008,9 +6008,15 @@ async function recalcularDeixadosAuto(turnoId, profundidade = 0) {
        FROM linhas l
        GROUP BY 1
      ),
+     -- Recipientes com tara (Fino Barril): o Deixado nunca fica abaixo do
+     -- peso do recipiente vazio (nem acima do que havia: Enc + Entrada).
      calc AS (
-       SELECT ts.id, ROUND(GREATEST(0, ts.encontrado + COALESCE(ts.entrada, 0) - COALESCE(b.qtd, 0)), 3) AS novo
+       SELECT ts.id, ROUND(GREATEST(
+                LEAST(COALESCE(p.peso_tara_kg, 0), ts.encontrado + COALESCE(ts.entrada, 0)),
+                0,
+                ts.encontrado + COALESCE(ts.entrada, 0) - COALESCE(b.qtd, 0)), 3) AS novo
        FROM turno_stock ts
+       JOIN produtos p ON p.id = ts.produto_id
        LEFT JOIN balcao b ON b.pid = ts.produto_id
        WHERE ts.turno_id = $1 AND ts.encontrado IS NOT NULL
      )

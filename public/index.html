@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-talao-traco-grosso">
+<html lang="pt" data-stockos-ui="2026-10-17-talao-letra-pixel">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10591,14 +10591,14 @@ async function exportarTurnoExcel() {
 
 // ── TALÃO DO TURNO (impressora térmica) ───────────────────────────────
 // Mesmas secções do Excel. Letra Normal (Font B: 42 col. em 58 mm, 64
-// em 80 mm), Média (45/68) ou Pequena (49/74) — estas como imagem, a negrito. Uma linha por produto/movimento (nomes cortados,
+// em 80 mm), Média (48/72) ou Pequena (54/82) — estas como imagem com letra em pixels. Uma linha por produto/movimento (nomes cortados,
 // nunca partidos). Android → RawBT (ESC/POS, como o talão dos pedidos);
 // noutros aparelhos → impressão do browser numa folha estreita.
 const TALAO_LARG_KEY = 'stockos.talaoTurnoLargura';
 const TALAO_LETRA_KEY = 'stockos.talaoTurnoLetra';
 /** Colunas por papel e tamanho de letra. «normal» = Font B da impressora
  *  (texto); «pequena» e «mini» vão como imagem (letra abaixo da Font B). */
-const TALAO_COLUNAS = { 58: { normal: 42, media: 45, pequena: 49 }, 80: { normal: 64, media: 68, pequena: 74 } };
+const TALAO_COLUNAS = { 58: { normal: 42, media: 48, pequena: 54 }, 80: { normal: 64, media: 72, pequena: 82 } };
 function talaoPapel() {
   try { return localStorage.getItem(TALAO_LARG_KEY) === '80' ? 80 : 58; } catch (_) { return 58; }
 }
@@ -10874,43 +10874,53 @@ function talaoTurnoEscPos(L, W) {
   return out + '\n\n\n\n' + GS + 'V' + '\x01';
 }
 
-/** Talão como imagem ESC/POS (GS v 0): permite letra mais pequena que a
- *  Font B. Desenha cada linha num canvas com a largura em pontos do papel
- *  (384 = 58 mm, 576 = 80 mm @ 203 dpi) e converte a preto e branco. */
+/** Letra em pixels para o talão como imagem (ASCII 32–126), gerada a partir
+ *  de DejaVu Sans Mono Bold e fixa no código: nítida em qualquer telemóvel
+ *  (a letra do canvas ficava ilegível na térmica). m = 8×13 pontos (Média),
+ *  p = 7×11 (Pequena). Cada glifo: ch linhas, 1 byte por linha (hex). */
+const TALAO_FONTE_PX = {"m":{"cw":8,"ch":13,"g":"0000000000000000000000000018181818181818001818000000246666240000000000000000001212367f3624fefe6848000000081c7e68783c1e0e7e7c0808000070d0d076384e0b0b0e0000003c3c6030787bcfcf6e7f000000181818180000000000000000000c181818183030181818080c00301818180c0c0c181818103000185a3e3c7e18000000000000000000181818ff7e1818000000000000000000000018181818300000000000003c3c000000000000000000000000000018180000000206040c0818103030606000003c7e66666e7e66667e3c00000038781818181818187e7f0000007c7e06060c1c38707e7e0000007c7e06063c1e06067e7c0000000c1c1c3c2c6c7e7f0c0c0000007e7e60607c4e06067e7c0000001e3e60687e666666763c0000007e7e060c0c1c181830300000003c7e66663c7e66667e3c000000387e6666667e3e066c7c00000000000018181800181818000000000000181818001818181830000000000f3ce0701e07000000000000007eff007eff0000000000000000f03c070e78e0000000003c7e060e0c1818101818000000001c7643dfd3b3d3df40621e00183c3c3c34667e7e67c30000007c7e66667e7e67677e7e0000001e3e7060606060703e1e000000787c6666666666667e780000007e7e60607e7e60607e7e0000007e7e60607e7e606060600000001e3e7060606e66623e3e000000666666667e7e666666660000007e7e1818181818187e7e0000003e3e06060606060e7c7c00000067666c78787c6c6e666300000020606060606060607e7f00000066e7ffffffdbcbc3c3c3000000626676767e7e6e6e66660000003c7e6666666666667e3c0000007c7e6667667e606060600000003c7e6666666766667e3c0e0400787e66667e7c6c6666630000003c7e60607c1e06067e7c0000007e7f181818181818181800000066666666666666667e3c0000004366666666263c3c3c3c000000c3c3c3dbdb7b7e76666600000043663e3c18183c3e66e3000000c366663c3c18181818180000007e7f060c1c1830707f7f0000001c1818181818181818181c1c00406020301018080c0c0606000038181818181818181818383800183c7e62000000000000000000000000000000000000000000ff301800000000000000000000000000087e063e7e66667e0000006060687e76666766767e0000000000083e72606060323e0000000606167e6e6666667e7e0000000000083e667e7f60723e0000001e18187e1818181818180000000000107e666666667e3e067e386060687e76666666666600000018000078181818187e7f0000000c00003c1c0c0c0c0c0c1c7870606060666c787c6c666700000078383838383838181e1e000000000000fedbdbdbdbdbdb0000000000087e7666666666660000000000083c666666667e3c0000000000087e766667667e7e6060600000107e6e6666667e3e0606060000023f3830303030300000000000087e60783c06667c0000001018387e381818181e1e00000000000066666666667e3e0000000000006666663c3c3c18000000000000c3cbdb5a7e7e66000000000000663c3c183c76660000000000006666663c3c1c181870600000007e0e0c18307e7e0000000e181818187878181818180e001818181818181818181818181870181818181e1e18181818700000000000007f0e000000000000"},"p":{"cw":7,"ch":11,"g":"0000000000000000000000080808080808000808000000363636000000000000000a1a1e3f16367e2c2c0000080c3e38381e0e2e3c0808007848783e360f0d0600001c3c3038386d67763f00000808080800000000000000040c081818181818080c041018080c0c0c0c0c081810082a3e1e2a08000000000000000808087f0808080000000000000000000c08181000000000001c1c00000000000000000000001c1c0000020206040c0818103020001c3e36363e3e36361c0000083c0c0c0c0c0c3e3f0000183e06060c0c103e3e0000183e06061c0602263c0000040e1e1636267f060600003c3e30383e0606063c00000c1e30383e3232361e00003e3e06060c0c18181800001c3e36361c3622361e0000083e2626363e06263c00000000001c1c00001c1c00000000001c1c00001c1818100000000f3c701c070000000000003e3e007f00000000000000380e071e700000001c3e06060c180808180000001e32674f5b5b4f20320e081c1c14363e3e23630000383e26363c3623373e00000e1e30303030303a1e0000303e36323333363e3c00003e3e30303e30303e3e00003e3e30303e3030303000000c1e30303637333b1e0000223636363e3636363600003e3e08080808083e3e00001c1e06060606062e3c000022262c3c3c3c2626230000103030303030303e3f00002277777f7f6b63636300002232323a2a2e26262600001c3e3622632332361c0000383e37333e3c30303000001c3e3622632332361c0600383e36363e3c36363300001c3e30303c0e06263e00003e7f08080808080808000022232323232222363e00002263323636361c1c1c00004163636b7f3f36363600002236361c1c1c1c366300002363363e1c1c08080800003e3f060e0c18303e3f00001c18181818181818181c0c2020101018080c040602001c0c0c0c0c0c0c0c0c1c18081c362200000000000000000000000000000000000010080000000000000000000000183e063e32363e00002030303e363333363e00000000041e303030381e00000206063e366626363e00000000083e223f30321e00000e0e3e3e181818181800000000023e3626263e1e063e3030303e363636363600000c08183c0c0c0c0c3f00000c041c3c0c0c0c0c0c0c38303032363c3c3c3633000038381818181818180e00000000007e6b6b6b6b6b00000000203e363636363600000000083e362322361c00000000243e323333363e30300000023e266626363e06060000121f1810101010000000000c3e303c0e263e000000183e3e181818180e000000002236363636363e00000000223236361c1c1c0000000041636b6f3e36360000000022361c1c1c363600000000223236361c1c0c183800003e3e060c18303e00000e0c080818381808080c0e0808080808080808080808381808080c0e0c0808183800000000307f0000000000"}};
+function talaoGlifo(f, code) {
+  const i = code - 32;
+  if (i < 0 || i > 94) return null;
+  const rows = [];
+  for (let r = 0; r < f.ch; r++) rows.push(parseInt(f.g.substr((i * f.ch + r) * 2, 2), 16));
+  return rows;
+}
+
+/** Talão como imagem ESC/POS (GS v 0) com a letra em pixels: letra mais
+ *  pequena que a Font B da impressora e sempre nítida. 384 pontos = 58 mm,
+ *  576 = 80 mm (203 dpi). */
 function talaoTurnoEscPosRaster(L, W, mm) {
   const ESC = '\x1B', GS = '\x1D';
   const largura = mm === 80 ? 576 : 384;
-  const cw = largura / W; // pontos por carácter
-  const fam = '"DejaVu Sans Mono","Roboto Mono","Droid Sans Mono","Courier New",monospace';
-  const cv = document.createElement('canvas');
-  const ctx = cv.getContext('2d');
-  ctx.font = `100px ${fam}`;
-  const tam = Math.max(6, (100 * cw) / (ctx.measureText('M').width || 60)); // px de letra p/ cw
-  const alt = Math.ceil(tam * 1.25);
-  const altTit = Math.ceil(tam * 1.6);
-  const h = L.reduce((a, l) => a + (l.s === 'titulo' ? altTit : alt), 0) + 4;
-  cv.width = largura;
-  cv.height = h;
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, largura, h);
-  ctx.fillStyle = '#000';
-  ctx.textBaseline = 'top';
-  let y = 2;
-  L.forEach(({ t, s }) => {
-    const tit = s === 'titulo';
-    // Térmica: letra pequena com traço fino quase não se vê — sempre negrito.
-    ctx.font = `bold ${tit ? (tam * 1.35).toFixed(1) : tam.toFixed(1)}px ${fam}`;
-    const txt = String(t);
-    const tw = Math.min(largura, ctx.measureText(txt).width);
-    const x = tit || s === 'centro' || s === 'seccao' ? Math.max(0, (largura - tw) / 2) : 0;
-    ctx.fillText(txt, x, y, largura - x);
-    // 2.ª passagem desviada 0,7 ponto na horizontal: engrossa os traços
-    // verticais sem fechar o interior das letras (o contorno fechava-o).
-    ctx.fillText(txt, x + 0.7, y, largura - x);
-    y += tit ? altTit : alt;
-  });
-  const px = ctx.getImageData(0, 0, largura, h).data;
   const bpr = largura / 8;
+  const f = TALAO_FONTE_PX[talaoLetra() === 'pequena' ? 'p' : 'm'];
+  const cols = Math.floor(largura / f.cw);
+  const esp = 2; // pontos entre linhas
+  const linhas = L.map(({ t, s }) => ({ t: pedidoBalcaoAsciiFold(t), s, esc: s === 'titulo' ? 2 : 1 }));
+  const h = linhas.reduce((a, l) => a + (f.ch * l.esc + esp), 0) + 4;
+  const bits = new Uint8Array(bpr * h);
+  const ponto = (x, y) => { if (x >= 0 && x < largura && y >= 0 && y < h) bits[y * bpr + (x >> 3)] |= 0x80 >> (x & 7); };
+  let y = 2;
+  linhas.forEach(({ t, s, esc }) => {
+    const maxC = Math.floor(cols / esc);
+    const txt = t.slice(0, maxC);
+    const centrar = s === 'titulo' || s === 'centro' || s === 'seccao';
+    const x0 = centrar ? Math.floor((largura - txt.length * f.cw * esc) / 2) : 0;
+    for (let i = 0; i < txt.length; i++) {
+      const g = talaoGlifo(f, txt.charCodeAt(i));
+      if (!g) continue;
+      for (let r = 0; r < f.ch; r++) {
+        const row = g[r];
+        if (!row) continue;
+        for (let c = 0; c < f.cw; c++) {
+          if (!(row & (1 << (f.cw - 1 - c)))) continue;
+          for (let dy = 0; dy < esc; dy++) for (let dx = 0; dx < esc; dx++) ponto(x0 + (i * f.cw + c) * esc + dx, y + r * esc + dy);
+        }
+      }
+    }
+    y += f.ch * esc + esp;
+  });
   let out = ESC + '@';
   const logo = pedidoBalcaoLogoGetEscPos();
   if (logo) out += ESC + 'a' + '\x01' + logo + '\n' + ESC + 'a' + '\x00';
@@ -10918,16 +10928,7 @@ function talaoTurnoEscPosRaster(L, W, mm) {
   for (let y0 = 0; y0 < h; y0 += 240) {
     const hh = Math.min(240, h - y0);
     let blk = GS + 'v0' + '\x00' + String.fromCharCode(bpr & 0xff, bpr >> 8, hh & 0xff, hh >> 8);
-    for (let yy = y0; yy < y0 + hh; yy++) {
-      for (let b = 0; b < bpr; b++) {
-        let byte = 0;
-        for (let k = 0; k < 8; k++) {
-          const i = (yy * largura + b * 8 + k) * 4;
-          if (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114 < 185) byte |= 0x80 >> k; // limiar um pouco alto = mais escuro
-        }
-        blk += String.fromCharCode(byte);
-      }
-    }
+    for (let i = y0 * bpr; i < (y0 + hh) * bpr; i++) blk += String.fromCharCode(bits[i]);
     out += blk;
   }
   return out + '\n\n\n\n' + GS + 'V' + '\x01';

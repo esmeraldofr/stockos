@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-foto-peso-barril">
+<html lang="pt" data-stockos-ui="2026-10-17-foto-barril-entrar-sair">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3789,7 +3789,11 @@ async function loadTurno() {
         // sem botão duplicado na folha de Stock.
         // Fino Barril: fotos do peso do barril (balança) neste turno.
         const fbBtnHtml = isFinoBarrilNome(s.produto_nome)
-          ? `<div style="font-size:11px;color:#94a3b8;margin-top:4px">📷 Fotos do peso do barril</div><div class="fotos-anexos" data-chave="barril:${turno.id}" data-canedit="${canEdit || (S.user && S.user.role === 'admin') ? '1' : '0'}"></div>`
+          ? (() => {
+              const ed = canEdit || (S.user && S.user.role === 'admin') ? '1' : '0';
+              return `<div style="font-size:11px;color:#94a3b8;margin-top:6px">📷 Peso do barril <strong style="color:#cbd5e1">ao entrar</strong> (início do turno)</div><div class="fotos-anexos" data-chave="barril:${turno.id}" data-canedit="${ed}"></div>`
+                + `<div style="font-size:11px;color:#94a3b8;margin-top:6px">📷 Peso do barril <strong style="color:#cbd5e1">ao sair</strong> (fim do turno)</div><div class="fotos-anexos" data-chave="barril-sai:${turno.id}" data-canedit="${ed}"></div>`;
+            })()
           : '';
         return `
           <tr class="stock-row">
@@ -3910,7 +3914,7 @@ async function loadTurno() {
         const cxBg = 'background:rgba(124,58,237,0.06)';
         return `
           <tr class="stock-row">
-            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div>${isFinoBarrilNome(s.produto_nome) ? `<div class="fotos-anexos" data-chave="barril:${turno.id}" data-canedit="0"></div>` : ''}</td>
+            <td class="td-name"><div class="stock-prod-nome">${s.produto_nome}</div>${isFinoBarrilNome(s.produto_nome) ? `<div style="font-size:10px;color:#64748b;margin-top:4px">📷 ao entrar</div><div class="fotos-anexos" data-chave="barril:${turno.id}" data-canedit="0"></div><div style="font-size:10px;color:#64748b;margin-top:4px">📷 ao sair</div><div class="fotos-anexos" data-chave="barril-sai:${turno.id}" data-canedit="0"></div>` : ''}</td>
             <td class="td-calc" style="color:#94a3b8;text-align:right">${s.prev_deixado !== null && s.prev_deixado !== undefined ? fmtNum(s.prev_deixado) : '—'}</td>
             <td class="td-calc" style="text-align:right">${faltaHtml}</td>
             <td class="td-calc" style="text-align:right">${sobraHtml}</td>
@@ -7316,7 +7320,7 @@ async function fotosAnexosAdicionar(inp, chave) {
     for (const f of files.slice(0, 12)) {
       const b64 = await comprimirFotoDataUrl(await fileToDataUrl(f), 1600, 0.8);
       await apiEscrita('POST', '/fotos', { chave, foto_base64: b64 },
-        { desc: /^barril:/.test(chave) ? 'Foto do peso do barril' : 'Foto adicional', timeoutMs: 10000, tid: (chave.match(/^(?:tpa|barril):(.+)$/) || [])[1] || null });
+        { desc: /^barril:/.test(chave) ? 'Foto do peso do barril (entrar)' : /^barril-sai:/.test(chave) ? 'Foto do peso do barril (sair)' : 'Foto adicional', timeoutMs: 10000, tid: (chave.match(/^(?:tpa|barril|barril-sai):(.+)$/) || [])[1] || null });
     }
     if (inp) inp.value = '';
   } catch (e) { alert(e.message || String(e)); }

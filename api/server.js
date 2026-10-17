@@ -5958,9 +5958,9 @@ function sumCaixaGeradoRow(row) {
 // Deixado = Encontrado + Entrada − Balcão (pedidos do turno, já sem as
 // devoluções). Copos → kg: copos × kg_por_copo; os copos de «Fino…» que não
 // estão na folha (Fino 400, Fino 1000…) descontam do «Fino Barril».
-// Fica bloqueado; o admin pode activar a edição manual por turno
-// (turnos.deixados_edicao_manual). Só corre com o registo inicial fechado
-// e enquanto o registo dos deixados estiver aberto.
+// Fica bloqueado. Corre em todos os turnos abertos (deixou de haver
+// registos a fechar); turnos antigos com deixados_fechados_em ficam como
+// estão. turnos.deixados_edicao_manual já não é usado.
 let _deixadoManualColReady = false;
 async function ensureDeixadoManualCol() {
   if (_deixadoManualColReady) return;
@@ -5972,12 +5972,14 @@ async function ensureDeixadoManualCol() {
 async function deixadoAutoAtivo(turnoId) {
   await ensureDeixadoManualCol();
   const t = await query(
-    `SELECT encontrados_fechados_em, deixados_fechados_em, COALESCE(deixados_edicao_manual, false) AS manual FROM turnos WHERE id=$1`,
+    `SELECT estado, deixados_fechados_em FROM turnos WHERE id=$1`,
     [turnoId]
   ).catch(() => ({ rows: [] }));
   if (!t.rows.length) return false;
   const r = t.rows[0];
-  return !!r.encontrados_fechados_em && !r.deixados_fechados_em && !r.manual;
+  // Sem registos a fechar: automático em todos os turnos abertos; turnos
+  // antigos com os deixados já fechados mantêm os valores.
+  return r.estado !== 'fechado' && !r.deixados_fechados_em;
 }
 /** Recalcula os Deixados do turno (se o automático estiver activo) e
  *  propaga ao Encontrado do turno seguinte aberto. Devolve as linhas
@@ -6128,9 +6130,8 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
     // Herdado: escreve-se sempre (é um espelho, nunca uma edição manual).
     if (!encontradosFechados || encHerdado) sets.push('encontrado=$3');
     if (!encontradosFechados || encGHerdado) sets.push('encontrado_caixa=$6');
-    // Deixados SÓ com o registo inicial fechado (ordem do turno) e
-    // enquanto o registo dos deixados não fechar.
-    const escreveDeixados = !deixadosFechados && encontradosFechados;
+    // Deixados enquanto o registo dos deixados não estiver fechado (legado).
+    const escreveDeixados = !deixadosFechados;
     // Deixado automático activo → o Deixado vem do cálculo (Encontrado +
     // Entrada − Balcão), não do cliente; o Deix. caixa continua manual.
     const deixAuto = escreveDeixados && await deixadoAutoAtivo(req.params.id);

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-aviso-deixados">
+<html lang="pt" data-stockos-ui="2026-10-17-sem-registos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3763,7 +3763,7 @@ async function loadTurno() {
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.
         const deixAuto = deixadoAutoAtivoTurno(turno);
-        const deixInputAttr = canEdit && encontradosFechados && !deixadosFechados && !deixAuto ? '' : 'disabled';
+        const deixInputAttr = canEdit && !deixadosFechados && !deixAuto ? '' : 'disabled';
         const deixTitulo = deixAuto ? 'Automático: Encontrado + Entrada − Balcão' : 'Obrigatório';
         const taraKg = parseFloat(s.peso_tara_kg) || 0;
         const metaLinha = taraKg > 0 ? `recipiente ${fmtNum(taraKg)} kg` : '';
@@ -3931,7 +3931,7 @@ async function loadTurno() {
         const encInputAttr = canEdit && !encontradosFechados && !encCxHerdado ? '' : 'disabled';
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.
-        const deixInputAttr = canEdit && encontradosFechados && !deixadosFechados ? '' : 'disabled';
+        const deixInputAttr = canEdit && !deixadosFechados ? '' : 'disabled';
         const prevCx = s.prev_deixado_caixa;
         const prevCxTxt = prevCx !== null && prevCx !== undefined ? `T. ant.: ${fmtNum(prevCx)}` : '';
         let compCaixaHtml = `<div class="stock-comp-caixa comp-null" id="comp-caixa-${pid}">${prevCxTxt}</div>`;
@@ -4004,8 +4004,8 @@ async function loadTurno() {
     const encontradosFechados = !!turno.encontrados_fechados_em;
     const deixadosFechados = !!turno.deixados_fechados_em;
     // Comparações só depois dos registos fechados (turno fechado mostra tudo).
-    const compEncOn = turnoFechado || encontradosFechados;
-    const compDeixOn = turnoFechado || deixadosFechados;
+    const compEncOn = true;  // Encontrado herdado do turno anterior
+    const compDeixOn = true; // Deixado automático (ou já fechado)
     const isAdminUserScope = S.user && (S.user.role === 'admin' || S.user.role === 'gestor');
     // Abas ocultas (Armazém, Diferenças, Escala, Vendas, Registos): os painéis
     // continuam no DOM — talão, Excel e validações usam-nos. Só o admin as
@@ -4033,9 +4033,7 @@ async function loadTurno() {
       <button type="button" id="turno-full-sair" onclick="alternarTurnoEcraInteiro(false)">✕ Sair do ecrã inteiro</button>
 
       <div id="tab-stock" class="${panelCls('stock')}">
-        ${encontradosBannerHtml(turno, encontradosFechados, canEdit, isAdminUserScope)}
-        ${deixadosBannerHtml(turno, deixadosFechados, canEdit, isAdminUserScope, encontradosFechados)}
-        ${deixadoAutoBannerHtml(turno, encontradosFechados, deixadosFechados)}
+
         <div class="card" style="padding:0;overflow:hidden">
           <div class="table-wrap">
             <table>
@@ -4109,8 +4107,7 @@ async function loadTurno() {
       </div>
 
       <div id="tab-caixas" class="${panelCls('caixas')}">
-        ${encontradosBannerHtml(turno, encontradosFechados, canEdit, isAdminUserScope)}
-        ${deixadosBannerHtml(turno, deixadosFechados, canEdit, isAdminUserScope, encontradosFechados)}
+
         <div class="card" style="padding:0;overflow:hidden">
           <div style="padding:14px 16px 0">
             <div class="card-title">📦 Controlo de caixas</div>
@@ -9059,10 +9056,9 @@ function difCampoFiltroApply() {
 function compGatesForTurno(t) {
   const tt = t || S.turnoData || {};
   const fech = tt.estado === 'fechado';
-  return {
-    enc: fech || !!tt.encontrados_fechados_em,
-    deix: fech || !!tt.deixados_fechados_em
-  };
+  // Encontrados herdados e Deixados automáticos: as comparações valem já
+  // com o turno aberto (deixou de haver registos a fechar).
+  return { enc: true, deix: true, fech };
 }
 /** Chave estável para mapas `produto_id` / `componente_id` (SERIAL ou UUID). Evita `parseInt` em UUIDs. */
 function prodIdKey(id) {
@@ -10046,7 +10042,7 @@ async function alternarAbasOcultas() {
 /** Deixado automático activo neste turno? (registo inicial fechado,
  *  deixados por fechar, e o admin não activou a edição manual). */
 function deixadoAutoAtivoTurno(turno) {
-  return !!(turno && turno.encontrados_fechados_em && !turno.deixados_fechados_em && !turno.deixados_edicao_manual);
+  return !!(turno && turno.estado !== 'fechado' && !turno.deixados_fechados_em);
 }
 /** Aplica ao turno (e ao stockBuf, se já montado) os Deixados devolvidos pelo servidor. */
 function aplicarDeixadosAuto(turno, linhas) {
@@ -10208,6 +10204,8 @@ async function reabrirEncontrados(turnoId) {
  *  fechar. Mostrado sempre — só para de aparecer depois de o registo
  *  inicial ficar fechado. */
 function notifyEncontradosPendente() {
+  return; // encontrados herdados automaticamente — já não há registo a fechar
+  // eslint-disable-next-line no-unreachable
   const t = S.turnoData;
   if (!t || t.estado !== 'aberto' || t.encontrados_fechados_em) return;
   const titulo = t.nome ? `turno “${t.nome}”` : `turno desta data`;
@@ -11420,8 +11418,11 @@ async function checklistPendentes(tid, fresco) {
 
 /** Fase do MOMENTO: abertura enquanto o registo inicial estiver aberto;
  *  fechado esse registo, o que interessa passa a ser o fecho. */
-function faseChecklistAtual() {
-  return S.turnoData && S.turnoData.encontrados_fechados_em ? 'fecho' : 'abertura';
+function faseChecklistAtual(aberturaPendente) {
+  // Sem registos a fechar (encontrados/deixados automáticos): a fase passa
+  // a fecho quando as tarefas de abertura estão todas feitas.
+  if (S.turnoData && S.turnoData.encontrados_fechados_em) return 'fecho';
+  return aberturaPendente === false ? 'fecho' : 'abertura';
 }
 /** Barra compacta com as tarefas da FASE ACTUAL — toca para abrir o
  *  painel. As fases nunca aparecem misturadas: abertura valida no registo
@@ -11431,8 +11432,8 @@ async function atualizarChecklistBar() {
   if (!bar || !S.turnoData) return;
   const cfg = await obterChecklistCfg();
   const fechado = S.turnoData.estado === 'fechado';
-  const fase = faseChecklistAtual();
   const pendTodas = await checklistPendentes(S.turnoData.id);
+  const fase = faseChecklistAtual(pendTodas.some((p) => p.fase === 'abertura'));
   let total, feitas, rotulo;
   if (fechado) {
     // Turno fechado: consulta do registo completo (as duas fases).
@@ -11484,8 +11485,8 @@ async function abrirChecklistTurno() {
   // ABERTURA pendente (ex.: tarefa adicionada depois do registo inicial
   // fechar) → mostra as duas, senão o fecho do turno bloqueava em tarefas
   // invisíveis. (Fecho pendente durante a abertura é o normal — não conta.)
-  const fase = faseChecklistAtual();
   const aberturaPend = (cfg.abertura || []).some((_, i) => !(estado.abertura && estado.abertura[String(i)] && estado.abertura[String(i)].feito));
+  const fase = faseChecklistAtual(aberturaPend);
   const mostrarAmbas = S.turnoData.estado === 'fechado' || (fase === 'fecho' && aberturaPend);
   const tituloFase = { abertura: '🌅 Abertura', fecho: '🌙 Fecho' };
   const corpo = mostrarAmbas

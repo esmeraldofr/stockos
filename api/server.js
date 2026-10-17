@@ -5749,7 +5749,11 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
     const filtroEmp = temEmpProd ? 'AND p.empresa_id = $3' : '';
     await client.query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, encontrado_caixa)
-       SELECT $1, p.id, ps.deixado, ps.deixado_caixa
+       SELECT $1, p.id,
+              -- Produto que não estava na folha anterior: começa em 0 (as
+              -- quantidades entram pelas Entradas), como os restantes, bloqueado.
+              CASE WHEN ps.id IS NULL AND $2::int IS NOT NULL THEN 0 ELSE ps.deixado END,
+              ps.deixado_caixa
          FROM produtos p
          LEFT JOIN turno_stock ps ON ps.turno_id = $2 AND ps.produto_id = p.id
         WHERE p.ativo = true AND p.em_stock_turno IS TRUE ${filtroEmp}
@@ -6090,7 +6094,8 @@ function recalcularDeixadosAutoSeguro(turnoId) {
 app.post('/api/turnos/:id/deixados/recalcular', auth, async (req, res) => {
   try {
     // Turno aberto: produtos com «Monitorar stock» activado depois da
-    // abertura entram na folha (Encontrado = Deixado do turno anterior).
+    // abertura entram na folha (Encontrado = Deixado do turno anterior, ou 0
+    // se o produto não estava lá — mais quantidade entra pelas Entradas).
     let inseridos = 0;
     try {
       const tAb = await query(`SELECT estado FROM turnos WHERE id=$1`, [req.params.id]);
@@ -6098,7 +6103,7 @@ app.post('/api/turnos/:id/deixados/recalcular', auth, async (req, res) => {
         const prevId = await turnoAnteriorComDeixados({ query }, req.params.id).catch(() => null);
         const ins = await query(
           `INSERT INTO turno_stock (turno_id, produto_id, encontrado, encontrado_caixa)
-           SELECT $1, p.id, ps.deixado, ps.deixado_caixa FROM produtos p
+           SELECT $1, p.id, CASE WHEN ps.id IS NULL AND $2::int IS NOT NULL THEN 0 ELSE ps.deixado END, ps.deixado_caixa FROM produtos p
            LEFT JOIN turno_stock ps ON ps.turno_id = $2 AND ps.produto_id = p.id
            WHERE p.ativo = true AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}
              AND NOT EXISTS (SELECT 1 FROM turno_stock x WHERE x.turno_id = $1 AND x.produto_id = p.id)
@@ -6176,13 +6181,12 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
         `SELECT deixado, deixado_caixa FROM turno_stock WHERE turno_id=$1 AND produto_id=$2`,
         [prevTurnoId, produto_id]
       );
-      // Produto que não estava na folha anterior (novo): Encontrado editável.
-      if (pv.rows.length) {
-        enc = pv.rows[0].deixado;
-        encG = pv.rows[0].deixado_caixa;
-        encHerdado = true;
-        encGHerdado = true;
-      }
+      // Produto que não estava na folha anterior (novo): começa em 0 —
+      // mesma lógica dos outros (bloqueado); quantidades pelas Entradas.
+      enc = pv.rows.length ? pv.rows[0].deixado : 0;
+      encG = pv.rows.length ? pv.rows[0].deixado_caixa : null;
+      encHerdado = true;
+      encGHerdado = true;
     }
     const sets = ['fechados=$5'];
     // Herdado: escreve-se sempre (é um espelho, nunca uma edição manual).

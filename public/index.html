@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-talao-sem-negrito">
+<html lang="pt" data-stockos-ui="2026-10-17-troca-fora-movimentos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -11723,7 +11723,9 @@ function renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, 
 
     // ---- linhas unificadas (stock + dinheiro, cronológicas) ----
     const movs = [];
-    (entradas || []).forEach(e => {
+    // Troca de barril NÃO é um movimento (entrada/saída): fica registada para
+    // o cálculo do Fino Barril, mas não aparece nesta lista nem nos totais.
+    (entradas || []).filter((e) => !ehTrocaBarrilNotas(e.notas)).forEach(e => {
       const compra = e.origem === 'compra' && e.tipo !== 'tirar';
       movs.push({
         ts: e.criado_em, cat: 'stock', dir: e.tipo === 'tirar' ? 'out' : 'in',
@@ -11982,6 +11984,12 @@ async function submitMovimento(turnoId) {
   } catch (e) {
     setErr(e.message);
   }
+}
+
+/** Registos criados pela troca de barril (entrada do barril novo, resto do
+ *  barril que sai, consumo do barril selado). */
+function ehTrocaBarrilNotas(notas) {
+  return /^(CONSUMO::Troca de barril|TROCA::|Barril novo|Barril USADO a entrar|Barril retirado SEM acabar)/.test(String(notas || ''));
 }
 
 /** Actualiza as células Entrada e Saída do Stock a partir dos movimentos;

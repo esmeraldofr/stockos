@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-sem-registos">
+<html lang="pt" data-stockos-ui="2026-10-17-coluna-saida">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3777,7 +3777,8 @@ async function loadTurno() {
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.encontrado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','encontrado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="encontrado" title="Obrigatório" ${encInputAttr}/></td>
-            <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada)}</td>
+            <td class="td-calc" id="entrada-${pid}">${fmtQtyInput(s.entrada_bruta != null ? s.entrada_bruta : s.entrada)}</td>
+            <td class="td-calc" id="saida-${pid}" style="color:${parseFloat(s.saida) > 0 ? '#f87171' : 'inherit'}">${fmtQtyInput(s.saida || 0)}</td>
             <td class="td-input"><input type="number" min="0" step="any" autocomplete="off" inputmode="decimal" value="${fmtStockEncontradoAttr(s.deixado)}"
               onblur="stockNumberInputBlur(this)"
               oninput="this.classList.remove('stock-caixa-required-missing');updateStock('${pid}','deixado',this.value)" data-stock-req="1" data-stock-pid="${pid}" data-stock-field="deixado" title="${deixTitulo}" ${deixInputAttr}/></td>
@@ -3894,7 +3895,8 @@ async function loadTurno() {
             <td class="td-calc" style="text-align:right">${faltaHtml}</td>
             <td class="td-calc" style="text-align:right">${sobraHtml}</td>
             <td class="td-calc" style="text-align:right">${enc}</td>
-            <td class="td-calc" style="text-align:right">${fmtQtyInput(s.entrada)}</td>
+            <td class="td-calc" style="text-align:right">${fmtQtyInput(s.entrada_bruta != null ? s.entrada_bruta : s.entrada)}</td>
+            <td class="td-calc" style="text-align:right;${parseFloat(s.saida) > 0 ? 'color:#f87171' : ''}">${fmtQtyInput(s.saida || 0)}</td>
             <td class="td-calc" style="text-align:right">${dei}</td>
             <td class="td-calc" style="text-align:right;color:#94a3b8">${fmtNum(parseFloat(s.fechados) || 0)}</td>
             <td class="td-calc" style="text-align:right">${vendTxt}</td>
@@ -3917,7 +3919,7 @@ async function loadTurno() {
     function validacaoTableFor(items, label) {
       if (!items.length) return '';
       return `
-        <tr><td colspan="21" class="section-header">${label}</td></tr>
+        <tr><td colspan="22" class="section-header">${label}</td></tr>
         ${validacaoRows(items)}`;
     }
 
@@ -3984,7 +3986,7 @@ async function loadTurno() {
     function tableFor(items, label) {
       if (!items.length) return '';
       return `
-        <tr><td colspan="4" class="section-header">${label}</td></tr>
+        <tr><td colspan="5" class="section-header">${label}</td></tr>
         ${stockRows(items)}`;
     }
 
@@ -4042,6 +4044,7 @@ async function loadTurno() {
                   <th>Produto</th>
                   <th style="text-align:right">Encontrado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Entrada</th>
+                  <th style="text-align:right">Saída</th>
                   <th style="text-align:right">Deixado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                 </tr>
               </thead>
@@ -4079,6 +4082,7 @@ async function loadTurno() {
                   <th style="text-align:right" title="Encontrado acima do Deixado do turno anterior">Sobra</th>
                   <th style="text-align:right">Encontrado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Entrada</th>
+                  <th style="text-align:right">Saída</th>
                   <th style="text-align:right">Deixado <span style="font-weight:400;color:#64748b">(obr.)</span></th>
                   <th style="text-align:right">Fechados <span style="font-weight:400;color:#64748b">(bloqueado)</span></th>
                   <th style="text-align:right">Vendido</th>
@@ -10652,7 +10656,7 @@ function talaoTurnoLinhas(sec, W) {
   seccao('Validação do stock');
   const cabV = sec.validacao.find((r) => r.tipo === 'cab') || [];
   const iV = {
-    enc: idx(cabV, /^Encontrado/), ent: idx(cabV, /^Entrada/), dei: idx(cabV, /^Deixado/),
+    enc: idx(cabV, /^Encontrado/), ent: idx(cabV, /^Entrada/), sai: idx(cabV, /^Sa[íi]da$/), dei: idx(cabV, /^Deixado/),
     ven: idx(cabV, /^Vendido/), bal: idx(cabV, /^Balc/)
   };
   const alertasV = [
@@ -10667,13 +10671,17 @@ function talaoTurnoLinhas(sec, W) {
     if (r.tipo === 'cab') return;
     if (r.tipo === 'seccao') { linV.push({ t: `-- ${tlTxt(cel(r, 0))} --`, s: 'b' }); return; }
     nProd++;
-    linV.push({ c: [cel(r, 0), tlNum(cel(r, iV.enc)), tlNum(cel(r, iV.ent)), tlNum(cel(r, iV.dei)), tlNum(cel(r, iV.ven)), tlVazio(cel(r, iV.bal)) ? '' : tlNum(cel(r, iV.bal))] });
+    linV.push({ c: [cel(r, 0), tlNum(cel(r, iV.enc)), tlNum(cel(r, iV.ent)), tlVazio(cel(r, iV.sai)) ? '' : tlNum(cel(r, iV.sai)), tlNum(cel(r, iV.dei)), tlNum(cel(r, iV.ven)), tlVazio(cel(r, iV.bal)) ? '' : tlNum(cel(r, iV.bal))] });
     const al = alertasV.filter((a) => a.i >= 0 && !tlVazio(cel(r, a.i))).map((a) => `${a.tipo} ${tlNum(cel(r, a.i))} ${a.onde}`);
     if (al.length) { nDif++; linV.push({ t: `  ! ${al.join(' | ')}`, s: 'b' }); }
   });
   if (!nProd) add('(sem produtos)');
   else {
-    tabela([{ h: 'Produto', flex: true }, { h: 'Enc', al: 'r' }, { h: 'Ent', al: 'r' }, { h: 'Deix', al: 'r' }, { h: 'Vend', al: 'r' }, { h: 'Balc', al: 'r' }], linV);
+    // Coluna Saída só quando houve saídas de produto no turno.
+    const comSai = linV.some((l) => l.c && l.c[3] !== '');
+    const colsV = [{ h: 'Produto', flex: true }, { h: 'Enc', al: 'r' }, { h: 'Ent', al: 'r' }, { h: 'Sai', al: 'r' }, { h: 'Deix', al: 'r' }, { h: 'Vend', al: 'r' }, { h: 'Balc', al: 'r' }];
+    const usarV = (_, i) => comSai || i !== 3;
+    tabela(colsV.filter(usarV), linV.map((l) => (l.c ? { ...l, c: l.c.filter(usarV) } : l)));
     add('-'.repeat(W));
     addLR(`${nProd} produto(s)`, nDif ? `${nDif} com diferenca` : 'sem diferencas', 'b');
   }
@@ -11941,6 +11949,23 @@ async function submitMovimento(turnoId) {
   }
 }
 
+/** Actualiza as células Entrada e Saída do Stock a partir dos movimentos;
+ *  devolve o saldo (entradas − saídas), que é o que entra nas contas. */
+function atualizarCelulasEntradaSaida(pid, rows) {
+  let ent = 0, sai = 0;
+  (rows || []).filter((e) => prodIdKey(e.produto_id) === pid).forEach((e) => {
+    const q = parseFloat(e.quantidade) || 0;
+    if (e.tipo === 'tirar') sai += q; else ent += q;
+  });
+  const cE = document.getElementById(`entrada-${pid}`);
+  if (cE) cE.textContent = fmtQtyInput(ent);
+  const cS = document.getElementById(`saida-${pid}`);
+  if (cS) { cS.textContent = fmtQtyInput(sai); cS.style.color = sai > 0 ? '#f87171' : 'inherit'; }
+  const row = (S.turnoData && S.turnoData.stock || []).find((x) => prodIdKey(x.produto_id) === pid);
+  if (row) { row.entrada_bruta = ent; row.saida = sai; row.entrada = ent - sai; }
+  return ent - sai;
+}
+
 async function submitEntrada(turnoId) {
   const pidRaw = document.getElementById('e-produto')?.value;
   const ehLivre = pidRaw === '__livre';
@@ -11981,10 +12006,7 @@ async function submitEntrada(turnoId) {
       const novaEntrada = await api('GET', `/turnos/${turnoId}/entradas`).catch(() => {
         try { return aplicarEscritasOffline(comLojaNoPath(`/turnos/${turnoId}/entradas`), []); } catch (_) { return []; }
       });
-      const soma = novaEntrada.filter((e) => prodIdKey(e.produto_id) === pid)
-                              .reduce((s, e) => s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1), 0);
-      const cell = document.getElementById(`entrada-${pid}`);
-      if (cell) cell.textContent = fmtQtyInput(soma);
+      const soma = atualizarCelulasEntradaSaida(pid, novaEntrada);
       if (!stockBuf[pid]) stockBuf[pid] = { encontrado: null, entrada: 0, deixado: null, fechados: 0 };
       stockBuf[pid].entrada = soma;
       updateStock(pidRaw, 'entrada', soma);
@@ -12171,15 +12193,7 @@ async function adicionarFinoBarrilNovo(produtoId) {
     const entradasRows = await api('GET', `/turnos/${turnoId}/entradas`).catch(() => {
       try { return aplicarEscritasOffline(comLojaNoPath(`/turnos/${turnoId}/entradas`), []); } catch (_) { return []; }
     });
-    const soma = entradasRows
-      .filter((e) => prodIdKey(e.produto_id) === pid)
-      .reduce(
-        (s, e) =>
-          s + parseFloat(e.quantidade) * (e.tipo === 'tirar' ? -1 : 1),
-        0
-      );
-    const cell = document.getElementById(`entrada-${pid}`);
-    if (cell) cell.textContent = fmtQtyInput(soma);
+    const soma = atualizarCelulasEntradaSaida(pid, entradasRows);
     if (!stockBuf[pid])
       stockBuf[pid] = { encontrado: null, entrada: 0, deixado: null, fechados: 0 };
     stockBuf[pid].entrada = soma;

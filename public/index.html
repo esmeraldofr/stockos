@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-barril-consumo">
+<html lang="pt" data-stockos-ui="2026-10-17-talao-letra-media">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10590,20 +10590,20 @@ async function exportarTurnoExcel() {
 }
 
 // ── TALÃO DO TURNO (impressora térmica) ───────────────────────────────
-// Mesmas 5 secções do Excel. Letra Normal (Font B: 42 col. em 58 mm, 64
-// em 80 mm), Pequena (52/78) ou Mini (60/90) — estas como imagem. Uma linha por produto/movimento (nomes cortados,
+// Mesmas secções do Excel. Letra Normal (Font B: 42 col. em 58 mm, 64
+// em 80 mm), Média (47/71) ou Pequena (52/78) — estas como imagem, a negrito. Uma linha por produto/movimento (nomes cortados,
 // nunca partidos). Android → RawBT (ESC/POS, como o talão dos pedidos);
 // noutros aparelhos → impressão do browser numa folha estreita.
 const TALAO_LARG_KEY = 'stockos.talaoTurnoLargura';
 const TALAO_LETRA_KEY = 'stockos.talaoTurnoLetra';
 /** Colunas por papel e tamanho de letra. «normal» = Font B da impressora
  *  (texto); «pequena» e «mini» vão como imagem (letra abaixo da Font B). */
-const TALAO_COLUNAS = { 58: { normal: 42, pequena: 52, mini: 60 }, 80: { normal: 64, pequena: 78, mini: 90 } };
+const TALAO_COLUNAS = { 58: { normal: 42, media: 47, pequena: 52 }, 80: { normal: 64, media: 71, pequena: 78 } };
 function talaoPapel() {
   try { return localStorage.getItem(TALAO_LARG_KEY) === '80' ? 80 : 58; } catch (_) { return 58; }
 }
 function talaoLetra() {
-  try { const v = localStorage.getItem(TALAO_LETRA_KEY); return TALAO_COLUNAS[58][v] ? v : 'pequena'; } catch (_) { return 'pequena'; }
+  try { const v = localStorage.getItem(TALAO_LETRA_KEY); return TALAO_COLUNAS[58][v] ? v : 'media'; } catch (_) { return 'media'; }
 }
 function talaoLargura() {
   return TALAO_COLUNAS[talaoPapel()][talaoLetra()];
@@ -10886,7 +10886,7 @@ function talaoTurnoEscPosRaster(L, W, mm) {
   const ctx = cv.getContext('2d');
   ctx.font = `100px ${fam}`;
   const tam = Math.max(6, (100 * cw) / (ctx.measureText('M').width || 60)); // px de letra p/ cw
-  const alt = Math.ceil(tam * 1.18);
+  const alt = Math.ceil(tam * 1.25);
   const altTit = Math.ceil(tam * 1.6);
   const h = L.reduce((a, l) => a + (l.s === 'titulo' ? altTit : alt), 0) + 4;
   cv.width = largura;
@@ -10898,8 +10898,8 @@ function talaoTurnoEscPosRaster(L, W, mm) {
   let y = 2;
   L.forEach(({ t, s }) => {
     const tit = s === 'titulo';
-    const neg = tit || s === 'seccao' || s === 'b';
-    ctx.font = `${neg ? 'bold ' : ''}${tit ? (tam * 1.35).toFixed(1) : tam.toFixed(1)}px ${fam}`;
+    // Térmica: letra pequena com traço fino quase não se vê — sempre negrito.
+    ctx.font = `bold ${tit ? (tam * 1.35).toFixed(1) : tam.toFixed(1)}px ${fam}`;
     const txt = String(t);
     const tw = Math.min(largura, ctx.measureText(txt).width);
     const x = tit || s === 'centro' || s === 'seccao' ? Math.max(0, (largura - tw) / 2) : 0;
@@ -10920,7 +10920,7 @@ function talaoTurnoEscPosRaster(L, W, mm) {
         let byte = 0;
         for (let k = 0; k < 8; k++) {
           const i = (yy * largura + b * 8 + k) * 4;
-          if (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114 < 170) byte |= 0x80 >> k;
+          if (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114 < 200) byte |= 0x80 >> k; // limiar alto = mais escuro
         }
         blk += String.fromCharCode(byte);
       }
@@ -10953,7 +10953,7 @@ function talaoTurnoImprimirBrowser(L, W) {
   d.write(`<!doctype html><html><head><meta charset="utf-8"><title>Talão do turno</title><style>
     @page { size: ${mm}mm auto; margin: 2mm; }
     html, body { margin: 0; background: #fff; color: #000; }
-    pre { font: ${letraMm}mm/1.2 "Courier New", Consolas, monospace; margin: 0; white-space: pre; }
+    pre { font: ${talaoLetra() === 'normal' ? 'normal' : 'bold'} ${letraMm}mm/1.2 "Courier New", Consolas, monospace; margin: 0; white-space: pre; }
   </style></head><body><pre>${talaoTurnoHtml(L, W)}</pre></body></html>`);
   d.close();
   setTimeout(() => {
@@ -10995,8 +10995,8 @@ async function abrirTalaoTurno() {
       <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:13px;color:#cbd5e1;margin-bottom:10px">
         <span style="color:#94a3b8">Letra:</span>
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-letra" value="normal"/> Normal</label>
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-letra" value="media"/> Média</label>
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-letra" value="pequena"/> Pequena</label>
-        <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-letra" value="mini"/> Mini</label>
       </div>
       <div style="max-height:58vh;overflow:auto;background:#fff;border-radius:8px;padding:10px;display:flex;justify-content:center">
         <pre id="talao-turno-pre" style="margin:0;color:#000;font:10.5px/1.25 'Courier New',Consolas,monospace;white-space:pre"></pre>

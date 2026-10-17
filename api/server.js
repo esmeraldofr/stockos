@@ -5346,17 +5346,24 @@ app.get('/api/dia', auth, async (req, res) => {
     // Entrada e Saída de produto separadas (turno_stock.entrada é o saldo):
     // saida = soma das saídas («tirar»); entrada_bruta = saldo + saídas.
     const saidasMov = await query(
-      `SELECT turno_id, produto_id, COALESCE(SUM(quantidade),0)::numeric AS saida
+      `SELECT turno_id, produto_id,
+              COALESCE(SUM(quantidade) FILTER (WHERE COALESCE(notas,'') NOT LIKE 'CONSUMO::%'),0)::numeric AS saida,
+              COALESCE(SUM(quantidade) FILTER (WHERE COALESCE(notas,'') LIKE 'CONSUMO::%'),0)::numeric AS consumo
        FROM turno_entradas WHERE turno_id = ANY($1::int[]) AND tipo = 'tirar' AND produto_id IS NOT NULL
        GROUP BY turno_id, produto_id`,
       [ids]
     ).catch(() => ({ rows: [] }));
-    const saidaPor = {};
-    for (const r of saidasMov.rows) saidaPor[`${r.turno_id}:${r.produto_id}`] = parseFloat(r.saida) || 0;
+    const saidaPor = {}, consumoPor = {};
+    for (const r of saidasMov.rows) {
+      saidaPor[`${r.turno_id}:${r.produto_id}`] = parseFloat(r.saida) || 0;
+      consumoPor[`${r.turno_id}:${r.produto_id}`] = parseFloat(r.consumo) || 0;
+    }
     const stockByTurno = {};
     for (const row of stockAll.rows) {
       const sai = saidaPor[`${row.turno_id}:${row.produto_id}`] || 0;
       row.saida = sai;
+      // Consumo (ex.: barril selado gasto na troca) conta como vendido.
+      row.consumo = consumoPor[`${row.turno_id}:${row.produto_id}`] || 0;
       row.entrada_bruta = (parseFloat(row.entrada) || 0) + sai;
       if (!stockByTurno[row.turno_id]) stockByTurno[row.turno_id] = [];
       stockByTurno[row.turno_id].push(row);
@@ -6040,7 +6047,13 @@ async function recalcularDeixadosAuto(turnoId, profundidade = 0) {
        JOIN produtos p ON p.id = tpl.produto_id
        WHERE tp.turno_id = $1
      ),
-     balcao AS (
+     consumos AS (
+       SELECT produto_id AS pid, SUM(quantidade)::numeric AS qtd
+       FROM turno_entradas
+       WHERE turno_id = $1 AND tipo = 'tirar' AND COALESCE(notas,'') LIKE 'CONSUMO::%' AND produto_id IS NOT NULL
+       GROUP BY produto_id
+     ),
+     balcao_ped AS (
        SELECT CASE
                 WHEN l.pid_venda IN (SELECT produto_id FROM ts_turno) THEN l.pid_venda
                 WHEN l.copo AND l.kgc > 0 AND lower(trim(l.nome)) LIKE 'fino%' THEN (SELECT produto_id FROM barril)
@@ -6048,6 +6061,10 @@ async function recalcularDeixadosAuto(turnoId, profundidade = 0) {
               SUM(CASE WHEN l.copo AND l.kgc > 0 THEN l.q * l.kgc ELSE l.q END) AS qtd
        FROM linhas l
        GROUP BY 1
+     ),
+     -- Balcão = pedidos + consumos (contam como vendido, não como Saída).
+     balcao AS (
+       SELECT pid, SUM(qtd) AS qtd FROM (SELECT pid, qtd FROM balcao_ped UNION ALL SELECT pid, qtd FROM consumos) u GROUP BY pid
      ),
      -- Recipientes com tara (Fino Barril): o Deixado nunca fica abaixo do
      -- peso do recipiente vazio (nem acima do que havia: Enc + Entrada).
@@ -6440,7 +6457,9 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
       // entrada = soma das entradas - soma das saídas (só na folha de stock)
       if (naFolhaStock) await client.query(
         `UPDATE turno_stock SET entrada=(
-           SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE -quantidade END),0)
+           SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN quantidade
+                                    WHEN COALESCE(notas,'') LIKE 'CONSUMO::%' THEN 0
+                                    ELSE -quantidade END),0)
            FROM turno_entradas WHERE turno_id=$1 AND produto_id=$2
          ) WHERE turno_id=$1 AND produto_id=$2`,
         [turnoId, produto_id]

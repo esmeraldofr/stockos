@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-stock-outros">
+<html lang="pt" data-stockos-ui="2026-10-17-outros-zero">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3676,7 +3676,9 @@ async function loadTurno() {
       // Passagem de turno: turnos abertos antes desta regra podem ter um
       // Encontrado diferente do Deixado anterior — alinha e grava (o
       // servidor aplica o valor herdado).
-      if (turno.estado === 'aberto' && temAnteriorAlinhar && s.prev_tem_linha !== false) {
+      if (turno.estado === 'aberto' && temAnteriorAlinhar) {
+        // Produto que não estava na folha anterior: o Encontrado é 0.
+        if (s.prev_tem_linha === false && (s.prev_deixado === null || s.prev_deixado === undefined)) s.prev_deixado = 0;
         const vazio = (v) => v === null || v === undefined || v === '';
         const difere = (a, b) => (vazio(a) !== vazio(b)) ||
           (!vazio(a) && Math.abs(parseFloat(a) - parseFloat(b)) >= 0.001);
@@ -3764,8 +3766,8 @@ async function loadTurno() {
         const inputAttr = canEdit ? '' : 'disabled';
         // Passagem de turno: com Deixado no turno anterior, o Encontrado É
         // esse valor (herdado e mantido pelo servidor) — só leitura.
-        // Produto novo na folha (não existia no turno anterior): editável.
-        const encHerdado = turnoTemAnterior && s.prev_tem_linha !== false;
+        // Herdado do turno anterior (produto novo na folha: começa em 0).
+        const encHerdado = turnoTemAnterior;
         const encInputAttr = canEdit && !encHerdado ? '' : 'disabled';
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.
@@ -3936,7 +3938,7 @@ async function loadTurno() {
         if (!pid) return '';
         const inputAttr = canEdit ? '' : 'disabled';
         // Passagem de turno: Enc. caixa herdado do Deix. caixa anterior — só leitura.
-        const encCxHerdado = turnoTemAnterior && s.prev_tem_linha !== false;
+        const encCxHerdado = turnoTemAnterior;
         const encInputAttr = canEdit && !encCxHerdado ? '' : 'disabled';
         // Deixados SÓ depois de o registo inicial fechar: garante a ordem
         // do turno (encontrados primeiro) e evita trocas de coluna.

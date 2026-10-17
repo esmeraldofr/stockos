@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-sync-emaxconn">
+<html lang="pt" data-stockos-ui="2026-10-17-balcao-fino-barril">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3470,7 +3470,8 @@ function getVendasBalcaoPorProduto() {
     for (const ln of (p.linhas || [])) {
       const pid = prodIdKey(ln.produto_id);
       if (!pid) continue;
-      const qtd = parseFloat(ln.quantidade) || 0;
+      // Sem as devoluções — igual ao Deixado automático no servidor.
+      const qtd = Math.max(0, (parseFloat(ln.quantidade) || 0) - (parseFloat(ln.quantidade_devolvida) || 0));
       const isCopo = ln.venda_por_copo === true && (parseFloat(ln.kg_por_copo) || 0) > 0;
       const kgPorCopo = parseFloat(ln.kg_por_copo) || 0;
       if (!map[pid]) map[pid] = { copos: 0, unidades: 0, kg: 0, isCopo, kg_por_copo: kgPorCopo };
@@ -3479,6 +3480,27 @@ function getVendasBalcaoPorProduto() {
         map[pid].kg += qtd * kgPorCopo;
       } else {
         map[pid].unidades += qtd;
+      }
+    }
+  }
+  // Copos de «Fino…» que não estão na folha (Fino 400, Fino 1000…) saem do
+  // Fino Barril — mesma regra do Deixado automático no servidor.
+  const stockT = (S.turnoData && S.turnoData.stock) || [];
+  const barril = stockT.find((x) => isFinoBarrilNome(x.produto_nome));
+  if (barril) {
+    const bid = prodIdKey(barril.produto_id);
+    const naFolha = new Set(stockT.map((x) => prodIdKey(x.produto_id)));
+    for (const p of pedidos) {
+      for (const ln of (p.linhas || [])) {
+        const pid = prodIdKey(ln.produto_id);
+        const kgc = parseFloat(ln.kg_por_copo) || 0;
+        if (!pid || naFolha.has(pid) || ln.venda_por_copo !== true || kgc <= 0) continue;
+        if (!/^fino/i.test(String(ln.produto_nome || '').trim())) continue;
+        const q = Math.max(0, (parseFloat(ln.quantidade) || 0) - (parseFloat(ln.quantidade_devolvida) || 0));
+        if (!map[bid]) map[bid] = { copos: 0, unidades: 0, kg: 0, isCopo: true, kg_por_copo: kgc };
+        map[bid].isCopo = true;
+        map[bid].copos += q;
+        map[bid].kg += q * kgc;
       }
     }
   }

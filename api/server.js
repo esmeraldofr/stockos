@@ -5329,8 +5329,21 @@ app.get('/api/dia', auth, async (req, res) => {
       query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids])
     ]);
 
+    // Entrada e Saída de produto separadas (turno_stock.entrada é o saldo):
+    // saida = soma das saídas («tirar»); entrada_bruta = saldo + saídas.
+    const saidasMov = await query(
+      `SELECT turno_id, produto_id, COALESCE(SUM(quantidade),0)::numeric AS saida
+       FROM turno_entradas WHERE turno_id = ANY($1::int[]) AND tipo = 'tirar' AND produto_id IS NOT NULL
+       GROUP BY turno_id, produto_id`,
+      [ids]
+    ).catch(() => ({ rows: [] }));
+    const saidaPor = {};
+    for (const r of saidasMov.rows) saidaPor[`${r.turno_id}:${r.produto_id}`] = parseFloat(r.saida) || 0;
     const stockByTurno = {};
     for (const row of stockAll.rows) {
+      const sai = saidaPor[`${row.turno_id}:${row.produto_id}`] || 0;
+      row.saida = sai;
+      row.entrada_bruta = (parseFloat(row.entrada) || 0) + sai;
       if (!stockByTurno[row.turno_id]) stockByTurno[row.turno_id] = [];
       stockByTurno[row.turno_id].push(row);
     }

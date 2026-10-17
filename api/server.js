@@ -280,6 +280,16 @@ function verificarSeloDdl(sqlConn) {
   })();
 }
 
+/** Listas JS → literal de array do Postgres ('{1,2,3}'). O postgres.js só
+ *  serializa arrays bem depois de carregar os tipos da BD na ligação; em
+ *  ligações novas no pooler isso às vezes falha e [568] seguia como "568"
+ *  («malformed array literal»). Com o literal explícito funciona sempre. */
+function pgParams(params) {
+  return (params || []).map((v) => (Array.isArray(v)
+    ? '{' + v.map((x) => (x == null ? 'NULL' : '"' + String(x).replace(/(["\\])/g, '\\$1') + '"')).join(',') + '}'
+    : v));
+}
+
 /** Último timeout-retry interno — o auto-diagnóstico expõe-o à app. */
 let __pgTimeoutTs = 0;
 const query = async (text, params) => {
@@ -294,7 +304,7 @@ const query = async (text, params) => {
       // → resetPgSingleton() + retry com ligação nova.
       const tmoMs = attempt === 0 ? 2500 : 6000;
       const rows = await Promise.race([
-        sql.unsafe(text, params || []),
+        sql.unsafe(text, pgParams(params)),
         new Promise((_, reject) => setTimeout(() => reject(new Error(`query timeout (${tmoMs}ms)`)), tmoMs))
       ]);
       _lastPgUseTs = Date.now();
@@ -342,7 +352,7 @@ const pool = {
         ]);
         return {
           query: async (text, params) => {
-            const rows = await reserved.unsafe(text, params || []);
+            const rows = await reserved.unsafe(text, pgParams(params));
             _lastPgUseTs = Date.now();
             return { rows: Array.from(rows) };
           },

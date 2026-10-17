@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-troca-fora-movimentos">
+<html lang="pt" data-stockos-ui="2026-10-17-talao-sem-corte">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10620,6 +10620,26 @@ const tlFmt = (v) => tlMil(fmt(v));
 const tlNum = (v) => (v === '' || v == null ? '' : typeof v === 'number' ? tlFmtNum(v) : tlMil(tlTxt(v)));
 const tlKz = (v) => (v === '' || v == null ? '—' : typeof v === 'number' ? tlFmt(v) : tlMil(tlTxt(v)));
 const tlVazio = (v) => v === '' || v == null || v === 0 || /^[—-]?$/.test(tlTxt(v));
+/** Só o número de uma célula do ecrã: «copos 127,39 (25,48 kg)» → 127,39;
+ *  «copos (42 pacotes) 126,00» → 126. Texto sem número fica como está. */
+const tlSoNum = (v) => {
+  if (v === '' || v == null) return '';
+  if (typeof v === 'number') return tlFmtNum(v);
+  const t = tlTxt(v).replace(/\([^)]*\)/g, ' ');
+  const m = t.match(/[+-]?\d{1,3}(?:[ .]\d{3})*(?:,\d+)?|[+-]?\d+(?:,\d+)?/g);
+  if (!m) return tlTxt(v);
+  const n = celulaExcel(m[m.length - 1]);
+  return typeof n === 'number' ? tlFmtNum(n) : tlTxt(v);
+};
+/** Quantidade curta para colunas apertadas: ≥10 sem decimais, <10 com 1. */
+const tlQtdCurta = (v, sinal) => {
+  if (v === '' || v == null || tlVazio(v)) return '';
+  let n = typeof v === 'number' ? v : celulaExcel(tlSoNum(v));
+  if (typeof n !== 'number') return tlTxt(v);
+  const a = Math.abs(n);
+  const txt = (a >= 10 ? Math.round(a) : Math.round(a * 10) / 10).toLocaleString('pt-AO', { maximumFractionDigits: 1 });
+  return (n < 0 ? '-' : (sinal && n > 0 ? '+' : '')) + tlMil(txt);
+};
 const tlSinal = (v) => (tlVazio(v) ? '' : (typeof v === 'number' && v > 0 ? '+' : '') + tlNum(v));
 
 /** Linhas do talão: [{t: texto, s: ''|'titulo'|'seccao'|'b'|'centro'}]. */
@@ -10692,7 +10712,7 @@ function talaoTurnoLinhas(sec, W) {
     if (r.tipo === 'cab') return;
     if (r.tipo === 'seccao') { linV.push({ t: `-- ${tlTxt(cel(r, 0))} --`, s: 'b' }); return; }
     nProd++;
-    linV.push({ c: [cel(r, 0), tlNum(cel(r, iV.enc)), tlNum(cel(r, iV.ent)), tlVazio(cel(r, iV.sai)) ? '' : tlNum(cel(r, iV.sai)), tlNum(cel(r, iV.dei)), tlNum(cel(r, iV.ven)), tlVazio(cel(r, iV.bal)) ? '' : tlNum(cel(r, iV.bal))] });
+    linV.push({ c: [cel(r, 0), tlNum(cel(r, iV.enc)), tlNum(cel(r, iV.ent)), tlVazio(cel(r, iV.sai)) ? '' : tlNum(cel(r, iV.sai)), tlNum(cel(r, iV.dei)), tlNum(cel(r, iV.ven)), tlVazio(cel(r, iV.bal)) ? '' : tlSoNum(cel(r, iV.bal))] });
     const al = alertasV.filter((a) => a.i >= 0 && !tlVazio(cel(r, a.i))).map((a) => `${a.tipo} ${tlNum(cel(r, a.i))} ${a.onde}`);
     if (al.length) { nDif++; linV.push({ t: `  ! ${al.join(' | ')}`, s: 'b' }); }
   });
@@ -10742,16 +10762,11 @@ function talaoTurnoLinhas(sec, W) {
     const total = r.tipo === 'total';
     if (total) linP.push({ t: '-'.repeat(W) });
     else algumP = true;
-    const n = (i) => (tlVazio(cel(r, i)) ? '' : tlNum(cel(r, i)));
-    // Quantidade: só o número (sem «copos (89 pacotes)», «itens», «un.»…).
-    const qtd = (() => {
-      const v = cel(r, iP.q);
-      if (typeof v === 'number' || tlVazio(v)) return n(iP.q);
-      const m = tlTxt(v).match(/-?\d{1,3}(?:[ .]\d{3})*(?:,\d+)?$|-?\d+(?:,\d+)?$/);
-      const num = m ? celulaExcel(m[0]) : '';
-      return typeof num === 'number' ? tlFmtNum(num) : tlTxt(v);
-    })();
-    linP.push({ c: [cel(r, 0), qtd, n(iP.val), n(iP.ven), n(iP.vv), tlSinal(cel(r, iP.dq)), tlSinal(cel(r, iP.dv))], s: total ? 'b' : '' });
+    // Só números (sem «copos (89 pacotes)», «(25,48 kg)», «itens», «un.»…).
+    const n = (i) => (tlVazio(cel(r, i)) ? '' : tlSoNum(cel(r, i)));
+    const qtd = tlQtdCurta(cel(r, iP.q));
+    const nomeP = String(tlTxt(cel(r, 0))).replace(/^Total geral \(sem c[aá]lculos do Fino\)$/i, 'T. s/ Fino');
+    linP.push({ c: [nomeP, qtd, n(iP.val), tlQtdCurta(cel(r, iP.ven)), n(iP.vv), tlQtdCurta(cel(r, iP.dq), true), tlSinal(cel(r, iP.dv))], s: total ? 'b' : '' });
   });
   const sv = sec.stockVendido || [];
   if (!algumP && sv.length) {
@@ -10774,7 +10789,7 @@ function talaoTurnoLinhas(sec, W) {
   else {
     tabela([{ h: 'Produto', flex: true }, { h: 'Qtd', al: 'r' }, { h: 'Valor', al: 'r' }, { h: 'Vend', al: 'r' },
       { h: 'V.vend', al: 'r' }, { h: 'Dif', al: 'r' }, { h: 'Dif Kz', al: 'r' }], linP);
-    add('Vend = vendido (stock)  V.vend = valor vendido');
+    add(W >= 46 ? 'Vend = vendido (stock)  V.vend = valor vendido' : 'Vend=vendido stock  V.vend=valor vendido');
   }
   if (linC.length) {
     add('');

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-resumo-fino-barril">
+<html lang="pt" data-stockos-ui="2026-10-17-total-sem-fino">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -7880,10 +7880,15 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       outros: '📦 Outros'
     }[c] || c);
     let totalQtdGeral = 0, totalKzGeral = 0, totalComGeral = 0, totalVendKzGeral = 0, totalDifKzGeral = 0;
+    // Mesmo total sem o Valor vendido / Dif. valor calculados a partir do
+    // Fino Barril (os pedidos de Fino continuam na Quantidade e no Valor).
+    let totalVendKzSemFino = 0, totalDifKzSemFino = 0, haFinoCalc = false;
     porCat.forEach((byProd) => {
       byProd.forEach((r) => {
         totalVendKzGeral += valorVendidoKzR(r) || 0;
         totalDifKzGeral += difKz(r) || 0;
+        if (finoInfo(r)) haFinoCalc = true;
+        else { totalVendKzSemFino += valorVendidoKzR(r) || 0; totalDifKzSemFino += difKz(r) || 0; }
         totalQtdGeral += r.qtd;
         totalKzGeral += r.valor;
         totalComGeral += r.comissao;
@@ -7914,6 +7919,17 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
                 <td style="background:rgba(244,63,94,0.07);border-left:2px solid #f43f5e"></td>
                 ${difCell(totalDifKzGeral, fmt, 'font-weight:700;background:rgba(244,63,94,0.07)')}
               </tr>
+              ${haFinoCalc ? `
+              <tr>
+                <td style="padding:8px;color:#cbd5e1;font-weight:700">Total geral (sem cálculos do Fino)</td>
+                <td style="padding:8px;text-align:right;color:#a5b4fc;font-variant-numeric:tabular-nums;font-weight:700"><span style="color:#64748b;font-size:11px">itens</span> ${num2(totalQtdGeral)}</td>
+                <td style="padding:8px;text-align:right;color:#4ade80;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalKzGeral)}</td>
+                <td style="padding:8px;text-align:right;color:#fbbf24;font-variant-numeric:tabular-nums;font-weight:700">${fmt(totalComGeral)}</td>
+                <td style="background:rgba(14,165,233,0.08);border-left:2px solid #0ea5e9"></td>
+                <td style="padding:8px;text-align:right;color:#86efac;font-variant-numeric:tabular-nums;font-weight:700;background:rgba(14,165,233,0.08)">${fmt(totalVendKzSemFino)}</td>
+                <td style="background:rgba(244,63,94,0.07);border-left:2px solid #f43f5e"></td>
+                ${difCell(totalDifKzSemFino, fmt, 'font-weight:700;background:rgba(244,63,94,0.07)')}
+              </tr>` : ''}
             </tbody>
           </table>
         </div>`;

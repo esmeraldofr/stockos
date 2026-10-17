@@ -14,7 +14,11 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'stockos-secret-2025';
 const PWD_SALT   = 'stockos-pwd-salt-2025';
 
-const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
+// Folha de stock do turno: todas as categorias (inclui «outro»: copos,
+// vasilhames, barris…) para os produtos com «Monitorar stock».
+const SQL_STOCK_CATEGORIAS = "COALESCE(categoria,'') IN ('menu','ingredientes','bebida','outro','')";
+const SQL_P_FOLHA_CATEGORIAS = "COALESCE(p.categoria,'') IN ('menu','ingredientes','bebida','outro','')";
+// Totais de VENDAS a partir da folha: só o que se vende (sem «outro»).
 const SQL_P_STOCK_CATEGORIAS = "p.categoria IN ('menu','ingredientes','bebida')";
 const SQL_ORD_H = `(CASE h.valid_from_turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 0 END)`;
 let _sqlUsePrecoHistorico = true;
@@ -5329,7 +5333,7 @@ app.get('/api/dia', auth, async (req, res) => {
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
          JOIN turnos t ON t.id = ts.turno_id
-         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}`;
+         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}`;
     const ordStockDia = ` ORDER BY ts.turno_id, p.ordem, p.nome`;
     const [stockAll, caixaAll] = await Promise.all([
       queryEmpresa(
@@ -5363,6 +5367,8 @@ app.get('/api/dia', auth, async (req, res) => {
     }
 
     const prevMapByTurnoId = {};
+
+    const prevTemLinhaByTurnoId = {};
     const prevCaixaMapByTurnoId = {};
     const nextMapByTurnoId = {};
     const nextCaixaMapByTurnoId = {};
@@ -5391,7 +5397,7 @@ app.get('/api/dia', auth, async (req, res) => {
                ${lojaCond}
                AND EXISTS (
                  SELECT 1 FROM turno_stock ts
-                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}
                  WHERE ts.turno_id = t.id AND ts.deixado IS NOT NULL
                )
              ORDER BY t.data DESC, ${slotCaseT} DESC
@@ -5401,11 +5407,14 @@ app.get('/api/dia', auth, async (req, res) => {
          SELECT pr.turno_id, ts.produto_id, ts.deixado, ts.deixado_caixa
          FROM prev pr
          JOIN turno_stock ts ON ts.turno_id = pr.prev_turno_id
-         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
-         WHERE ts.deixado IS NOT NULL OR ts.deixado_caixa IS NOT NULL`,
+         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}`,
         [ids]
       );
       for (const r of prevStock.rows) {
+        // Produto presente na folha do turno anterior (mesmo vazio): o
+        // Encontrado é herdado. Ausente (produto novo na folha) → editável.
+        if (!prevTemLinhaByTurnoId[r.turno_id]) prevTemLinhaByTurnoId[r.turno_id] = new Set();
+        prevTemLinhaByTurnoId[r.turno_id].add(String(r.produto_id));
         if (r.deixado !== null) {
           if (!prevMapByTurnoId[r.turno_id]) prevMapByTurnoId[r.turno_id] = {};
           prevMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.deixado);
@@ -5433,7 +5442,7 @@ app.get('/api/dia', auth, async (req, res) => {
                ${lojaCond}
                AND EXISTS (
                  SELECT 1 FROM turno_stock ts
-                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}
                  WHERE ts.turno_id = t.id AND ts.encontrado IS NOT NULL
                )
              ORDER BY t.data ASC, ${slotCaseT} ASC
@@ -5443,7 +5452,7 @@ app.get('/api/dia', auth, async (req, res) => {
          SELECT nx.turno_id, ts.produto_id, ts.encontrado, ts.encontrado_caixa
          FROM nxt nx
          JOIN turno_stock ts ON ts.turno_id = nx.next_turno_id
-         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}
          WHERE ts.encontrado IS NOT NULL OR ts.encontrado_caixa IS NOT NULL`,
         [ids]
       );
@@ -5492,6 +5501,8 @@ app.get('/api/dia', auth, async (req, res) => {
           else comparacao = `sobra ${diff}`;
         }
         const prevDeixado = prevMap[s.produto_id] !== undefined ? prevMap[s.produto_id] : null;
+        const prevSet = prevTemLinhaByTurnoId[turno.id];
+        const prevTemLinha = !!(prevSet && prevSet.has(String(s.produto_id)));
 
         // Mesma lógica para a coluna "a caixa": Enc. caixa vs Deix. caixa do turno anterior.
         const encCaixa =
@@ -5514,6 +5525,7 @@ app.get('/api/dia', auth, async (req, res) => {
           valor: val,
           comparacao,
           prev_deixado: prevDeixado,
+          prev_tem_linha: prevTemLinha,
           comparacao_caixa: comparacaoCaixa,
           prev_deixado_caixa: prevDeixadoCaixa,
           next_encontrado: nextEncontrado,
@@ -5741,7 +5753,7 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
          FROM produtos p
          LEFT JOIN turno_stock ps ON ps.turno_id = $2 AND ps.produto_id = p.id
         WHERE p.ativo = true AND p.em_stock_turno IS TRUE ${filtroEmp}
-          AND ${SQL_P_STOCK_CATEGORIAS}
+          AND ${SQL_P_FOLHA_CATEGORIAS}
        ON CONFLICT DO NOTHING`,
       temEmpProd ? [turnoId, prevTurnoId, empresaDe(req)] : [turnoId, prevTurnoId]
     );
@@ -6077,12 +6089,32 @@ function recalcularDeixadosAutoSeguro(turnoId) {
 /** Recalcula agora (o cliente chama ao abrir o turno) e diz se está activo. */
 app.post('/api/turnos/:id/deixados/recalcular', auth, async (req, res) => {
   try {
+    // Turno aberto: produtos com «Monitorar stock» activado depois da
+    // abertura entram na folha (Encontrado = Deixado do turno anterior).
+    let inseridos = 0;
+    try {
+      const tAb = await query(`SELECT estado FROM turnos WHERE id=$1`, [req.params.id]);
+      if (tAb.rows.length && tAb.rows[0].estado === 'aberto') {
+        const prevId = await turnoAnteriorComDeixados({ query }, req.params.id).catch(() => null);
+        const ins = await query(
+          `INSERT INTO turno_stock (turno_id, produto_id, encontrado, encontrado_caixa)
+           SELECT $1, p.id, ps.deixado, ps.deixado_caixa FROM produtos p
+           LEFT JOIN turno_stock ps ON ps.turno_id = $2 AND ps.produto_id = p.id
+           WHERE p.ativo = true AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}
+             AND NOT EXISTS (SELECT 1 FROM turno_stock x WHERE x.turno_id = $1 AND x.produto_id = p.id)
+           ON CONFLICT DO NOTHING
+           RETURNING produto_id`,
+          [req.params.id, prevId]
+        );
+        inseridos = ins.rows.length;
+      }
+    } catch (e) { console.warn('[stock] acrescentar produtos à folha:', e && e.message); }
     const alterados = await recalcularDeixadosAuto(req.params.id);
     const ativo = await deixadoAutoAtivo(req.params.id);
     const linhas = ativo
       ? (await query(`SELECT produto_id, deixado FROM turno_stock WHERE turno_id=$1`, [req.params.id])).rows
       : [];
-    res.json({ ativo, alterados: alterados.length, linhas });
+    res.json({ ativo, alterados: alterados.length, linhas, inseridos });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -6144,10 +6176,13 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
         `SELECT deixado, deixado_caixa FROM turno_stock WHERE turno_id=$1 AND produto_id=$2`,
         [prevTurnoId, produto_id]
       );
-      enc = pv.rows.length ? pv.rows[0].deixado : null;
-      encG = pv.rows.length ? pv.rows[0].deixado_caixa : null;
-      encHerdado = true;
-      encGHerdado = true;
+      // Produto que não estava na folha anterior (novo): Encontrado editável.
+      if (pv.rows.length) {
+        enc = pv.rows[0].deixado;
+        encG = pv.rows[0].deixado_caixa;
+        encHerdado = true;
+        encGHerdado = true;
+      }
     }
     const sets = ['fechados=$5'];
     // Herdado: escreve-se sempre (é um espelho, nunca uma edição manual).

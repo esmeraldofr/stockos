@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-19-calculadora-finos">
+<html lang="pt" data-stockos-ui="2026-10-19-relatorio-fino">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4205,6 +4205,10 @@ async function loadTurno() {
         <div class="card" id="pedidos-resumo-card">
           <div class="card-title">📊 Resumo dos pedidos</div>
           <div id="pedidos-resumo-mount"><span style="color:#64748b">A carregar…</span></div>
+        </div>
+        <div class="card mt-16" id="fino-relatorio-card" style="display:none">
+          <div class="card-title">🛢️ Fino Barril — copos</div>
+          <div id="fino-relatorio-mount"></div>
         </div>
         <div class="card mt-16">
           <div class="card-title">💰 Caixa</div>
@@ -8423,6 +8427,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
       ? '<span style="color:#64748b">Ainda não há pedidos neste turno.</span>'
       : resumoProdutosHtml + resumoComissoesHtml;
   }
+  try { renderRelatorioFino(); } catch (_) {}
   // Aba "⚠️ Diferenças": bloco Validação — diferenças detectadas.
   const difMount = document.getElementById('dif-validacao-mount');
   if (difMount) {
@@ -10551,6 +10556,7 @@ function recolherSeccoesTurno() {
         : (parseFloat(row.preco) > 0 ? v * parseFloat(row.preco) : null);
       return { nome: row.produto_nome, categoria: row.categoria || 'outros', v, kz };
     }).filter(Boolean),
+    fino: (() => { try { return relatorioFinoBarril(t); } catch (_) { return null; } })(),
     estado: { turno: t.estado || '', encontrados: t.encontrados_fechados_em || null, deixados: t.deixados_fechados_em || null },
     // Dados completos da aba Entradas e Saídas (independente do filtro do ecrã).
     mvDados: window.__mvDados ? { ...window.__mvDados, movs: [...(window.__mvDados.movs || [])] } : null,
@@ -10582,6 +10588,28 @@ function linhasCaixaTurno(sec) {
   }
   return out;
 }
+/** Linhas do relatório do Fino Barril para o Excel. */
+function linhasFinoTurno(sec) {
+  const fr = sec.fino;
+  if (!fr) return [['(sem Fino Barril neste turno)']];
+  if (!fr.ok) return [['(falta o peso encontrado ou deixado)']];
+  const out = [
+    [XL_H('Fino Barril'), XL_H('Kg')],
+    ['Peso encontrado (bruto)', fr.enc], ['Tara (vasilhame)', fr.tara], ['Líquido no início', fr.liqIni],
+    [`Barris novos (${fr.trocas})`, fr.entradaKg], ['Retirado sem acabar', fr.restoLiq ? -fr.restoLiq : 0],
+    ['Peso deixado (bruto)', fr.dei], ['Líquido no fim', fr.liqFim],
+    [{ v: 'Kg vendidos (barril)', b: true }, { v: fr.kgVend, b: true }],
+    [],
+    [XL_H('Vendido no balcão'), XL_H('Qtd'), XL_H('Kg por unid.'), XL_H('Kg'), XL_H('Valor (Kz)')],
+    ...fr.vendas.map((x) => [x.nome, x.qtd, x.kgc, x.kg, x.valor]),
+    [{ v: 'Total balcão', b: true }, '', '', { v: fr.kgBalcao, b: true }, { v: fr.valorBalcao, b: true }],
+    [],
+    [{ v: 'Diferença (barril − balcão) kg', b: true }, { v: fr.difKg, b: true, cor: Math.abs(fr.difKg) < 0.1 ? '2E7D32' : 'C00000' }],
+    ['≈ copos de 0,2 kg', fr.difCopos], ['≈ valor (Kz)', fr.difKz]
+  ];
+  return out;
+}
+
 /** Linhas «Quem trabalhou» (equipa real) para o Excel. */
 function linhasEquipaTurno(sec) {
   const cab = [XL_H('Nome'), XL_H('Função'), XL_H('A cobrir'), XL_H('Hora extra'), XL_H('Notas')]; cab.tipo = 'cab';
@@ -10609,6 +10637,7 @@ async function exportarTurnoExcel() {
     { nome: 'Produtos vendidos', linhas: cab.concat(sec.produtos) },
     { nome: 'Caixa', linhas: cab.concat(linhasCaixaTurno(sec)) },
     { nome: 'Movimentos do turno', linhas: cab.concat(sec.movimentos) },
+    ...(sec.fino ? [{ nome: 'Fino Barril', linhas: cab.concat(linhasFinoTurno(sec)) }] : []),
     { nome: 'Quem trabalhou', linhas: cab.concat(linhasEquipaTurno(sec)) },
     { nome: 'Observações', linhas: cab.concat([[XL_H('Observações do turno')], [sec.notas || '(sem observações)'], [], [XL_H('Observações do admin')], [sec.notasAdmin || '(sem observações)']]) }
   ]), nomeFicheiroXlsx([lojaAtivaNome(), sec.data, sec.nome]));
@@ -10822,6 +10851,27 @@ function talaoTurnoLinhas(sec, W) {
     add('Comissoes por promotor', 'b');
     tabela([{ h: 'Promotor', flex: true }, { h: 'Ped', al: 'r' }, { h: 'Vendido', al: 'r' }, { h: 'Comissao', al: 'r' }],
       linC.map((l) => (l.s ? [{ t: '-'.repeat(W) }, l] : [l])).flat());
+  }
+
+  // Fino Barril: kg que saíram do barril vs vendido no balcão.
+  const fr = sec.fino;
+  if (fr) {
+    seccao('Fino Barril');
+    if (!fr.ok) add('(falta o peso encontrado ou deixado)');
+    else {
+      addLR('Inicio (liq.)', `${tlFmtNum(fr.enc)}-${tlFmtNum(fr.tara)}=${tlFmtNum(fr.liqIni)} kg`);
+      if (fr.trocas) addLR(`Barris novos (${fr.trocas})`, `+${tlFmtNum(fr.entradaKg)} kg`);
+      if (fr.restoLiq) addLR('Retirado sem acabar', `-${tlFmtNum(fr.restoLiq)} kg`);
+      addLR('Fim (liq.)', `${tlFmtNum(fr.dei)}-${tlFmtNum(fr.tara)}=${tlFmtNum(fr.liqFim)} kg`);
+      addLR('Kg vendidos (barril)', `${tlFmtNum(fr.kgVend)} kg`, 'b');
+      add('-'.repeat(W));
+      if (fr.vendas.length) tabela([{ h: 'Balcao', flex: true }, { h: 'Qtd', al: 'r' }, { h: 'Kg', al: 'r' }, { h: 'Valor', al: 'r' }],
+        fr.vendas.map((x) => ({ c: [x.nome, tlFmtNum(x.qtd), tlFmtNum(x.kg), tlFmtNum(x.valor)] })).concat([{ c: ['Total balcao', '', tlFmtNum(fr.kgBalcao), tlFmtNum(fr.valorBalcao)], s: 'b' }]));
+      else add('(sem pedidos de Fino)');
+      add('-'.repeat(W));
+      addLR('Diferenca', Math.abs(fr.difKg) < 0.1 ? 'bate' : `${fr.difKg > 0 ? '+' : '-'}${tlFmtNum(Math.abs(fr.difKg))} kg`, 'b');
+      if (Math.abs(fr.difKg) >= 0.1) addLR(fr.difKg > 0 ? '  sem pedido' : '  a mais no balcao', `~${tlFmtNum(Math.abs(fr.difCopos))} copos ~${tlFmtNum(Math.abs(fr.difKz))} Kz`);
+    }
   }
 
   // 3. Caixa
@@ -11151,6 +11201,7 @@ function livroVariosTurnos(secs, layout, titulo) {
         sub('Produtos vendidos'), ...sec.produtos, [],
         sub('Caixa'), ...linhasCaixaTurno(sec), [],
         sub('Movimentos do turno'), ...sec.movimentos, [],
+        ...(sec.fino ? [sub('Fino Barril'), ...linhasFinoTurno(sec), []] : []),
         sub('Quem trabalhou'), ...linhasEquipaTurno(sec), [],
         sub('Observações'), [sec.notas || '(sem observações)'], [],
         sub('Observações do admin'), [sec.notasAdmin || '(sem observações)']];
@@ -11178,6 +11229,8 @@ function livroVariosTurnos(secs, layout, titulo) {
       { nome: 'Produtos vendidos', linhas: continua('produtos', true) },
       { nome: 'Caixa', linhas: resumoCaixa() },
       { nome: 'Movimentos do turno', linhas: continua('movimentos', false) },
+      { nome: 'Fino Barril', linhas: [[XL_H('Data'), XL_H('Turno'), XL_H('Encontrado'), XL_H('Barris novos'), XL_H('Retirado (kg)'), XL_H('Deixado'), XL_H('Kg vendidos'), XL_H('Kg balcão'), XL_H('Valor balcão'), XL_H('Dif. kg'), XL_H('Dif. copos'), XL_H('Dif. Kz')],
+        ...secs.filter((sec) => sec.fino && sec.fino.ok).map((sec) => { const f = sec.fino; return [xlData(sec.data), sec.turno, f.enc, f.trocas, f.restoLiq, f.dei, f.kgVend, f.kgBalcao, f.valorBalcao, f.difKg, f.difCopos, f.difKz]; })] },
       { nome: 'Quem trabalhou', linhas: [[XL_H('Data'), XL_H('Turno'), XL_H('Nome'), XL_H('Função'), XL_H('A cobrir'), XL_H('Hora extra'), XL_H('Notas')],
         ...secs.flatMap((sec) => (sec.equipa || []).map((e) => [xlData(sec.data), sec.turno, e.nome, e.funcao, e.cobrindo, e.horaExtra ? 'Sim' : '', e.notas]))] },
       { nome: 'Observações', linhas: [[XL_H('Data'), XL_H('Turno'), XL_H('Observações'), XL_H('Observações do admin')], ...secs.map((sec) => [xlData(sec.data), sec.turno, sec.notas || '', sec.notasAdmin || ''])] }
@@ -11196,6 +11249,7 @@ function livroVariosTurnos(secs, layout, titulo) {
     { nome: 'Produtos vendidos', linhas: cab.concat(blocos('produtos')) },
     { nome: 'Caixa', linhas: cab.concat(caixaBlocos) },
     { nome: 'Movimentos do turno', linhas: cab.concat(blocos('movimentos')) },
+    { nome: 'Fino Barril', linhas: cab.concat(secs.flatMap((sec) => [blocoTit(sec), ...linhasFinoTurno(sec), []])) },
     { nome: 'Quem trabalhou', linhas: cab.concat(secs.flatMap((sec) => [blocoTit(sec), ...linhasEquipaTurno(sec), []])) },
     { nome: 'Observações', linhas: cab.concat(secs.flatMap((sec) => [blocoTit(sec), [sec.notas || '(sem observações)'], [{ v: 'Admin:', b: true }, sec.notasAdmin || '(sem observações)'], []])) }
   ];
@@ -11743,7 +11797,9 @@ async function loadRegistosMovimentosSection(turnoId, stocks, canEdit) {
         .catch(() => posCacheRead(CAT_LEVE_KEY) || posCacheRead('stockos.cache.produtosPos') || [])
     ]);
     window.__mvCatalogo = Array.isArray(catalogo) ? catalogo : [];
+    window.__mvEntradasRaw = { tid: String(turnoId), rows: Array.isArray(entradas) ? entradas : [] };
     renderMovimentosUnificados(turnoId, stocks, canEdit, entradas, saidas, caixaEntradas);
+    try { renderRelatorioFino(); } catch (_) {}
   } catch (e) {
     el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }
@@ -12167,6 +12223,79 @@ async function perguntarPesoBarril(titulo) {
 
 /** Nº de trocas de barril já registadas neste turno (inclui as em fila
  *  offline, via overlay) — visível no próprio botão. */
+/** Relatório do Fino Barril com os valores do turno (pesos brutos da folha):
+ *  líquido = bruto − tara; kg vendidos = início + barris novos − retirado −
+ *  fim; comparado com o vendido no balcão por produto de Fino. */
+function relatorioFinoBarril(t) {
+  t = t || S.turnoData;
+  const row = (t && t.stock || []).find((x) => isFinoBarrilNome(x.produto_nome));
+  if (!row) return null;
+  const pid = prodIdKey(row.produto_id);
+  const b = (stockBuf && stockBuf[pid]) || {};
+  const num = (v) => (v === null || v === undefined || v === '' ? NaN : parseFloat(v));
+  const enc = num(b.encontrado !== undefined ? b.encontrado : row.encontrado);
+  const dei = num(b.deixado !== undefined ? b.deixado : row.deixado);
+  const tara = KG_FINO_BARRIL_VAZIO, cheio = KG_FINO_BARRIL_CHEIO;
+  let trocas = 0, restoLiq = 0;
+  const raw = window.__mvEntradasRaw && window.__mvEntradasRaw.tid === String(t.id) ? window.__mvEntradasRaw.rows : [];
+  raw.filter((r) => prodIdKey(r.produto_id) === pid).forEach((r) => {
+    const n = String(r.notas || '');
+    if (r.tipo !== 'tirar' && /^(Barril novo|Barril USADO a entrar|TROCA::)/.test(n)) trocas++;
+    if (r.tipo === 'tirar' && /^Barril retirado SEM acabar/.test(n)) restoLiq += parseFloat(r.quantidade) || 0;
+  });
+  const naFolha = new Set((t.stock || []).map((x) => prodIdKey(x.produto_id)));
+  const porProd = {};
+  (window.__stockosPedidosBalcao || []).forEach((p) => (p.linhas || []).forEach((ln) => {
+    const kgc = parseFloat(ln.kg_por_copo) || 0;
+    if (ln.venda_por_copo !== true || kgc <= 0 || !/^fino/i.test(String(ln.produto_nome || '').trim())) return;
+    if (naFolha.has(prodIdKey(ln.produto_id))) return;
+    const q = Math.max(0, (parseFloat(ln.quantidade) || 0) - (parseFloat(ln.quantidade_devolvida) || 0));
+    const k = prodIdKey(ln.produto_id);
+    if (!porProd[k]) porProd[k] = { nome: ln.produto_nome, kgc, qtd: 0, valor: 0 };
+    porProd[k].qtd += q;
+    porProd[k].valor += precoVendaCopos(Math.floor(q), parseFloat(ln.preco) || 0, parseInt(ln.qtd_copos_pacote, 10) || 0, parseFloat(ln.preco_copos_pacote) || 0);
+  }));
+  const vendas = Object.values(porProd).map((x) => ({ ...x, kg: Math.round(x.qtd * x.kgc * 1000) / 1000 })).sort((a, c) => c.kg - a.kg);
+  const kgBalcao = vendas.reduce((a, x) => a + x.kg, 0);
+  const valorBalcao = vendas.reduce((a, x) => a + x.valor, 0);
+  const liq = (v) => Math.max(0, v - tara);
+  const ok = Number.isFinite(enc) && Number.isFinite(dei);
+  const liqIni = ok ? liq(enc) : NaN, liqFim = ok ? liq(dei) : NaN;
+  const entradaKg = trocas * (cheio - tara);
+  const kgVend = ok ? liqIni + entradaKg - restoLiq - liqFim : NaN;
+  const difKg = ok ? kgVend - kgBalcao : NaN;
+  const kzPorKg = kgBalcao > 0 ? valorBalcao / kgBalcao : 0;
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+  return {
+    tara, cheio, enc, dei, trocas, restoLiq: r3(restoLiq), liqIni: r3(liqIni), liqFim: r3(liqFim), entradaKg: r3(entradaKg),
+    kgVend: r3(kgVend), vendas, kgBalcao: r3(kgBalcao), valorBalcao, difKg: r3(difKg),
+    difCopos: Math.round(difKg / 0.2 * 10) / 10, difKz: Math.round(difKg * kzPorKg), ok
+  };
+}
+/** Cartão no Caixa com o relatório do Fino Barril. */
+function renderRelatorioFino() {
+  const card = document.getElementById('fino-relatorio-card');
+  const mount = document.getElementById('fino-relatorio-mount');
+  if (!card || !mount) return;
+  const r = relatorioFinoBarril();
+  if (!r) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  const L = (a, b2, st) => `<div style="display:flex;justify-content:space-between;gap:10px${st ? ';' + st : ''}"><span style="color:#94a3b8">${a}</span><span>${b2}</span></div>`;
+  if (!r.ok) { mount.innerHTML = '<span style="color:#64748b;font-size:13px">Falta o peso encontrado ou deixado do Fino Barril.</span>'; return; }
+  const cor = Math.abs(r.difKg) < 0.1 ? '#86efac' : r.difKg > 0 ? '#f87171' : '#fb923c';
+  mount.innerHTML = `<div style="font-size:13px;line-height:1.7">
+    ${L('Líquido no início', `${fmtNum(r.enc)} − ${fmtNum(r.tara)} = ${fmtNum(r.liqIni)} kg`)}
+    ${r.trocas ? L('Barris novos', `${r.trocas} × (${fmtNum(r.cheio)} − ${fmtNum(r.tara)}) = +${fmtNum(r.entradaKg)} kg`) : ''}
+    ${r.restoLiq ? L('Retirado sem acabar', `−${fmtNum(r.restoLiq)} kg`) : ''}
+    ${L('Líquido no fim', `${fmtNum(r.dei)} − ${fmtNum(r.tara)} = ${fmtNum(r.liqFim)} kg`)}
+    ${L('<strong style="color:#cbd5e1">Kg vendidos (barril)</strong>', `<strong>${fmtNum(r.kgVend)} kg</strong> · ${fmtNum(Math.round(r.kgVend / 0.2 * 10) / 10)} copos de 0,2`, 'border-top:1px dashed #334155;margin-top:4px;padding-top:4px')}
+    <div style="color:#94a3b8;margin-top:6px">Vendido no balcão</div>
+    ${r.vendas.length ? r.vendas.map((x) => L(escapeHtml(x.nome), `${fmtNum(x.qtd)} × ${fmtNum(x.kgc)} = ${fmtNum(x.kg)} kg · ${fmt(x.valor)}`)).join('') : '<div style="color:#64748b">Sem pedidos de Fino.</div>'}
+    ${L('<strong style="color:#cbd5e1">Total balcão</strong>', `<strong>${fmtNum(r.kgBalcao)} kg · ${fmt(r.valorBalcao)}</strong>`)}
+    ${L('Diferença (barril − balcão)', `<strong style="color:${cor}">${Math.abs(r.difKg) < 0.1 ? '✓ bate' : `${r.difKg > 0 ? '+' : '−'}${fmtNum(Math.abs(r.difKg))} kg · ≈ ${fmtNum(Math.abs(r.difCopos))} copos · ≈ ${fmt(Math.abs(r.difKz))}`}</strong>`, 'border-top:1px dashed #334155;margin-top:4px;padding-top:4px')}
+  </div>`;
+}
+
 /** 🧮 Calculadora de copos do Fino Barril:
  *  kg vendidos = Encontrado + trocas × kg do barril novo − resto retirado − Deixado
  *  copos = kg vendidos ÷ kg por copo. Comparado com os copos do balcão. */

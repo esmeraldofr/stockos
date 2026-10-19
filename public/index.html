@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-19-calculadora-tara">
+<html lang="pt" data-stockos-ui="2026-10-19-calculadora-finos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -12187,14 +12187,26 @@ async function abrirCalculadoraCopos() {
       if (r.tipo === 'tirar' && /^Barril retirado SEM acabar/.test(n)) restoKg += parseFloat(r.quantidade) || 0;
     });
   } catch (_) {}
-  // kg por copo: dos pedidos de Fino do turno, senão 0,2.
-  let kgCopo = 0;
+  // Vendas de Fino no balcão, por produto (cada um com o seu peso e preço):
+  // Fino 1000/400 (copos), Fino grande, Fino Torre…
+  const naFolha = new Set((t.stock || []).map((x) => prodIdKey(x.produto_id)));
+  const porProd = {};
   (window.__stockosPedidosBalcao || []).forEach((p) => (p.linhas || []).forEach((ln) => {
-    if (!kgCopo && ln.venda_por_copo === true && /^fino/i.test(String(ln.produto_nome || '')) && parseFloat(ln.kg_por_copo) > 0 && parseFloat(ln.kg_por_copo) < 1) kgCopo = parseFloat(ln.kg_por_copo);
+    const kgc = parseFloat(ln.kg_por_copo) || 0;
+    if (ln.venda_por_copo !== true || kgc <= 0 || !/^fino/i.test(String(ln.produto_nome || '').trim())) return;
+    if (naFolha.has(prodIdKey(ln.produto_id))) return;
+    const q = Math.max(0, (parseFloat(ln.quantidade) || 0) - (parseFloat(ln.quantidade_devolvida) || 0));
+    const c = Math.floor(q);
+    const u = parseFloat(ln.preco) || 0, n = parseInt(ln.qtd_copos_pacote, 10) || 0, pp = parseFloat(ln.preco_copos_pacote) || 0;
+    const k = prodIdKey(ln.produto_id);
+    if (!porProd[k]) porProd[k] = { nome: ln.produto_nome, kgc, qtd: 0, valor: 0 };
+    porProd[k].qtd += q;
+    porProd[k].valor += precoVendaCopos(c, u, n, pp);
   }));
-  if (!kgCopo) kgCopo = 0.2;
-  const balcao = (getVendasBalcaoPorProduto() || {})[pid] || {};
-  const coposBalcao = parseFloat(balcao.copos) || 0;
+  const vendasFino = Object.values(porProd).sort((a, b) => b.qtd * b.kgc - a.qtd * a.kgc);
+  const kgBalcao = vendasFino.reduce((a, x) => a + x.qtd * x.kgc, 0);
+  const valorBalcao = vendasFino.reduce((a, x) => a + x.valor, 0);
+  const kgCopo = 0.2; // copo de referência para converter a diferença
   const num = (v) => (v === null || v === undefined || v === '' ? '' : String(v));
   document.getElementById('calc-copos-modal')?.remove();
   const div = document.createElement('div');
@@ -12219,7 +12231,7 @@ async function abrirCalculadoraCopos() {
       ${campo('cc-cheio', 'Peso do barril cheio (kg)', KG_FINO_BARRIL_CHEIO, 'barril novo, selado')}
       ${campo('cc-retirado', 'Peso do barril retirado sem acabar (kg)', restoKg > 0 ? Math.round((restoKg + KG_FINO_BARRIL_VAZIO) * 1000) / 1000 : 0, '0 se os barris trocados estavam vazios')}
       ${campo('cc-deix', 'Peso deixado (kg)', b.deixado, 'pesa o barril no fim do turno')}
-      ${campo('cc-kgcopo', 'Kg por copo', kgCopo, 'peso de um copo servido')}
+      ${campo('cc-kgcopo', 'Kg do copo de referência', kgCopo, 'para mostrar a diferença em copos')}
       <div id="cc-res" style="margin-top:12px;padding:10px 12px;background:#0f172a;border:1px solid #334155;border-radius:10px;font-size:13px;line-height:1.7"></div>
     </div>`;
   document.body.appendChild(div);
@@ -12241,18 +12253,25 @@ async function abrirCalculadoraCopos() {
     const entradaKg = tro * liq(cheio);
     const resto = retirado > 0 ? liq(retirado) : 0;
     const kgVend = liqIni + entradaKg - resto - liqFim;
-    const copos = kgVend / kgc;
-    const dif = copos - coposBalcao;
-    const corDif = Math.abs(dif) < 0.5 ? '#86efac' : dif > 0 ? '#f87171' : '#fb923c';
+    const difKg = kgVend - kgBalcao;
+    const difCopos = difKg / kgc;
+    const kzPorKg = kgBalcao > 0 ? valorBalcao / kgBalcao : 0;
+    const corDif = Math.abs(difKg) < kgc / 2 ? '#86efac' : difKg > 0 ? '#f87171' : '#fb923c';
+    const linhasFino = vendasFino.length
+      ? vendasFino.map((x) => `<div style="display:flex;justify-content:space-between;color:#cbd5e1"><span>${escapeHtml(x.nome)}</span><span>${fmtNum(x.qtd)} × ${fmtNum(x.kgc)} = ${fmtNum(Math.round(x.qtd * x.kgc * 1000) / 1000)} kg · ${fmt(x.valor)}</span></div>`).join('')
+      : '<div style="color:#64748b">Sem pedidos de Fino neste turno.</div>';
     el.innerHTML = `
       <div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Líquido no início</span><span>${fmtNum(enc)} − ${fmtNum(tara)} = ${fmtNum(liqIni)} kg</span></div>
       ${tro ? `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Barris novos</span><span>${fmtNum(tro)} × (${fmtNum(cheio)} − ${fmtNum(tara)}) = +${fmtNum(entradaKg)} kg</span></div>` : ''}
       ${resto ? `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Barril retirado</span><span>${fmtNum(retirado)} − ${fmtNum(tara)} = −${fmtNum(resto)} kg</span></div>` : ''}
       <div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Líquido no fim</span><span>${fmtNum(dei)} − ${fmtNum(tara)} = ${fmtNum(liqFim)} kg</span></div>
       <div style="display:flex;justify-content:space-between;border-top:1px dashed #334155;margin-top:4px;padding-top:4px"><span style="color:#cbd5e1">Kg vendidos</span><strong>${fmtNum(Math.round(kgVend * 1000) / 1000)} kg</strong></div>
-      <div style="display:flex;justify-content:space-between;font-size:16px"><span style="color:#cbd5e1">Copos</span><strong style="color:#93c5fd">${fmtNum(Math.round(copos * 10) / 10)}</strong></div>
-      <div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Copos registados no balcão</span><span>${fmtNum(coposBalcao)}</span></div>
-      <div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Diferença</span><strong style="color:${corDif}">${Math.abs(dif) < 0.5 ? '✓ bate' : `${dif > 0 ? '+' : '−'}${fmtNum(Math.round(Math.abs(dif) * 10) / 10)} copos ${dif > 0 ? '(sem pedido)' : '(a mais no balcão)'}`}</strong></div>
+      <div style="display:flex;justify-content:space-between;font-size:15px"><span style="color:#cbd5e1">= copos de ${fmtNum(kgc)} kg</span><strong style="color:#93c5fd">${fmtNum(Math.round(kgVend / kgc * 10) / 10)}</strong></div>
+      <div style="margin-top:8px;padding-top:6px;border-top:1px dashed #334155;color:#94a3b8">Vendido no balcão</div>
+      ${linhasFino}
+      <div style="display:flex;justify-content:space-between"><span style="color:#cbd5e1">Total balcão</span><strong>${fmtNum(Math.round(kgBalcao * 1000) / 1000)} kg · ${fmt(valorBalcao)}</strong></div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px;padding-top:6px;border-top:1px dashed #334155"><span style="color:#94a3b8">Diferença (barril − balcão)</span><strong style="color:${corDif}">${Math.abs(difKg) < kgc / 2 ? '✓ bate' : `${difKg > 0 ? '+' : '−'}${fmtNum(Math.round(Math.abs(difKg) * 1000) / 1000)} kg`}</strong></div>
+      ${Math.abs(difKg) >= kgc / 2 ? `<div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">${difKg > 0 ? 'Saiu do barril sem pedido' : 'A mais no balcão'}</span><span style="color:${corDif}">≈ ${fmtNum(Math.round(Math.abs(difCopos) * 10) / 10)} copos de ${fmtNum(kgc)} kg${kzPorKg ? ` · ≈ ${fmt(Math.round(Math.abs(difKg) * kzPorKg))}` : ''}</span></div>` : ''}
       ${kgVend < 0 ? '<div style="color:#fb923c;margin-top:4px">⚠ O deixado é maior do que o que havia — confere os pesos.</div>' : ''}
       ${enc > 0 && enc < tara ? '<div style="color:#fb923c;margin-top:4px">⚠ O peso encontrado é menor que a tara — confere se é o peso bruto.</div>' : ''}`;
   };

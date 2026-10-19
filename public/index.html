@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-17-foto-data-hora">
+<html lang="pt" data-stockos-ui="2026-10-19-calculadora-copos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3795,7 +3795,8 @@ async function loadTurno() {
           return `<div style="font-size:11px;color:#94a3b8;margin-top:6px">📷 ${rotulo} <strong style="color:#cbd5e1">ao entrar</strong> (início do turno)</div><div class="fotos-anexos" data-chave="${pref}:${turno.id}" data-canedit="${ed}"></div>`
             + `<div style="font-size:11px;color:#94a3b8;margin-top:6px">📷 ${rotulo} <strong style="color:#cbd5e1">ao sair</strong> (fim do turno)</div><div class="fotos-anexos" data-chave="${pref}-sai:${turno.id}" data-canedit="${ed}"></div>`;
         };
-        const fbBtnHtml = isFinoBarrilNome(s.produto_nome) ? fotosEntSai('barril', 'Peso do barril')
+        const fbBtnHtml = isFinoBarrilNome(s.produto_nome)
+          ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px" onclick="runAction(event, abrirCalculadoraCopos)">🧮 Calcular copos</button>` + fotosEntSai('barril', 'Peso do barril')
           : ehSelado ? fotosEntSai('selado', 'Barris selados')
           : '';
         return `
@@ -7323,7 +7324,7 @@ async function fotosAnexosRender(el) {
       ${thumbs}
       ${canEdit ? `<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#94a3b8;border:1px dashed #475569;border-radius:8px;padding:6px 10px;cursor:pointer">📷 + foto
         <input type="file" accept="image/jpeg,image/png,image/webp" multiple style="display:none" onchange="fotosAnexosAdicionar(this, '${chave}')"/>
-      </label>` : (thumbs ? '' : '<span style="font-size:11px;color:#475569">Sem fotos adicionais.</span>')}
+      </label>` : (thumbs || /^(barril|selado)/.test(chave) ? '' : '<span style="font-size:11px;color:#475569">Sem fotos adicionais.</span>')}
     </div>`;
 }
 async function fotosAnexosAdicionar(inp, chave) {
@@ -7536,6 +7537,9 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
   const finoBarrilBtnPos = canEdit && finoBarrilPidPos
     ? `<button type="button" style="margin-left:auto;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.5);color:#86efac" title="O barril acabou? Regista a troca (o que sai acabou?, o que entra é novo?) — soma os kg líquidos à Entrada do Fino Barril" onclick="runAction(event, () => adicionarFinoBarrilNovo('${finoBarrilPidPos}'))">🛢️ Troca de barril<span id="troca-barril-count" style="display:none;margin-left:7px;background:rgba(34,197,94,0.3);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:700"></span></button>`
     : '';
+  const calcCoposBtnPos = finoBarrilPidPos
+    ? `<button type="button" style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.5);color:#93c5fd" title="Calcular copos a partir do peso do barril" onclick="runAction(event, abrirCalculadoraCopos)">🧮 Calcular copos</button>`
+    : '';
   if (finoBarrilPidPos) setTimeout(() => atualizarContadorTrocasBarril(turnoId, finoBarrilPidPos), 300);
   const formHtml = canEdit
     ? `<div class="pedidos-balcao-pos" style="margin-bottom:14px">
@@ -7551,7 +7555,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <button type="button" data-grupo="Avulso" onclick="pedidoBalcaoSetFilter(this)">Avulso</button>
           <button type="button" data-grupo="BebidaCopo" onclick="pedidoBalcaoSetFilter(this)">Bebida (copos)</button>
           <button type="button" data-grupo="BebidaUnidade" onclick="pedidoBalcaoSetFilter(this)">Bebida (unidade)</button>
-          ${finoBarrilBtnPos}
+          ${finoBarrilBtnPos}${calcCoposBtnPos}
         </div>
         <div class="pedidos-balcao-tiles">${tilesHtml}</div>
         <div id="pedido-balcao-sem-resultados" style="display:none;color:#64748b;font-size:13px;padding:10px 2px">Nenhum produto corresponde à pesquisa.</div>
@@ -12163,6 +12167,87 @@ async function perguntarPesoBarril(titulo) {
 
 /** Nº de trocas de barril já registadas neste turno (inclui as em fila
  *  offline, via overlay) — visível no próprio botão. */
+/** 🧮 Calculadora de copos do Fino Barril:
+ *  kg vendidos = Encontrado + trocas × kg do barril novo − resto retirado − Deixado
+ *  copos = kg vendidos ÷ kg por copo. Comparado com os copos do balcão. */
+async function abrirCalculadoraCopos() {
+  const t = S.turnoData;
+  const row = (t && t.stock || []).find((x) => isFinoBarrilNome(x.produto_nome));
+  if (!row) { alert('Este turno não tem Fino Barril na folha de stock.'); return; }
+  const pid = prodIdKey(row.produto_id);
+  const b = (stockBuf && stockBuf[pid]) || {};
+  let nTrocas = 0, restoKg = 0;
+  try {
+    const rows = await api('GET', `/turnos/${t.id}/entradas`).catch(() => {
+      try { return aplicarEscritasOffline(comLojaNoPath(`/turnos/${t.id}/entradas`), []); } catch (_) { return []; }
+    });
+    (Array.isArray(rows) ? rows : []).filter((r) => prodIdKey(r.produto_id) === pid).forEach((r) => {
+      const n = String(r.notas || '');
+      if (r.tipo !== 'tirar' && /^(Barril novo|Barril USADO a entrar|TROCA::)/.test(n)) nTrocas++;
+      if (r.tipo === 'tirar' && /^Barril retirado SEM acabar/.test(n)) restoKg += parseFloat(r.quantidade) || 0;
+    });
+  } catch (_) {}
+  // kg por copo: dos pedidos de Fino do turno, senão 0,2.
+  let kgCopo = 0;
+  (window.__stockosPedidosBalcao || []).forEach((p) => (p.linhas || []).forEach((ln) => {
+    if (!kgCopo && ln.venda_por_copo === true && /^fino/i.test(String(ln.produto_nome || '')) && parseFloat(ln.kg_por_copo) > 0 && parseFloat(ln.kg_por_copo) < 1) kgCopo = parseFloat(ln.kg_por_copo);
+  }));
+  if (!kgCopo) kgCopo = 0.2;
+  const balcao = (getVendasBalcaoPorProduto() || {})[pid] || {};
+  const coposBalcao = parseFloat(balcao.copos) || 0;
+  const num = (v) => (v === null || v === undefined || v === '' ? '' : String(v));
+  document.getElementById('calc-copos-modal')?.remove();
+  const div = document.createElement('div');
+  div.id = 'calc-copos-modal';
+  div.className = 'modal-overlay';
+  div.style.zIndex = '300';
+  const campo = (id, rotulo, valor, ajuda) => `
+    <label style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:6px 0;font-size:13px;color:#cbd5e1">
+      <span>${rotulo}${ajuda ? `<br><small style="color:#64748b">${ajuda}</small>` : ''}</span>
+      <input id="${id}" type="number" step="any" inputmode="decimal" value="${num(valor)}" style="width:110px;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:6px 8px;text-align:right"/>
+    </label>`;
+  div.innerHTML = `
+    <div class="modal" style="max-width:min(440px,94vw)">
+      <div class="modal-header">
+        <div class="modal-title">🧮 Calculadora de copos — Fino Barril</div>
+        <button type="button" class="modal-close" aria-label="Fechar">×</button>
+      </div>
+      ${campo('cc-enc', 'Peso encontrado (kg)', b.encontrado, 'barril no início do turno')}
+      ${campo('cc-trocas', 'Trocas de barril (barris novos)', nTrocas, `cada um + kg líquidos abaixo`)}
+      ${campo('cc-kgbarril', 'Kg líquidos por barril novo', KG_FINO_BARRIL_NET, `cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)}`)}
+      ${campo('cc-resto', 'Resto retirado (kg)', restoKg || 0, 'cerveja que saiu num barril não acabado')}
+      ${campo('cc-deix', 'Peso deixado (kg)', b.deixado, 'pesa o barril no fim do turno')}
+      ${campo('cc-kgcopo', 'Kg por copo', kgCopo, 'peso de um copo servido')}
+      <div id="cc-res" style="margin-top:12px;padding:10px 12px;background:#0f172a;border:1px solid #334155;border-radius:10px;font-size:13px;line-height:1.7"></div>
+    </div>`;
+  document.body.appendChild(div);
+  const fechar = () => div.remove();
+  div.addEventListener('click', (e) => { if (e.target === div) fechar(); });
+  div.querySelector('.modal-close').onclick = fechar;
+  const v = (id) => { const x = parseFloat(String(document.getElementById(id).value).replace(',', '.')); return Number.isFinite(x) ? x : NaN; };
+  const calcular = () => {
+    const enc = v('cc-enc'), tro = v('cc-trocas') || 0, kgb = v('cc-kgbarril') || 0, resto = v('cc-resto') || 0, dei = v('cc-deix'), kgc = v('cc-kgcopo');
+    const el = document.getElementById('cc-res');
+    if (!Number.isFinite(enc) || !Number.isFinite(dei) || !(kgc > 0)) {
+      el.innerHTML = '<span style="color:#94a3b8">Preenche o peso encontrado, o deixado e o kg por copo.</span>';
+      return;
+    }
+    const entradaKg = tro * kgb;
+    const kgVend = enc + entradaKg - resto - dei;
+    const copos = kgVend / kgc;
+    const dif = copos - coposBalcao;
+    const corDif = Math.abs(dif) < 0.5 ? '#86efac' : dif > 0 ? '#f87171' : '#fb923c';
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Kg vendidos</span><span>${fmtNum(enc)} + ${fmtNum(entradaKg)} − ${fmtNum(resto)} − ${fmtNum(dei)} = <strong>${fmtNum(kgVend)} kg</strong></span></div>
+      <div style="display:flex;justify-content:space-between;font-size:16px"><span style="color:#cbd5e1">Copos</span><strong style="color:#93c5fd">${fmtNum(Math.round(copos * 10) / 10)}</strong></div>
+      <div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Copos registados no balcão</span><span>${fmtNum(coposBalcao)}</span></div>
+      <div style="display:flex;justify-content:space-between"><span style="color:#94a3b8">Diferença</span><strong style="color:${corDif}">${Math.abs(dif) < 0.5 ? '✓ bate' : `${dif > 0 ? '+' : '−'}${fmtNum(Math.round(Math.abs(dif) * 10) / 10)} copos ${dif > 0 ? '(sem pedido)' : '(a mais no balcão)'}`}</strong></div>
+      ${kgVend < 0 ? '<div style="color:#fb923c;margin-top:4px">⚠ O deixado é maior do que o que havia — confere os pesos.</div>' : ''}`;
+  };
+  div.querySelectorAll('input').forEach((i) => { i.oninput = calcular; });
+  calcular();
+}
+
 async function atualizarContadorTrocasBarril(turnoId, produtoId) {
   try {
     const rows = await api('GET', `/turnos/${turnoId}/entradas`).catch(() => {

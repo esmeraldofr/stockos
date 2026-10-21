@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-19-relatorio-fino">
+<html lang="pt" data-stockos-ui="2026-10-21-card-turno-caixa">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2311,6 +2311,13 @@ function renderDiaCards(turnos, provisorio, diaSemCache) {
               <div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#64748b">Saídas</span><strong style="color:#f87171">− ${fmt(saidaKz)}</strong></div>
             </div>
           </div>
+          ${(() => {
+            // Caixa por meio de pagamento (como na aba Caixa do turno).
+            const c = t.caixa || {};
+            const v = (x) => (x === null || x === undefined || x === '' ? '—' : fmt(x));
+            const item = (rot, val, cor) => `<div style="flex:1;min-width:0;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:5px 6px;text-align:center"><div style="font-size:10px;color:#64748b">${rot}</div><div style="font-size:12px;font-weight:700;color:${cor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${val}</div></div>`;
+            return `<div style="display:flex;gap:6px;margin-top:10px">${item('TPA', v(c.tpa), '#38bdf8')}${item('Dinheiro', v(c.dinheiro), '#4ade80')}${item('Transf.', v(c.transferencia), '#c084fc')}</div>`;
+          })()}
           ${avisoAnt}
         </div>`;
     }).join('');

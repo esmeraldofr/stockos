@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-21-card-turno-caixa">
+<html lang="pt" data-stockos-ui="2026-10-21-fino-config-admin">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3510,7 +3510,7 @@ function getVendasBalcaoPorProduto() {
         const pid = prodIdKey(ln.produto_id);
         const kgc = parseFloat(ln.kg_por_copo) || 0;
         if (!pid || naFolha.has(pid) || ln.venda_por_copo !== true || kgc <= 0) continue;
-        if (!/^fino/i.test(String(ln.produto_nome || '').trim())) continue;
+        if (!finoIncluido(ln.produto_id, ln.produto_nome)) continue;
         const q = Math.max(0, (parseFloat(ln.quantidade) || 0) - (parseFloat(ln.quantidade_devolvida) || 0));
         if (!map[bid]) map[bid] = { copos: 0, unidades: 0, kg: 0, isCopo: true, kg_por_copo: kgc };
         map[bid].isCopo = true;
@@ -3680,6 +3680,7 @@ async function loadTurno() {
         aplicarDeixadosAuto(turno, rAuto && rAuto.linhas);
       } catch (_) { /* offline: fica o último valor conhecido */ }
     }
+    carregarFinoCfg().catch(() => {});
     stockBuf = {};
     stockDirty = new Set();
     const temAnteriorAlinhar = turno.stock.some((r) =>
@@ -7834,7 +7835,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     const stockResumo = (S.turnoData && S.turnoData.stock) || [];
     const naFolhaResumo = new Set(stockResumo.map((x) => prodIdKey(x.produto_id)));
     const barrilResumo = stockResumo.find((x) => isFinoBarrilNome(x.produto_nome));
-    const ehCopoFino = (r) => !!barrilResumo && r.isCopo && r.kgc > 0 && !naFolhaResumo.has(prodIdKey(r.pid)) && /^fino/i.test(String(r.nome || '').trim());
+    const ehCopoFino = (r) => !!barrilResumo && r.isCopo && r.kgc > 0 && !naFolhaResumo.has(prodIdKey(r.pid)) && finoIncluido(r.pid, r.nome);
     let kgFinoPedidos = 0;
     porCat.forEach((byProd) => byProd.forEach((r) => { if (ehCopoFino(r)) kgFinoPedidos += r.qtd * r.kgc; }));
     const barrilInfo = barrilResumo ? vendidoStockInfo(barrilResumo.produto_id) : null;
@@ -9047,6 +9048,28 @@ const KG_FINO_COPO = 0.27;
 const KG_FINO_BARRIL_CHEIO = 61.05; // peso bruto na balança
 const KG_FINO_BARRIL_VAZIO = 12.9;  // tara
 const KG_FINO_BARRIL_NET = KG_FINO_BARRIL_CHEIO - KG_FINO_BARRIL_VAZIO; // 48,15 kg líquidos por barril novo
+/** Config do Fino Barril (admin): tara, peso cheio, copo de referência e
+ *  produtos que saem do barril. Sem config carregada → valores de origem. */
+function finoCfg() {
+  const c = S.finoCfg || {};
+  return {
+    tara: parseFloat(c.tara) > 0 ? parseFloat(c.tara) : KG_FINO_BARRIL_VAZIO,
+    cheio: parseFloat(c.cheio) > 0 ? parseFloat(c.cheio) : KG_FINO_BARRIL_CHEIO,
+    kg_copo: parseFloat(c.kg_copo) > 0 ? parseFloat(c.kg_copo) : 0.2,
+    produtos: Array.isArray(c.produtos) ? c.produtos.map(String) : [],
+    candidatos: Array.isArray(c.candidatos) ? c.candidatos : []
+  };
+}
+async function carregarFinoCfg(forcar) {
+  if (S.finoCfg && !forcar) return finoCfg();
+  try { S.finoCfg = await api('GET', '/config/fino-barril'); } catch (_) {}
+  return finoCfg();
+}
+/** Produto que sai do Fino Barril (nome «Fino…» ou escolhido pelo admin). */
+function finoIncluido(pid, nome) {
+  if (isFinoBarrilNome(nome)) return false;
+  return /^fino/i.test(String(nome || '').trim()) || finoCfg().produtos.includes(String(pid));
+}
 function prodNomeNorm(n) {
   return String(n || '').trim().toLowerCase();
 }
@@ -10612,7 +10635,7 @@ function linhasFinoTurno(sec) {
     [{ v: 'Total balcão', b: true }, '', '', { v: fr.kgBalcao, b: true }, { v: fr.valorBalcao, b: true }],
     [],
     [{ v: 'Diferença (barril − balcão) kg', b: true }, { v: fr.difKg, b: true, cor: Math.abs(fr.difKg) < 0.1 ? '2E7D32' : 'C00000' }],
-    ['≈ copos de 0,2 kg', fr.difCopos], ['≈ valor (Kz)', fr.difKz]
+    [`≈ copos de ${fr.kgCopo || 0.2} kg`, fr.difCopos], ['≈ valor (Kz)', fr.difKz]
   ];
   return out;
 }
@@ -12214,15 +12237,15 @@ function dialogoTroca(opts) {
 async function perguntarPesoBarril(titulo) {
   const resp = await dialogoTroca({
     titulo,
-    texto: `Peso na balança, em kg (barril com casca).\nTara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg · cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg`,
+    texto: `Peso na balança, em kg (barril com casca).\nTara ${fmtNum(finoCfg().tara)} kg · cheio ${fmtNum(finoCfg().cheio)} kg`,
     tipo: 'texto',
     numero: true,
     placeholder: 'ex.: 30,5'
   });
   if (resp === null) return null; // cancelado
   const peso = parsePtOrIsoNumberString(resp);
-  if (!Number.isFinite(peso) || peso < KG_FINO_BARRIL_VAZIO || peso > KG_FINO_BARRIL_CHEIO + 5) {
-    alert(`Peso inválido — indica um valor entre ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg (tara) e ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg (cheio).`);
+  if (!Number.isFinite(peso) || peso < finoCfg().tara || peso > finoCfg().cheio + 5) {
+    alert(`Peso inválido — indica um valor entre ${fmtNum(finoCfg().tara)} kg (tara) e ${fmtNum(finoCfg().cheio)} kg (cheio).`);
     return null;
   }
   return peso;
@@ -12242,7 +12265,7 @@ function relatorioFinoBarril(t) {
   const num = (v) => (v === null || v === undefined || v === '' ? NaN : parseFloat(v));
   const enc = num(b.encontrado !== undefined ? b.encontrado : row.encontrado);
   const dei = num(b.deixado !== undefined ? b.deixado : row.deixado);
-  const tara = KG_FINO_BARRIL_VAZIO, cheio = KG_FINO_BARRIL_CHEIO;
+  const tara = finoCfg().tara, cheio = finoCfg().cheio;
   let trocas = 0, restoLiq = 0;
   const raw = window.__mvEntradasRaw && window.__mvEntradasRaw.tid === String(t.id) ? window.__mvEntradasRaw.rows : [];
   raw.filter((r) => prodIdKey(r.produto_id) === pid).forEach((r) => {
@@ -12254,7 +12277,7 @@ function relatorioFinoBarril(t) {
   const porProd = {};
   (window.__stockosPedidosBalcao || []).forEach((p) => (p.linhas || []).forEach((ln) => {
     const kgc = parseFloat(ln.kg_por_copo) || 0;
-    if (ln.venda_por_copo !== true || kgc <= 0 || !/^fino/i.test(String(ln.produto_nome || '').trim())) return;
+    if (ln.venda_por_copo !== true || kgc <= 0 || !finoIncluido(ln.produto_id, ln.produto_nome)) return;
     if (naFolha.has(prodIdKey(ln.produto_id))) return;
     const q = Math.max(0, (parseFloat(ln.quantidade) || 0) - (parseFloat(ln.quantidade_devolvida) || 0));
     const k = prodIdKey(ln.produto_id);
@@ -12276,7 +12299,7 @@ function relatorioFinoBarril(t) {
   return {
     tara, cheio, enc, dei, trocas, restoLiq: r3(restoLiq), liqIni: r3(liqIni), liqFim: r3(liqFim), entradaKg: r3(entradaKg),
     kgVend: r3(kgVend), vendas, kgBalcao: r3(kgBalcao), valorBalcao, difKg: r3(difKg),
-    difCopos: Math.round(difKg / 0.2 * 10) / 10, difKz: Math.round(difKg * kzPorKg), ok
+    kgCopo: finoCfg().kg_copo, difCopos: Math.round(difKg / finoCfg().kg_copo * 10) / 10, difKz: Math.round(difKg * kzPorKg), ok
   };
 }
 /** Cartão no Caixa com o relatório do Fino Barril. */
@@ -12295,7 +12318,7 @@ function renderRelatorioFino() {
     ${r.trocas ? L('Barris novos', `${r.trocas} × (${fmtNum(r.cheio)} − ${fmtNum(r.tara)}) = +${fmtNum(r.entradaKg)} kg`) : ''}
     ${r.restoLiq ? L('Retirado sem acabar', `−${fmtNum(r.restoLiq)} kg`) : ''}
     ${L('Líquido no fim', `${fmtNum(r.dei)} − ${fmtNum(r.tara)} = ${fmtNum(r.liqFim)} kg`)}
-    ${L('<strong style="color:#cbd5e1">Kg vendidos (barril)</strong>', `<strong>${fmtNum(r.kgVend)} kg</strong> · ${fmtNum(Math.round(r.kgVend / 0.2 * 10) / 10)} copos de 0,2`, 'border-top:1px dashed #334155;margin-top:4px;padding-top:4px')}
+    ${L('<strong style="color:#cbd5e1">Kg vendidos (barril)</strong>', `<strong>${fmtNum(r.kgVend)} kg</strong> · ${fmtNum(Math.round(r.kgVend / r.kgCopo * 10) / 10)} copos de ${fmtNum(r.kgCopo)}`, 'border-top:1px dashed #334155;margin-top:4px;padding-top:4px')}
     <div style="color:#94a3b8;margin-top:6px">Vendido no balcão</div>
     ${r.vendas.length ? r.vendas.map((x) => L(escapeHtml(x.nome), `${fmtNum(x.qtd)} × ${fmtNum(x.kgc)} = ${fmtNum(x.kg)} kg · ${fmt(x.valor)}`)).join('') : '<div style="color:#64748b">Sem pedidos de Fino.</div>'}
     ${L('<strong style="color:#cbd5e1">Total balcão</strong>', `<strong>${fmtNum(r.kgBalcao)} kg · ${fmt(r.valorBalcao)}</strong>`)}
@@ -12307,6 +12330,8 @@ function renderRelatorioFino() {
  *  kg vendidos = Encontrado + trocas × kg do barril novo − resto retirado − Deixado
  *  copos = kg vendidos ÷ kg por copo. Comparado com os copos do balcão. */
 async function abrirCalculadoraCopos() {
+  await carregarFinoCfg(true);
+  const isAdminCfg = !!(S.user && S.user.role === 'admin');
   const t = S.turnoData;
   const row = (t && t.stock || []).find((x) => isFinoBarrilNome(x.produto_nome));
   if (!row) { alert('Este turno não tem Fino Barril na folha de stock.'); return; }
@@ -12329,7 +12354,7 @@ async function abrirCalculadoraCopos() {
   const porProd = {};
   (window.__stockosPedidosBalcao || []).forEach((p) => (p.linhas || []).forEach((ln) => {
     const kgc = parseFloat(ln.kg_por_copo) || 0;
-    if (ln.venda_por_copo !== true || kgc <= 0 || !/^fino/i.test(String(ln.produto_nome || '').trim())) return;
+    if (ln.venda_por_copo !== true || kgc <= 0 || !finoIncluido(ln.produto_id, ln.produto_nome)) return;
     if (naFolha.has(prodIdKey(ln.produto_id))) return;
     const q = Math.max(0, (parseFloat(ln.quantidade) || 0) - (parseFloat(ln.quantidade_devolvida) || 0));
     const c = Math.floor(q);
@@ -12342,18 +12367,39 @@ async function abrirCalculadoraCopos() {
   const vendasFino = Object.values(porProd).sort((a, b) => b.qtd * b.kgc - a.qtd * a.kgc);
   const kgBalcao = vendasFino.reduce((a, x) => a + x.qtd * x.kgc, 0);
   const valorBalcao = vendasFino.reduce((a, x) => a + x.valor, 0);
-  const kgCopo = 0.2; // copo de referência para converter a diferença
+  const kgCopo = finoCfg().kg_copo; // copo de referência (config do admin)
   const num = (v) => (v === null || v === undefined || v === '' ? '' : String(v));
   document.getElementById('calc-copos-modal')?.remove();
   const div = document.createElement('div');
   div.id = 'calc-copos-modal';
   div.className = 'modal-overlay';
   div.style.zIndex = '300';
-  const campo = (id, rotulo, valor, ajuda) => `
+  // Campos definidos pelo admin (config da empresa): bloqueados para os outros.
+  const CAMPOS_ADMIN = ['cc-tara', 'cc-cheio', 'cc-kgcopo'];
+  const campo = (id, rotulo, valor, ajuda) => {
+    const bloq = CAMPOS_ADMIN.includes(id) && !isAdminCfg;
+    return `
     <label style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:6px 0;font-size:13px;color:#cbd5e1">
-      <span>${rotulo}${ajuda ? `<br><small style="color:#64748b">${ajuda}</small>` : ''}</span>
-      <input id="${id}" type="number" step="any" inputmode="decimal" value="${num(valor)}" style="width:110px;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:6px 8px;text-align:right"/>
+      <span>${rotulo}${CAMPOS_ADMIN.includes(id) ? ' <small style="color:#a78bfa">(admin)</small>' : ''}${ajuda ? `<br><small style="color:#64748b">${ajuda}</small>` : ''}</span>
+      <input id="${id}" type="number" step="any" inputmode="decimal" value="${num(valor)}" ${bloq ? 'disabled' : ''} style="width:110px;background:#0f172a;color:#f1f5f9;border:1px solid ${CAMPOS_ADMIN.includes(id) ? '#5b21b6' : '#334155'};border-radius:8px;padding:6px 8px;text-align:right${bloq ? ';opacity:.7' : ''}"/>
     </label>`;
+  };
+  const cfgF = finoCfg();
+  const adminHtml = isAdminCfg ? `
+      <details style="margin-top:10px;border:1px solid #5b21b6;border-radius:10px;padding:8px 10px">
+        <summary style="cursor:pointer;color:#c4b5fd;font-size:13px">⚙️ Produtos de Fino (admin)</summary>
+        <div style="font-size:11px;color:#94a3b8;margin:6px 0">Marca os produtos que saem do Fino Barril e o peso de cada venda (kg). Fica gravado no produto.</div>
+        ${(cfgF.candidatos || []).map((c) => {
+          const inc = finoIncluido(c.id, c.nome) && (parseFloat(c.kg_por_copo) > 0 || !/^fino/i.test(c.nome));
+          return `<label style="display:flex;align-items:center;gap:8px;margin:4px 0;font-size:13px;color:#cbd5e1">
+            <input type="checkbox" class="cc-fp-inc" data-id="${escapeHtml(String(c.id))}" ${inc && parseFloat(c.kg_por_copo) > 0 ? 'checked' : ''}/>
+            <span style="flex:1">${escapeHtml(c.nome)}</span>
+            <input type="number" step="any" class="cc-fp-kg" data-id="${escapeHtml(String(c.id))}" value="${parseFloat(c.kg_por_copo) > 0 ? parseFloat(c.kg_por_copo) : ''}" placeholder="kg" style="width:80px;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:4px 6px;text-align:right"/>
+          </label>`;
+        }).join('') || '<div style="color:#64748b;font-size:12px">Sem produtos com «fino» no nome.</div>'}
+        <button type="button" id="cc-guardar-cfg" class="btn btn-primary btn-sm" style="margin-top:8px">💾 Guardar como padrão</button>
+        <span id="cc-cfg-msg" style="font-size:12px;margin-left:8px"></span>
+      </details>` : '';
   div.innerHTML = `
     <div class="modal" style="max-width:min(440px,94vw)">
       <div class="modal-header">
@@ -12361,14 +12407,15 @@ async function abrirCalculadoraCopos() {
         <button type="button" class="modal-close" aria-label="Fechar">×</button>
       </div>
       <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Pesos <strong>brutos</strong>, como na balança (com o vasilhame).</div>
-      ${campo('cc-tara', 'Tara do barril (vasilhame) kg', KG_FINO_BARRIL_VAZIO, 'barril vazio')}
+      ${campo('cc-tara', 'Tara do barril (vasilhame) kg', cfgF.tara, 'barril vazio')}
       ${campo('cc-enc', 'Peso encontrado (kg)', b.encontrado, 'barril no início do turno')}
       ${campo('cc-trocas', 'Trocas de barril (barris novos)', nTrocas, 'barris cheios postos no turno')}
-      ${campo('cc-cheio', 'Peso do barril cheio (kg)', KG_FINO_BARRIL_CHEIO, 'barril novo, selado')}
-      ${campo('cc-retirado', 'Peso do barril retirado sem acabar (kg)', restoKg > 0 ? Math.round((restoKg + KG_FINO_BARRIL_VAZIO) * 1000) / 1000 : 0, '0 se os barris trocados estavam vazios')}
+      ${campo('cc-cheio', 'Peso do barril cheio (kg)', cfgF.cheio, 'barril novo, selado')}
+      ${campo('cc-retirado', 'Peso do barril retirado sem acabar (kg)', restoKg > 0 ? Math.round((restoKg + finoCfg().tara) * 1000) / 1000 : 0, '0 se os barris trocados estavam vazios')}
       ${campo('cc-deix', 'Peso deixado (kg)', b.deixado, 'pesa o barril no fim do turno')}
       ${campo('cc-kgcopo', 'Kg do copo de referência', kgCopo, 'para mostrar a diferença em copos')}
       <div id="cc-res" style="margin-top:12px;padding:10px 12px;background:#0f172a;border:1px solid #334155;border-radius:10px;font-size:13px;line-height:1.7"></div>
+      ${adminHtml}
     </div>`;
   document.body.appendChild(div);
   const fechar = () => div.remove();
@@ -12411,7 +12458,21 @@ async function abrirCalculadoraCopos() {
       ${kgVend < 0 ? '<div style="color:#fb923c;margin-top:4px">⚠ O deixado é maior do que o que havia — confere os pesos.</div>' : ''}
       ${enc > 0 && enc < tara ? '<div style="color:#fb923c;margin-top:4px">⚠ O peso encontrado é menor que a tara — confere se é o peso bruto.</div>' : ''}`;
   };
-  div.querySelectorAll('input').forEach((i) => { i.oninput = calcular; });
+  div.querySelectorAll('input:not(.cc-fp-inc):not(.cc-fp-kg)').forEach((i) => { i.oninput = calcular; });
+  const btnCfg = div.querySelector('#cc-guardar-cfg');
+  if (btnCfg) btnCfg.onclick = async () => {
+    const msg = div.querySelector('#cc-cfg-msg');
+    const produtos = [...div.querySelectorAll('.cc-fp-inc')].filter((c) => c.checked).map((c) => ({
+      id: c.dataset.id, kg: parseFloat(String(div.querySelector(`.cc-fp-kg[data-id="${CSS.escape(c.dataset.id)}"]`).value).replace(',', '.'))
+    }));
+    if (produtos.some((p) => !(p.kg > 0))) { msg.style.color = '#f87171'; msg.textContent = 'Indica o kg de cada produto marcado.'; return; }
+    try {
+      await api('PUT', '/config/fino-barril', { tara: v('cc-tara'), cheio: v('cc-cheio'), kg_copo: v('cc-kgcopo'), produtos });
+      await carregarFinoCfg(true);
+      try { localStorage.removeItem('stockos.cache.produtosPos'); } catch (_) {}
+      msg.style.color = '#86efac'; msg.textContent = 'Guardado ✓';
+    } catch (e) { msg.style.color = '#f87171'; msg.textContent = e.message; }
+  };
   calcular();
 }
 
@@ -12466,7 +12527,7 @@ async function adicionarFinoBarrilNovo(produtoId) {
     if (!motivoSaida) { alert('Indica o motivo — é obrigatório quando o barril sai sem acabar.'); return; }
     pesoSaida = await perguntarPesoBarril('Barril que SAI — quanto pesa?');
     if (pesoSaida === null) return;
-    restoLiquidoKg = Math.round(Math.max(0, pesoSaida - KG_FINO_BARRIL_VAZIO) * 1000) / 1000;
+    restoLiquidoKg = Math.round(Math.max(0, pesoSaida - finoCfg().tara) * 1000) / 1000;
   }
 
   // ── Barril que ENTRA: novo? Se não, peso (líquidos = peso − tara). ──
@@ -12476,12 +12537,12 @@ async function adicionarFinoBarrilNovo(produtoId) {
     tipo: 'simnao'
   });
   if (entraNovo === null) return; // cancelado
-  let entradaLiquidosKg = KG_FINO_BARRIL_NET;
+  let entradaLiquidosKg = (finoCfg().cheio - finoCfg().tara);
   let pesoEntrada = null;
   if (!entraNovo) {
     pesoEntrada = await perguntarPesoBarril('Barril que ENTRA — quanto pesa?');
     if (pesoEntrada === null) return;
-    entradaLiquidosKg = Math.round(Math.max(0, pesoEntrada - KG_FINO_BARRIL_VAZIO) * 1000) / 1000;
+    entradaLiquidosKg = Math.round(Math.max(0, pesoEntrada - finoCfg().tara) * 1000) / 1000;
     if (entradaLiquidosKg <= 0) { alert('O barril que entra está vazio (peso = tara) — não há nada para registar.'); return; }
   }
 
@@ -12525,7 +12586,7 @@ async function adicionarFinoBarrilNovo(produtoId) {
     preco: 0,
     quantidade: entradaLiquidosKg,
     notas: entraNovo
-      ? `Barril novo (${fmtNum(KG_FINO_BARRIL_NET)} kg líquidos; cheio ${fmtNum(KG_FINO_BARRIL_CHEIO)} kg − tara ${fmtNum(KG_FINO_BARRIL_VAZIO)} kg)${!saiuAcabou ? ` · trocou barril não acabado (${motivoSaida})` : ''}`
+      ? `Barril novo (${fmtNum((finoCfg().cheio - finoCfg().tara))} kg líquidos; cheio ${fmtNum(finoCfg().cheio)} kg − tara ${fmtNum(finoCfg().tara)} kg)${!saiuAcabou ? ` · trocou barril não acabado (${motivoSaida})` : ''}`
       : `Barril USADO a entrar (pesou ${fmtNum(pesoEntrada)} kg; líquidos ${fmtNum(entradaLiquidosKg)} kg)${!saiuAcabou ? ` · trocou barril não acabado (${motivoSaida})` : ''}`
   }, { tid: turnoId, desc: 'Troca de barril de Fino', extra: { produto_nome: 'Fino' } });
   if (entraNovo && selado) {

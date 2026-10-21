@@ -5826,10 +5826,12 @@ app.get('/api/config/fino-barril', auth, async (req, res) => {
     const cfg = await getFinoCfg(empresaDe(req));
     const emp = empresaDe(req);
     const cand = await queryEmpresa(
-      `SELECT id, nome, categoria, COALESCE(venda_por_copo,false) AS venda_por_copo, COALESCE(kg_por_copo,0)::numeric AS kg_por_copo
+      `SELECT id, nome, categoria, COALESCE(venda_por_copo,false) AS venda_por_copo, COALESCE(kg_por_copo,0)::numeric AS kg_por_copo,
+              COALESCE(preco,0)::numeric AS preco, COALESCE(qtd_copos_pacote,0)::int AS qtd_copos_pacote, COALESCE(preco_copos_pacote,0)::numeric AS preco_copos_pacote
        FROM produtos WHERE ativo = true AND empresa_id = $1 AND (nome ILIKE '%fino%' OR id::text = ANY($2::text[])) AND lower(trim(nome)) <> 'fino barril'
        ORDER BY nome`, [emp, cfg.produtos],
-      `SELECT id, nome, categoria, COALESCE(venda_por_copo,false) AS venda_por_copo, COALESCE(kg_por_copo,0)::numeric AS kg_por_copo
+      `SELECT id, nome, categoria, COALESCE(venda_por_copo,false) AS venda_por_copo, COALESCE(kg_por_copo,0)::numeric AS kg_por_copo,
+              COALESCE(preco,0)::numeric AS preco, COALESCE(qtd_copos_pacote,0)::int AS qtd_copos_pacote, COALESCE(preco_copos_pacote,0)::numeric AS preco_copos_pacote
        FROM produtos WHERE ativo = true AND (nome ILIKE '%fino%' OR id::text = ANY($1::text[])) AND lower(trim(nome)) <> 'fino barril'
        ORDER BY nome`, [cfg.produtos]
     );

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-21-fino-config-admin">
+<html lang="pt" data-stockos-ui="2026-10-21-fino-admin-separado">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -12387,8 +12387,13 @@ async function abrirCalculadoraCopos() {
   const cfgF = finoCfg();
   const adminHtml = isAdminCfg ? `
       <details style="margin-top:10px;border:1px solid #5b21b6;border-radius:10px;padding:8px 10px">
-        <summary style="cursor:pointer;color:#c4b5fd;font-size:13px">⚙️ Produtos de Fino (admin)</summary>
-        <div style="font-size:11px;color:#94a3b8;margin:6px 0">Marca os produtos que saem do Fino Barril e o peso de cada venda (kg). Fica gravado no produto.</div>
+        <summary style="cursor:pointer;color:#c4b5fd;font-size:13px">⚙️ Configuração do Fino Barril (admin)</summary>
+        <div style="font-size:12px;color:#c4b5fd;margin:8px 0 2px">Barril</div>
+        ${campo('cc-tara', 'Tara do barril (vasilhame) kg', cfgF.tara, 'barril vazio')}
+        ${campo('cc-cheio', 'Peso do barril cheio (kg)', cfgF.cheio, 'barril novo, selado')}
+        ${campo('cc-kgcopo', 'Kg do copo de referência', cfgF.kg_copo, 'para mostrar a diferença em copos')}
+        <div style="font-size:12px;color:#c4b5fd;margin:10px 0 2px">Produtos de Fino</div>
+        <div style="font-size:11px;color:#94a3b8;margin:2px 0 6px">Marca os produtos que saem do Fino Barril e o peso de cada venda (kg). Fica gravado no produto.</div>
         ${(cfgF.candidatos || []).map((c) => {
           const inc = finoIncluido(c.id, c.nome) && (parseFloat(c.kg_por_copo) > 0 || !/^fino/i.test(c.nome));
           return `<label style="display:flex;align-items:center;gap:8px;margin:4px 0;font-size:13px;color:#cbd5e1">
@@ -12406,14 +12411,14 @@ async function abrirCalculadoraCopos() {
         <div class="modal-title">🧮 Calculadora de copos — Fino Barril</div>
         <button type="button" class="modal-close" aria-label="Fechar">×</button>
       </div>
-      <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Pesos <strong>brutos</strong>, como na balança (com o vasilhame).</div>
-      ${campo('cc-tara', 'Tara do barril (vasilhame) kg', cfgF.tara, 'barril vazio')}
+      <div id="cc-cfg-info" style="font-size:12px;color:#c4b5fd;background:rgba(124,58,237,0.08);border:1px solid #5b21b6;border-radius:8px;padding:6px 8px;margin-bottom:8px">
+        Definido pelo admin: tara <strong>${fmtNum(cfgF.tara)} kg</strong> · barril cheio <strong>${fmtNum(cfgF.cheio)} kg</strong> · copo <strong>${fmtNum(cfgF.kg_copo)} kg</strong>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Pesos do turno <strong>brutos</strong>, como na balança (com o vasilhame).</div>
       ${campo('cc-enc', 'Peso encontrado (kg)', b.encontrado, 'barril no início do turno')}
       ${campo('cc-trocas', 'Trocas de barril (barris novos)', nTrocas, 'barris cheios postos no turno')}
-      ${campo('cc-cheio', 'Peso do barril cheio (kg)', cfgF.cheio, 'barril novo, selado')}
       ${campo('cc-retirado', 'Peso do barril retirado sem acabar (kg)', restoKg > 0 ? Math.round((restoKg + finoCfg().tara) * 1000) / 1000 : 0, '0 se os barris trocados estavam vazios')}
       ${campo('cc-deix', 'Peso deixado (kg)', b.deixado, 'pesa o barril no fim do turno')}
-      ${campo('cc-kgcopo', 'Kg do copo de referência', kgCopo, 'para mostrar a diferença em copos')}
       <div id="cc-res" style="margin-top:12px;padding:10px 12px;background:#0f172a;border:1px solid #334155;border-radius:10px;font-size:13px;line-height:1.7"></div>
       ${adminHtml}
     </div>`;
@@ -12421,7 +12426,13 @@ async function abrirCalculadoraCopos() {
   const fechar = () => div.remove();
   div.addEventListener('click', (e) => { if (e.target === div) fechar(); });
   div.querySelector('.modal-close').onclick = fechar;
-  const v = (id) => { const x = parseFloat(String(document.getElementById(id).value).replace(',', '.')); return Number.isFinite(x) ? x : NaN; };
+  const CFG_PAD = { 'cc-tara': cfgF.tara, 'cc-cheio': cfgF.cheio, 'cc-kgcopo': cfgF.kg_copo };
+  const v = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return CFG_PAD[id] !== undefined ? CFG_PAD[id] : NaN;
+    const x = parseFloat(String(el.value).replace(',', '.'));
+    return Number.isFinite(x) ? x : NaN;
+  };
   const calcular = () => {
     const tara = v('cc-tara') || 0, enc = v('cc-enc'), tro = v('cc-trocas') || 0, cheio = v('cc-cheio') || 0;
     const retirado = v('cc-retirado') || 0, dei = v('cc-deix'), kgc = v('cc-kgcopo');
@@ -12458,7 +12469,13 @@ async function abrirCalculadoraCopos() {
       ${kgVend < 0 ? '<div style="color:#fb923c;margin-top:4px">⚠ O deixado é maior do que o que havia — confere os pesos.</div>' : ''}
       ${enc > 0 && enc < tara ? '<div style="color:#fb923c;margin-top:4px">⚠ O peso encontrado é menor que a tara — confere se é o peso bruto.</div>' : ''}`;
   };
-  div.querySelectorAll('input:not(.cc-fp-inc):not(.cc-fp-kg)').forEach((i) => { i.oninput = calcular; });
+  div.querySelectorAll('input:not(.cc-fp-inc):not(.cc-fp-kg)').forEach((i) => {
+    i.oninput = () => {
+      const info = document.getElementById('cc-cfg-info');
+      if (info && CAMPOS_ADMIN.includes(i.id)) info.innerHTML = `Definido pelo admin: tara <strong>${fmtNum(v('cc-tara'))} kg</strong> · barril cheio <strong>${fmtNum(v('cc-cheio'))} kg</strong> · copo <strong>${fmtNum(v('cc-kgcopo'))} kg</strong>`;
+      calcular();
+    };
+  });
   const btnCfg = div.querySelector('#cc-guardar-cfg');
   if (btnCfg) btnCfg.onclick = async () => {
     const msg = div.querySelector('#cc-cfg-msg');

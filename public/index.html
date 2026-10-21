@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-21-copos-balcao-fixo">
+<html lang="pt" data-stockos-ui="2026-10-21-copos-balcao-guardar">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -12509,6 +12509,10 @@ async function abrirCalculadoraBalcao() {
   if (!r) { alert('Este turno não tem Fino Barril na folha de stock.'); return; }
   const cfg = finoCfg();
   const num = (x) => (Number.isFinite(x) ? String(x) : '');
+  // Valores guardados deste turno (se houver) substituem os do turno.
+  let gravado = {};
+  try { gravado = (await api('GET', `/turnos/${encodeURIComponent(t.id)}/fino-calc`)) || {}; } catch (_) {}
+  const gv = (k, def) => (gravado[k] !== null && gravado[k] !== undefined ? gravado[k] : def);
   document.getElementById('calc-balcao-modal')?.remove();
   const div = document.createElement('div');
   div.id = 'calc-balcao-modal';
@@ -12553,10 +12557,14 @@ async function abrirCalculadoraBalcao() {
         <div id="cb-tot" style="display:flex;justify-content:space-between;border-top:1px dashed #334155;margin-top:6px;padding-top:4px"></div>
       </div>
       <div style="font-size:11px;color:#c4b5fd;margin:8px 0 2px">Tara ${fmtNum(cfg.tara)} kg · barril cheio ${fmtNum(cfg.cheio)} kg (definidos pelo admin)</div>
-      ${campo('cb-enc', 'Peso encontrado (kg)', num(r.enc), 'barril no início do turno (bruto)')}
-      ${campo('cb-trocas', 'Trocas de barril (barris novos)', r.trocas, '')}
-      ${campo('cb-retirado', 'Peso do barril retirado sem acabar (kg)', r.restoLiq ? Math.round((r.restoLiq + cfg.tara) * 1000) / 1000 : 0, '0 se estavam vazios')}
-      ${campo('cb-agora', 'Peso na balança agora (kg)', '', 'opcional — para comparar')}
+      ${campo('cb-enc', 'Peso encontrado (kg)', num(gv('encontrado', r.enc)), 'barril no início do turno (bruto)')}
+      ${campo('cb-trocas', 'Trocas de barril (barris novos)', gv('trocas', r.trocas), '')}
+      ${campo('cb-retirado', 'Peso do barril retirado sem acabar (kg)', gv('retirado', r.restoLiq ? Math.round((r.restoLiq + cfg.tara) * 1000) / 1000 : 0), '0 se estavam vazios')}
+      ${campo('cb-agora', 'Peso na balança agora (kg)', num(gv('agora', NaN)), 'opcional — para comparar')}
+      <div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
+        <button type="button" id="cb-guardar" class="btn btn-primary btn-sm">💾 Guardar</button>
+        <span id="cb-guardado" style="font-size:11px;color:#94a3b8">${gravado.guardado_em ? `Guardado ${new Date(gravado.guardado_em).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${gravado.guardado_por ? ` por ${escapeHtml(gravado.guardado_por)}` : ''}` : 'Ainda não guardado neste turno.'}</span>
+      </div>
       <div id="cb-res" style="margin-top:12px;padding:10px 12px;background:#0f172a;border:1px solid #334155;border-radius:10px;font-size:13px;line-height:1.7"></div>
     </div>`;
   document.body.appendChild(div);
@@ -12605,7 +12613,17 @@ async function abrirCalculadoraBalcao() {
       ${esperadoLiq < 0 ? '<div style="color:#fb923c">⚠ O balcão vendeu mais do que havia no barril — falta registar uma troca?</div>' : ''}
       ${comp}`;
   };
-  div.querySelectorAll('input').forEach((i) => { i.oninput = calcular; });
+  div.querySelectorAll('input').forEach((i) => { i.oninput = () => { calcular(); const g = document.getElementById('cb-guardado'); if (g) { g.style.color = '#fbbf24'; g.textContent = 'Alterações por guardar.'; } }; });
+  div.querySelector('#cb-guardar').onclick = async () => {
+    const g = document.getElementById('cb-guardado');
+    try {
+      const d = await api('PUT', `/turnos/${encodeURIComponent(t.id)}/fino-calc`, {
+        encontrado: v('cb-enc'), trocas: v('cb-trocas'), retirado: v('cb-retirado'), agora: v('cb-agora')
+      });
+      g.style.color = '#86efac';
+      g.textContent = `Guardado ${new Date(d.guardado_em).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${d.guardado_por ? ` por ${d.guardado_por}` : ''}`;
+    } catch (e) { g.style.color = '#f87171'; g.textContent = e.message; }
+  };
   calcular();
 }
 

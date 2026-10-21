@@ -5804,6 +5804,58 @@ app.put('/api/config/checklist-turno', auth, requireRole('admin', 'gestor'), asy
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── Config: Fino Barril (admin) ── tara, peso do barril cheio, copo de
+// referência e os produtos que saem do barril (com o kg por venda, que fica
+// gravado no próprio produto: venda_por_copo + kg_por_copo).
+const FINO_CFG_DEF = { tara: 12.9, cheio: 61.05, kg_copo: 0.2, produtos: [] };
+async function getFinoCfg(empresaId) {
+  try {
+    const v = await getConfigEmpresa(empresaId || 1, 'fino_barril');
+    const o = v ? JSON.parse(v) : {};
+    return { ...FINO_CFG_DEF, ...o, produtos: Array.isArray(o.produtos) ? o.produtos.map(String) : [] };
+  } catch (_) { return { ...FINO_CFG_DEF }; }
+}
+async function empresaDoTurno(turnoId) {
+  try {
+    const r = await query(`SELECT l.empresa_id FROM turnos t JOIN lojas l ON l.id = t.loja_id WHERE t.id=$1`, [turnoId]);
+    return (r.rows[0] && r.rows[0].empresa_id) || 1;
+  } catch (_) { return 1; }
+}
+app.get('/api/config/fino-barril', auth, async (req, res) => {
+  try {
+    const cfg = await getFinoCfg(empresaDe(req));
+    const emp = empresaDe(req);
+    const cand = await queryEmpresa(
+      `SELECT id, nome, categoria, COALESCE(venda_por_copo,false) AS venda_por_copo, COALESCE(kg_por_copo,0)::numeric AS kg_por_copo
+       FROM produtos WHERE ativo = true AND empresa_id = $1 AND (nome ILIKE '%fino%' OR id::text = ANY($2::text[])) AND lower(trim(nome)) <> 'fino barril'
+       ORDER BY nome`, [emp, cfg.produtos],
+      `SELECT id, nome, categoria, COALESCE(venda_por_copo,false) AS venda_por_copo, COALESCE(kg_por_copo,0)::numeric AS kg_por_copo
+       FROM produtos WHERE ativo = true AND (nome ILIKE '%fino%' OR id::text = ANY($1::text[])) AND lower(trim(nome)) <> 'fino barril'
+       ORDER BY nome`, [cfg.produtos]
+    );
+    res.json({ ...cfg, candidatos: cand.rows });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+app.put('/api/config/fino-barril', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const n = (v, d) => { const x = parseFloat(v); return Number.isFinite(x) && x > 0 ? x : d; };
+    const tara = n(b.tara, FINO_CFG_DEF.tara), cheio = n(b.cheio, FINO_CFG_DEF.cheio), kg_copo = n(b.kg_copo, FINO_CFG_DEF.kg_copo);
+    if (cheio <= tara) return res.status(400).json({ erro: 'O peso do barril cheio tem de ser maior que a tara.' });
+    const prods = (Array.isArray(b.produtos) ? b.produtos : []).filter((p) => p && p.id != null);
+    const incluidos = [];
+    for (const p of prods) {
+      const kg = parseFloat(p.kg);
+      if (!(kg > 0)) continue;
+      incluidos.push(String(p.id));
+      await query(`UPDATE produtos SET venda_por_copo = true, kg_por_copo = $2 WHERE id::text = $1`, [String(p.id), kg]);
+    }
+    const cfg = { tara, cheio, kg_copo, produtos: incluidos };
+    await setConfigEmpresa(empresaDe(req), 'fino_barril', JSON.stringify(cfg));
+    res.json(cfg);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 let checklistColReady = false;
 async function ensureChecklistCol() {
   if (checklistColReady) return;
@@ -6034,6 +6086,7 @@ async function recalcularDeixadosAuto(turnoId, profundidade = 0) {
   if (!(await deixadoAutoAtivo(turnoId))) return [];
   const hasDev = await qtdDevolvidaAvailable().catch(() => false);
   const dev = hasDev ? 'COALESCE(tpl.qtd_devolvida,0)' : '0';
+  const finoIds = (await getFinoCfg(await empresaDoTurno(turnoId))).produtos;
   const r = await query(
     `WITH ts_turno AS (
        SELECT ts.produto_id, p.nome FROM turno_stock ts JOIN produtos p ON p.id = ts.produto_id WHERE ts.turno_id = $1
@@ -6056,7 +6109,7 @@ async function recalcularDeixadosAuto(turnoId, profundidade = 0) {
      balcao_ped AS (
        SELECT CASE
                 WHEN l.pid_venda IN (SELECT produto_id FROM ts_turno) THEN l.pid_venda
-                WHEN l.copo AND l.kgc > 0 AND lower(trim(l.nome)) LIKE 'fino%' THEN (SELECT produto_id FROM barril)
+                WHEN l.copo AND l.kgc > 0 AND (lower(trim(l.nome)) LIKE 'fino%' OR l.pid_venda::text = ANY($2::text[])) THEN (SELECT produto_id FROM barril)
               END AS pid,
               SUM(CASE WHEN l.copo AND l.kgc > 0 THEN l.q * l.kgc ELSE l.q END) AS qtd
        FROM linhas l
@@ -6082,7 +6135,7 @@ async function recalcularDeixadosAuto(turnoId, profundidade = 0) {
        FROM calc
       WHERE ts.id = calc.id AND ts.deixado IS DISTINCT FROM calc.novo
      RETURNING ts.produto_id, ts.deixado, ts.deixado_caixa`,
-    [turnoId]
+    [turnoId, finoIds]
   );
   // Passagem de turno: o Encontrado do turno seguinte (aberto) segue o Deixado.
   if (r.rows.length) {

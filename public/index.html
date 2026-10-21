@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-21-calculo-do-fino">
+<html lang="pt" data-stockos-ui="2026-10-21-fino-botoes-caixa">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -4216,6 +4216,7 @@ async function loadTurno() {
         </div>
         <div class="card mt-16" id="fino-relatorio-card" style="display:none">
           <div class="card-title">🛢️ Fino Barril — copos</div>
+          <div id="fino-acoes-caixa" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"></div>
           <div id="fino-relatorio-mount"></div>
         </div>
         <div class="card mt-16">
@@ -7567,7 +7568,6 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
           <button type="button" data-grupo="Avulso" onclick="pedidoBalcaoSetFilter(this)">Avulso</button>
           <button type="button" data-grupo="BebidaCopo" onclick="pedidoBalcaoSetFilter(this)">Bebida (copos)</button>
           <button type="button" data-grupo="BebidaUnidade" onclick="pedidoBalcaoSetFilter(this)">Bebida (unidade)</button>
-          ${finoBarrilBtnPos}${calcCoposBtnPos}
         </div>
         <div class="pedidos-balcao-tiles">${tilesHtml}</div>
         <div id="pedido-balcao-sem-resultados" style="display:none;color:#64748b;font-size:13px;padding:10px 2px">Nenhum produto corresponde à pesquisa.</div>
@@ -12310,6 +12310,18 @@ function renderRelatorioFino() {
   const r = relatorioFinoBarril();
   if (!r) { card.style.display = 'none'; return; }
   card.style.display = '';
+  // Acções do Fino Barril (vieram dos Pedidos ao balcão).
+  const acoes = document.getElementById('fino-acoes-caixa');
+  const barrilRow = (S.turnoData && S.turnoData.stock || []).find((x) => isFinoBarrilNome(x.produto_nome));
+  if (acoes && barrilRow) {
+    const pidB = String(barrilRow.produto_id).replace(/[^0-9a-zA-Z-]/g, '');
+    const bt = (estilo, titulo, onclick, html) => `<button type="button" class="btn btn-sm" style="${estilo}" title="${titulo}" onclick="${onclick}">${html}</button>`;
+    acoes.innerHTML =
+      (S.turnoCanEdit ? bt('background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.5);color:#86efac', 'Regista a troca de barril (soma os kg líquidos ao Fino Barril)', `runAction(event, () => adicionarFinoBarrilNovo('${pidB}'))`, '🛢️ Troca de barril<span id="troca-barril-count" style="display:none;margin-left:7px;background:rgba(34,197,94,0.3);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:700"></span>') : '')
+      + bt('background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.5);color:#93c5fd', 'Calcular copos a partir do peso do barril', 'runAction(event, abrirCalculadoraCopos)', '🧮 Calcular copos')
+      + bt('background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.5);color:#6ee7b7', 'Peso esperado do barril a partir do balcão', 'runAction(event, abrirCalculadoraBalcao)', '🧾 Cálculo do Fino');
+    if (S.turnoData) atualizarContadorTrocasBarril(S.turnoData.id, pidB).catch(() => {});
+  }
   const L = (a, b2, st) => `<div style="display:flex;justify-content:space-between;gap:10px${st ? ';' + st : ''}"><span style="color:#94a3b8">${a}</span><span>${b2}</span></div>`;
   if (!r.ok) { mount.innerHTML = '<span style="color:#64748b;font-size:13px">Falta o peso encontrado ou deixado do Fino Barril.</span>'; return; }
   const cor = Math.abs(r.difKg) < 0.1 ? '#86efac' : r.difKg > 0 ? '#f87171' : '#fb923c';

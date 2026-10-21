@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-21-copos-balcao-qtd">
+<html lang="pt" data-stockos-ui="2026-10-21-copos-balcao-fixo">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -12537,7 +12537,7 @@ async function abrirCalculadoraBalcao() {
   const linhasProd = prods.length
     ? prods.map((x, i) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;color:#cbd5e1;margin:3px 0">
         <span style="flex:1;min-width:0">${escapeHtml(x.nome)} <small style="color:#64748b">${fmtNum(x.kgc)} kg</small></span>
-        <input type="number" min="0" step="1" inputmode="numeric" class="cb-qtd" data-i="${i}" value="${x.qtd || 0}" style="width:64px;background:#1e293b;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:4px 6px;text-align:right"/>
+        <span class="cb-qtd" data-i="${i}" style="width:48px;text-align:right;font-weight:700;color:#f1f5f9">${fmtNum(x.qtd || 0)}</span>
         <span class="cb-lin" data-i="${i}" style="width:150px;text-align:right;font-size:12px"></span>
       </div>`).join('')
     : '<div style="color:#64748b">Sem produtos de Fino configurados (o admin define-os na 🧮 Calcular copos).</div>';
@@ -12547,7 +12547,7 @@ async function abrirCalculadoraBalcao() {
         <div class="modal-title">🧾 Copos do balcão — Fino Barril</div>
         <button type="button" class="modal-close" aria-label="Fechar">×</button>
       </div>
-      <div style="font-size:12px;color:#94a3b8;margin-bottom:4px">Quantidade vendida (vem do balcão — podes ajustar)</div>
+      <div style="font-size:12px;color:#94a3b8;margin-bottom:4px">Quantidade vendida (pedidos do balcão)</div>
       <div style="padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:10px;font-size:13px;line-height:1.5">
         ${linhasProd}
         <div id="cb-tot" style="display:flex;justify-content:space-between;border-top:1px dashed #334155;margin-top:6px;padding-top:4px"></div>
@@ -12566,13 +12566,12 @@ async function abrirCalculadoraBalcao() {
   const v = (id) => { const x = parseFloat(String(document.getElementById(id).value).replace(',', '.')); return Number.isFinite(x) ? x : NaN; };
   const calcular = () => {
     const el = document.getElementById('cb-res');
-    // Quantidades (editáveis) → kg e valor por produto.
+    // Quantidades do balcão (sem ajuste) → kg e valor por produto.
     let kgBalcao = 0, valorBalcao = 0;
     prods.forEach((x, i) => {
-      const inp = div.querySelector(`.cb-qtd[data-i="${i}"]`);
-      const q = Math.max(0, parseFloat(String(inp && inp.value).replace(',', '.')) || 0);
+      const q = Math.max(0, x.qtd || 0);
       const kg = Math.round(q * x.kgc * 1000) / 1000;
-      const valor = q === x.qtd && x.valorBalcao ? x.valorBalcao : precoVendaCopos(Math.floor(q), x.preco, x.n, x.pp);
+      const valor = x.valorBalcao || 0;
       kgBalcao += kg; valorBalcao += valor;
       const lin = div.querySelector(`.cb-lin[data-i="${i}"]`);
       if (lin) lin.innerHTML = `<strong>${fmtNum(kg)} kg</strong> · ${fmt(valor)}`;

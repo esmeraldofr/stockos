@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-21-copos-balcao-guardar">
+<html lang="pt" data-stockos-ui="2026-10-21-calculo-do-fino">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -3804,7 +3804,7 @@ async function loadTurno() {
             + `<div style="font-size:11px;color:#94a3b8;margin-top:6px">📷 ${rotulo} <strong style="color:#cbd5e1">ao sair</strong> (fim do turno)</div><div class="fotos-anexos" data-chave="${pref}-sai:${turno.id}" data-canedit="${ed}"></div>`;
         };
         const fbBtnHtml = isFinoBarrilNome(s.produto_nome)
-          ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px" onclick="runAction(event, abrirCalculadoraCopos)">🧮 Calcular copos</button> <button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px" onclick="runAction(event, abrirCalculadoraBalcao)">🧾 Copos do balcão</button>` + fotosEntSai('barril', 'Peso do barril')
+          ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px" onclick="runAction(event, abrirCalculadoraCopos)">🧮 Calcular copos</button> <button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px" onclick="runAction(event, abrirCalculadoraBalcao)">🧾 Cálculo do Fino</button>` + fotosEntSai('barril', 'Peso do barril')
           : ehSelado ? fotosEntSai('selado', 'Barris selados')
           : '';
         return `
@@ -7550,7 +7550,7 @@ async function renderPedidosBalcao(turnoId, canEdit, produtosParaPedido) {
     ? `<button type="button" style="margin-left:auto;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.5);color:#86efac" title="O barril acabou? Regista a troca (o que sai acabou?, o que entra é novo?) — soma os kg líquidos à Entrada do Fino Barril" onclick="runAction(event, () => adicionarFinoBarrilNovo('${finoBarrilPidPos}'))">🛢️ Troca de barril<span id="troca-barril-count" style="display:none;margin-left:7px;background:rgba(34,197,94,0.3);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:700"></span></button>`
     : '';
   const calcCoposBtnPos = finoBarrilPidPos
-    ? `<button type="button" style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.5);color:#93c5fd" title="Calcular copos a partir do peso do barril" onclick="runAction(event, abrirCalculadoraCopos)">🧮 Calcular copos</button><button type="button" style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.5);color:#6ee7b7" title="Peso esperado do barril a partir do balcão" onclick="runAction(event, abrirCalculadoraBalcao)">🧾 Copos do balcão</button>`
+    ? `<button type="button" style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.5);color:#93c5fd" title="Calcular copos a partir do peso do barril" onclick="runAction(event, abrirCalculadoraCopos)">🧮 Calcular copos</button><button type="button" style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.5);color:#6ee7b7" title="Peso esperado do barril a partir do balcão" onclick="runAction(event, abrirCalculadoraBalcao)">🧾 Cálculo do Fino</button>`
     : '';
   if (finoBarrilPidPos) setTimeout(() => atualizarContadorTrocasBarril(turnoId, finoBarrilPidPos), 300);
   const formHtml = canEdit
@@ -12493,7 +12493,7 @@ async function abrirCalculadoraCopos() {
   calcular();
 }
 
-/** 🧾 Copos do balcão: parte dos produtos de Fino vendidos no balcão e
+/** 🧾 Cálculo do Fino: parte dos produtos de Fino vendidos no balcão e
  *  calcula o peso que o barril DEVIA ter agora:
  *  esperado (bruto) = Encontrado + barris novos − retirado − kg do balcão.
  *  Opcional: peso na balança agora → diferença (kg, copos, Kz). */
@@ -12548,7 +12548,7 @@ async function abrirCalculadoraBalcao() {
   div.innerHTML = `
     <div class="modal" style="max-width:min(460px,94vw)">
       <div class="modal-header">
-        <div class="modal-title">🧾 Copos do balcão — Fino Barril</div>
+        <div class="modal-title">🧾 Cálculo do Fino</div>
         <button type="button" class="modal-close" aria-label="Fechar">×</button>
       </div>
       <div style="font-size:12px;color:#94a3b8;margin-bottom:4px">Quantidade vendida (pedidos do balcão)</div>

@@ -5858,6 +5858,27 @@ app.put('/api/config/fino-barril', auth, requireRole('admin'), async (req, res) 
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Campos da calculadora «Copos do balcão» guardados por turno.
+app.get('/api/turnos/:id/fino-calc', auth, async (req, res) => {
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k=$1`, [`fino_calc:t${parseInt(req.params.id, 10) || 0}`]);
+    res.json(r.rows.length ? JSON.parse(r.rows[0].v) : {});
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+app.put('/api/turnos/:id/fino-calc', auth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const n = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
+    const dados = {
+      encontrado: n(b.encontrado), trocas: n(b.trocas), retirado: n(b.retirado), agora: n(b.agora),
+      guardado_em: new Date().toISOString(), guardado_por: (req.user && req.user.nome) || ''
+    };
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ($1,$2) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+      [`fino_calc:t${parseInt(req.params.id, 10) || 0}`, JSON.stringify(dados)]);
+    res.json(dados);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 let checklistColReady = false;
 async function ensureChecklistCol() {
   if (checklistColReady) return;

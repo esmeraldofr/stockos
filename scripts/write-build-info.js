@@ -10,8 +10,8 @@ function safeGit(cmd) {
   catch (_) { return ''; }
 }
 
-const sha = process.env.VERCEL_GIT_COMMIT_SHA || safeGit('rev-parse HEAD');
-const ref = process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || safeGit('rev-parse --abbrev-ref HEAD');
+const sha = process.env.VERCEL_GIT_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || safeGit('rev-parse HEAD');
+const ref = process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || process.env.RENDER_GIT_BRANCH || safeGit('rev-parse --abbrev-ref HEAD');
 const msgRaw = process.env.VERCEL_GIT_COMMIT_MESSAGE || (sha ? safeGit(`log -1 --format=%s ${sha}`) : '');
 const commitTs = sha
   ? safeGit(`log -1 --format=%cI ${sha}`)
@@ -24,7 +24,7 @@ const info = {
   fullSha: sha || null,
   ref: ref || null,
   msg: msgRaw ? msgRaw.split('\n')[0].slice(0, 120) : null,
-  source: process.env.VERCEL ? 'vercel' : 'local'
+  source: process.env.VERCEL ? 'vercel' : process.env.RENDER ? 'render' : 'local'
 };
 
 const out = path.join(__dirname, '..', 'build-info.json');

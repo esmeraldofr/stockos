@@ -77,6 +77,16 @@ Push em `main` ou `workflow_dispatch`. Corre `supabase/stockos_database.sql` se 
 
 ---
 
+## Render (alternativa gratuita, em paralelo com a Vercel)
+
+- `render.yaml` define o serviço web `stockos` (plano free, região Frankfurt, branch `main`, `npm install` / `npm start`, health check `/api/ping`).
+- A Vercel continua configurada — os dois podem estar activos ao mesmo tempo, contra a mesma BD de produção.
+- No Render o servidor detecta o ambiente pelo branch (`RENDER_GIT_BRANCH`: main → production, qualidade → só leitura, develop → develop); `STOCKOS_DEPLOY_TIER=production` também está definido.
+- Variáveis a preencher no painel do Render: `DATABASE_URL` (pooler 6543 de produção), `JWT_SECRET`; opcionais `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `MINDEE_API_KEY`.
+- Plano free adormece após ~15 min sem pedidos (1.º acesso ~30–60 s). Não conta invocações (a Vercel Hobby suspendeu a conta em 25/10/2026 por limite de utilização — `402 DEPLOYMENT_DISABLED`).
+
+---
+
 ## Vercel (`vercel.json`)
 
 ```json

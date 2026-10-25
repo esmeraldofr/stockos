@@ -73,6 +73,9 @@ if (process.env.VERCEL_ENV === 'preview' && /dakleqewbwbryuchlrzm/i.test(_dbUrlR
     '[WARN] Preview com ref de produção na DATABASE_URL. Define DATABASE_URL (Preview) na Vercel = secret DATABASE_URL_DEV no GitHub, ou corre o workflow deploy-develop.'
   );
 }
+if (process.env.RENDER && String(process.env.RENDER_GIT_BRANCH || '').toLowerCase() === 'develop' && /dakleqewbwbryuchlrzm/i.test(_dbUrlRaw)) {
+  console.error('[WARN] Render develop com ref de PRODUÇÃO na DATABASE_URL — usa a BD de desenvolvimento (secret DATABASE_URL_DEV).');
+}
 
 /** Log de arranque: host, user e ref (sem password) — confirma em Vercel Logs qual BD está ligada. */
 function logStockosDbTarget() {

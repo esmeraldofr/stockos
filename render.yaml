@@ -1,0 +1,47 @@
+# Render (render.com) — alternativa gratuita à Vercel, em paralelo.
+# A Vercel continua configurada (vercel.json + workflows); este ficheiro só
+# é usado pelo Render («New → Blueprint» ou serviço web com estes valores).
+#
+# Plano free: o serviço adormece após ~15 min sem pedidos e o 1.º acesso a
+# seguir demora ~30–60 s. Pedidos não são contados por invocação (ao
+# contrário da Vercel Hobby), por isso o refrescamento da app não gasta cota.
+#
+# Variáveis com «sync: false» são preenchidas à mão no painel do Render
+# (Environment) — nunca escrever valores secretos neste ficheiro.
+services:
+  - type: web
+    name: stockos
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: main            # produção vem de main (promoção manual qualidade → main)
+    autoDeploy: true        # cada push em main publica sozinho
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/ping
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      # Ambiente explícito (o servidor também o detecta pelo branch no Render).
+      - key: STOCKOS_DEPLOY_TIER
+        value: production
+      # Servidor sempre ligado (não serverless): pode usar mais ligações.
+      - key: PG_POOL_MAX
+        value: "4"
+      # Base de dados de produção (Supabase, pooler 6543) — a mesma da Vercel.
+      - key: DATABASE_URL
+        sync: false
+      # Chave das sessões (login). Pode ser a mesma da Vercel.
+      - key: JWT_SECRET
+        sync: false
+      # Opcionais — só se usados na Vercel (fotos/Storage, OCR de faturas).
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: MINDEE_API_KEY
+        sync: false

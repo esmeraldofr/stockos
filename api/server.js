@@ -835,6 +835,14 @@ try {
 function stockosDeploymentTier() {
   const explicit = String(process.env.STOCKOS_DEPLOY_TIER || '').trim().toLowerCase();
   if (['production', 'qualidade', 'develop', 'preview', 'local'].includes(explicit)) return explicit;
+  // Render: o ambiente vem do branch publicado (main = produção).
+  if (process.env.RENDER) {
+    const brR = String(process.env.RENDER_GIT_BRANCH || '').toLowerCase();
+    if (brR === 'main') return 'production';
+    if (brR === 'qualidade') return 'qualidade';
+    if (brR === 'develop') return 'develop';
+    return 'preview';
+  }
   if (process.env.VERCEL_ENV === 'production') return 'production';
   if (process.env.VERCEL_ENV === 'preview') {
     const br = String(
@@ -871,6 +879,7 @@ function isStockosApiReadOnly() {
     ).toLowerCase();
     if (br === 'qualidade') return true;
   }
+  if (process.env.RENDER && String(process.env.RENDER_GIT_BRANCH || '').toLowerCase() === 'qualidade') return true;
   return false;
 }
 
@@ -910,8 +919,8 @@ app.get('/api/health', (req, res) =>
     tier: stockosDeploymentTier(),
     develop_only: isStockosDevelopOnly(),
     read_only: isStockosApiReadOnly(),
-    git_ref: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.ref) || process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || null,
-    git_sha: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.sha) || (process.env.VERCEL_GIT_COMMIT_SHA ? String(process.env.VERCEL_GIT_COMMIT_SHA).slice(0, 7) : null),
+    git_ref: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.ref) || process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || process.env.RENDER_GIT_BRANCH || null,
+    git_sha: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.sha) || (process.env.VERCEL_GIT_COMMIT_SHA || process.env.RENDER_GIT_COMMIT ? String(process.env.VERCEL_GIT_COMMIT_SHA || process.env.RENDER_GIT_COMMIT).slice(0, 7) : null),
     commit_at: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.commitAt) || null,
     built_at: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.builtAt) || null,
     commit_msg: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.msg) || null,
@@ -2593,7 +2602,7 @@ app.get('/api/dev/info', (req, res) => {
     node: process.version,
     uptime_s: Math.floor(process.uptime()),
     vercel_url: process.env.VERCEL_URL || null,
-    git_ref: process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || null,
+    git_ref: process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || process.env.RENDER_GIT_BRANCH || null,
     git_sha: process.env.VERCEL_GIT_COMMIT_SHA
       ? String(process.env.VERCEL_GIT_COMMIT_SHA).slice(0, 7)
       : null

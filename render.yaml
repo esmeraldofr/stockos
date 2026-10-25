@@ -45,3 +45,55 @@ services:
         sync: false
       - key: MINDEE_API_KEY
         sync: false
+
+  # ── Develop: integração, BD de desenvolvimento (stockos-dev) ──
+  # Cada push do Claude chega a develop (auto-merge) e o Render publica sozinho.
+  - type: web
+    name: stockos-develop
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: develop
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/ping
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: STOCKOS_DEPLOY_TIER
+        value: develop
+      - key: PG_POOL_MAX
+        value: "4"
+      # BD de DESENVOLVIMENTO (mesmo valor do secret DATABASE_URL_DEV do GitHub).
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+
+  # ── Qualidade: staging com a BD de produção em SÓ LEITURA ──
+  - type: web
+    name: stockos-qualidade
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: qualidade
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/ping
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: STOCKOS_DEPLOY_TIER
+        value: qualidade
+      # API só aceita leitura (+ login), como na Vercel.
+      - key: STOCKOS_READ_ONLY
+        value: "1"
+      - key: PG_POOL_MAX
+        value: "4"
+      # BD de produção com utilizador só de leitura (secret DATABASE_URL_QUALIDADE).
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false

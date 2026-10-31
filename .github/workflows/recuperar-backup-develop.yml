@@ -1,0 +1,85 @@
+# Recupera o backup do develop (artifact «backup-develop» do Sync DADOS
+# produção → desenvolvimento) para o schema «recuperado» da BD de develop,
+# sem tocar no schema public. Serve para consultar/copiar dados que a cópia
+# prod → dev apagou (ex.: turnos criados pelo Render ligado à BD errada).
+#
+# Corre num Postgres local do runner: restaura o dump, renomeia public →
+# recuperado e envia só esse schema para o develop.
+name: Recuperar backup develop → schema recuperado
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "ID da execução do Sync DADOS com o artifact backup-develop"
+        required: true
+        default: "41161258720"
+  push:
+    branches: ["claude/**"]
+    paths: [".github/workflows/recuperar-backup-develop.yml"]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  recuperar:
+    runs-on: ubuntu-latest
+    services:
+      pg:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: local
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar cliente PostgreSQL 17
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+
+      - name: Descarregar backup-develop
+        uses: actions/download-artifact@v4
+        with:
+          name: backup-develop
+          run-id: ${{ inputs.run_id || '41161258720' }}
+          github-token: ${{ github.token }}
+          path: bk
+
+      - name: Restaurar no Postgres local e renomear para «recuperado»
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: local
+          PGDATABASE: postgres
+        run: |
+          set -euo pipefail
+          ls -la bk
+          F=$(ls bk/*.sql.gz | head -1)
+          # Papéis do Supabase referenciados no dump (GRANTs/policies).
+          for r in anon authenticated service_role stockos_app supabase_admin; do
+            psql -qc "CREATE ROLE $r" 2>/dev/null || true
+          done
+          gunzip -c "$F" | psql -q -v ON_ERROR_STOP=0 2>&1 | grep -v '^$' | sort | uniq -c | sort -rn | head -30 || true
+          psql -qc "ALTER SCHEMA public RENAME TO recuperado"
+          psql -Atc "SELECT 'turnos', count(*), max(data)::text FROM recuperado.turnos"
+          pg_dump --no-owner --no-privileges --schema=recuperado --file=recuperado.sql
+          ls -la recuperado.sql
+
+      - name: Enviar schema «recuperado» para o develop
+        env:
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"
+          psql -qc "DROP SCHEMA IF EXISTS recuperado CASCADE"
+          psql -q -v ON_ERROR_STOP=0 -f recuperado.sql 2>&1 | sort | uniq -c | sort -rn | head -20 || true
+          psql -Atc "SELECT 'develop.recuperado.turnos', count(*), max(data)::text FROM recuperado.turnos"

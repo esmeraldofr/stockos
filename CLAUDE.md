@@ -33,6 +33,7 @@ Este ficheiro serve de referência para sessões futuras. Resume tudo o que foi 
 | Campo | Valor |
 |---|---|
 | URL | https://stockos-mu.vercel.app |
+| URL develop | https://stockos-develop-esmeraldofr.vercel.app (alias fixo actualizado pelo `deploy-dev.yml`; o antigo `stockos-git-develop-…` deixou de existir quando a integração Git da Vercel foi desligada) |
 
 **Contas:** sem seed automático no código. O administrador cria os utilizadores pela UI (Admin → Utilizadores). Se ficares sem nenhum admin activo, reactiva uma conta directamente na BD: `UPDATE utilizadores SET ativo=true WHERE email='…';`.
 
@@ -73,6 +74,19 @@ Push em `develop` → preview Vercel para desenvolvimento.
 ### 7. `setup-db.yml` — Inicialização da BD
 
 Push em `main` ou `workflow_dispatch`. Corre `supabase/stockos_database.sql` se a BD ainda não estiver inicializada. **Não cria utilizadores nem repõe passwords.**
+
+---
+
+## Render (alternativa gratuita, em paralelo com a Vercel)
+
+- `render.yaml` define 3 serviços web (plano free, Frankfurt, `npm install` / `npm start`, health `/api/ping`, autoDeploy):
+  - `stockos` — branch `main`, BD de produção (**a funcionar desde 25/10/2026**);
+  - `stockos-develop` — branch `develop`, BD de desenvolvimento (`DATABASE_URL_DEV`), `STOCKOS_DEPLOY_TIER=develop`;
+  - `stockos-qualidade` — branch `qualidade`, BD de produção só leitura (`DATABASE_URL_QUALIDADE`), `STOCKOS_READ_ONLY=1`.
+- A Vercel continua configurada — os dois podem estar activos ao mesmo tempo, contra a mesma BD de produção.
+- No Render o servidor detecta o ambiente pelo branch (`RENDER_GIT_BRANCH`: main → production, qualidade → só leitura, develop → develop); `STOCKOS_DEPLOY_TIER=production` também está definido.
+- Variáveis a preencher no painel do Render: `DATABASE_URL` (pooler 6543 de produção), `JWT_SECRET`; opcionais `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `MINDEE_API_KEY`.
+- Plano free adormece após ~15 min sem pedidos (1.º acesso ~30–60 s). Não conta invocações (a Vercel Hobby suspendeu a conta em 25/10/2026 por limite de utilização — `402 DEPLOYMENT_DISABLED`).
 
 ---
 
@@ -124,6 +138,7 @@ claude/session-<id>  ──auto (auto-merge-claude.yml)──▶  develop
 | BD não inicializada | `setup-db.yml` não correu ou falhou | Correr manualmente via `workflow_dispatch` no GitHub Actions |
 | Qualidade desactualizada | Promoção é manual | Disparar `promote-to-qualidade.yml` ou abrir PR `develop → qualidade` |
 | Produção desactualizada | Promoção é manual | Disparar `promote-to-main.yml` ou abrir PR `qualidade → main` |
+| Vercel `402 DEPLOYMENT_DISABLED` (conta suspensa) | Limite do plano Hobby: muitos pedidos (refresco do turno ~8 pedidos/25 s por aparelho + ping 10 s) e tráfego (foto do TPA base64 em cada `/api/dia`) | Foto fora do `/api/dia` (`SQL_CAIXA_SEM_FOTO`), refresco 60 s, ping 30 s, heartbeat 150 s, tudo parado com a app em segundo plano. Publicar menos vezes (agrupar alterações). Alternativa: Render (`render.yaml`) |
 
 ---
 

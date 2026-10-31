@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-21-fino-botoes-caixa">
+<html lang="pt" data-stockos-ui="2026-10-31-menos-pedidos">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -6030,7 +6030,8 @@ async function sondarInternet() {
   }
   return __netReal;
 }
-setInterval(() => { sondarInternet().catch(() => {}); }, 10000);
+// 30s (era 10s) e só com a app visível — ao voltar a ela sonda logo.
+setInterval(() => { if (!document.hidden) sondarInternet().catch(() => {}); }, 30000);
 setTimeout(() => { sondarInternet().catch(() => {}); }, 1500);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) sondarInternet().catch(() => {}); });
 window.addEventListener('online', () => { sondarInternet().catch(() => {}); });
@@ -6069,7 +6070,8 @@ async function enviarHeartbeat(ehLogin) {
     });
   } catch (_) { /* sem rede — o próximo heartbeat trata */ }
 }
-setInterval(() => { enviarHeartbeat().catch(() => {}); }, 60000);
+// 150s (era 60s) e só com a app visível; o Monitor dá «online» até 5 min.
+setInterval(() => { if (!document.hidden) enviarHeartbeat().catch(() => {}); }, 150000);
 setTimeout(() => { enviarHeartbeat().catch(() => {}); }, 3000);
 
 // ── DIÁRIO DE SINCRONIZAÇÕES ─ Cada tentativa da fila fica registada
@@ -6321,7 +6323,7 @@ function refrescoAutomatico(forcar) {
     if (!S.token || document.hidden) return;
     if (navigator.onLine === false || __netReal === false) return;
     const agora = Date.now();
-    if (!forcar && agora - __refrescoAutoTs < 20000) return;
+    if (!forcar && agora - __refrescoAutoTs < 50000) return;
     __refrescoAutoTs = agora;
     const urls = [];
     switch (S.page) {
@@ -6353,7 +6355,9 @@ function refrescoAutomatico(forcar) {
     urls.forEach((u, i) => setTimeout(() => { api('GET', u).catch(() => {}); }, i * 400));
   } catch (_) {}
 }
-setInterval(() => refrescoAutomatico(false), 25000);
+// 60s (era 25s): cada refresco do turno são ~8 pedidos — com vários aparelhos
+// abertos o dia todo isso esgotou o limite da Vercel Hobby (out/2026).
+setInterval(() => refrescoAutomatico(false), 60000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refrescoAutomatico(true); });
 window.addEventListener('online', () => refrescoAutomatico(true));
 /** Debounce pós-sincronização: um refresco ~2,5s após o ÚLTIMO item. */
@@ -17012,7 +17016,7 @@ async function drawMonitor() {
       </div>
     </div>
     <div id="content">
-      <p style="font-size:12px;color:#64748b;margin:0 0 12px;line-height:1.45">🟢 online = aparelho com a app aberta nos últimos 2 minutos. A contagem «por sincronizar» é reportada pelo próprio aparelho a cada minuto. ⏱ abre o diário de sincronizações (geral, ou por aparelho ao lado de cada um).</p>
+      <p style="font-size:12px;color:#64748b;margin:0 0 12px;line-height:1.45">🟢 online = aparelho com a app aberta nos últimos 5 minutos. A contagem «por sincronizar» é reportada pelo próprio aparelho a cada 2,5 minutos. ⏱ abre o diário de sincronizações (geral, ou por aparelho ao lado de cada um).</p>
       <div id="monitor-content"><div class="text-center" style="padding:40px;color:#64748b"><div class="spinner"></div></div></div>
     </div>
     ${navBar()}
@@ -17047,11 +17051,11 @@ async function loadMonitor() {
     };
     const cards = Object.values(por).filter((u) => u.dispositivos.length > 0).map((u) => {
       const roleLabel = u.role === 'compras' ? 'operador de sistema' : u.role;
-      const algumOnline = u.dispositivos.some((d) => d.visto_em && (agora - new Date(d.visto_em).getTime()) < 2 * 60000);
+      const algumOnline = u.dispositivos.some((d) => d.visto_em && (agora - new Date(d.visto_em).getTime()) < 5 * 60000);
       const disps = u.dispositivos.length === 0
         ? '<div style="color:#475569;font-size:12px;padding:6px 0">Nunca usou a app (ou ainda sem heartbeat registado).</div>'
         : u.dispositivos.map((d) => {
-            const online = d.visto_em && (agora - new Date(d.visto_em).getTime()) < 2 * 60000;
+            const online = d.visto_em && (agora - new Date(d.visto_em).getTime()) < 5 * 60000;
             const pend = parseInt(d.pendentes, 10) || 0;
             window.__monitorNomes = window.__monitorNomes || {};
             window.__monitorNomes[d.dispositivo_id] = d.dispositivo_nome || '';

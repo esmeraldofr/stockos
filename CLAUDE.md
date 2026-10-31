@@ -138,6 +138,7 @@ claude/session-<id>  ──auto (auto-merge-claude.yml)──▶  develop
 | BD não inicializada | `setup-db.yml` não correu ou falhou | Correr manualmente via `workflow_dispatch` no GitHub Actions |
 | Qualidade desactualizada | Promoção é manual | Disparar `promote-to-qualidade.yml` ou abrir PR `develop → qualidade` |
 | Produção desactualizada | Promoção é manual | Disparar `promote-to-main.yml` ou abrir PR `qualidade → main` |
+| Vercel `402 DEPLOYMENT_DISABLED` (conta suspensa) | Limite do plano Hobby: muitos pedidos (refresco do turno ~8 pedidos/25 s por aparelho + ping 10 s) e tráfego (foto do TPA base64 em cada `/api/dia`) | Foto fora do `/api/dia` (`SQL_CAIXA_SEM_FOTO`), refresco 60 s, ping 30 s, heartbeat 150 s, tudo parado com a app em segundo plano. Publicar menos vezes (agrupar alterações). Alternativa: Render (`render.yaml`) |
 
 ---
 

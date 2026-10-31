@@ -20,6 +20,10 @@ const SQL_STOCK_CATEGORIAS = "COALESCE(categoria,'') IN ('menu','ingredientes','
 const SQL_P_FOLHA_CATEGORIAS = "COALESCE(p.categoria,'') IN ('menu','ingredientes','bebida','outro','')";
 // Totais de VENDAS a partir da folha: só o que se vende (sem «outro»).
 const SQL_P_STOCK_CATEGORIAS = "p.categoria IN ('menu','ingredientes','bebida')";
+/** turno_caixa SEM a foto do TPA (base64 inline, centenas de KB): a lista de
+ *  turnos só precisa de saber se existe — 'tem' / ''. A foto vê-se na galeria
+ *  (GET /api/fotos). Era o grosso do tráfego do /api/dia (refresca sozinho). */
+const SQL_CAIXA_SEM_FOTO = `(to_jsonb(tc) - 'tpa_foto_url') || jsonb_build_object('tpa_foto_url', CASE WHEN COALESCE(tc.tpa_foto_url,'') <> '' THEN 'tem' ELSE '' END)`;
 const SQL_ORD_H = `(CASE h.valid_from_turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 0 END)`;
 let _sqlUsePrecoHistorico = true;
 
@@ -1180,7 +1184,7 @@ app.use(function auditMiddleware(req, res, next) {
   if (p === '/api/auditoria') return next(); // não regista as próprias leituras
   // RUÍDO de alta frequência fora da auditoria (98% do tamanho da tabela):
   // auto-guardar da folha de stock (um PUT por célula tocada), sonda de
-  // internet (10 s) e heartbeat do monitoramento (60 s).
+  // internet (30 s) e heartbeat do monitoramento (150 s).
   if (p === '/api/ping' || p === '/api/monitor/heartbeat' || p === '/api/monitor/sync-log') return next();
   if (m === 'PUT' && /^\/api\/turnos\/[^/]+\/stock$/.test(p)) return next();
   res.on('finish', () => {
@@ -5237,7 +5241,8 @@ app.get('/api/dia', auth, async (req, res) => {
     /** Vista lista (página Dia, depósitos): sem linhas de stock nem comparação com turno anterior — muito mais rápido. */
     if (resumo) {
       const [caixaAll, vendasAgg, pedidosAgg, entradasMarcadas, entradasTabela] = await Promise.all([
-        query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids]),
+        query(`SELECT ${SQL_CAIXA_SEM_FOTO} AS j FROM turno_caixa tc WHERE tc.turno_id = ANY($1::int[])`, [ids])
+          .then((r) => ({ rows: r.rows.map((x) => x.j) })),
         queryEmpresa(
           `SELECT ts.turno_id,
              COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS total_vendas
@@ -5352,7 +5357,8 @@ app.get('/api/dia', auth, async (req, res) => {
         `${selStockDia} AND p.empresa_id = $2${ordStockDia}`, [ids, empresaDe(req)],
         `${selStockDia}${ordStockDia}`, [ids]
       ),
-      query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids])
+      query(`SELECT ${SQL_CAIXA_SEM_FOTO} AS j FROM turno_caixa tc WHERE tc.turno_id = ANY($1::int[])`, [ids])
+        .then((r) => ({ rows: r.rows.map((x) => x.j) }))
     ]);
 
     // Entrada e Saída de produto separadas (turno_stock.entrada é o saldo):
@@ -6702,10 +6708,10 @@ app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (turno_id)
        DO UPDATE SET tpa=$2, transferencia=$3, dinheiro=$4, saida=$5
-       RETURNING *`,
+       RETURNING ${SQL_CAIXA_SEM_FOTO.replace(/tc\b/g, 'turno_caixa')} AS j`,
       [req.params.id, tpaV, trV, diV, saida]
     );
-    const c = r.rows[0];
+    const c = r.rows[0].j;
     const tg = sumCaixaGeradoRow(c);
     c.total_gerado = tg;
     c.total_final = tg === null ? null : tg - parseFloat(c.saida || 0);

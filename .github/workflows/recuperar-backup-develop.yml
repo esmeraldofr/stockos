@@ -68,7 +68,14 @@ jobs:
           for r in anon authenticated service_role stockos_app supabase_admin; do
             psql -qc "CREATE ROLE $r" 2>/dev/null || true
           done
-          gunzip -c "$F" | psql -q -v ON_ERROR_STOP=0 2>&1 | grep -v '^$' | sort | uniq -c | sort -rn | head -30 || true
+          # Extensões no schema «extensions», como no Supabase
+          # (defaults do tipo extensions.uuid_generate_v4()).
+          psql -qc "CREATE SCHEMA IF NOT EXISTS extensions"
+          for e in uuid-ossp pgcrypto citext pg_trgm unaccent; do
+            psql -qc "CREATE EXTENSION IF NOT EXISTS \"$e\" WITH SCHEMA extensions" || true
+          done
+          gunzip -c "$F" | psql -q -v ON_ERROR_STOP=0 > restore.log 2>&1 || true
+          echo "Primeiros erros:"; grep -m 40 ERROR restore.log || true
           psql -qc "ALTER SCHEMA public RENAME TO recuperado"
           psql -Atc "SELECT 'turnos', count(*), max(data)::text FROM recuperado.turnos"
           pg_dump --no-owner --no-privileges --schema=recuperado --file=recuperado.sql

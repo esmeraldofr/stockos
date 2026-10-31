@@ -14,8 +14,16 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'stockos-secret-2025';
 const PWD_SALT   = 'stockos-pwd-salt-2025';
 
-const SQL_STOCK_CATEGORIAS = "categoria IN ('menu','ingredientes','bebida')";
+// Folha de stock do turno: todas as categorias (inclui «outro»: copos,
+// vasilhames, barris…) para os produtos com «Monitorar stock».
+const SQL_STOCK_CATEGORIAS = "COALESCE(categoria,'') IN ('menu','ingredientes','bebida','outro','')";
+const SQL_P_FOLHA_CATEGORIAS = "COALESCE(p.categoria,'') IN ('menu','ingredientes','bebida','outro','')";
+// Totais de VENDAS a partir da folha: só o que se vende (sem «outro»).
 const SQL_P_STOCK_CATEGORIAS = "p.categoria IN ('menu','ingredientes','bebida')";
+/** turno_caixa SEM a foto do TPA (base64 inline, centenas de KB): a lista de
+ *  turnos só precisa de saber se existe — 'tem' / ''. A foto vê-se na galeria
+ *  (GET /api/fotos). Era o grosso do tráfego do /api/dia (refresca sozinho). */
+const SQL_CAIXA_SEM_FOTO = `(to_jsonb(tc) - 'tpa_foto_url') || jsonb_build_object('tpa_foto_url', CASE WHEN COALESCE(tc.tpa_foto_url,'') <> '' THEN 'tem' ELSE '' END)`;
 const SQL_ORD_H = `(CASE h.valid_from_turno WHEN 'manha' THEN 1 WHEN 'tarde' THEN 2 WHEN 'noite' THEN 3 ELSE 0 END)`;
 let _sqlUsePrecoHistorico = true;
 
@@ -68,6 +76,9 @@ if (process.env.VERCEL_ENV === 'preview' && /dakleqewbwbryuchlrzm/i.test(_dbUrlR
   console.error(
     '[WARN] Preview com ref de produção na DATABASE_URL. Define DATABASE_URL (Preview) na Vercel = secret DATABASE_URL_DEV no GitHub, ou corre o workflow deploy-develop.'
   );
+}
+if (process.env.RENDER && String(process.env.RENDER_GIT_BRANCH || '').toLowerCase() === 'develop' && /dakleqewbwbryuchlrzm/i.test(_dbUrlRaw)) {
+  console.error('[WARN] Render develop com ref de PRODUÇÃO na DATABASE_URL — usa a BD de desenvolvimento (secret DATABASE_URL_DEV).');
 }
 
 /** Log de arranque: host, user e ref (sem password) — confirma em Vercel Logs qual BD está ligada. */
@@ -242,11 +253,18 @@ async function ensurePgSingleton() {
       } catch (e) {
         lastErr = e;
         try { await sqlConn?.end({ timeout: 2 }).catch(() => {}); } catch (_) {}
+        // Pooler cheio: tentar os outros endereços só abre mais ligações e
+        // mantém-no cheio (tempestade de EMAXCONN) — desiste já.
+        if (isEmaxconn(e)) throw e;
       }
     }
     if (round === 0) await new Promise((r) => setTimeout(r, 120));
   }
   throw lastErr;
+}
+/** Pooler do Supabase sem lugares livres («max client connections reached»). */
+function isEmaxconn(e) {
+  return /EMAXCONN|max client connections|MaxClientsInSessionMode/i.test(String((e && e.message) || e || ''));
 }
 
 // ── SELO DO SCHEMA ─ As dezenas de «ensure*» (CREATE TABLE/ALTER IF NOT
@@ -273,6 +291,16 @@ function verificarSeloDdl(sqlConn) {
   })();
 }
 
+/** Listas JS → literal de array do Postgres ('{1,2,3}'). O postgres.js só
+ *  serializa arrays bem depois de carregar os tipos da BD na ligação; em
+ *  ligações novas no pooler isso às vezes falha e [568] seguia como "568"
+ *  («malformed array literal»). Com o literal explícito funciona sempre. */
+function pgParams(params) {
+  return (params || []).map((v) => (Array.isArray(v)
+    ? '{' + v.map((x) => (x == null ? 'NULL' : '"' + String(x).replace(/(["\\])/g, '\\$1') + '"')).join(',') + '}'
+    : v));
+}
+
 /** Último timeout-retry interno — o auto-diagnóstico expõe-o à app. */
 let __pgTimeoutTs = 0;
 const query = async (text, params) => {
@@ -287,7 +315,7 @@ const query = async (text, params) => {
       // → resetPgSingleton() + retry com ligação nova.
       const tmoMs = attempt === 0 ? 2500 : 6000;
       const rows = await Promise.race([
-        sql.unsafe(text, params || []),
+        sql.unsafe(text, pgParams(params)),
         new Promise((_, reject) => setTimeout(() => reject(new Error(`query timeout (${tmoMs}ms)`)), tmoMs))
       ]);
       _lastPgUseTs = Date.now();
@@ -303,11 +331,14 @@ const query = async (text, params) => {
           e.code === 'EPIPE');
       if (transient) {
         if (/query timeout/i.test(msg)) __pgTimeoutTs = Date.now();
-        await resetPgSingleton();
-        // backoff curto para EMAXCONN (esperar conexões libertarem no pooler)
-        if (/EMAXCONN|max client connections/i.test(msg)) {
-          await new Promise((r) => setTimeout(r, 250 + Math.floor(Math.random() * 250)));
+        if (isEmaxconn(e)) {
+          // Pooler cheio: NÃO deitar fora uma ligação que ainda funcione (teria
+          // de voltar a disputar um lugar) e esperar mais; só 1 nova tentativa.
+          if (attempt >= 1) throw e;
+          await new Promise((r) => setTimeout(r, 1200 + Math.floor(Math.random() * 800)));
+          continue;
         }
+        await resetPgSingleton();
         continue;
       }
       throw e;
@@ -332,7 +363,7 @@ const pool = {
         ]);
         return {
           query: async (text, params) => {
-            const rows = await reserved.unsafe(text, params || []);
+            const rows = await reserved.unsafe(text, pgParams(params));
             _lastPgUseTs = Date.now();
             return { rows: Array.from(rows) };
           },
@@ -347,6 +378,11 @@ const pool = {
           attempt < 2 &&
           /EMAXCONN|max client connections|MaxClientsInSessionMode|pool_size|ECONNRESET|EPIPE|Connection|terminated|closed|destroyed|socket/i.test(msg);
         if (transient) {
+          if (isEmaxconn(e)) {
+            if (attempt >= 1) throw e;
+            await new Promise((r) => setTimeout(r, 1200 + Math.floor(Math.random() * 800)));
+            continue;
+          }
           await resetPgSingleton();
           await new Promise((r) => setTimeout(r, 300 + Math.floor(Math.random() * 400)));
           continue;
@@ -523,6 +559,10 @@ async function initDB() {
   await qry(`ALTER TABLE turno_stock ADD COLUMN IF NOT EXISTS deixado_caixa NUMERIC(10,3)`, [], 'turno_stock-deixado-caixa');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS encontrados_fechados_em TIMESTAMPTZ`, [], 'turnos-encontrados-fechados-em');
   await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_fechados_em TIMESTAMPTZ`, [], 'turnos-deixados-fechados-em');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_edicao_manual BOOLEAN NOT NULL DEFAULT FALSE`, [], 'turnos-deixados-edicao-manual');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin TEXT NOT NULL DEFAULT ''`, [], 'turnos-notas-admin');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin_em TIMESTAMPTZ`, [], 'turnos-notas-admin-em');
+  await qry(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin_por TEXT`, [], 'turnos-notas-admin-por');
   await qry(`CREATE TABLE IF NOT EXISTS turno_caixa (
     id SERIAL PRIMARY KEY, turno_id INTEGER NOT NULL UNIQUE REFERENCES turnos(id) ON DELETE CASCADE,
     tpa NUMERIC(15,2), transferencia NUMERIC(15,2), dinheiro NUMERIC(15,2),
@@ -802,6 +842,14 @@ try {
 function stockosDeploymentTier() {
   const explicit = String(process.env.STOCKOS_DEPLOY_TIER || '').trim().toLowerCase();
   if (['production', 'qualidade', 'develop', 'preview', 'local'].includes(explicit)) return explicit;
+  // Render: o ambiente vem do branch publicado (main = produção).
+  if (process.env.RENDER) {
+    const brR = String(process.env.RENDER_GIT_BRANCH || '').toLowerCase();
+    if (brR === 'main') return 'production';
+    if (brR === 'qualidade') return 'qualidade';
+    if (brR === 'develop') return 'develop';
+    return 'preview';
+  }
   if (process.env.VERCEL_ENV === 'production') return 'production';
   if (process.env.VERCEL_ENV === 'preview') {
     const br = String(
@@ -838,6 +886,7 @@ function isStockosApiReadOnly() {
     ).toLowerCase();
     if (br === 'qualidade') return true;
   }
+  if (process.env.RENDER && String(process.env.RENDER_GIT_BRANCH || '').toLowerCase() === 'qualidade') return true;
   return false;
 }
 
@@ -877,8 +926,8 @@ app.get('/api/health', (req, res) =>
     tier: stockosDeploymentTier(),
     develop_only: isStockosDevelopOnly(),
     read_only: isStockosApiReadOnly(),
-    git_ref: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.ref) || process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || null,
-    git_sha: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.sha) || (process.env.VERCEL_GIT_COMMIT_SHA ? String(process.env.VERCEL_GIT_COMMIT_SHA).slice(0, 7) : null),
+    git_ref: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.ref) || process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || process.env.RENDER_GIT_BRANCH || null,
+    git_sha: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.sha) || (process.env.VERCEL_GIT_COMMIT_SHA || process.env.RENDER_GIT_COMMIT ? String(process.env.VERCEL_GIT_COMMIT_SHA || process.env.RENDER_GIT_COMMIT).slice(0, 7) : null),
     commit_at: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.commitAt) || null,
     built_at: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.builtAt) || null,
     commit_msg: (STOCKOS_BUILD_INFO && STOCKOS_BUILD_INFO.msg) || null,
@@ -1135,7 +1184,7 @@ app.use(function auditMiddleware(req, res, next) {
   if (p === '/api/auditoria') return next(); // não regista as próprias leituras
   // RUÍDO de alta frequência fora da auditoria (98% do tamanho da tabela):
   // auto-guardar da folha de stock (um PUT por célula tocada), sonda de
-  // internet (10 s) e heartbeat do monitoramento (60 s).
+  // internet (30 s) e heartbeat do monitoramento (150 s).
   if (p === '/api/ping' || p === '/api/monitor/heartbeat' || p === '/api/monitor/sync-log') return next();
   if (m === 'PUT' && /^\/api\/turnos\/[^/]+\/stock$/.test(p)) return next();
   res.on('finish', () => {
@@ -2560,7 +2609,7 @@ app.get('/api/dev/info', (req, res) => {
     node: process.version,
     uptime_s: Math.floor(process.uptime()),
     vercel_url: process.env.VERCEL_URL || null,
-    git_ref: process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || null,
+    git_ref: process.env.VERCEL_GIT_COMMIT_REF || process.env.VERCEL_GIT_BRANCH || process.env.RENDER_GIT_BRANCH || null,
     git_sha: process.env.VERCEL_GIT_COMMIT_SHA
       ? String(process.env.VERCEL_GIT_COMMIT_SHA).slice(0, 7)
       : null
@@ -2935,6 +2984,15 @@ async function qtdDevolvidaAvailable() {
 
 app.get('/api/produtos', auth, async (req, res) => {
   try {
+    // ?leve=1 → só o essencial para listas (sem imagens): poupa tráfego.
+    if (req.query.leve === '1') {
+      const empL = empresaDe(req);
+      const rl = await queryEmpresa(
+        `SELECT id, nome, categoria, tipo_medicao, ativo, em_stock_turno FROM produtos WHERE empresa_id=$1 AND ativo=true ORDER BY nome`, [empL],
+        `SELECT id, nome, categoria, tipo_medicao, ativo, em_stock_turno FROM produtos WHERE ativo=true ORDER BY nome`, []
+      );
+      return res.json(rl.rows);
+    }
     const hasFP = await forcaPacoteAvailable();
     const todos = req.query.todos === '1';
     // Quando a coluna não existe, devolve forca_pacote=false para o frontend
@@ -4910,14 +4968,14 @@ async function ensureFotosAnexos() {
 }
 
 function fotosAnexosChaveValida(chave) {
-  return /^(tpa:\d+|bordero:\d{4}-\d{2}-\d{2}|fatura:\d+)$/.test(String(chave || ''));
+  return /^(tpa:\d+|barril:\d+|barril-sai:\d+|selado:\d+|selado-sai:\d+|bordero:\d{4}-\d{2}-\d{2}|fatura:\d+)$/.test(String(chave || ''));
 }
 
 app.get('/api/fotos', auth, async (req, res) => {
   try {
     const chave = String(req.query.chave || '').trim();
     if (!fotosAnexosChaveValida(chave)) return res.status(400).json({ erro: 'Chave inválida' });
-    const mTpaF = chave.match(/^tpa:(\d+)$/);
+    const mTpaF = chave.match(/^(?:tpa|barril|barril-sai|selado|selado-sai):(\d+)$/);
     if (mTpaF && !(await turnoNoContexto(req, parseInt(mTpaF[1], 10)).catch(() => true))) {
       return res.status(404).json({ erro: 'Turno não encontrado' });
     }
@@ -4937,7 +4995,7 @@ app.post('/api/fotos', auth, async (req, res) => {
     if (typeof foto_base64 !== 'string' || !foto_base64.startsWith('data:image')) {
       return res.status(400).json({ erro: 'Envia a foto (data URL de imagem)' });
     }
-    const mTpaP = String(chave).match(/^tpa:(\d+)$/);
+    const mTpaP = String(chave).match(/^(?:tpa|barril|barril-sai|selado|selado-sai):(\d+)$/);
     if (mTpaP && !(await turnoNoContexto(req, parseInt(mTpaP[1], 10)).catch(() => true))) {
       return res.status(404).json({ erro: 'Turno não encontrado' });
     }
@@ -5183,7 +5241,8 @@ app.get('/api/dia', auth, async (req, res) => {
     /** Vista lista (página Dia, depósitos): sem linhas de stock nem comparação com turno anterior — muito mais rápido. */
     if (resumo) {
       const [caixaAll, vendasAgg, pedidosAgg, entradasMarcadas, entradasTabela] = await Promise.all([
-        query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids]),
+        query(`SELECT ${SQL_CAIXA_SEM_FOTO} AS j FROM turno_caixa tc WHERE tc.turno_id = ANY($1::int[])`, [ids])
+          .then((r) => ({ rows: r.rows.map((x) => x.j) })),
         queryEmpresa(
           `SELECT ts.turno_id,
              COALESCE(SUM(${sqlTsValorVendaLinha()}), 0)::numeric AS total_vendas
@@ -5291,18 +5350,39 @@ app.get('/api/dia', auth, async (req, res) => {
          FROM turno_stock ts
          JOIN produtos p ON ts.produto_id=p.id
          JOIN turnos t ON t.id = ts.turno_id
-         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}`;
+         WHERE ts.turno_id = ANY($1::int[]) AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}`;
     const ordStockDia = ` ORDER BY ts.turno_id, p.ordem, p.nome`;
     const [stockAll, caixaAll] = await Promise.all([
       queryEmpresa(
         `${selStockDia} AND p.empresa_id = $2${ordStockDia}`, [ids, empresaDe(req)],
         `${selStockDia}${ordStockDia}`, [ids]
       ),
-      query(`SELECT * FROM turno_caixa WHERE turno_id = ANY($1::int[])`, [ids])
+      query(`SELECT ${SQL_CAIXA_SEM_FOTO} AS j FROM turno_caixa tc WHERE tc.turno_id = ANY($1::int[])`, [ids])
+        .then((r) => ({ rows: r.rows.map((x) => x.j) }))
     ]);
 
+    // Entrada e Saída de produto separadas (turno_stock.entrada é o saldo):
+    // saida = soma das saídas («tirar»); entrada_bruta = saldo + saídas.
+    const saidasMov = await query(
+      `SELECT turno_id, produto_id,
+              COALESCE(SUM(quantidade) FILTER (WHERE COALESCE(notas,'') NOT LIKE 'CONSUMO::%'),0)::numeric AS saida,
+              COALESCE(SUM(quantidade) FILTER (WHERE COALESCE(notas,'') LIKE 'CONSUMO::%'),0)::numeric AS consumo
+       FROM turno_entradas WHERE turno_id = ANY($1::int[]) AND tipo = 'tirar' AND produto_id IS NOT NULL
+       GROUP BY turno_id, produto_id`,
+      [ids]
+    ).catch(() => ({ rows: [] }));
+    const saidaPor = {}, consumoPor = {};
+    for (const r of saidasMov.rows) {
+      saidaPor[`${r.turno_id}:${r.produto_id}`] = parseFloat(r.saida) || 0;
+      consumoPor[`${r.turno_id}:${r.produto_id}`] = parseFloat(r.consumo) || 0;
+    }
     const stockByTurno = {};
     for (const row of stockAll.rows) {
+      const sai = saidaPor[`${row.turno_id}:${row.produto_id}`] || 0;
+      row.saida = sai;
+      // Consumo (ex.: barril selado gasto na troca) conta como vendido.
+      row.consumo = consumoPor[`${row.turno_id}:${row.produto_id}`] || 0;
+      row.entrada_bruta = (parseFloat(row.entrada) || 0) + sai;
       if (!stockByTurno[row.turno_id]) stockByTurno[row.turno_id] = [];
       stockByTurno[row.turno_id].push(row);
     }
@@ -5312,6 +5392,8 @@ app.get('/api/dia', auth, async (req, res) => {
     }
 
     const prevMapByTurnoId = {};
+
+    const prevTemLinhaByTurnoId = {};
     const prevCaixaMapByTurnoId = {};
     const nextMapByTurnoId = {};
     const nextCaixaMapByTurnoId = {};
@@ -5340,7 +5422,7 @@ app.get('/api/dia', auth, async (req, res) => {
                ${lojaCond}
                AND EXISTS (
                  SELECT 1 FROM turno_stock ts
-                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}
                  WHERE ts.turno_id = t.id AND ts.deixado IS NOT NULL
                )
              ORDER BY t.data DESC, ${slotCaseT} DESC
@@ -5350,11 +5432,14 @@ app.get('/api/dia', auth, async (req, res) => {
          SELECT pr.turno_id, ts.produto_id, ts.deixado, ts.deixado_caixa
          FROM prev pr
          JOIN turno_stock ts ON ts.turno_id = pr.prev_turno_id
-         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
-         WHERE ts.deixado IS NOT NULL OR ts.deixado_caixa IS NOT NULL`,
+         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}`,
         [ids]
       );
       for (const r of prevStock.rows) {
+        // Produto presente na folha do turno anterior (mesmo vazio): o
+        // Encontrado é herdado. Ausente (produto novo na folha) → editável.
+        if (!prevTemLinhaByTurnoId[r.turno_id]) prevTemLinhaByTurnoId[r.turno_id] = new Set();
+        prevTemLinhaByTurnoId[r.turno_id].add(String(r.produto_id));
         if (r.deixado !== null) {
           if (!prevMapByTurnoId[r.turno_id]) prevMapByTurnoId[r.turno_id] = {};
           prevMapByTurnoId[r.turno_id][r.produto_id] = parseFloat(r.deixado);
@@ -5382,7 +5467,7 @@ app.get('/api/dia', auth, async (req, res) => {
                ${lojaCond}
                AND EXISTS (
                  SELECT 1 FROM turno_stock ts
-                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+                 JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}
                  WHERE ts.turno_id = t.id AND ts.encontrado IS NOT NULL
                )
              ORDER BY t.data ASC, ${slotCaseT} ASC
@@ -5392,7 +5477,7 @@ app.get('/api/dia', auth, async (req, res) => {
          SELECT nx.turno_id, ts.produto_id, ts.encontrado, ts.encontrado_caixa
          FROM nxt nx
          JOIN turno_stock ts ON ts.turno_id = nx.next_turno_id
-         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_STOCK_CATEGORIAS}
+         JOIN produtos p ON p.id = ts.produto_id AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}
          WHERE ts.encontrado IS NOT NULL OR ts.encontrado_caixa IS NOT NULL`,
         [ids]
       );
@@ -5441,6 +5526,8 @@ app.get('/api/dia', auth, async (req, res) => {
           else comparacao = `sobra ${diff}`;
         }
         const prevDeixado = prevMap[s.produto_id] !== undefined ? prevMap[s.produto_id] : null;
+        const prevSet = prevTemLinhaByTurnoId[turno.id];
+        const prevTemLinha = !!(prevSet && prevSet.has(String(s.produto_id)));
 
         // Mesma lógica para a coluna "a caixa": Enc. caixa vs Deix. caixa do turno anterior.
         const encCaixa =
@@ -5463,6 +5550,7 @@ app.get('/api/dia', auth, async (req, res) => {
           valor: val,
           comparacao,
           prev_deixado: prevDeixado,
+          prev_tem_linha: prevTemLinha,
           comparacao_caixa: comparacaoCaixa,
           prev_deixado_caixa: prevDeixadoCaixa,
           next_encontrado: nextEncontrado,
@@ -5595,6 +5683,39 @@ app.put('/api/config/turnos-bloqueados', auth, requireRole('admin', 'gestor'), a
   }
 });
 
+// ── PASSAGEM DE TURNO: uma só contagem ────────────────────────────────
+// O Encontrado de um turno É o Deixado do turno anterior (mesma loja):
+// herdado na abertura, actualizado sempre que esse Deixado muda e
+// bloqueado para edição. «Turno anterior» = mesma regra do T. Anterior
+// do /dia: o último turno anterior da loja com deixados registados.
+const SLOT_TURNO_SQL = (a) => `CASE ${a}.nome WHEN 'manha' THEN 0 WHEN 'tarde' THEN 1 WHEN 'noite' THEN 2 END`;
+async function turnoAnteriorComDeixados(db, turnoId) {
+  const r = await db.query(
+    `SELECT t.id FROM turnos c JOIN turnos t
+       ON t.loja_id IS NOT DISTINCT FROM c.loja_id
+      AND (t.data < c.data OR (t.data = c.data AND ${SLOT_TURNO_SQL('t')} < ${SLOT_TURNO_SQL('c')}))
+     WHERE c.id = $1
+       AND EXISTS (SELECT 1 FROM turno_stock ts WHERE ts.turno_id = t.id AND ts.deixado IS NOT NULL)
+     ORDER BY t.data DESC, ${SLOT_TURNO_SQL('t')} DESC
+     LIMIT 1`,
+    [turnoId]
+  );
+  return r.rows.length ? r.rows[0].id : null;
+}
+/** Turno imediatamente a seguir (mesma loja), se ainda estiver aberto. */
+async function turnoSeguinteAberto(db, turnoId) {
+  const r = await db.query(
+    `SELECT t.id, t.estado FROM turnos c JOIN turnos t
+       ON t.loja_id IS NOT DISTINCT FROM c.loja_id
+      AND (t.data > c.data OR (t.data = c.data AND ${SLOT_TURNO_SQL('t')} > ${SLOT_TURNO_SQL('c')}))
+     WHERE c.id = $1
+     ORDER BY t.data ASC, ${SLOT_TURNO_SQL('t')} ASC
+     LIMIT 1`,
+    [turnoId]
+  );
+  return r.rows.length && r.rows[0].estado === 'aberto' ? r.rows[0].id : null;
+}
+
 app.post('/api/turnos/abrir', auth, async (req, res) => {
   // Antes da transacção: a folha de stock do turno usa SÓ produtos da
   // empresa (verificação prévia da coluna — nunca aborta o BEGIN).
@@ -5646,21 +5767,25 @@ app.post('/api/turnos/abrir', auth, async (req, res) => {
         );
     const turnoId = turno.rows[0].id;
 
-    // Stock do turno: só produtos activos DA EMPRESA marcados para a folha
-    const produtos = temEmpProd
-      ? await client.query(
-          `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND empresa_id=$1 AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`,
-          [empresaDe(req)]
-        )
-      : await client.query(
-          `SELECT id FROM produtos WHERE ativo=true AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS} ORDER BY ordem`
-        );
-    for (const p of produtos.rows) {
-      await client.query(
-        'INSERT INTO turno_stock (turno_id, produto_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-        [turnoId, p.id]
-      );
-    }
+    // Stock do turno: só produtos activos DA EMPRESA marcados para a folha.
+    // Encontrado / Enc. caixa nascem iguais ao Deixado / Deix. caixa do
+    // turno anterior — a passagem de turno é uma só contagem.
+    const prevTurnoId = temLojaCol ? await turnoAnteriorComDeixados(client, turnoId) : null;
+    const filtroEmp = temEmpProd ? 'AND p.empresa_id = $3' : '';
+    await client.query(
+      `INSERT INTO turno_stock (turno_id, produto_id, encontrado, encontrado_caixa)
+       SELECT $1, p.id,
+              -- Produto que não estava na folha anterior: começa em 0 (as
+              -- quantidades entram pelas Entradas), como os restantes, bloqueado.
+              CASE WHEN ps.id IS NULL AND $2::int IS NOT NULL THEN 0 ELSE ps.deixado END,
+              ps.deixado_caixa
+         FROM produtos p
+         LEFT JOIN turno_stock ps ON ps.turno_id = $2 AND ps.produto_id = p.id
+        WHERE p.ativo = true AND p.em_stock_turno IS TRUE ${filtroEmp}
+          AND ${SQL_P_FOLHA_CATEGORIAS}
+       ON CONFLICT DO NOTHING`,
+      temEmpProd ? [turnoId, prevTurnoId, empresaDe(req)] : [turnoId, prevTurnoId]
+    );
 
     // Criar entrada de caixa
     await client.query('INSERT INTO turno_caixa (turno_id) VALUES ($1) ON CONFLICT DO NOTHING', [turnoId]);
@@ -5694,6 +5819,81 @@ app.put('/api/config/checklist-turno', auth, requireRole('admin', 'gestor'), asy
     const cfg = parseChecklistCfg(req.body || {});
     await setConfigEmpresa(empresaDe(req), 'checklist_turno', JSON.stringify(cfg));
     res.json(cfg);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Config: Fino Barril (admin) ── tara, peso do barril cheio, copo de
+// referência e os produtos que saem do barril (com o kg por venda, que fica
+// gravado no próprio produto: venda_por_copo + kg_por_copo).
+const FINO_CFG_DEF = { tara: 12.9, cheio: 61.05, kg_copo: 0.2, produtos: [] };
+async function getFinoCfg(empresaId) {
+  try {
+    const v = await getConfigEmpresa(empresaId || 1, 'fino_barril');
+    const o = v ? JSON.parse(v) : {};
+    return { ...FINO_CFG_DEF, ...o, produtos: Array.isArray(o.produtos) ? o.produtos.map(String) : [] };
+  } catch (_) { return { ...FINO_CFG_DEF }; }
+}
+async function empresaDoTurno(turnoId) {
+  try {
+    const r = await query(`SELECT l.empresa_id FROM turnos t JOIN lojas l ON l.id = t.loja_id WHERE t.id=$1`, [turnoId]);
+    return (r.rows[0] && r.rows[0].empresa_id) || 1;
+  } catch (_) { return 1; }
+}
+app.get('/api/config/fino-barril', auth, async (req, res) => {
+  try {
+    const cfg = await getFinoCfg(empresaDe(req));
+    const emp = empresaDe(req);
+    const cand = await queryEmpresa(
+      `SELECT id, nome, categoria, COALESCE(venda_por_copo,false) AS venda_por_copo, COALESCE(kg_por_copo,0)::numeric AS kg_por_copo,
+              COALESCE(preco,0)::numeric AS preco, COALESCE(qtd_copos_pacote,0)::int AS qtd_copos_pacote, COALESCE(preco_copos_pacote,0)::numeric AS preco_copos_pacote
+       FROM produtos WHERE ativo = true AND empresa_id = $1 AND (nome ILIKE '%fino%' OR id::text = ANY($2::text[])) AND lower(trim(nome)) <> 'fino barril'
+       ORDER BY nome`, [emp, cfg.produtos],
+      `SELECT id, nome, categoria, COALESCE(venda_por_copo,false) AS venda_por_copo, COALESCE(kg_por_copo,0)::numeric AS kg_por_copo,
+              COALESCE(preco,0)::numeric AS preco, COALESCE(qtd_copos_pacote,0)::int AS qtd_copos_pacote, COALESCE(preco_copos_pacote,0)::numeric AS preco_copos_pacote
+       FROM produtos WHERE ativo = true AND (nome ILIKE '%fino%' OR id::text = ANY($1::text[])) AND lower(trim(nome)) <> 'fino barril'
+       ORDER BY nome`, [cfg.produtos]
+    );
+    res.json({ ...cfg, candidatos: cand.rows });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+app.put('/api/config/fino-barril', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const n = (v, d) => { const x = parseFloat(v); return Number.isFinite(x) && x > 0 ? x : d; };
+    const tara = n(b.tara, FINO_CFG_DEF.tara), cheio = n(b.cheio, FINO_CFG_DEF.cheio), kg_copo = n(b.kg_copo, FINO_CFG_DEF.kg_copo);
+    if (cheio <= tara) return res.status(400).json({ erro: 'O peso do barril cheio tem de ser maior que a tara.' });
+    const prods = (Array.isArray(b.produtos) ? b.produtos : []).filter((p) => p && p.id != null);
+    const incluidos = [];
+    for (const p of prods) {
+      const kg = parseFloat(p.kg);
+      if (!(kg > 0)) continue;
+      incluidos.push(String(p.id));
+      await query(`UPDATE produtos SET venda_por_copo = true, kg_por_copo = $2 WHERE id::text = $1`, [String(p.id), kg]);
+    }
+    const cfg = { tara, cheio, kg_copo, produtos: incluidos };
+    await setConfigEmpresa(empresaDe(req), 'fino_barril', JSON.stringify(cfg));
+    res.json(cfg);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Campos da calculadora «Copos do balcão» guardados por turno.
+app.get('/api/turnos/:id/fino-calc', auth, async (req, res) => {
+  try {
+    const r = await query(`SELECT v FROM stockos_meta WHERE k=$1`, [`fino_calc:t${parseInt(req.params.id, 10) || 0}`]);
+    res.json(r.rows.length ? JSON.parse(r.rows[0].v) : {});
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+app.put('/api/turnos/:id/fino-calc', auth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const n = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
+    const dados = {
+      encontrado: n(b.encontrado), trocas: n(b.trocas), retirado: n(b.retirado), agora: n(b.agora),
+      guardado_em: new Date().toISOString(), guardado_por: (req.user && req.user.nome) || ''
+    };
+    await query(`INSERT INTO stockos_meta (k,v) VALUES ($1,$2) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+      [`fino_calc:t${parseInt(req.params.id, 10) || 0}`, JSON.stringify(dados)]);
+    res.json(dados);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -5893,6 +6093,163 @@ function sumCaixaGeradoRow(row) {
   return t + tr + d;
 }
 
+// ── DEIXADO AUTOMÁTICO ───────────────────────────────────────────────
+// Deixado = Encontrado + Entrada − Balcão (pedidos do turno, já sem as
+// devoluções). Copos → kg: copos × kg_por_copo; os copos de «Fino…» que não
+// estão na folha (Fino 400, Fino 1000…) descontam do «Fino Barril».
+// Fica bloqueado. Corre em todos os turnos abertos (deixou de haver
+// registos a fechar); turnos antigos com deixados_fechados_em ficam como
+// estão. turnos.deixados_edicao_manual já não é usado.
+let _deixadoManualColReady = false;
+async function ensureDeixadoManualCol() {
+  if (_deixadoManualColReady) return;
+  try {
+    await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS deixados_edicao_manual BOOLEAN NOT NULL DEFAULT FALSE`);
+    _deixadoManualColReady = true;
+  } catch (_) {}
+}
+async function deixadoAutoAtivo(turnoId) {
+  await ensureDeixadoManualCol();
+  const t = await query(
+    `SELECT estado, deixados_fechados_em FROM turnos WHERE id=$1`,
+    [turnoId]
+  ).catch(() => ({ rows: [] }));
+  if (!t.rows.length) return false;
+  const r = t.rows[0];
+  // Sem registos a fechar: automático em todos os turnos abertos; turnos
+  // antigos com os deixados já fechados mantêm os valores.
+  return r.estado !== 'fechado' && !r.deixados_fechados_em;
+}
+/** Recalcula os Deixados do turno (se o automático estiver activo) e
+ *  propaga ao Encontrado do turno seguinte aberto. Devolve as linhas
+ *  alteradas [{produto_id, deixado, deixado_caixa}]. */
+async function recalcularDeixadosAuto(turnoId, profundidade = 0) {
+  if (!(await deixadoAutoAtivo(turnoId))) return [];
+  const hasDev = await qtdDevolvidaAvailable().catch(() => false);
+  const dev = hasDev ? 'COALESCE(tpl.qtd_devolvida,0)' : '0';
+  const finoIds = (await getFinoCfg(await empresaDoTurno(turnoId))).produtos;
+  const r = await query(
+    `WITH ts_turno AS (
+       SELECT ts.produto_id, p.nome FROM turno_stock ts JOIN produtos p ON p.id = ts.produto_id WHERE ts.turno_id = $1
+     ),
+     barril AS (SELECT produto_id FROM ts_turno WHERE lower(trim(nome)) = 'fino barril' LIMIT 1),
+     linhas AS (
+       SELECT tpl.produto_id AS pid_venda, p.nome, COALESCE(p.venda_por_copo, false) AS copo,
+              COALESCE(p.kg_por_copo, 0)::numeric AS kgc, GREATEST(0, tpl.quantidade - ${dev})::numeric AS q
+       FROM turno_pedidos tp
+       JOIN turno_pedido_linhas tpl ON tpl.pedido_id = tp.id
+       JOIN produtos p ON p.id = tpl.produto_id
+       WHERE tp.turno_id = $1
+     ),
+     consumos AS (
+       SELECT produto_id AS pid, SUM(quantidade)::numeric AS qtd
+       FROM turno_entradas
+       WHERE turno_id = $1 AND tipo = 'tirar' AND COALESCE(notas,'') LIKE 'CONSUMO::%' AND produto_id IS NOT NULL
+       GROUP BY produto_id
+     ),
+     balcao_ped AS (
+       SELECT CASE
+                WHEN l.pid_venda IN (SELECT produto_id FROM ts_turno) THEN l.pid_venda
+                WHEN l.copo AND l.kgc > 0 AND (lower(trim(l.nome)) LIKE 'fino%' OR l.pid_venda::text = ANY($2::text[])) THEN (SELECT produto_id FROM barril)
+              END AS pid,
+              SUM(CASE WHEN l.copo AND l.kgc > 0 THEN l.q * l.kgc ELSE l.q END) AS qtd
+       FROM linhas l
+       GROUP BY 1
+     ),
+     -- Balcão = pedidos + consumos (contam como vendido, não como Saída).
+     balcao AS (
+       SELECT pid, SUM(qtd) AS qtd FROM (SELECT pid, qtd FROM balcao_ped UNION ALL SELECT pid, qtd FROM consumos) u GROUP BY pid
+     ),
+     -- Recipientes com tara (Fino Barril): o Deixado nunca fica abaixo do
+     -- peso do recipiente vazio (nem acima do que havia: Enc + Entrada).
+     calc AS (
+       SELECT ts.id, ROUND(GREATEST(
+                LEAST(COALESCE(p.peso_tara_kg, 0), ts.encontrado + COALESCE(ts.entrada, 0)),
+                0,
+                ts.encontrado + COALESCE(ts.entrada, 0) - COALESCE(b.qtd, 0)), 3) AS novo
+       FROM turno_stock ts
+       JOIN produtos p ON p.id = ts.produto_id
+       LEFT JOIN balcao b ON b.pid = ts.produto_id
+       WHERE ts.turno_id = $1 AND ts.encontrado IS NOT NULL
+     )
+     UPDATE turno_stock ts SET deixado = calc.novo
+       FROM calc
+      WHERE ts.id = calc.id AND ts.deixado IS DISTINCT FROM calc.novo
+     RETURNING ts.produto_id, ts.deixado, ts.deixado_caixa`,
+    [turnoId, finoIds]
+  );
+  // Passagem de turno: o Encontrado do turno seguinte (aberto) segue o Deixado.
+  if (r.rows.length) {
+    const nextId = await turnoSeguinteAberto({ query }, turnoId).catch(() => null);
+    if (nextId) {
+      for (const row of r.rows) {
+        await query(
+          `INSERT INTO turno_stock (turno_id, produto_id, encontrado, encontrado_caixa)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (turno_id, produto_id)
+           DO UPDATE SET encontrado = EXCLUDED.encontrado, encontrado_caixa = EXCLUDED.encontrado_caixa`,
+          [nextId, row.produto_id, row.deixado, row.deixado_caixa]
+        ).catch((e) => console.warn('[deixado-auto] propagar ao turno seguinte:', e && e.message));
+      }
+      if (profundidade < 3) await recalcularDeixadosAuto(nextId, profundidade + 1).catch(() => {});
+    }
+  }
+  return r.rows;
+}
+/** Recalcula sem deixar falhar o pedido principal. */
+function recalcularDeixadosAutoSeguro(turnoId) {
+  return recalcularDeixadosAuto(turnoId).catch((e) => { console.warn('[deixado-auto]', e && e.message); return []; });
+}
+
+/** Recalcula agora (o cliente chama ao abrir o turno) e diz se está activo. */
+app.post('/api/turnos/:id/deixados/recalcular', auth, async (req, res) => {
+  try {
+    // Turno aberto: produtos com «Monitorar stock» activado depois da
+    // abertura entram na folha (Encontrado = Deixado do turno anterior, ou 0
+    // se o produto não estava lá — mais quantidade entra pelas Entradas).
+    let inseridos = 0;
+    try {
+      const tAb = await query(`SELECT estado FROM turnos WHERE id=$1`, [req.params.id]);
+      if (tAb.rows.length && tAb.rows[0].estado === 'aberto') {
+        const prevId = await turnoAnteriorComDeixados({ query }, req.params.id).catch(() => null);
+        const ins = await query(
+          `INSERT INTO turno_stock (turno_id, produto_id, encontrado, encontrado_caixa)
+           SELECT $1, p.id, CASE WHEN ps.id IS NULL AND $2::int IS NOT NULL THEN 0 ELSE ps.deixado END, ps.deixado_caixa FROM produtos p
+           LEFT JOIN turno_stock ps ON ps.turno_id = $2 AND ps.produto_id = p.id
+           WHERE p.ativo = true AND p.em_stock_turno IS TRUE AND ${SQL_P_FOLHA_CATEGORIAS}
+             AND NOT EXISTS (SELECT 1 FROM turno_stock x WHERE x.turno_id = $1 AND x.produto_id = p.id)
+           ON CONFLICT DO NOTHING
+           RETURNING produto_id`,
+          [req.params.id, prevId]
+        );
+        inseridos = ins.rows.length;
+      }
+    } catch (e) { console.warn('[stock] acrescentar produtos à folha:', e && e.message); }
+    const alterados = await recalcularDeixadosAuto(req.params.id);
+    const ativo = await deixadoAutoAtivo(req.params.id);
+    const linhas = ativo
+      ? (await query(`SELECT produto_id, deixado FROM turno_stock WHERE turno_id=$1`, [req.params.id])).rows
+      : [];
+    res.json({ ativo, alterados: alterados.length, linhas, inseridos });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Admin: activa/desactiva a edição manual dos Deixados neste turno.
+ *  Ao voltar ao automático, recalcula logo. */
+app.post('/api/turnos/:id/deixados/edicao', auth, requireRole('admin'), async (req, res) => {
+  try {
+    await ensureDeixadoManualCol();
+    const manual = req.body && req.body.manual === true;
+    const r = await query(
+      `UPDATE turnos SET deixados_edicao_manual = $2 WHERE id = $1 RETURNING id, deixados_edicao_manual`,
+      [req.params.id, manual]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    const alterados = manual ? [] : await recalcularDeixadosAuto(req.params.id);
+    res.json({ ...r.rows[0], alterados });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 app.put('/api/turnos/:id/stock', auth, async (req, res) => {
   try {
     const { produto_id, encontrado, deixado, fechados, encontrado_caixa, deixado_caixa } = req.body;
@@ -5920,15 +6277,38 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
       const turnoRow = await query(`SELECT encontrados_fechados_em FROM turnos WHERE id=$1`, [req.params.id]);
       encontradosFechados = turnoRow.rows.length && turnoRow.rows[0].encontrados_fechados_em != null;
     }
-    const enc = parseOptionalNumericBody(encontrado);
+    let enc = parseOptionalNumericBody(encontrado);
     const deix = parseOptionalNumericBody(deixado);
-    const encG = parseOptionalNumericBody(encontrado_caixa);
+    let encG = parseOptionalNumericBody(encontrado_caixa);
     const deixG = parseOptionalNumericBody(deixado_caixa);
+    // Passagem de turno: havendo turno anterior, o Encontrado de TODOS os
+    // produtos é o Deixado desse turno (vazio fica vazio) — o que o cliente
+    // mandar é ignorado. Só sem turno anterior o Encontrado é editável.
+    let encHerdado = false;
+    let encGHerdado = false;
+    const prevTurnoId = await turnoAnteriorComDeixados({ query }, req.params.id).catch(() => null);
+    if (prevTurnoId) {
+      const pv = await query(
+        `SELECT deixado, deixado_caixa FROM turno_stock WHERE turno_id=$1 AND produto_id=$2`,
+        [prevTurnoId, produto_id]
+      );
+      // Produto que não estava na folha anterior (novo): começa em 0 —
+      // mesma lógica dos outros (bloqueado); quantidades pelas Entradas.
+      enc = pv.rows.length ? pv.rows[0].deixado : 0;
+      encG = pv.rows.length ? pv.rows[0].deixado_caixa : null;
+      encHerdado = true;
+      encGHerdado = true;
+    }
     const sets = ['fechados=$5'];
-    if (!encontradosFechados) sets.push('encontrado=$3', 'encontrado_caixa=$6');
-    // Deixados SÓ com o registo inicial fechado (ordem do turno) e
-    // enquanto o registo dos deixados não fechar.
-    if (!deixadosFechados && encontradosFechados) sets.push('deixado=$4', 'deixado_caixa=$7');
+    // Herdado: escreve-se sempre (é um espelho, nunca uma edição manual).
+    if (!encontradosFechados || encHerdado) sets.push('encontrado=$3');
+    if (!encontradosFechados || encGHerdado) sets.push('encontrado_caixa=$6');
+    // Deixados enquanto o registo dos deixados não estiver fechado (legado).
+    const escreveDeixados = !deixadosFechados;
+    // Deixado automático activo → o Deixado vem do cálculo (Encontrado +
+    // Entrada − Balcão), não do cliente; o Deix. caixa continua manual.
+    const deixAuto = escreveDeixados && await deixadoAutoAtivo(req.params.id);
+    if (escreveDeixados) sets.push(...(deixAuto ? ['deixado_caixa=$7'] : ['deixado=$4', 'deixado_caixa=$7']));
     const updateSet = sets.join(', ');
     const r = await query(
       `INSERT INTO turno_stock (turno_id, produto_id, encontrado, deixado, fechados, encontrado_caixa, deixado_caixa)
@@ -5938,12 +6318,28 @@ app.put('/api/turnos/:id/stock', auth, async (req, res) => {
        RETURNING *`,
       [
         req.params.id, produto_id, enc,
-        encontradosFechados && !deixadosFechados ? deix : null,
+        escreveDeixados && !deixAuto ? deix : null,
         fechados || 0, encG,
-        encontradosFechados && !deixadosFechados ? deixG : null
+        escreveDeixados ? deixG : null
       ]
     );
-    res.json(r.rows[0]);
+    // O Deixado mudou → o Encontrado do turno seguinte (se aberto) segue-o.
+    if (escreveDeixados) {
+      const nextId = await turnoSeguinteAberto({ query }, req.params.id).catch(() => null);
+      if (nextId) {
+        await query(
+          `INSERT INTO turno_stock (turno_id, produto_id, encontrado, encontrado_caixa)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (turno_id, produto_id)
+           DO UPDATE SET encontrado = EXCLUDED.encontrado, encontrado_caixa = EXCLUDED.encontrado_caixa`,
+          [nextId, produto_id, r.rows[0].deixado, r.rows[0].deixado_caixa]
+        ).catch((e) => console.warn('[stock] propagar deixado → encontrado seguinte:', e && e.message));
+      }
+    }
+    // Com o Deixado automático este PUT não muda o Deixado (o Encontrado já
+    // está fechado): sem recálculo aqui — corre nos pedidos, devoluções,
+    // entradas e ao abrir o turno (POST …/deixados/recalcular).
+    res.json({ ...r.rows[0], encontrado_herdado: encHerdado, encontrado_caixa_herdado: encGHerdado, deixado_auto: !!deixAuto });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -5986,6 +6382,7 @@ app.post('/api/turnos/:id/encontrados/fechar', auth, async (req, res) => {
       [req.params.id]
     );
     if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    await recalcularDeixadosAutoSeguro(req.params.id);
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -6045,6 +6442,7 @@ app.post('/api/turnos/:id/deixados/reabrir', auth, requireRole('admin', 'gestor'
       [req.params.id]
     );
     if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    await recalcularDeixadosAutoSeguro(req.params.id);
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -6132,26 +6530,30 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
     const precoVal  = origemVal === 'compra' ? (parseFloat(preco) || 0) : 0;
 
     let registo;
+    let naFolhaStock = false;
     if (produto_id) {
+      const existe = await client.query(`SELECT 1 FROM produtos WHERE id=$1`, [produto_id]);
+      if (!existe.rows.length) throw new Error('Produto não encontrado.');
+      // Produtos fora da folha de stock também se registam (ex.: compra de
+      // alface ou gás): fica o movimento e a compra conta na caixa; a folha
+      // de stock só muda para os produtos que fazem parte dela.
       const emStock = await client.query(
         `SELECT 1 FROM produtos WHERE id=$1 AND em_stock_turno IS TRUE AND ${SQL_STOCK_CATEGORIAS}`,
         [produto_id]
       );
-      if (!emStock.rows.length) {
-        throw new Error(
-          'Este produto não está na folha de stock do turno. Activa «Stock no turno» em Produtos ou regista no armazém.'
-        );
-      }
+      naFolhaStock = emStock.rows.length > 0;
 
       registo = await client.query(
         'INSERT INTO turno_entradas (turno_id, produto_id, tipo, origem, preco, quantidade, notas) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
         [turnoId, produto_id, tipoVal, origemVal, precoVal, quantidade, notasVal]
       );
 
-      // entrada = soma das entradas - soma das saídas
-      await client.query(
+      // entrada = soma das entradas - soma das saídas (só na folha de stock)
+      if (naFolhaStock) await client.query(
         `UPDATE turno_stock SET entrada=(
-           SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN quantidade ELSE -quantidade END),0)
+           SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN quantidade
+                                    WHEN COALESCE(notas,'') LIKE 'CONSUMO::%' THEN 0
+                                    ELSE -quantidade END),0)
            FROM turno_entradas WHERE turno_id=$1 AND produto_id=$2
          ) WHERE turno_id=$1 AND produto_id=$2`,
         [turnoId, produto_id]
@@ -6173,6 +6575,7 @@ app.post('/api/turnos/:id/entradas', auth, async (req, res) => {
     }
 
     await client.query('COMMIT');
+    if (produto_id && naFolhaStock) await recalcularDeixadosAutoSeguro(turnoId);
     res.json(registo.rows[0]);
   } catch(e) {
     await client.query('ROLLBACK').catch(()=>{});
@@ -6203,6 +6606,33 @@ app.put('/api/turnos/:id/notas', auth, async (req, res) => {
     if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
     res.json(r.rows[0]);
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+/** Observações do admin (separadas das do turno). Só o admin escreve —
+ *  também com o turno já fechado; ficam registados quem e quando. */
+let _notasAdminColsReady = false;
+app.put('/api/turnos/:id/notas-admin', auth, requireRole('admin'), async (req, res) => {
+  try {
+    if (!_notasAdminColsReady) {
+      await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin TEXT NOT NULL DEFAULT ''`);
+      await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin_em TIMESTAMPTZ`);
+      await query(`ALTER TABLE turnos ADD COLUMN IF NOT EXISTS notas_admin_por TEXT`);
+      _notasAdminColsReady = true;
+    }
+    const texto = String((req.body && req.body.notas_admin) || '').slice(0, 5000);
+    let nome = (req.user && req.user.nome) || '';
+    try {
+      const u = await query(`SELECT nome FROM utilizadores WHERE id::text = $1::text`, [String(req.user && req.user.id)]);
+      nome = (u.rows[0] && u.rows[0].nome) || nome;
+    } catch (_) {}
+    const r = await query(
+      `UPDATE turnos SET notas_admin=$1, notas_admin_em=NOW(), notas_admin_por=$2 WHERE id=$3
+       RETURNING notas_admin, notas_admin_em, notas_admin_por`,
+      [texto, nome, req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ erro: 'Turno não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // ── Foto do recibo de fecho do TPA (obrigatória para fechar turno com TPA > 0) ──
@@ -6278,10 +6708,10 @@ app.put('/api/turnos/:id/caixa', auth, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (turno_id)
        DO UPDATE SET tpa=$2, transferencia=$3, dinheiro=$4, saida=$5
-       RETURNING *`,
+       RETURNING ${SQL_CAIXA_SEM_FOTO.replace(/tc\b/g, 'turno_caixa')} AS j`,
       [req.params.id, tpaV, trV, diV, saida]
     );
-    const c = r.rows[0];
+    const c = r.rows[0].j;
     const tg = sumCaixaGeradoRow(c);
     c.total_gerado = tg;
     c.total_final = tg === null ? null : tg - parseFloat(c.saida || 0);
@@ -7148,6 +7578,34 @@ app.get('/api/historico', auth, async (req, res) => {
       sqlHistH.replace('{LOJA_FILTRO}', 'AND t.loja_id = $3'), [d1, d2, lojaDe(req)],
       sqlHistH.replace('{LOJA_FILTRO}', ''), [d1, d2]
     );
+    // Entradas extra de caixa (mesmas fontes que /dia): turno_saidas marcadas
+    // com ENTRADA:: e a tabela turno_caixa_entradas. Somam ao total final.
+    const ids = r.rows.map(x => x.turno_id);
+    if (ids.length) {
+      const [marcadas, tabela] = await Promise.all([
+        query(
+          `SELECT turno_id, COALESCE(SUM(valor),0)::numeric AS t
+           FROM turno_saidas
+           WHERE turno_id = ANY($1::int[]) AND COALESCE(notas,'') LIKE 'ENTRADA::%'
+           GROUP BY turno_id`, [ids]
+        ).catch(() => ({ rows: [] })),
+        query(
+          `SELECT turno_id, COALESCE(SUM(valor),0)::numeric AS t
+           FROM turno_caixa_entradas
+           WHERE turno_id = ANY($1::int[])
+           GROUP BY turno_id`, [ids]
+        ).catch(() => ({ rows: [] }))
+      ]);
+      const ent = {};
+      for (const x of [...marcadas.rows, ...tabela.rows]) {
+        ent[x.turno_id] = (ent[x.turno_id] || 0) + (parseFloat(x.t) || 0);
+      }
+      for (const row of r.rows) {
+        const e = ent[row.turno_id] || 0;
+        row.caixa_entradas = e;
+        row.total_final = (parseFloat(row.total_final) || 0) + e;
+      }
+    }
     res.json(r.rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -7699,6 +8157,7 @@ app.post('/api/turnos/:turnoId/pedidos/:pedidoId/devolver', auth, async (req, re
       await client.query(`UPDATE turno_caixa SET saida=$1 WHERE turno_id=$2`, [novasSaida, turnoId]);
     }
     await client.query('COMMIT');
+    await recalcularDeixadosAutoSeguro(turnoId);
     res.json({
       sucesso: true,
       pedido_id: pedidoId,
@@ -7909,6 +8368,7 @@ app.post('/api/turnos/:id/pedidos', auth, async (req, res) => {
       await applyTurnoVendaQuantity(client, turnoId, line.produto_id, oldQ + line.quantidade);
     }
     await client.query('COMMIT');
+    await recalcularDeixadosAutoSeguro(turnoId);
     res.json({
       id: pedidoId,
       sucesso: true,

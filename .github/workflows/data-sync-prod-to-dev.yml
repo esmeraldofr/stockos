@@ -77,6 +77,23 @@ jobs:
                   raise SystemExit(1)
           PY
 
+      # Proteção: se o develop tem turnos mais recentes que a produção, há
+      # uma app a gravar no develop como se fosse produção (aconteceu com o
+      # Render ligado à BD errada) — copiar apagaria esse trabalho.
+      - name: Abortar se o develop tem turnos mais recentes que a produção
+        env:
+          DATABASE_URL_PROD: ${{ secrets.DATABASE_URL_PROD_ADMIN || 'postgresql://postgres.dakleqewbwbryuchlrzm:LKB2DWbWbc60fZXh@aws-1-eu-west-1.pooler.supabase.com:5432/postgres' }}
+          DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}
+        run: |
+          set -euo pipefail
+          MAXP=$(eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_PROD")"; psql -Atc "SELECT COALESCE(max(criado_em),'epoch')::text FROM turnos")
+          MAXD=$(eval "$(python3 scripts/ci/pg_env_from_url.py "$DATABASE_URL_DEV_ADMIN")"; psql -Atc "SELECT COALESCE(max(criado_em),'epoch')::text FROM turnos")
+          echo "Último turno — produção: $MAXP · develop: $MAXD"
+          if [[ "$MAXD" > "$MAXP" ]]; then
+            echo "::error::O develop tem turnos mais recentes que a produção ($MAXD > $MAXP). Alguma app de produção está a gravar no develop — corrige o DATABASE_URL antes de copiar."
+            exit 1
+          fi
+
       - name: Backup do develop (antes de apagar)
         env:
           DATABASE_URL_DEV_ADMIN: ${{ secrets.DATABASE_URL_DEV_ADMIN }}

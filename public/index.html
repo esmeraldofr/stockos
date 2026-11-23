@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-10-31-menos-pedidos">
+<html lang="pt" data-stockos-ui="2026-11-23-talao-a4">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -10690,6 +10690,10 @@ const TALAO_COLUNAS = { 58: { normal: 42, media: 45, pequena: 48, mini: 54 }, 80
 function talaoPapel() {
   try { return localStorage.getItem(TALAO_LARG_KEY) === '80' ? 80 : 58; } catch (_) { return 58; }
 }
+/** Formato escolhido: '58', '80' (térmica) ou 'A4' (impressora normal). */
+function talaoFormato() {
+  try { const v = localStorage.getItem(TALAO_LARG_KEY); return v === 'A4' || v === '80' ? v : '58'; } catch (_) { return '58'; }
+}
 function talaoLetra() {
   try { const v = localStorage.getItem(TALAO_LETRA_KEY); return TALAO_COLUNAS[58][v] ? v : 'media'; } catch (_) { return 'media'; }
 }
@@ -11100,6 +11104,126 @@ function talaoTurnoImprimirBrowser(L, W) {
   }, 250);
 }
 
+// ── FOLHA A4 (impressora normal) ──────────────────────────────────────
+// As mesmas secções do Excel, em tabelas completas (sem cortar nomes nem
+// colunas). Colunas sem nenhum valor são omitidas para caber na largura.
+const TALAO_A4_CSS = `
+  .a4doc { font: 9pt/1.3 Arial, Helvetica, sans-serif; color: #000; background: #fff; }
+  .a4doc h1 { font-size: 15pt; margin: 0 0 2px; color: #1F4E79; }
+  .a4doc .a4-sub { font-size: 9pt; color: #444; margin-bottom: 8px; }
+  .a4doc h2 { font-size: 11pt; margin: 14px 0 5px; padding-bottom: 2px; color: #1F4E79; border-bottom: 1.5px solid #1F4E79; break-after: avoid; page-break-after: avoid; }
+  .a4doc h3 { font-size: 9.5pt; margin: 8px 0 3px; break-after: avoid; page-break-after: avoid; }
+  .a4doc table { border-collapse: collapse; width: 100%; margin: 0 0 6px; }
+  .a4doc th, .a4doc td { border: 0.5pt solid #999; padding: 2px 4px; vertical-align: top; }
+  .a4doc th { background: #1F4E79; color: #fff; font-weight: bold; text-align: left; }
+  .a4doc td.n { text-align: right; white-space: nowrap; }
+  .a4doc tr.seccao td { background: #D9D9D9; font-weight: bold; }
+  .a4doc tr.total td { font-weight: bold; }
+  .a4doc tr { break-inside: avoid; page-break-inside: avoid; }
+  .a4doc thead { display: table-header-group; }
+  .a4doc .a4-kv { width: auto; min-width: 50%; }
+  .a4doc .a4-txt { white-space: pre-wrap; border: 0.5pt solid #999; padding: 5px 6px; min-height: 1.3em; }
+  .a4doc .a4-ass { display: flex; gap: 40px; margin-top: 34px; }
+  .a4doc .a4-ass div { flex: 1; border-top: 0.75pt solid #000; padding-top: 3px; font-size: 8.5pt; text-align: center; }
+  .a4doc * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+`;
+/** Linhas tipadas (formato do Excel) → tabelas HTML. */
+function talaoA4Tabelas(rows) {
+  const out = [];
+  let cur = [];
+  const valor = (c) => (c && typeof c === 'object' && 'v' in c ? c.v : c);
+  const ehCab = (r) => r.tipo === 'cab' || (r.length > 1 && r.every((c) => c && typeof c === 'object' && c.fundo === '1F4E79'));
+  const ehTitulo = (r) => r.length === 1 && r[0] && typeof r[0] === 'object' && (r[0].sz || 0) >= 12;
+  const fmtCel = (v) => (typeof v === 'number' ? tlMil(fmtNum(v)) : String(v == null ? '' : v));
+  const flush = () => {
+    if (!cur.length) return;
+    const ncol = Math.max(...cur.map((r) => r.length));
+    // Colunas sem valor em nenhuma linha de dados (fora a 1.ª) ficam de fora.
+    const dados = cur.filter((r) => !ehCab(r) && r.tipo !== 'seccao' && r.length > 1);
+    const usar = [...Array(ncol).keys()].filter((i) => i === 0 || !dados.length || dados.some((r) => fmtCel(valor(r[i])).trim() !== ''));
+    let html = '<table>';
+    let corpo = false;
+    cur.forEach((r) => {
+      if (ehCab(r)) {
+        html += `${corpo ? '' : '<thead>'}<tr>${usar.map((i) => `<th>${escapeHtml(fmtCel(valor(r[i])))}</th>`).join('')}</tr>${corpo ? '' : '</thead>'}`;
+        return;
+      }
+      corpo = true;
+      if (r.length === 1 && ncol > 1) {
+        const sc = r.tipo === 'seccao' || (r[0] && typeof r[0] === 'object' && r[0].b);
+        html += `<tr${sc ? ' class="seccao"' : ''}><td colspan="${usar.length}">${escapeHtml(fmtCel(valor(r[0])))}</td></tr>`;
+        return;
+      }
+      const cls = r.tipo === 'total' || r.some((c) => c && typeof c === 'object' && c.b) ? 'total' : '';
+      html += `<tr class="${cls}">${usar.map((i) => {
+        const c = r[i];
+        const v = valor(c);
+        const est = [];
+        if (c && typeof c === 'object' && c.cor && c.cor !== 'FFFFFF') est.push(`color:#${c.cor}`);
+        if (c && typeof c === 'object' && c.fundo) est.push(`background:#${c.fundo}`);
+        return `<td${typeof v === 'number' ? ' class="n"' : ''}${est.length ? ` style="${est.join(';')}"` : ''}>${escapeHtml(fmtCel(v))}</td>`;
+      }).join('')}</tr>`;
+    });
+    out.push(html + '</table>');
+    cur = [];
+  };
+  rows.forEach((r) => {
+    if (!r || !r.length) { flush(); return; }
+    if (ehTitulo(r)) { flush(); out.push(`<h3>${escapeHtml(String(valor(r[0])))}</h3>`); return; }
+    if (ehCab(r) && cur.some((x) => !ehCab(x))) flush();
+    cur.push(r);
+  });
+  flush();
+  return out.join('') || '<p>(sem dados)</p>';
+}
+/** Corpo da folha A4 do turno. */
+function talaoA4Html(sec) {
+  const quando = (ts) => {
+    const d = ts ? new Date(ts) : null;
+    return d && !isNaN(d) ? d.toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  };
+  const est = sec.estado || {};
+  const reg = (ts) => (ts ? `Fechado ${quando(ts)}` : 'Por fechar');
+  const sub = (t) => `<h2>${escapeHtml(t)}</h2>`;
+  const txt = (t) => `<div class="a4-txt">${escapeHtml(String(t || '').trim() || '(sem observações)')}</div>`;
+  return `<div class="a4doc">
+    <h1>${escapeHtml(lojaAtivaNome() || 'StockOS')} — ${est.turno === 'aberto' ? 'Turno em curso (parcial)' : 'Fecho de turno'}</h1>
+    <div class="a4-sub">${escapeHtml(tlTxt(sec.turno))} · ${xlDataPt(sec.data)} · Impresso: ${escapeHtml(new Date().toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }))}</div>
+    ${sub('Estado do turno')}
+    <table class="a4-kv">
+      <tr><td>Turno</td><td><b>${est.turno === 'fechado' ? 'Fechado' : est.turno === 'aberto' ? 'Aberto' : escapeHtml(est.turno || '—')}</b></td></tr>
+      <tr><td>Registo inicial (encontrados)</td><td>${escapeHtml(reg(est.encontrados))}</td></tr>
+      <tr><td>Registo dos deixados</td><td>${escapeHtml(reg(est.deixados))}</td></tr>
+    </table>
+    ${sub('Quem trabalhou')}${talaoA4Tabelas(linhasEquipaTurno(sec))}
+    ${sub('Validação do stock')}${sec.validacao.length ? talaoA4Tabelas(sec.validacao) : '<p>(sem produtos)</p>'}
+    ${sub('Produtos vendidos')}${sec.produtos.length ? talaoA4Tabelas(sec.produtos) : '<p>(sem pedidos)</p>'}
+    ${sec.fino ? sub('Fino Barril') + talaoA4Tabelas(linhasFinoTurno(sec)) : ''}
+    ${sub('Caixa')}${talaoA4Tabelas(linhasCaixaTurno(sec))}
+    ${sub('Movimentos do turno')}${sec.movimentos.length ? talaoA4Tabelas(sec.movimentos) : '<p>(sem entradas nem saídas)</p>'}
+    ${sub('Observações')}${txt(sec.notas)}
+    ${sub('Observações do admin')}${txt(sec.notasAdmin)}
+    <div class="a4-ass"><div>Responsável do turno</div><div>Gestor / Admin</div></div>
+  </div>`;
+}
+function talaoA4Imprimir(sec) {
+  const fr = document.createElement('iframe');
+  fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+  document.body.appendChild(fr);
+  const d = fr.contentDocument;
+  d.open();
+  d.write(`<!doctype html><html><head><meta charset="utf-8"><title>Turno ${escapeHtml(xlDataPt(sec.data))}</title><style>
+    @page { size: A4; margin: 12mm; }
+    html, body { margin: 0; background: #fff; }
+    ${TALAO_A4_CSS}
+  </style></head><body>${talaoA4Html(sec)}</body></html>`);
+  d.close();
+  setTimeout(() => {
+    try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch (_) { window.print(); }
+    setTimeout(() => fr.remove(), 60000);
+  }, 250);
+}
+
 async function abrirTalaoTurno() {
   if (!S.turnoData) throw new Error('Abre um turno primeiro.');
   await garantirResumoPedidosCarregado();
@@ -11110,13 +11234,23 @@ async function abrirTalaoTurno() {
   div.className = 'modal-overlay';
   div.style.zIndex = '300';
   const desenhar = () => {
+    const a4 = talaoFormato() === 'A4';
     const W = talaoLargura();
     const L = talaoTurnoLinhas(sec, W);
     div.__talao = { L, W };
     const pre = div.querySelector('#talao-turno-pre');
-    pre.innerHTML = talaoTurnoHtml(L, W);
-    pre.style.fontSize = `${Math.min(10.5, 470 / (W * 0.6)).toFixed(1)}px`;
-    div.querySelectorAll('input[name="talao-larg"]').forEach((r) => { r.checked = r.value === String(talaoPapel()); });
+    const prevA4 = div.querySelector('#talao-a4-prev');
+    pre.style.display = a4 ? 'none' : '';
+    prevA4.style.display = a4 ? '' : 'none';
+    div.querySelector('#talao-letra-linha').style.display = a4 ? 'none' : 'flex';
+    div.querySelector('[data-acao="rawbt"]').style.display = a4 ? 'none' : '';
+    div.querySelector('[data-acao="browser"]').textContent = a4 ? '🖨️ Imprimir A4' : '🖨️ Imprimir (browser)';
+    if (a4) prevA4.innerHTML = talaoA4Html(sec);
+    else {
+      pre.innerHTML = talaoTurnoHtml(L, W);
+      pre.style.fontSize = `${Math.min(10.5, 470 / (W * 0.6)).toFixed(1)}px`;
+    }
+    div.querySelectorAll('input[name="talao-larg"]').forEach((r) => { r.checked = r.value === talaoFormato(); });
     div.querySelectorAll('input[name="talao-letra"]').forEach((r) => { r.checked = r.value === talaoLetra(); });
   };
   div.innerHTML = `
@@ -11129,8 +11263,9 @@ async function abrirTalaoTurno() {
         <span style="color:#94a3b8">Papel:</span>
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-larg" value="58"/> 58 mm</label>
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-larg" value="80"/> 80 mm</label>
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer" title="Folha A4 numa impressora normal, com as tabelas completas"><input type="radio" name="talao-larg" value="A4"/> Folha A4</label>
       </div>
-      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:13px;color:#cbd5e1;margin-bottom:10px">
+      <div id="talao-letra-linha" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:13px;color:#cbd5e1;margin-bottom:10px">
         <span style="color:#94a3b8">Letra:</span>
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-letra" value="normal"/> Normal <small style="color:#64748b">42</small></label>
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="talao-letra" value="media"/> Média <small style="color:#64748b">45</small></label>
@@ -11139,7 +11274,9 @@ async function abrirTalaoTurno() {
       </div>
       <div style="max-height:58vh;overflow:auto;background:#fff;border-radius:8px;padding:10px;display:flex;justify-content:center">
         <pre id="talao-turno-pre" style="margin:0;color:#000;font:10.5px/1.25 'Courier New',Consolas,monospace;white-space:pre"></pre>
+        <div id="talao-a4-prev" style="display:none;width:100%;font-size:11px"></div>
       </div>
+      <style>${TALAO_A4_CSS.replace(/\.a4doc/g, '#talao-a4-prev .a4doc')}</style>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap">
         <button type="button" class="btn btn-ghost btn-sm" data-acao="browser" title="Imprime pelo browser (PC, iPhone, impressora instalada no sistema)">🖨️ Imprimir (browser)</button>
         <button type="button" class="btn btn-primary btn-sm" data-acao="rawbt" title="Impressora térmica Bluetooth via RawBT (Android)">🧾 Impressora térmica</button>
@@ -11155,7 +11292,9 @@ async function abrirTalaoTurno() {
   div.querySelectorAll('input[name="talao-letra"]').forEach((r) => {
     r.onchange = () => { try { localStorage.setItem(TALAO_LETRA_KEY, r.value); } catch (_) {} desenhar(); };
   });
-  div.querySelector('[data-acao="browser"]').onclick = () => talaoTurnoImprimirBrowser(div.__talao.L, div.__talao.W);
+  div.querySelector('[data-acao="browser"]').onclick = () => (talaoFormato() === 'A4'
+    ? talaoA4Imprimir(sec)
+    : talaoTurnoImprimirBrowser(div.__talao.L, div.__talao.W));
   div.querySelector('[data-acao="rawbt"]').onclick = () => {
     if (!pedidoBalcaoIsAndroid()) {
       pedidoBalcaoMostrarAjudaImpressao('A impressora térmica Bluetooth (RawBT) só funciona no Android. Neste aparelho usa «Imprimir (browser)».');

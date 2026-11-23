@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-11-23-talao-a4">
+<html lang="pt" data-stockos-ui="2026-11-23-a4-ecra">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -11224,6 +11224,26 @@ function talaoA4Imprimir(sec) {
   }, 250);
 }
 
+/** Folha A4 em ecrã inteiro (fundo branco, deslizar para ler). */
+function talaoA4EcraInteiro(sec) {
+  document.getElementById('talao-a4-ecra')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'talao-a4-ecra';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:10050;background:#fff;overflow:auto;-webkit-overflow-scrolling:touch';
+  ov.innerHTML = `
+    <style>${TALAO_A4_CSS.replace(/\.a4doc/g, '#talao-a4-ecra .a4doc')}
+      #talao-a4-ecra .a4doc { max-width: 210mm; margin: 0 auto; padding: 12px 12px 40px; box-sizing: border-box; }</style>
+    <div style="position:sticky;top:0;z-index:1;display:flex;gap:8px;justify-content:flex-end;align-items:center;padding:8px 12px;padding-top:max(8px,env(safe-area-inset-top));background:#1e293b">
+      <span style="flex:1;color:#e2e8f0;font-weight:600;font-size:14px">📄 Folha A4</span>
+      <button type="button" class="btn btn-primary btn-sm" data-acao="imprimir">🖨️ Imprimir A4</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-acao="fechar">✕ Fechar</button>
+    </div>
+    ${talaoA4Html(sec)}`;
+  document.body.appendChild(ov);
+  ov.querySelector('[data-acao="fechar"]').onclick = () => ov.remove();
+  ov.querySelector('[data-acao="imprimir"]').onclick = () => talaoA4Imprimir(sec);
+}
+
 async function abrirTalaoTurno() {
   if (!S.turnoData) throw new Error('Abre um turno primeiro.');
   await garantirResumoPedidosCarregado();
@@ -11244,6 +11264,7 @@ async function abrirTalaoTurno() {
     prevA4.style.display = a4 ? '' : 'none';
     div.querySelector('#talao-letra-linha').style.display = a4 ? 'none' : 'flex';
     div.querySelector('[data-acao="rawbt"]').style.display = a4 ? 'none' : '';
+    div.querySelector('[data-acao="ecra"]').style.display = a4 ? '' : 'none';
     div.querySelector('[data-acao="browser"]').textContent = a4 ? '🖨️ Imprimir A4' : '🖨️ Imprimir (browser)';
     if (a4) prevA4.innerHTML = talaoA4Html(sec);
     else {
@@ -11274,10 +11295,11 @@ async function abrirTalaoTurno() {
       </div>
       <div style="max-height:58vh;overflow:auto;background:#fff;border-radius:8px;padding:10px;display:flex;justify-content:center">
         <pre id="talao-turno-pre" style="margin:0;color:#000;font:10.5px/1.25 'Courier New',Consolas,monospace;white-space:pre"></pre>
-        <div id="talao-a4-prev" style="display:none;width:100%;font-size:11px"></div>
+        <div id="talao-a4-prev" style="display:none;width:100%;font-size:11px;cursor:zoom-in" title="Tocar para ver em ecrã inteiro"></div>
       </div>
       <style>${TALAO_A4_CSS.replace(/\.a4doc/g, '#talao-a4-prev .a4doc')}</style>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap">
+        <button type="button" class="btn btn-ghost btn-sm" data-acao="ecra" style="display:none">⛶ Ecrã inteiro</button>
         <button type="button" class="btn btn-ghost btn-sm" data-acao="browser" title="Imprime pelo browser (PC, iPhone, impressora instalada no sistema)">🖨️ Imprimir (browser)</button>
         <button type="button" class="btn btn-primary btn-sm" data-acao="rawbt" title="Impressora térmica Bluetooth via RawBT (Android)">🧾 Impressora térmica</button>
       </div>
@@ -11292,6 +11314,8 @@ async function abrirTalaoTurno() {
   div.querySelectorAll('input[name="talao-letra"]').forEach((r) => {
     r.onchange = () => { try { localStorage.setItem(TALAO_LETRA_KEY, r.value); } catch (_) {} desenhar(); };
   });
+  div.querySelector('[data-acao="ecra"]').onclick = () => talaoA4EcraInteiro(sec);
+  div.querySelector('#talao-a4-prev').onclick = () => talaoA4EcraInteiro(sec);
   div.querySelector('[data-acao="browser"]').onclick = () => (talaoFormato() === 'A4'
     ? talaoA4Imprimir(sec)
     : talaoTurnoImprimirBrowser(div.__talao.L, div.__talao.W));

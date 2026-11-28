@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt" data-stockos-ui="2026-11-23-a4-ecra">
+<html lang="pt" data-stockos-ui="2026-11-23-preencher-turno">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
@@ -2333,6 +2333,7 @@ function renderDiaCards(turnos, provisorio, diaSemCache) {
     show('dia-content', `
       ${avisoOffline}
       <div id="dia-avisos-slot"></div>
+      <button type="button" class="btn btn-primary btn-full" style="margin-bottom:12px;padding:12px;font-weight:700" onclick="runAction(event, () => abrirPreencherTurno({ data: S.date }))">📝 Preencher turno completo <span style="font-weight:400;opacity:.85">— tudo de uma vez</span></button>
       <div class="turno-cards">${cards}</div>
       ${pendentesLoading}
     `);
@@ -3746,9 +3747,12 @@ async function loadTurno() {
     const reabrirBtn = !isAberto && isAdminUser
       ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="reabrirTurno(event, '${turno.id}')">Reabrir</button>`
       : '';
+    const preencherBtn = isAberto || isAdminUser
+      ? `<button type="button" class="btn btn-primary btn-sm" style="margin-right:6px" title="Preencher tudo de uma vez" onclick="runAction(event, () => abrirPreencherTurno({ data: S.date, nome: '${turno.nome}' }))">📝 Preencher</button>`
+      : '';
     show('turno-header-actions', isAberto
-      ? `<button type="button" class="btn btn-danger btn-sm" onclick="fecharTurno(event, '${turno.id}')">Fechar</button>`
-      : `<span class="badge badge-grey">Fechado</span>${reabrirBtn}`
+      ? `${preencherBtn}<button type="button" class="btn btn-danger btn-sm" onclick="fecharTurno(event, '${turno.id}')">Fechar</button>`
+      : `${preencherBtn}<span class="badge badge-grey">Fechado</span>${reabrirBtn}`
     );
 
     // Folha de stock: Menu, Ingredientes, Bebidas e Outros (copos, vasilhames…)
@@ -11967,6 +11971,464 @@ async function reabrirTurno(ev, id) {
       turnoMsgErr(e.message);
     }
   });
+}
+
+// ── PREENCHER TURNO COMPLETO (assistente) ─────────────────────────────
+// Tudo o que um turno precisa num só sítio — para quem não conhece as abas.
+// Passo a passo ou numa página só (mesmos campos). Nada vai para o
+// servidor até «Gravar tudo»; o rascunho fica neste aparelho (por loja,
+// data e turno). Grava pelas MESMAS rotas das abas (pedidos, entradas,
+// caixa…), cada registo com client_ref fixo — repetir não duplica.
+const PT_DRAFT_KEY = 'stockos.preencherTurno';
+const PT_MODO_KEY = 'stockos.preencherTurnoModo';
+const PT_PASSOS = [
+  { k: 'turno', t: 'Turno' }, { k: 'equipa', t: 'Quem trabalhou' }, { k: 'pedidos', t: 'Pedidos' },
+  { k: 'stock', t: 'Produtos' }, { k: 'dinheiro', t: 'Dinheiro' }, { k: 'caixa', t: 'Caixa' },
+  { k: 'obs', t: 'Observações' }, { k: 'rever', t: 'Gravar' }
+];
+const PT_MOV_TIPOS = { armazem: 'Entrada do armazém', compra: 'Compra (paga da caixa)', perda: 'Saída / perda' };
+let PT = null;
+
+function ptChave() { return `${PT_DRAFT_KEY}:${lojaAtivaId()}:${PT.data}:${PT.nome}`; }
+function ptGuardarRascunho() {
+  if (!PT || !PT.data || !PT.nome) return;
+  const r = { equipa: PT.equipa, pedidos: PT.pedidos, stockMovs: PT.stockMovs, dinheiroMovs: PT.dinheiroMovs,
+    caixa: PT.caixa, notas: PT.notas, notasAdmin: PT.notasAdmin, done: PT.done, mexeu: PT.mexeu };
+  try { localStorage.setItem(ptChave(), JSON.stringify(r)); } catch (_) {}
+}
+function ptLerRascunho() {
+  try { const v = JSON.parse(localStorage.getItem(ptChave()) || 'null'); return v && typeof v === 'object' ? v : null; } catch (_) { return null; }
+}
+const ptNum = (v) => { const n = parseFloat(String(v == null ? '' : v).replace(',', '.')); return Number.isFinite(n) ? n : null; };
+const ptProd = (id) => (PT.produtos || []).find((p) => String(p.id) === String(id));
+
+async function abrirPreencherTurno(opts) {
+  opts = opts || {};
+  PT = {
+    data: String(opts.data || S.date || luandaTodayStr()).slice(0, 10), nome: opts.nome || '',
+    passo: opts.nome ? 1 : 0, modo: (() => { try { return localStorage.getItem(PT_MODO_KEY) === 'pagina' ? 'pagina' : 'passos'; } catch (_) { return 'passos'; } })(),
+    produtos: [], pessoas: [], promotores: [], turno: null, existentes: null,
+    equipa: [], pedidos: [], stockMovs: [], dinheiroMovs: [], caixa: { tpa: '', transf: '', din: '' }, notas: '', notasAdmin: '',
+    done: {}, mexeu: {}, tpaFoto: null, aGravar: false, msg: '', ok: false
+  };
+  document.getElementById('pt-overlay')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'pt-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:1480;background:#0f172a;overflow:auto;-webkit-overflow-scrolling:touch';
+  ov.innerHTML = '<div style="padding:60px;text-align:center;color:#94a3b8"><div class="spinner"></div><div style="margin-top:10px">A carregar…</div></div>';
+  document.body.appendChild(ov);
+  ov.addEventListener('input', ptOnInput);
+  ov.addEventListener('change', ptOnInput);
+  ov.addEventListener('click', (e) => { const b = e.target.closest('[data-pt-acao]'); if (b) ptOnAcao(b, e); });
+  try {
+    const [prods, pessoas, prom] = await Promise.all([
+      api('GET', '/produtos?todos=0'),
+      api('GET', '/equipa/pessoas').catch(() => []),
+      api('GET', '/promotores').catch(() => [])
+    ]);
+    PT.produtos = (Array.isArray(prods) ? prods : []).filter((p) => p.ativo !== false);
+    PT.pessoas = Array.isArray(pessoas) ? pessoas : [];
+    PT.promotores = Array.isArray(prom) ? prom : [];
+    if (PT.nome) await ptCarregarTurno();
+    ptRender();
+  } catch (e) {
+    ov.innerHTML = `<div style="padding:24px"><div class="alert alert-error">${escapeHtml(e.message || String(e))}</div><button type="button" class="btn btn-ghost" data-pt-acao="sair">Fechar</button></div>`;
+  }
+}
+
+/** Turno da data/nome escolhidos (se já existe) + rascunho guardado. */
+async function ptCarregarTurno() {
+  PT.turno = null; PT.existentes = null;
+  PT.equipa = []; PT.pedidos = []; PT.stockMovs = []; PT.dinheiroMovs = [];
+  PT.caixa = { tpa: '', transf: '', din: '' }; PT.notas = ''; PT.notasAdmin = ''; PT.done = {}; PT.mexeu = {}; PT.tpaFoto = null; PT.ok = false; PT.msg = '';
+  if (!PT.data || !PT.nome) return;
+  const lista = await api('GET', `/dia?data=${encodeURIComponent(PT.data)}&resumo=1`).catch(() => []);
+  const t = (Array.isArray(lista) ? lista : []).find((x) => x.nome === PT.nome && !String(x.id).startsWith('off-'));
+  if (t) {
+    PT.turno = t;
+    const [eq, ped, ent, sai] = await Promise.all([
+      api('GET', `/turnos/${t.id}/equipa-real`).catch(() => []),
+      api('GET', `/turnos/${t.id}/pedidos`).catch(() => []),
+      api('GET', `/turnos/${t.id}/entradas`).catch(() => []),
+      api('GET', `/turnos/${t.id}/saidas`).catch(() => [])
+    ]);
+    PT.existentes = { equipa: Array.isArray(eq) ? eq : [], pedidos: Array.isArray(ped) ? ped : [], entradas: Array.isArray(ent) ? ent : [], saidas: Array.isArray(sai) ? sai : [] };
+    PT.equipa = PT.existentes.equipa.map((e) => String(e.utilizador_id));
+    const c = t.caixa || {};
+    const v = (x) => (x == null || x === '' ? '' : String(parseFloat(x)));
+    PT.caixa = { tpa: v(c.tpa), transf: v(c.transferencia), din: v(c.dinheiro) };
+    PT.notas = t.notas || '';
+    PT.notasAdmin = t.notas_admin || '';
+  }
+  const r = ptLerRascunho();
+  if (r) {
+    ['pedidos', 'stockMovs', 'dinheiroMovs'].forEach((k) => { if (Array.isArray(r[k])) PT[k] = r[k]; });
+    PT.done = r.done || {};
+    PT.mexeu = r.mexeu || {};
+    // Só sobrepõe o que foi mexido no rascunho (o resto vem do servidor).
+    if (PT.mexeu.equipa && Array.isArray(r.equipa)) PT.equipa = r.equipa;
+    if (PT.mexeu.caixa && r.caixa) PT.caixa = r.caixa;
+    if (PT.mexeu.notas) PT.notas = r.notas || '';
+    if (PT.mexeu.notasAdmin) PT.notasAdmin = r.notasAdmin || '';
+  }
+}
+
+function ptOpcoesProdutos(sel, paraPedido) {
+  const lista = PT.produtos.filter((p) => (paraPedido
+    ? (p.categoria === 'menu' || (p.categoria === 'bebida' && !isFinoBarrilNome(p.nome)) || p.venda_avulso)
+    : true));
+  const grupos = { menu: 'Menu', bebida: 'Bebidas', ingredientes: 'Ingredientes', outros: 'Outros' };
+  const porCat = {};
+  lista.forEach((p) => { const g = grupos[p.categoria] || 'Outros'; (porCat[g] = porCat[g] || []).push(p); });
+  return `<option value="">— escolher produto —</option>` + Object.keys(porCat).map((g) => `<optgroup label="${g}">${
+    porCat[g].sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt'))
+      .map((p) => `<option value="${escapeHtml(String(p.id))}"${String(p.id) === String(sel) ? ' selected' : ''}>${escapeHtml(p.nome)}${paraPedido && parseFloat(p.preco) > 0 ? ` · ${fmt(p.preco)}` : ''}</option>`).join('')
+  }</optgroup>`).join('');
+}
+function ptTotalPedido(p) {
+  return (p.linhas || []).reduce((a, l) => { const pr = ptProd(l.produto_id); return a + (pr ? (parseFloat(pr.preco) || 0) * (ptNum(l.qtd) || 0) : 0); }, 0);
+}
+
+const PT_IN = 'width:100%;box-sizing:border-box;background:#0b1220;color:#f1f5f9;border:1px solid #334155;border-radius:8px;padding:9px 10px;font-size:15px';
+const PT_LBL = 'display:block;font-size:12px;color:#94a3b8;margin:0 0 4px';
+const ptFeito = (ref) => (PT.done[ref] ? '<span class="badge badge-green" style="margin-left:6px">gravado</span>' : '');
+
+function ptSecTurno() {
+  const t = PT.turno;
+  const est = !PT.nome ? '' : !t
+    ? '<div class="alert" style="margin-top:10px;background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.4);color:#bfdbfe">Este turno ainda não existe — é aberto ao gravar.</div>'
+    : `<div style="margin-top:10px;font-size:13px;color:#cbd5e1">Turno já existe · ${t.estado === 'aberto' ? '<span class="badge badge-green">Aberto</span>' : '<span class="badge badge-grey">Fechado</span>'}
+        ${t.estado !== 'aberto' ? `<div style="font-size:12px;color:#fbbf24;margin-top:6px">${S.user?.role === 'admin' ? 'Está fechado: ao gravar, o turno é reaberto (só admin) para receber os registos.' : 'Está fechado — só o admin pode acrescentar registos.'}</div>` : ''}
+        ${PT.existentes ? `<div style="font-size:12px;color:#94a3b8;margin-top:6px">Já registado: ${PT.existentes.pedidos.length} pedido(s), ${PT.existentes.entradas.length} movimento(s) de produtos, ${PT.existentes.saidas.length} de dinheiro. O que acrescentares aqui soma-se a isso.</div>` : ''}
+      </div>`;
+  return `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label style="${PT_LBL}">Data</label><input type="date" data-pt="data" value="${escapeHtml(PT.data)}" max="${luandaTodayStr()}" style="${PT_IN}"></div>
+      <div><label style="${PT_LBL}">Turno</label><select data-pt="nome" style="${PT_IN}">
+        <option value="">— escolher —</option>
+        ${['manha', 'tarde', 'noite'].map((n) => `<option value="${n}"${PT.nome === n ? ' selected' : ''}>${turnoLabel(n)}</option>`).join('')}
+      </select></div>
+    </div>${est}`;
+}
+function ptSecEquipa() {
+  if (!PT.pessoas.length) return '<span style="color:#64748b">Sem pessoas registadas.</span>';
+  return `<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">Marca quem trabalhou neste turno.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px">${PT.pessoas.map((p) => {
+      const on = PT.equipa.includes(String(p.id));
+      return `<label style="display:flex;gap:8px;align-items:center;padding:9px 10px;border:1px solid ${on ? '#22c55e' : '#334155'};border-radius:8px;cursor:pointer;color:#e2e8f0;background:${on ? 'rgba(34,197,94,.10)' : 'transparent'}">
+        <input type="checkbox" data-pt="equipa" value="${escapeHtml(String(p.id))}"${on ? ' checked' : ''}> ${escapeHtml(p.nome)}</label>`;
+    }).join('')}</div>`;
+}
+function ptSecPedidos() {
+  const total = PT.pedidos.reduce((a, p) => a + ptTotalPedido(p), 0);
+  return `<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">Um cartão por pedido do balcão (como no talão). Valores aproximados — o sistema calcula o preço final.</div>
+    ${PT.pedidos.map((p, i) => `
+      <div style="border:1px solid #334155;border-radius:10px;padding:10px;margin-bottom:10px;${PT.done[p.ref] ? 'opacity:.6' : ''}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <strong style="color:#f1f5f9">Pedido ${i + 1}</strong>${ptFeito(p.ref)}
+          <span id="pt-ped-tot-${i}" style="margin-left:auto;color:#86efac;font-weight:700">≈ ${fmt(ptTotalPedido(p))}</span>
+          ${PT.done[p.ref] ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-pt-acao="ped-rem" data-i="${i}" title="Apagar pedido">🗑</button>`}
+        </div>
+        ${(p.linhas || []).map((l, j) => `
+          <div style="display:grid;grid-template-columns:1fr 80px 34px;gap:6px;margin-bottom:6px">
+            <select data-pt="ped-prod" data-i="${i}" data-j="${j}" style="${PT_IN}"${PT.done[p.ref] ? ' disabled' : ''}>${ptOpcoesProdutos(l.produto_id, true)}</select>
+            <input type="number" inputmode="decimal" min="0" step="any" placeholder="Qtd" data-pt="ped-qtd" data-i="${i}" data-j="${j}" value="${escapeHtml(String(l.qtd ?? ''))}" style="${PT_IN}"${PT.done[p.ref] ? ' disabled' : ''}>
+            ${PT.done[p.ref] ? '<span></span>' : `<button type="button" class="btn btn-ghost btn-sm" data-pt-acao="ped-lin-rem" data-i="${i}" data-j="${j}" title="Tirar linha">✕</button>`}
+          </div>`).join('')}
+        ${PT.done[p.ref] ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-pt-acao="ped-lin-add" data-i="${i}">+ Produto</button>`}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
+          <div><label style="${PT_LBL}">Pagamento</label><select data-pt="ped-pag" data-i="${i}" style="${PT_IN}"${PT.done[p.ref] ? ' disabled' : ''}>
+            ${['dinheiro', 'tpa', 'transferencia'].map((k) => `<option value="${k}"${(p.pag || 'dinheiro') === k ? ' selected' : ''}>${pedidoTipoPagamentoLabel(k)}</option>`).join('')}
+          </select></div>
+          <div><label style="${PT_LBL}">Promotor</label><select data-pt="ped-prom" data-i="${i}" style="${PT_IN}"${PT.done[p.ref] ? ' disabled' : ''}>
+            <option value="">— nenhum —</option>
+            ${PT.promotores.map((u) => `<option value="${escapeHtml(String(u.id))}"${String(p.promotor_id || '') === String(u.id) ? ' selected' : ''}>${escapeHtml(u.nome)}</option>`).join('')}
+          </select></div>
+        </div>
+      </div>`).join('')}
+    <button type="button" class="btn btn-primary" data-pt-acao="ped-add" style="width:100%">+ Novo pedido</button>
+    ${PT.pedidos.length ? `<div style="text-align:right;margin-top:8px;color:#cbd5e1">${PT.pedidos.length} pedido(s) · ≈ <strong>${fmt(total)}</strong></div>` : ''}`;
+}
+function ptSecStock() {
+  return `<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">Produtos que entraram (do armazém ou comprados) ou saíram (perdas, estragados). Os Encontrados e Deixados são calculados sozinhos.</div>
+    ${PT.stockMovs.map((m, i) => `
+      <div style="border:1px solid #334155;border-radius:10px;padding:10px;margin-bottom:8px;${PT.done[m.ref] ? 'opacity:.6' : ''}">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><strong style="color:#f1f5f9;font-size:13px">Movimento ${i + 1}</strong>${ptFeito(m.ref)}
+          ${PT.done[m.ref] ? '' : `<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" data-pt-acao="mov-rem" data-i="${i}">🗑</button>`}</div>
+        <select data-pt="mov-prod" data-i="${i}" style="${PT_IN};margin-bottom:6px"${PT.done[m.ref] ? ' disabled' : ''}>${ptOpcoesProdutos(m.produto_id, false)}</select>
+        <div style="display:grid;grid-template-columns:1.4fr 1fr${m.tipo === 'compra' ? ' 1fr' : ''};gap:6px">
+          <select data-pt="mov-tipo" data-i="${i}" style="${PT_IN}"${PT.done[m.ref] ? ' disabled' : ''}>${Object.entries(PT_MOV_TIPOS).map(([k, v]) => `<option value="${k}"${m.tipo === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
+          <input type="number" inputmode="decimal" min="0" step="any" placeholder="Quantidade" data-pt="mov-qtd" data-i="${i}" value="${escapeHtml(String(m.qtd ?? ''))}" style="${PT_IN}"${PT.done[m.ref] ? ' disabled' : ''}>
+          ${m.tipo === 'compra' ? `<input type="number" inputmode="decimal" min="0" step="any" placeholder="Preço pago (Kz)" data-pt="mov-preco" data-i="${i}" value="${escapeHtml(String(m.preco ?? ''))}" style="${PT_IN}"${PT.done[m.ref] ? ' disabled' : ''}>` : ''}
+        </div>
+        <input type="text" placeholder="Nota (opcional)" data-pt="mov-notas" data-i="${i}" value="${escapeHtml(m.notas || '')}" style="${PT_IN};margin-top:6px"${PT.done[m.ref] ? ' disabled' : ''}>
+      </div>`).join('')}
+    <button type="button" class="btn btn-primary" data-pt-acao="mov-add" style="width:100%">+ Entrada / saída de produto</button>`;
+}
+function ptSecDinheiro() {
+  return `<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">Dinheiro que saiu da caixa (despesas, pagamentos) ou entrou fora das vendas.</div>
+    ${PT.dinheiroMovs.map((m, i) => `
+      <div style="display:grid;grid-template-columns:110px 1fr 110px 34px;gap:6px;margin-bottom:6px;align-items:center;${PT.done[m.ref] ? 'opacity:.6' : ''}">
+        <select data-pt="din-tipo" data-i="${i}" style="${PT_IN}"${PT.done[m.ref] ? ' disabled' : ''}><option value="saida"${m.tipo !== 'entrada' ? ' selected' : ''}>− Saída</option><option value="entrada"${m.tipo === 'entrada' ? ' selected' : ''}>+ Entrada</option></select>
+        <input type="text" placeholder="Descrição (ex.: carvão)" data-pt="din-desc" data-i="${i}" value="${escapeHtml(m.desc || '')}" style="${PT_IN}"${PT.done[m.ref] ? ' disabled' : ''}>
+        <input type="number" inputmode="decimal" min="0" step="any" placeholder="Kz" data-pt="din-valor" data-i="${i}" value="${escapeHtml(String(m.valor ?? ''))}" style="${PT_IN}"${PT.done[m.ref] ? ' disabled' : ''}>
+        ${PT.done[m.ref] ? '<span class="badge badge-green">✓</span>' : `<button type="button" class="btn btn-ghost btn-sm" data-pt-acao="din-rem" data-i="${i}">✕</button>`}
+      </div>`).join('')}
+    <button type="button" class="btn btn-primary" data-pt-acao="din-add" style="width:100%">+ Entrada / saída de dinheiro</button>`;
+}
+function ptSecCaixa() {
+  const campo = (k, rot) => `<div><label style="${PT_LBL}">${rot}</label><input type="number" inputmode="decimal" min="0" step="any" data-pt="cx-${k}" value="${escapeHtml(String(PT.caixa[k] ?? ''))}" placeholder="0" style="${PT_IN}"></div>`;
+  const temFoto = PT.turno && PT.turno.caixa && PT.turno.caixa.tpa_foto_url;
+  return `<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">O que foi contado no fecho: valor do TPA, transferências recebidas e dinheiro na gaveta.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+      ${campo('tpa', 'TPA (Kz)')}${campo('transf', 'Transferência (Kz)')}${campo('din', 'Dinheiro (Kz)')}
+    </div>
+    <div style="margin-top:12px"><label style="${PT_LBL}">Foto do recibo de fecho do TPA ${temFoto ? '<span class="badge badge-green">já anexada</span>' : '(obrigatória para fechar, se houver TPA)'}</label>
+      <input type="file" accept="image/*" data-pt="cx-foto" style="color:#cbd5e1">
+      ${PT.tpaFoto ? '<div style="font-size:12px;color:#86efac;margin-top:4px">✓ Foto pronta — vai ao gravar</div>' : ''}</div>`;
+}
+function ptSecObs() {
+  const isAdmin = S.user?.role === 'admin';
+  return `<label style="${PT_LBL}">Observações do turno</label>
+    <textarea data-pt="notas" rows="4" placeholder="Ex.: saiu 500 para o segurança…" style="${PT_IN};resize:vertical">${escapeHtml(PT.notas || '')}</textarea>
+    ${isAdmin ? `<label style="${PT_LBL};margin-top:10px">🛡️ Observações do admin</label>
+    <textarea data-pt="notasAdmin" rows="3" style="${PT_IN};resize:vertical;border-color:#7c3aed">${escapeHtml(PT.notasAdmin || '')}</textarea>` : ''}`;
+}
+function ptResumo() {
+  const pend = (arr) => arr.filter((x) => !PT.done[x.ref]).length;
+  const linhas = [
+    ['Turno', PT.nome ? `${turnoLabel(PT.nome)} · ${xlDataPt(PT.data)}${PT.turno ? '' : ' (novo)'}` : '— falta escolher —'],
+    ['Quem trabalhou', PT.equipa.length ? PT.pessoas.filter((p) => PT.equipa.includes(String(p.id))).map((p) => p.nome).join(', ') : '— ninguém —'],
+    ['Pedidos novos', `${pend(PT.pedidos)} (≈ ${fmt(PT.pedidos.filter((p) => !PT.done[p.ref]).reduce((a, p) => a + ptTotalPedido(p), 0))})`],
+    ['Movimentos de produtos', String(pend(PT.stockMovs))],
+    ['Movimentos de dinheiro', String(pend(PT.dinheiroMovs))],
+    ['Caixa', `TPA ${fmt(ptNum(PT.caixa.tpa) || 0)} · Transf. ${fmt(ptNum(PT.caixa.transf) || 0)} · Dinheiro ${fmt(ptNum(PT.caixa.din) || 0)}`],
+    ['Observações', (PT.notas || '').trim() ? 'sim' : '—']
+  ];
+  return `<div style="border:1px solid #334155;border-radius:10px;overflow:hidden">${linhas.map(([a, b]) => `
+      <div style="display:grid;grid-template-columns:150px 1fr;gap:8px;padding:8px 10px;border-bottom:1px solid #1e293b;font-size:14px"><span style="color:#94a3b8">${a}</span><span style="color:#f1f5f9">${escapeHtml(b)}</span></div>`).join('')}</div>
+    ${PT.msg ? `<div class="alert ${PT.ok ? 'alert-success' : 'alert-error'}" style="margin-top:10px;white-space:pre-wrap">${escapeHtml(PT.msg)}</div>` : ''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button type="button" class="btn btn-success" style="flex:1;padding:12px;font-weight:700" data-pt-acao="gravar"${PT.aGravar || !PT.nome ? ' disabled' : ''}>${PT.aGravar ? 'A gravar…' : '💾 Gravar tudo'}</button>
+      ${PT.ok && PT.turno ? `<button type="button" class="btn btn-primary" style="flex:1;padding:12px" data-pt-acao="ver-turno">Abrir o turno (ver / fechar)</button>` : ''}
+    </div>`;
+}
+
+function ptRender() {
+  const ov = document.getElementById('pt-overlay');
+  if (!ov || !PT) return;
+  const secs = { turno: ptSecTurno, equipa: ptSecEquipa, pedidos: ptSecPedidos, stock: ptSecStock, dinheiro: ptSecDinheiro, caixa: ptSecCaixa, obs: ptSecObs, rever: ptResumo };
+  const pagina = PT.modo === 'pagina';
+  const passo = PT_PASSOS[PT.passo];
+  const bloco = (p, i) => `<div class="card" style="margin-bottom:12px"><div class="card-title">${i + 1}. ${p.t}</div>${secs[p.k]()}</div>`;
+  const scrollY = ov.scrollTop;
+  ov.innerHTML = `
+    <div style="position:sticky;top:0;z-index:2;background:#1e293b;border-bottom:1px solid #334155;padding:8px 12px;padding-top:max(8px,env(safe-area-inset-top))">
+      <div style="display:flex;align-items:center;gap:8px">
+        <strong style="color:#f1f5f9;font-size:15px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📝 Preencher turno${PT.nome ? ` · ${turnoLabel(PT.nome)} ${xlDataPt(PT.data)}` : ''}</strong>
+        <button type="button" class="btn btn-ghost btn-sm" data-pt-acao="modo">${pagina ? '🪜 Passo a passo' : '📄 Tudo numa página'}</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-pt-acao="sair">✕</button>
+      </div>
+      ${pagina ? '' : `<div style="display:flex;gap:4px;overflow-x:auto;margin-top:8px;padding-bottom:2px">${PT_PASSOS.map((p, i) => `
+        <button type="button" data-pt-acao="ir" data-i="${i}" style="flex-shrink:0;border:0;border-radius:999px;padding:5px 10px;font-size:12px;cursor:pointer;background:${i === PT.passo ? '#3b82f6' : '#0f172a'};color:${i === PT.passo ? '#fff' : '#94a3b8'}">${i + 1}. ${p.t}</button>`).join('')}</div>`}
+    </div>
+    <div style="max-width:760px;margin:0 auto;padding:12px 12px 120px">
+      ${pagina ? PT_PASSOS.map(bloco).join('') : bloco(passo, PT.passo)}
+    </div>
+    ${pagina ? '' : `<div style="position:fixed;left:0;right:0;bottom:0;z-index:2;display:flex;gap:8px;padding:10px 12px;padding-bottom:max(10px,env(safe-area-inset-bottom));background:#1e293b;border-top:1px solid #334155">
+      <button type="button" class="btn btn-ghost" style="flex:1" data-pt-acao="voltar"${PT.passo === 0 ? ' disabled' : ''}>‹ Voltar</button>
+      ${PT.passo < PT_PASSOS.length - 1 ? `<button type="button" class="btn btn-primary" style="flex:2" data-pt-acao="seguinte"${PT.passo === 0 && !PT.nome ? ' disabled' : ''}>Seguinte ›</button>` : ''}
+    </div>`}`;
+  if (pagina) ov.scrollTop = scrollY;
+}
+
+async function ptOnInput(e) {
+  const el = e.target;
+  const k = el.getAttribute && el.getAttribute('data-pt');
+  if (!k || !PT) return;
+  const i = parseInt(el.getAttribute('data-i'), 10), j = parseInt(el.getAttribute('data-j'), 10);
+  const v = el.value;
+  const reRender = e.type === 'change';
+  if (k === 'data' || k === 'nome') {
+    if (e.type !== 'change') return;
+    PT[k] = v;
+    await ptCarregarTurno();
+    ptRender();
+    return;
+  }
+  if (k === 'equipa') {
+    const id = String(v);
+    PT.equipa = el.checked ? [...new Set([...PT.equipa, id])] : PT.equipa.filter((x) => x !== id);
+    PT.mexeu.equipa = true;
+  } else if (k === 'ped-prod') PT.pedidos[i].linhas[j].produto_id = v;
+  else if (k === 'ped-qtd') PT.pedidos[i].linhas[j].qtd = v;
+  else if (k === 'ped-pag') PT.pedidos[i].pag = v;
+  else if (k === 'ped-prom') PT.pedidos[i].promotor_id = v;
+  else if (k === 'mov-prod') PT.stockMovs[i].produto_id = v;
+  else if (k === 'mov-tipo') PT.stockMovs[i].tipo = v;
+  else if (k === 'mov-qtd') PT.stockMovs[i].qtd = v;
+  else if (k === 'mov-preco') PT.stockMovs[i].preco = v;
+  else if (k === 'mov-notas') PT.stockMovs[i].notas = v;
+  else if (k === 'din-tipo') PT.dinheiroMovs[i].tipo = v;
+  else if (k === 'din-desc') PT.dinheiroMovs[i].desc = v;
+  else if (k === 'din-valor') PT.dinheiroMovs[i].valor = v;
+  else if (k.startsWith('cx-') && k !== 'cx-foto') { PT.caixa[k.slice(3)] = v; PT.mexeu.caixa = true; }
+  else if (k === 'notas') { PT.notas = v; PT.mexeu.notas = true; }
+  else if (k === 'notasAdmin') { PT.notasAdmin = v; PT.mexeu.notasAdmin = true; }
+  else if (k === 'cx-foto') {
+    if (e.type !== 'change' || !el.files || !el.files[0]) return;
+    try { PT.tpaFoto = await comprimirFotoDataUrl(await fileToDataUrl(el.files[0]), 1280, 0.72); } catch (_) { PT.tpaFoto = null; }
+    ptRender();
+    return;
+  }
+  ptGuardarRascunho();
+  // Re-desenha só nas escolhas (selects/checkbox) — ao escrever mantém o foco
+  // (e um toque num botão logo a seguir não se perde num re-desenho).
+  if (reRender && (el.tagName === 'SELECT' || el.type === 'checkbox')) ptRender();
+  else if (k === 'ped-qtd') {
+    const tot = document.getElementById(`pt-ped-tot-${i}`);
+    if (tot) tot.textContent = `≈ ${fmt(ptTotalPedido(PT.pedidos[i]))}`;
+  }
+}
+
+function ptOnAcao(b, ev) {
+  const a = b.getAttribute('data-pt-acao');
+  const i = parseInt(b.getAttribute('data-i'), 10), j = parseInt(b.getAttribute('data-j'), 10);
+  const ref = () => novoClientRef();
+  if (a === 'sair') {
+    document.getElementById('pt-overlay')?.remove();
+    const tinha = PT && PT.ok;
+    PT = null;
+    if (tinha) { if (S.page === 'turno') loadTurno().catch(() => {}); else if (S.page === 'dia') loadDia().catch(() => {}); }
+    return;
+  }
+  if (a === 'modo') { PT.modo = PT.modo === 'pagina' ? 'passos' : 'pagina'; try { localStorage.setItem(PT_MODO_KEY, PT.modo); } catch (_) {} }
+  else if (a === 'ir') PT.passo = Math.max(0, Math.min(PT_PASSOS.length - 1, i));
+  else if (a === 'voltar') PT.passo = Math.max(0, PT.passo - 1);
+  else if (a === 'seguinte') PT.passo = Math.min(PT_PASSOS.length - 1, PT.passo + 1);
+  else if (a === 'ped-add') PT.pedidos.push({ ref: ref(), linhas: [{ produto_id: '', qtd: '' }], pag: 'dinheiro', promotor_id: '' });
+  else if (a === 'ped-rem') { if (!confirm('Apagar este pedido do rascunho?')) return; PT.pedidos.splice(i, 1); }
+  else if (a === 'ped-lin-add') PT.pedidos[i].linhas.push({ produto_id: '', qtd: '' });
+  else if (a === 'ped-lin-rem') PT.pedidos[i].linhas.splice(j, 1);
+  else if (a === 'mov-add') PT.stockMovs.push({ ref: ref(), produto_id: '', tipo: 'armazem', qtd: '', preco: '', notas: '' });
+  else if (a === 'mov-rem') PT.stockMovs.splice(i, 1);
+  else if (a === 'din-add') PT.dinheiroMovs.push({ ref: ref(), tipo: 'saida', desc: '', valor: '' });
+  else if (a === 'din-rem') PT.dinheiroMovs.splice(i, 1);
+  else if (a === 'gravar') { runAction(ev, ptGravar); return; }
+  else if (a === 'ver-turno') {
+    const tid = PT.turno.id, data = PT.data;
+    document.getElementById('pt-overlay')?.remove();
+    PT = null;
+    S.date = data;
+    navigate('turno', { turnoId: String(tid) });
+    return;
+  } else return;
+  ptGuardarRascunho();
+  ptRender();
+  if (['ir', 'voltar', 'seguinte'].includes(a)) document.getElementById('pt-overlay').scrollTop = 0;
+}
+
+/** Valida o rascunho; devolve a lista de problemas (vazia = pode gravar). */
+function ptValidar() {
+  const erros = [];
+  if (!PT.data || !PT.nome) erros.push('Escolhe a data e o turno (passo 1).');
+  PT.pedidos.forEach((p, i) => {
+    if (PT.done[p.ref]) return;
+    const ok = (p.linhas || []).filter((l) => l.produto_id && (ptNum(l.qtd) || 0) > 0);
+    if (!ok.length) erros.push(`Pedido ${i + 1}: escolhe pelo menos um produto com quantidade.`);
+    if ((p.linhas || []).some((l) => (l.produto_id && !((ptNum(l.qtd) || 0) > 0)) || (!l.produto_id && (ptNum(l.qtd) || 0) > 0))) erros.push(`Pedido ${i + 1}: há uma linha com produto sem quantidade (ou o contrário).`);
+  });
+  PT.stockMovs.forEach((m, i) => {
+    if (PT.done[m.ref]) return;
+    if (!m.produto_id || !((ptNum(m.qtd) || 0) > 0)) erros.push(`Movimento de produto ${i + 1}: falta o produto ou a quantidade.`);
+  });
+  PT.dinheiroMovs.forEach((m, i) => {
+    if (PT.done[m.ref]) return;
+    if (!String(m.desc || '').trim() || !((ptNum(m.valor) || 0) > 0)) erros.push(`Movimento de dinheiro ${i + 1}: falta a descrição ou o valor.`);
+  });
+  ['tpa', 'transf', 'din'].forEach((k) => { const v = PT.caixa[k]; if (v !== '' && v != null && (ptNum(v) == null || ptNum(v) < 0)) erros.push('Caixa: valor inválido.'); });
+  return erros;
+}
+
+async function ptGravar() {
+  if (!PT || PT.aGravar) return;
+  const erros = ptValidar();
+  if (erros.length) { PT.ok = false; PT.msg = erros.join('\n'); PT.passo = PT_PASSOS.length - 1; ptRender(); return; }
+  PT.aGravar = true; PT.ok = false; PT.msg = ''; ptRender();
+  const passo = (t) => { PT.msg = t; ptRender(); };
+  try {
+    // 1. Turno: abre se não existe; reabre (admin) se está fechado.
+    if (!PT.turno) {
+      passo('A abrir o turno…');
+      const t = await api('POST', '/turnos/abrir', { data: PT.data, nome: PT.nome, client_ref: `pt-abrir-${lojaAtivaId()}-${PT.data}-${PT.nome}` });
+      PT.turno = { ...t, caixa: {} };
+    } else if (PT.turno.estado !== 'aberto') {
+      if (S.user?.role !== 'admin') throw new Error('O turno está fechado — só o admin pode acrescentar registos.');
+      if (!confirm('Este turno está fechado. Reabrir para gravar os registos?')) throw new Error('Cancelado — o turno continua fechado.');
+      await api('POST', `/turnos/${PT.turno.id}/reabrir`, {});
+      PT.turno.estado = 'aberto';
+    }
+    const tid = PT.turno.id;
+    // 2. Quem trabalhou: acrescenta os marcados e tira os desmarcados.
+    if (PT.mexeu.equipa) {
+      passo('A gravar quem trabalhou…');
+      const ja = ((PT.existentes && PT.existentes.equipa) || []).map((e) => String(e.utilizador_id));
+      for (const uid of PT.equipa.filter((x) => !ja.includes(x))) await api('POST', `/turnos/${tid}/equipa-real`, { utilizador_id: uid });
+      for (const uid of ja.filter((x) => !PT.equipa.includes(x))) await api('DELETE', `/turnos/${tid}/equipa-real/${encodeURIComponent(uid)}`);
+    }
+    // 3. Pedidos (um a um, client_ref fixo: repetir não duplica).
+    let n = 0;
+    for (const p of PT.pedidos) {
+      if (PT.done[p.ref]) continue;
+      passo(`A gravar pedidos… (${++n})`);
+      const linhas = p.linhas.filter((l) => l.produto_id && (ptNum(l.qtd) || 0) > 0).map((l) => ({ produto_id: l.produto_id, quantidade: ptNum(l.qtd) }));
+      await api('POST', `/turnos/${tid}/pedidos`, { linhas, tipo_pagamento: p.pag || 'dinheiro', promotor_id: p.promotor_id || null, client_ref: p.ref });
+      PT.done[p.ref] = true; ptGuardarRascunho();
+    }
+    // 4. Entradas / saídas de produtos.
+    for (const m of PT.stockMovs) {
+      if (PT.done[m.ref]) continue;
+      passo('A gravar movimentos de produtos…');
+      await api('POST', `/turnos/${tid}/entradas`, {
+        produto_id: m.produto_id, tipo: m.tipo === 'perda' ? 'tirar' : 'entrada', origem: m.tipo === 'compra' ? 'compra' : 'armazem',
+        preco: m.tipo === 'compra' ? (ptNum(m.preco) || 0) : 0, quantidade: ptNum(m.qtd), notas: m.notas || '', client_ref: m.ref
+      });
+      PT.done[m.ref] = true; ptGuardarRascunho();
+    }
+    // 5. Entradas / saídas de dinheiro (as entradas levam a marca ENTRADA::).
+    for (const m of PT.dinheiroMovs) {
+      if (PT.done[m.ref]) continue;
+      passo('A gravar movimentos de dinheiro…');
+      await api('POST', `/turnos/${tid}/saidas`, { descricao: String(m.desc).trim(), valor: ptNum(m.valor), notas: m.tipo === 'entrada' ? ENTRADA_MARK : '', client_ref: m.ref });
+      PT.done[m.ref] = true; ptGuardarRascunho();
+    }
+    // 6. Caixa + foto do TPA.
+    if (PT.mexeu.caixa) {
+      passo('A gravar a caixa…');
+      const cv = (k) => (PT.caixa[k] === '' || PT.caixa[k] == null ? null : ptNum(PT.caixa[k]));
+      await api('PUT', `/turnos/${tid}/caixa`, { tpa: cv('tpa'), transferencia: cv('transf'), dinheiro: cv('din') });
+    }
+    if (PT.tpaFoto) {
+      passo('A enviar a foto do TPA…');
+      await api('POST', `/turnos/${tid}/caixa/tpa-foto`, { foto_base64: PT.tpaFoto });
+      PT.tpaFoto = null;
+      PT.turno.caixa = { ...(PT.turno.caixa || {}), tpa_foto_url: 'tem' };
+    }
+    // 7. Observações.
+    if (PT.mexeu.notas) await api('PUT', `/turnos/${tid}/notas`, { notas: PT.notas || '' });
+    if (PT.mexeu.notasAdmin && S.user?.role === 'admin') await api('PUT', `/turnos/${tid}/notas-admin`, { notas_admin: PT.notasAdmin || '' });
+    try { localStorage.removeItem(ptChave()); } catch (_) {}
+    await ptCarregarTurno();
+    PT.ok = true;
+    PT.msg = 'Tudo gravado. ✓\nPara fechar o turno, abre-o e carrega em «Fechar» (o sistema confirma o checklist e a foto do TPA).';
+  } catch (e) {
+    PT.ok = false;
+    PT.msg = `Parou: ${e.message || e}\nO que já foi gravado está marcado como «gravado»; corrige e carrega outra vez em Gravar tudo (não duplica).`;
+    ptGuardarRascunho();
+  } finally {
+    PT.aGravar = false;
+    ptRender();
+  }
 }
 
 // ── REGISTOS: STOCK + SAÍDAS DE CAIXA (unificado) ──────────────
